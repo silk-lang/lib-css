@@ -7,9 +7,12 @@ The original packages remain in nonstd for now. This repository starts from that
 | --- | --- | --- |
 | `css-layout` | [css/layout](css/layout) | Block, inline, flex and grid layout |
 | `css-style` | [css/style](css/style) | Parsing, selectors, cascade, CSSOM and Typed OM |
-| `css-layout-cli` | [css/layout/tools/cli](css/layout/tools/cli) | Native JSON layout adapter |
 
-Package names, exports, fixtures and directory paths are preserved. `css-style` uses Silk's Git dependency support to fetch `graphics-geometry` from nonstd at commit `7d6c3693a9ad1fec24127985626ab4224f9f1995`; no sibling checkout is required. `css-layout` has no package dependencies.
+Library package names, exports, fixtures and directory paths are preserved. `css-style` uses Silk's Git dependency support to fetch `graphics-geometry` from nonstd at commit `7d6c3693a9ad1fec24127985626ab4224f9f1995`; no sibling checkout is required. `css-layout` has no package dependencies.
+
+[`layout-test-harness/`](layout-test-harness) is internal development tooling for layout tests,
+conformance checks and benchmarks, not a library or supported consumer CLI. Silk builds it as
+the executable `css-layout-test-harness`; applications should depend on the libraries above.
 
 ## Build and test
 
@@ -20,7 +23,7 @@ silk use
 silk check --workspace
 silk test --manifest-path css/layout/silk.toml --root src/tests.silk
 silk test --manifest-path css/style/silk.toml --root src/tests.silk
-silk build --package css-layout-cli
+silk build --package css-layout-test-harness
 ```
 
 On macOS, set `SDKROOT` to `xcrun --sdk macosx --show-sdk-path` before running tests. Set `SILK_CLANG` if LLVM's Clang is not your default compiler.

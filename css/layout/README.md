@@ -64,7 +64,10 @@ shaping of text. Dependents import the package as `layout`.
 | Path | Package | What it is |
 | --- | --- | --- |
 | `css/layout` | `css-layout` | The engine |
-| `css/layout/tools/cli` | `css-layout-cli` | A JSON adapter: one layout request on stdin, one result on stdout |
+
+The root-level [`layout-test-harness`](../../layout-test-harness) is internal test and benchmark
+tooling, not a consumer package. It builds as `css-layout-test-harness` and accepts one JSON
+layout request on stdin, returning one result on stdout.
 
 ## Tests
 

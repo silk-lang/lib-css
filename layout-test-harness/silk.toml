@@ -1,0 +1,9 @@
+[package]
+name = "css-layout-test-harness"
+description = "Internal layout test and benchmark harness; not a consumer package"
+version = "0.1.0"
+silk-version = "0.1.0-dev.61+91f335268900"
+license = "MIT"
+
+[dependencies]
+layout = { path = "../css/layout", package = "css-layout" }

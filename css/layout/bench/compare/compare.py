@@ -8,7 +8,7 @@ Geometry is compared on border boxes in absolute coordinates.
 Grid workloads are taffy-only comparisons: Yoga is explicitly skipped and excluded
 from timing-ratio and geometry summaries.
 
-  python3 bench/compare/compare.py --silk build/.../release/css-layout-cli \\
+  python3 bench/compare/compare.py --silk build/.../release/css-layout-test-harness \\
       --taffy bench/compare/taffy/target/release/taffy-harness \\
       --yoga bench/compare/yoga/build/yoga-harness [--iterations 15] [--only NAME,...]
 

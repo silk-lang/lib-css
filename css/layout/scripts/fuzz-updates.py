@@ -19,7 +19,7 @@ compute takes for them:
           geometry with a fresh layout of the final tree in tree order
   gridstructure  the same over grid containers and items
 
-  python3 scripts/fuzz-updates.py --cli build/.../css-layout-cli [--seeds 200] [--mode inner,text]
+  python3 scripts/fuzz-updates.py --cli build/.../css-layout-test-harness [--seeds 200] [--mode inner,text]
 """
 import argparse
 import copy

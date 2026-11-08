@@ -20,7 +20,7 @@ if [ ! -d "$yoga/.git" ] || [ "$(git -C "$yoga" rev-parse HEAD)" != "$yoga_rev" 
   git -C "$yoga" fetch -q --depth 1 https://github.com/facebook/yoga.git "$yoga_rev"
   git -C "$yoga" checkout -q FETCH_HEAD
 fi
-(cd tools/cli && silk build --release)
+silk build --package css-layout-test-harness --release
 cargo build --quiet --release --manifest-path bench/compare/taffy/Cargo.toml
 cmake -S bench/compare/yoga -B bench/compare/yoga/build -DYOGA_ROOT="$yoga" -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build bench/compare/yoga/build --parallel >/dev/null
@@ -31,6 +31,6 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "Unsupported native host for this script" >&2; exit 1 ;;
 esac
 exec python3 "bench/compare/$script" \
-  --silk "../../build/llvm/$target/release/css-layout-cli" \
+  --silk "../../build/llvm/$target/release/css-layout-test-harness" \
   --taffy bench/compare/taffy/target/release/taffy-harness \
   --yoga bench/compare/yoga/build/yoga-harness "$@"

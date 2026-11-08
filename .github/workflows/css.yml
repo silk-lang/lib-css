@@ -54,4 +54,4 @@ jobs:
       - run: silk check --workspace
       - run: silk test --manifest-path css/layout/silk.toml --root src/tests.silk
       - run: silk test --manifest-path css/style/silk.toml --root src/tests.silk
-      - run: silk build --package css-layout-cli
+      - run: silk build --package css-layout-test-harness
