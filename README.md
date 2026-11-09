@@ -1,14 +1,14 @@
 # lib-css
 
 CSS libraries for Silk, extracted from [silk-lang/nonstd](https://github.com/silk-lang/nonstd/tree/7d6c3693a9ad1fec24127985626ab4224f9f1995/css).
-The original packages remain in nonstd for now. This repository starts from that commit's CSS snapshot; earlier history remains in nonstd.
+This repository starts from that commit's CSS snapshot; earlier implementation history remains in nonstd.
 
 | Package | Path | Purpose |
 | --- | --- | --- |
 | `css-layout` | [css/layout](css/layout) | Block, inline, flex and grid layout |
 | `css-style` | [css/style](css/style) | Parsing, selectors, cascade, CSSOM and Typed OM |
 
-Library package names, exports, fixtures and directory paths are preserved. `css-style` uses Silk's Git dependency support to fetch `graphics-geometry` from nonstd at commit `7d6c3693a9ad1fec24127985626ab4224f9f1995`; no sibling checkout is required. `css-layout` has no package dependencies.
+Library package names, exports, fixtures and directory paths are preserved. `css-style` uses Silk's Git dependency support to fetch `graphics-geometry` from [lib-graphics](https://github.com/silk-lang/lib-graphics); no sibling checkout is required. `css-layout` has no package dependencies. Keep the graphics revision in the manifest aligned with `lib-fonts` and other consumers: Silk rejects duplicate physical copies of a named package.
 
 [`layout-test-harness/`](layout-test-harness) is internal development tooling for layout tests,
 conformance checks and benchmarks, not a library or supported consumer CLI. Silk builds it as
