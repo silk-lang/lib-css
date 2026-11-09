@@ -11,9 +11,9 @@ import tempfile
 import urllib.request
 
 
-ROOT = Path(__file__).resolve().parents[2]
-LOCK = ROOT / "svg/specs.lock.json"
-CACHE = ROOT / "svg/.cache/specs"
+ROOT = Path(__file__).resolve().parents[1]
+LOCK = ROOT / "modules/specs.lock.json"
+CACHE = ROOT / "modules/.cache/specs"
 SVG11 = "https://www.w3.org/TR/2011/REC-SVG11-20110816/"
 SVG2 = "https://www.w3.org/TR/2018/CR-SVG2-20181004/"
 SVG2_ED = "https://svgwg.org/svg2-draft/"

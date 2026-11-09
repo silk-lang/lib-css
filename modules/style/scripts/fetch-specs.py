@@ -7,10 +7,10 @@ import runpy
 from urllib.parse import urljoin, urldefrag
 
 ROOT = Path(__file__).resolve().parents[3]
-# Share the repository's content-addressed download/lock policy with SVG.
-FETCH = runpy.run_path(str(ROOT / "svg/scripts/fetch-specs.py"))
-LOCK = ROOT / "css/style/specs.lock.json"
-CACHE = ROOT / "css/style/.cache/specs"
+# Share the repository's content-addressed download/lock policy.
+FETCH = runpy.run_path(str(ROOT / "scripts/fetch-specs.py"))
+LOCK = ROOT / "modules/style/specs.lock.json"
+CACHE = ROOT / "modules/style/.cache/specs"
 ROOTS = {
     "cssom": "https://drafts.csswg.org/cssom/",
     "cssom-view": "https://drafts.csswg.org/cssom-view/",

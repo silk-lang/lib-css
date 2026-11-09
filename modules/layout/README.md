@@ -63,7 +63,7 @@ shaping of text. Dependents import the package as `layout`.
 
 | Path | Package | What it is |
 | --- | --- | --- |
-| `css/layout` | `css-layout` | The engine |
+| `modules/layout` | `css-layout` | The engine |
 
 The root-level [`layout-test-harness`](../../layout-test-harness) is internal test and benchmark
 tooling, not a consumer package. It builds as `css-layout-test-harness` and accepts one JSON
@@ -71,7 +71,7 @@ layout request on stdin, returning one result on stdout.
 
 ## Tests
 
-From `css/layout`:
+From `modules/layout`:
 
 ```sh
 scripts/check

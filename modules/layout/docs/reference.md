@@ -5,7 +5,7 @@ performance tooling. The [README](../README.md) has the overview.
 
 ## Checks and tools
 
-Commands below run from `css/layout`:
+Commands below run from `modules/layout`:
 
 ```sh
 scripts/check
@@ -13,7 +13,7 @@ silk build --package css-layout-test-harness
 python3 scripts/fetch-specs.py
 ```
 
-For native tests alone, run `silk test --root src/tests.silk` from `css/layout`. The explicit test root is required: package-only testing can succeed with zero discovered tests, and workspace checking does not load modules imported only by the test root.
+For native tests alone, run `silk test --root src/tests.silk` from `modules/layout`. The explicit test root is required: package-only testing can succeed with zero discovered tests, and workspace checking does not load modules imported only by the test root.
 
 Chrome source-text comparisons additionally need the MIT-licensed FontTools build tool:
 
@@ -24,7 +24,7 @@ python3 -m venv .cache/font-tools
 
 The oracle uses that interpreter automatically; `SILK_FONT_PYTHON` selects another installation. Native layout and spec checks do not depend on Python font tooling.
 
-`css/layout` is the library; the root-level `layout-test-harness/` is an internal JSON harness used by the conformance and benchmark scripts, not a supported consumer package. The library exports `layout.lib`. Source-tree ownership, node handles and result storage are separate; layout borrows the input tree and writes into a reusable `LayoutTree`.
+`modules/layout` is the library; the root-level `layout-test-harness/` is an internal JSON harness used by the conformance and benchmark scripts, not a supported consumer package. The library exports `layout.lib`. Source-tree ownership, node handles and result storage are separate; layout borrows the input tree and writes into a reusable `LayoutTree`.
 
 ## Incremental layout
 
