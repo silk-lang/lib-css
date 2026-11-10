@@ -1,0 +1,603 @@
+//! CSS text to the written values of css-properties, for every property in the shared catalog.
+//!
+//! This is the generic route beside the per-property grammars: it reads a value by its shape
+//! (keywords, numbers with units, colors, math functions, known functions, and lists split by
+//! commas, slashes and spaces) and does not check it against the property's grammar. A value
+//! with a part the shared model has no shape for, such as a string, a `url()`, `var()` or an
+//! identifier that is neither a shared keyword nor a color, comes back whole as `Value.Text`.
+import css_properties.catalog as catalog
+import css_properties.catalog { Property }
+import css_properties.keywords as keywords
+import css_properties.keywords { Keyword }
+import css_properties.values as values
+import css_properties.values { Value, Declaration, Unit, MathOperator, Separator }
+import colors
+import colors { Color, Identity }
+import cssom_declaration { StyleDeclaration }
+import input { Input }
+import lexer
+import syntax
+import tokens
+import tokens { Kind, Limits, CssError, TokenBuffer, TokenRange }
+import value_cursor { Cursor }
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.color.rgba { Rgba }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.f64
+
+const COMMA: u8 = 0
+const SLASH: u8 = 1
+const PLUS_MINUS: u8 = 2
+const TIMES_DIVIDE: u8 = 3
+
+/// The written value `css` spells, such as `10px`, `calc(100% - 8px)` or `1px 2px / 50%`.
+pub effect fn value(css: &[u8]) -> Value ! CssError | OutOfMemoryError ? &mut Allocator {
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(css, &limits)
+  let range = buffer.all()
+  return run valueIn(&buffer, range.start, range.end)
+}
+
+/// `value` with CSS text read into shapes where it has them. Other values are copied.
+pub effect fn resolve(written: &Value) -> Value ! CssError | OutOfMemoryError ? &mut Allocator {
+  match &written.* {
+    Value.Text { css } => {
+      return run value(css.asSlice())
+    }
+    _ => {
+      return run values.clone(written)
+    }
+  }
+}
+
+/// The declarations of a declaration block such as `width: 10px; color: red !important`.
+/// As in CSS, a declaration that does not parse is dropped; so is one whose property is not
+/// in the shared catalog, custom properties included.
+pub effect fn declarations(css: &[u8]) -> List<Declaration>
+  ! CssError | OutOfMemoryError
+  ? &mut Allocator {
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(css, &limits)
+  let parsed = run syntax.parseDeclarations(&buffer, buffer.all(), &limits)
+  let items = parsed.asSlice()
+  let mut out = List<Declaration>.make()
+  let mut i: usize = 0
+  while i < items.length {
+    let item = items[i]
+    match &catalog.lookup(buffer.text(item.name)) {
+      Option<Property>.Some { value: property } => {
+        if skipSpace(&buffer, item.value.start, item.value.end) < item.value.end {
+          let shaped = run valueIn(&buffer, item.value.start, item.value.end)
+          run out.append(Declaration { property: property, value: move shaped, important: item.important })
+        }
+      }
+      _ => {}
+    }
+    i = i + 1
+  }
+  return move out
+}
+
+/// The declarations of a CSSOM declaration block as shared declarations, in its order.
+/// It holds what css-style's own grammars accepted, so only the properties css-style knows.
+pub effect fn fromStyle(style: &StyleDeclaration) -> List<Declaration>
+  ! CssError | OutOfMemoryError
+  ? &mut Allocator {
+  let mut out = List<Declaration>.make()
+  let mut i: usize = 0
+  while i < style.length() {
+    let name = style.item(i)
+    match &catalog.lookup(name) {
+      Option<Property>.Some { value: property } => {
+        let text = run style.getPropertyValue(name)
+        if text.asSlice().length > 0 {
+          let parsed = run value(text.asSlice())
+          run out.append(
+            Declaration {
+              property: property,
+              value: move parsed,
+              important: style.getPropertyPriority(name).length > 0,
+            },
+          )
+        }
+      }
+      _ => {}
+    }
+    i = i + 1
+  }
+  return move out
+}
+
+/// The value in the tokens `start..end`: its shape, or the source text when it has none.
+effect fn valueIn(buffer: &TokenBuffer, start: usize, end: usize) -> Value
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let first = skipSpace(buffer, start, end)
+  let last = trimEnd(buffer, first, end)
+  let mut one = List<Value>.make()
+  if first < last {
+    let shaped = run list(buffer, first, last, COMMA, &mut one)
+    if shaped && one.length() == 1 {
+      return one.remove(0)
+    }
+  }
+  return run values.text(sourceText(buffer, first, last))
+}
+
+fn sourceText(buffer: &TokenBuffer, start: usize, end: usize) -> &[u8] {
+  if start >= end {
+    return b""
+  }
+  let items = buffer.tokens.asSlice()
+  let from = items[start].source.start
+  let to = items[end - 1].source.end
+  let source = buffer.source()
+  if from > to || to > source.length {
+    return b""
+  }
+  return Slice.view<u8>(source, from, to - from)
+}
+
+fn isSpace(kind: &Kind) -> bool {
+  return match &kind.* {
+    Kind.Whitespace => true
+    _ => false
+  }
+}
+
+fn skipSpace(buffer: &TokenBuffer, start: usize, end: usize) -> usize {
+  let items = buffer.tokens.asSlice()
+  let mut at = start
+  while at < end && isSpace(&items[at].kind) {
+    at = at + 1
+  }
+  return at
+}
+
+fn trimEnd(buffer: &TokenBuffer, start: usize, end: usize) -> usize {
+  let items = buffer.tokens.asSlice()
+  let mut at = end
+  while at > start && isSpace(&items[at - 1].kind) {
+    at = at - 1
+  }
+  return at
+}
+
+/// The token after the block or function opened at `at`, at most `end`.
+fn afterBlock(buffer: &TokenBuffer, at: usize, end: usize) -> usize {
+  let matching = buffer.tokens.asSlice()[at].matching
+  if matching <= at || matching >= end {
+    return end
+  }
+  return matching + 1
+}
+
+fn opens(kind: &Kind) -> bool {
+  return match &kind.* {
+    Kind.Function { .. } => true
+    Kind.OpenParen => true
+    Kind.OpenSquare => true
+    Kind.OpenBrace => true
+    _ => false
+  }
+}
+
+fn separates(kind: &Kind, separator: u8) -> bool {
+  return match &kind.* {
+    Kind.Comma => separator == COMMA
+    Kind.Delim { scalar } => (separator == SLASH && scalar == 47)
+      || (separator == PLUS_MINUS && (scalar == 43 || scalar == 45))
+      || (separator == TIMES_DIVIDE && (scalar == 42 || scalar == 47))
+    _ => false
+  }
+}
+
+/// The next `separator` in `start..end` outside any block, or `end`.
+fn find(buffer: &TokenBuffer, start: usize, end: usize, separator: u8) -> usize {
+  let items = buffer.tokens.asSlice()
+  let mut at = start
+  while at < end {
+    if separates(&items[at].kind, separator) {
+      return at
+    }
+    at = if opens(&items[at].kind) {
+      afterBlock(buffer, at, end)
+    } else {
+      at + 1
+    }
+  }
+  return end
+}
+
+/// Appends the one value of `start..end`, a list split by `separator` when it has several
+/// parts. Commas bind loosest, then slashes, then spaces.
+effect fn list(buffer: &TokenBuffer, start: usize, end: usize, separator: u8, out: &mut List<Value>) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  if find(buffer, start, end, separator) == end {
+    if separator == COMMA {
+      return run list(buffer, start, end, SLASH, &mut out.*)
+    }
+    return run words(buffer, start, end, &mut out.*)
+  }
+  let mut parts = List<Value>.make()
+  let mut at = start
+  while at <= end {
+    let stop = find(buffer, at, end, separator)
+    let ok = if separator == COMMA {
+      run list(buffer, at, stop, SLASH, &mut parts)
+    } else {
+      run words(buffer, at, stop, &mut parts)
+    }
+    if !ok {
+      return false
+    }
+    at = stop + 1
+  }
+  run out.append(
+    Value.Sequence {
+      separator: if separator == COMMA {
+        Separator.Comma
+      } else {
+        Separator.Slash
+      },
+      values: move parts,
+    },
+  )
+  return true
+}
+
+/// Appends the one value of the space-separated components in `start..end`.
+effect fn words(buffer: &TokenBuffer, start: usize, end: usize, out: &mut List<Value>) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let first = skipSpace(buffer, start, end)
+  let last = trimEnd(buffer, first, end)
+  if first >= last {
+    return false
+  }
+  let single = if opens(&buffer.tokens.asSlice()[first].kind) {
+    afterBlock(buffer, first, last) == last
+  } else {
+    first + 1 == last
+  }
+  if single {
+    let next = run component(buffer, first, last, &mut out.*)
+    return next == last
+  }
+  let mut parts = List<Value>.make()
+  let mut at = first
+  while at < last {
+    let next = run component(buffer, at, last, &mut parts)
+    if next == 0 {
+      return false
+    }
+    at = skipSpace(buffer, next, last)
+  }
+  run out.append(Value.Sequence { separator: Separator.Space, values: move parts })
+  return true
+}
+
+/// Appends the component at `at` and returns the token after it, or 0 when the shared model
+/// has no shape for it.
+effect fn component(buffer: &TokenBuffer, at: usize, end: usize, out: &mut List<Value>) -> usize
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let token = buffer.tokens.asSlice()[at]
+  match &token.kind {
+    Kind.Ident { text } => {
+      match &keywords.lookup(buffer.text(text)) {
+        Option<Keyword>.Some { value: word } => {
+          run out.append(Value.Keyword { value: word })
+          return at + 1
+        }
+        _ => {}
+      }
+      if run color(buffer, at, at + 1, &mut out.*) {
+        return at + 1
+      }
+      return 0
+    }
+    Kind.Hash { .. } => {
+      if run color(buffer, at, at + 1, &mut out.*) {
+        return at + 1
+      }
+      return 0
+    }
+    Kind.Number { value: amount, .. } => {
+      run out.append(Value.Unit { value: f64.toF32(amount), unit: Unit.Number })
+      return at + 1
+    }
+    Kind.Percentage { value: amount, .. } => {
+      run out.append(Value.Unit { value: f64.toF32(amount), unit: Unit.Percent })
+      return at + 1
+    }
+    Kind.Dimension { value: amount, unit, .. } => {
+      match &values.unitLookup(buffer.text(unit)) {
+        Option<Unit>.Some { value: known } => {
+          run out.append(Value.Unit { value: f64.toF32(amount), unit: known })
+          return at + 1
+        }
+        _ => {
+          return 0
+        }
+      }
+    }
+    Kind.Function { name } => {
+      let after = afterBlock(buffer, at, end)
+      // The closing parenthesis, or the end of the input for a function left open.
+      let close = if buffer.tokens.asSlice()[at].matching + 1 == after {
+        after - 1
+      } else {
+        after
+      }
+      let spelled = buffer.text(name)
+      let done = if tokens.insensitive(spelled, b"calc") {
+        run calc(buffer, at + 1, close, &mut out.*)
+      } else if tokens.insensitive(spelled, b"min") {
+        run mathList(buffer, at + 1, close, MathOperator.Min, &mut out.*)
+      } else if tokens.insensitive(spelled, b"max") {
+        run mathList(buffer, at + 1, close, MathOperator.Max, &mut out.*)
+      } else if tokens.insensitive(spelled, b"clamp") {
+        run mathList(buffer, at + 1, close, MathOperator.Clamp, &mut out.*)
+      } else if run color(buffer, at, after, &mut out.*) {
+        true
+      } else {
+        run function(buffer, spelled, at + 1, close, &mut out.*)
+      }
+      if done {
+        return after
+      }
+      return 0
+    }
+    _ => {
+      return 0
+    }
+  }
+}
+
+/// Appends the absolute color spelled by exactly the tokens `start..end`.
+effect fn color(buffer: &TokenBuffer, start: usize, end: usize, out: &mut List<Value>) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let source = Input.Contiguous { buffer: buffer, range: TokenRange { start: start, end: end } }
+  let mut cursor = Cursor.make(&source)
+  let parsed = run colors.parse(&source, &mut cursor)
+  match &parsed {
+    Option<Color>.Some { value: found } => {
+      if !cursor.done(&source) {
+        return false
+      }
+      // `currentcolor` and system colors have no fixed channels to carry.
+      match &found.identity {
+        Identity.Absolute => {}
+        _ => {
+          return false
+        }
+      }
+      let rgba = colors.toSrgb(found)
+      run out.append(
+        Value.Color {
+          value: Rgba<f32> {
+            r: f64.toF32(rgba.r),
+            g: f64.toF32(rgba.g),
+            b: f64.toF32(rgba.b),
+            a: f64.toF32(rgba.a),
+          },
+        },
+      )
+      return true
+    }
+    _ => {
+      return false
+    }
+  }
+}
+
+/// Appends `name(a, b, ...)` for a function the shared keywords name.
+effect fn function(buffer: &TokenBuffer, name: &[u8], start: usize, end: usize, out: &mut List<Value>) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  match &keywords.lookup(name) {
+    Option<Keyword>.Some { value: known } => {
+      let mut arguments = List<Value>.make()
+      let mut at = start
+      while at <= end {
+        let stop = find(buffer, at, end, COMMA)
+        if !run list(buffer, at, stop, SLASH, &mut arguments) {
+          return false
+        }
+        at = stop + 1
+      }
+      run out.append(Value.Function { name: known, values: move arguments })
+      return true
+    }
+    _ => {
+      return false
+    }
+  }
+}
+
+/// Appends `calc(...)` for the expression in `start..end`. A sum writes its own `calc()`, so
+/// anything else is kept as a sum of one term.
+effect fn calc(buffer: &TokenBuffer, start: usize, end: usize, out: &mut List<Value>) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  if find(buffer, start, end, PLUS_MINUS) < end || find(buffer, start, end, TIMES_DIVIDE) < end {
+    return run sum(buffer, start, end, &mut out.*)
+  }
+  let mut term = List<Value>.make()
+  if !run sum(buffer, start, end, &mut term) {
+    return false
+  }
+  run out.append(Value.Math { operator: MathOperator.Sum, values: move term })
+  return true
+}
+
+/// Appends `min()`, `max()` or `clamp()` with one expression per argument.
+effect fn mathList(
+  buffer: &TokenBuffer,
+  start: usize,
+  end: usize,
+  operator: MathOperator,
+  out: &mut List<Value>,
+) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut arguments = List<Value>.make()
+  let mut at = start
+  while at <= end {
+    let stop = find(buffer, at, end, COMMA)
+    if !run sum(buffer, at, stop, &mut arguments) {
+      return false
+    }
+    at = stop + 1
+  }
+  run out.append(Value.Math { operator: operator, values: move arguments })
+  return true
+}
+
+/// Appends the sum in `start..end`. `a - b` is `a + (-b)`, as in Typed OM.
+effect fn sum(buffer: &TokenBuffer, start: usize, end: usize, out: &mut List<Value>) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  if find(buffer, start, end, PLUS_MINUS) == end {
+    return run product(buffer, start, end, &mut out.*)
+  }
+  let items = buffer.tokens.asSlice()
+  let mut terms = List<Value>.make()
+  let mut at = start
+  let mut negate = false
+  while at <= end {
+    let stop = find(buffer, at, end, PLUS_MINUS)
+    if negate {
+      let mut term = List<Value>.make()
+      if !run product(buffer, at, stop, &mut term) {
+        return false
+      }
+      let plain = match &term.asSlice()[0] {
+        Value.Unit { value: amount, unit } => {
+          run terms.append(Value.Unit { value: 0.0 - amount, unit: unit })
+          true
+        }
+        _ => false
+      }
+      if !plain {
+        run terms.append(Value.Math { operator: MathOperator.Negate, values: move term })
+      }
+    } else if !run product(buffer, at, stop, &mut terms) {
+      return false
+    }
+    if stop < end {
+      negate = separates(&items[stop].kind, PLUS_MINUS) && isMinus(&items[stop].kind)
+    }
+    at = stop + 1
+  }
+  run out.append(Value.Math { operator: MathOperator.Sum, values: move terms })
+  return true
+}
+
+fn isMinus(kind: &Kind) -> bool {
+  return match &kind.* {
+    Kind.Delim { scalar } => scalar == 45
+    _ => false
+  }
+}
+
+fn isDivide(kind: &Kind) -> bool {
+  return match &kind.* {
+    Kind.Delim { scalar } => scalar == 47
+    _ => false
+  }
+}
+
+/// Appends the product in `start..end`. `a / b` is `a * (1 / b)`, as in Typed OM.
+effect fn product(buffer: &TokenBuffer, start: usize, end: usize, out: &mut List<Value>) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  if find(buffer, start, end, TIMES_DIVIDE) == end {
+    return run operand(buffer, start, end, &mut out.*)
+  }
+  let items = buffer.tokens.asSlice()
+  let mut factors = List<Value>.make()
+  let mut at = start
+  let mut invert = false
+  while at <= end {
+    let stop = find(buffer, at, end, TIMES_DIVIDE)
+    if invert {
+      let mut factor = List<Value>.make()
+      if !run operand(buffer, at, stop, &mut factor) {
+        return false
+      }
+      run factors.append(Value.Math { operator: MathOperator.Invert, values: move factor })
+    } else if !run operand(buffer, at, stop, &mut factors) {
+      return false
+    }
+    if stop < end {
+      invert = isDivide(&items[stop].kind)
+    }
+    at = stop + 1
+  }
+  run out.append(Value.Math { operator: MathOperator.Product, values: move factors })
+  return true
+}
+
+/// Appends one operand: a number, a parenthesized expression or a nested math function.
+effect fn operand(buffer: &TokenBuffer, start: usize, end: usize, out: &mut List<Value>) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let first = skipSpace(buffer, start, end)
+  let last = trimEnd(buffer, first, end)
+  if first >= last {
+    return false
+  }
+  let token = buffer.tokens.asSlice()[first]
+  match &token.kind {
+    Kind.OpenParen => {
+      let after = afterBlock(buffer, first, last)
+      if after != last {
+        return false
+      }
+      let close = if token.matching + 1 == after {
+        after - 1
+      } else {
+        after
+      }
+      return run sum(buffer, first + 1, close, &mut out.*)
+    }
+    Kind.Function { name } => {
+      let after = afterBlock(buffer, first, last)
+      if after != last {
+        return false
+      }
+      let spelled = buffer.text(name)
+      if tokens.insensitive(spelled, b"calc") {
+        let close = if token.matching + 1 == after {
+          after - 1
+        } else {
+          after
+        }
+        return run sum(buffer, first + 1, close, &mut out.*)
+      }
+      if !tokens.insensitive(spelled, b"min") && !tokens.insensitive(spelled, b"max")
+        && !tokens.insensitive(spelled, b"clamp") {
+        return false
+      }
+      let next = run component(buffer, first, last, &mut out.*)
+      return next == last
+    }
+    Kind.Number { .. } => {}
+    Kind.Percentage { .. } => {}
+    Kind.Dimension { .. } => {}
+    _ => {
+      return false
+    }
+  }
+  if first + 1 != last {
+    return false
+  }
+  let next = run component(buffer, first, last, &mut out.*)
+  return next == last
+}

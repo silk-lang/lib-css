@@ -42,3 +42,4 @@ import cssom_geometry_tests
 import cssom_view_tests
 import cssom_view_geometry_tests
 import cssom_view_window_tests
+import written_tests

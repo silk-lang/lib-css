@@ -142,6 +142,92 @@ pub fn unitName(unit: Unit) -> &'static [u8] {
   }
 }
 
+/// The unit a dimension spells, compared ASCII case-insensitively: `px`, `EM`, `deg`. A plain
+/// number and `%` are not dimension units, so they are not found.
+pub fn unitLookup(name: &[u8]) -> Option<Unit> {
+  let units: [Unit; 55] = [
+    Unit.Px,
+    Unit.Cm,
+    Unit.Mm,
+    Unit.Q,
+    Unit.In,
+    Unit.Pt,
+    Unit.Pc,
+    Unit.Em,
+    Unit.Rem,
+    Unit.Ex,
+    Unit.Rex,
+    Unit.Cap,
+    Unit.Rcap,
+    Unit.Ch,
+    Unit.Rch,
+    Unit.Ic,
+    Unit.Ric,
+    Unit.Lh,
+    Unit.Rlh,
+    Unit.Vw,
+    Unit.Vh,
+    Unit.Vi,
+    Unit.Vb,
+    Unit.Vmin,
+    Unit.Vmax,
+    Unit.Svw,
+    Unit.Svh,
+    Unit.Svi,
+    Unit.Svb,
+    Unit.Svmin,
+    Unit.Svmax,
+    Unit.Lvw,
+    Unit.Lvh,
+    Unit.Lvi,
+    Unit.Lvb,
+    Unit.Lvmin,
+    Unit.Lvmax,
+    Unit.Dvw,
+    Unit.Dvh,
+    Unit.Dvi,
+    Unit.Dvb,
+    Unit.Dvmin,
+    Unit.Dvmax,
+    Unit.Deg,
+    Unit.Grad,
+    Unit.Rad,
+    Unit.Turn,
+    Unit.S,
+    Unit.Ms,
+    Unit.Hz,
+    Unit.Khz,
+    Unit.Dpi,
+    Unit.Dpcm,
+    Unit.Dppx,
+    Unit.X,
+  ]
+  let mut i: usize = 0
+  while i < units.length {
+    let spelled = unitName(units[i])
+    if spelled.length == name.length {
+      let mut same = true
+      let mut j: usize = 0
+      while j < name.length {
+        let byte = if name[j] >= 65 && name[j] <= 90 {
+          name[j] + 32
+        } else {
+          name[j]
+        }
+        if byte != spelled[j] {
+          same = false
+        }
+        j = j + 1
+      }
+      if same {
+        return Option<Unit>.some(units[i])
+      }
+    }
+    i = i + 1
+  }
+  return Option<Unit>.None
+}
+
 /// The node kinds of a math expression, as in Typed OM's `CSSMathValue`.
 pub enum MathOperator {
   Sum,

@@ -22,6 +22,11 @@ WebGPU, or a particular UI tree.
 - **Native CSSOM:** mutable declaration blocks, media lists, stylesheet/rule objects, live rule
   and stylesheet collections, constructed-sheet adoption, inline-style synchronization, and
   read-only computed-style queries.
+- **Shared written values:** `written` reads CSS text into the plain `Value` and `Declaration`
+  of [css-properties](../properties), for every property in the shared catalog and not only the
+  ones with a grammar here: `written.value(b"calc(100% - 8px)")`,
+  `written.declarations(b"width: 10px; color: red")`, and `written.fromStyle` for a CSSOM
+  declaration block. It reads values by shape and keeps anything without one as CSS text.
 
 Every stage has explicit limits on input size, storage, nesting and matching work, so hostile
 stylesheets fail with a `CssError` instead of running away.

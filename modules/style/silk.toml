@@ -14,6 +14,7 @@ exports = [
   "cssom_error", "cssom_serialization", "cssom_declaration", "cssom_descriptors",
   "cssom_stylesheet", "cssom_media", "cssom_document", "cssom_computed",
   "cssom_inline", "cssom_loading",
+  "written",
   "typed_om", "typed_om_map", "typed_om_computed", "typed_om_unparsed",
   "typed_om_numeric", "typed_om_numeric_types", "typed_om_numeric_units",
   "typed_om_numeric_parse", "typed_om_numeric_sum", "typed_om_numeric_serialization",
