@@ -176,6 +176,34 @@ pub enum FontStyle { Normal, Italic }
 /// The `white-space` shorthand's named values.
 pub enum WhiteSpace { Normal, NoWrap, Pre, PreWrap, PreLine }
 
+// SVG painting and compositing keywords, shared with renderers outside the box model.
+
+/// `fill-rule` and `clip-rule`: which regions of a path are inside it.
+pub enum FillRule { Nonzero, EvenOdd }
+/// `stroke-linecap`: the shape at the ends of open subpaths.
+pub enum LineCap { Butt, Round, Square }
+/// `stroke-linejoin`: the shape at the corners of a stroke.
+pub enum LineJoin { Miter, Round, Bevel, MiterClip, Arcs }
+/// `mix-blend-mode`: how an element blends with what is behind it (Compositing 1).
+pub enum BlendMode {
+  Normal,
+  Multiply,
+  Screen,
+  Overlay,
+  Darken,
+  Lighten,
+  ColorDodge,
+  ColorBurn,
+  HardLight,
+  SoftLight,
+  Difference,
+  Exclusion,
+  Hue,
+  Saturation,
+  Color,
+  Luminosity,
+}
+
 /// `text-decoration-line` as flags.
 pub struct DecorationLine { pub underline: bool, pub overline: bool, pub lineThrough: bool }
 impl Copy for DecorationLine {}

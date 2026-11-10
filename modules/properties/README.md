@@ -30,7 +30,10 @@ import these instead of defining their own.
   CSSOM does. css-style's `written` module parses CSS text into these values.
 
 - **Keywords** (`keywords`, `keyword_enums`): one `Keyword` enum with CSS spellings and lookup,
-  and for each computed keyword enum a pair of functions to and from `Keyword`.
+  and for each computed keyword enum a pair of functions to and from `Keyword`. css-style's value
+  keywords are this same enum, so a keyword read by css-style and one in a `Declaration` compare
+  directly. The computed enums include the SVG painting ones (`FillRule`, `LineCap`, `LineJoin`,
+  `BlendMode`).
 
 - **Conversion** (`convert`): written to computed against a `Context` (font sizes and viewport),
   and computed back to written. A conversion returns `None` when a value does not fit, which is

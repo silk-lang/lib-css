@@ -147,11 +147,122 @@ pub enum(u16) Keyword {
   LinearGradient,
   Blur,
   LastBaseline,
+  FromImage,
+  Smooth,
+  HighQuality,
+  Pixelated,
+  CrispImageEdges,
+  SRGB,
+  Nonzero,
+  Evenodd,
+  Butt,
+  Round,
+  Square,
+  Miter,
+  MiterClip,
+  Bevel,
+  Arcs,
+  LinearRGB,
+  OptimizeSpeed,
+  OptimizeQuality,
+  CrispEdges,
+  GeometricPrecision,
+  OptimizeLegibility,
+  Lr,
+  LrTb,
+  Rl,
+  RlTb,
+  Tb,
+  TbRl,
+  BreakWord,
+  Anywhere,
+  KeepAll,
+  BreakAll,
+  Loose,
+  Strict,
+  MatchParent,
+  JustifyAll,
+  Manual,
+  Text,
+  Emoji,
+  Unicode,
+  Luminance,
+  Alpha,
+  ListItem,
+  RunIn,
+  Compact,
+  Marker,
+  Table,
+  InlineTable,
+  TableRowGroup,
+  TableHeaderGroup,
+  TableFooterGroup,
+  TableRow,
+  TableColumnGroup,
+  TableColumn,
+  TableCell,
+  TableCaption,
+  BoundingBox,
+  VisiblePainted,
+  VisibleFill,
+  VisibleStroke,
+  Painted,
+  Stroke,
+  Multiply,
+  Screen,
+  Overlay,
+  Darken,
+  Lighten,
+  ColorDodge,
+  ColorBurn,
+  HardLight,
+  SoftLight,
+  Difference,
+  Exclusion,
+  Hue,
+  Saturation,
+  Color,
+  Luminosity,
+  ContextFill,
+  ContextStroke,
+  Crosshair,
+  Default,
+  Pointer,
+  Move,
+  EResize,
+  NeResize,
+  NwResize,
+  NResize,
+  SeResize,
+  SwResize,
+  SResize,
+  WResize,
+  Wait,
+  Help,
+  Progress,
+  NotAllowed,
+  NoDrop,
+  VerticalText,
+  Cell,
+  ContextMenu,
+  Alias,
+  Copy,
+  Grab,
+  Grabbing,
+  AllScroll,
+  ColResize,
+  RowResize,
+  EwResize,
+  NsResize,
+  NeswResize,
+  NwseResize,
+  ZoomIn,
+  ZoomOut,
 }
 
-pub const COUNT: usize = 144
+pub const COUNT: usize = 255
 
-/// The CSS spelling, lowercase.
+/// The CSS spelling. A few SVG keywords are mixed case, such as `sRGB` and `optimizeSpeed`.
 pub fn name(value: Keyword) -> &'static [u8] {
   return match value {
     Keyword.Initial => b"initial"
@@ -298,6 +409,117 @@ pub fn name(value: Keyword) -> &'static [u8] {
     Keyword.LinearGradient => b"linear-gradient"
     Keyword.Blur => b"blur"
     Keyword.LastBaseline => b"last baseline"
+    Keyword.FromImage => b"from-image"
+    Keyword.Smooth => b"smooth"
+    Keyword.HighQuality => b"high-quality"
+    Keyword.Pixelated => b"pixelated"
+    Keyword.CrispImageEdges => b"crisp-edges"
+    Keyword.SRGB => b"sRGB"
+    Keyword.Nonzero => b"nonzero"
+    Keyword.Evenodd => b"evenodd"
+    Keyword.Butt => b"butt"
+    Keyword.Round => b"round"
+    Keyword.Square => b"square"
+    Keyword.Miter => b"miter"
+    Keyword.MiterClip => b"miter-clip"
+    Keyword.Bevel => b"bevel"
+    Keyword.Arcs => b"arcs"
+    Keyword.LinearRGB => b"linearRGB"
+    Keyword.OptimizeSpeed => b"optimizeSpeed"
+    Keyword.OptimizeQuality => b"optimizeQuality"
+    Keyword.CrispEdges => b"crispEdges"
+    Keyword.GeometricPrecision => b"geometricPrecision"
+    Keyword.OptimizeLegibility => b"optimizeLegibility"
+    Keyword.Lr => b"lr"
+    Keyword.LrTb => b"lr-tb"
+    Keyword.Rl => b"rl"
+    Keyword.RlTb => b"rl-tb"
+    Keyword.Tb => b"tb"
+    Keyword.TbRl => b"tb-rl"
+    Keyword.BreakWord => b"break-word"
+    Keyword.Anywhere => b"anywhere"
+    Keyword.KeepAll => b"keep-all"
+    Keyword.BreakAll => b"break-all"
+    Keyword.Loose => b"loose"
+    Keyword.Strict => b"strict"
+    Keyword.MatchParent => b"match-parent"
+    Keyword.JustifyAll => b"justify-all"
+    Keyword.Manual => b"manual"
+    Keyword.Text => b"text"
+    Keyword.Emoji => b"emoji"
+    Keyword.Unicode => b"unicode"
+    Keyword.Luminance => b"luminance"
+    Keyword.Alpha => b"alpha"
+    Keyword.ListItem => b"list-item"
+    Keyword.RunIn => b"run-in"
+    Keyword.Compact => b"compact"
+    Keyword.Marker => b"marker"
+    Keyword.Table => b"table"
+    Keyword.InlineTable => b"inline-table"
+    Keyword.TableRowGroup => b"table-row-group"
+    Keyword.TableHeaderGroup => b"table-header-group"
+    Keyword.TableFooterGroup => b"table-footer-group"
+    Keyword.TableRow => b"table-row"
+    Keyword.TableColumnGroup => b"table-column-group"
+    Keyword.TableColumn => b"table-column"
+    Keyword.TableCell => b"table-cell"
+    Keyword.TableCaption => b"table-caption"
+    Keyword.BoundingBox => b"bounding-box"
+    Keyword.VisiblePainted => b"visiblePainted"
+    Keyword.VisibleFill => b"visibleFill"
+    Keyword.VisibleStroke => b"visibleStroke"
+    Keyword.Painted => b"painted"
+    Keyword.Stroke => b"stroke"
+    Keyword.Multiply => b"multiply"
+    Keyword.Screen => b"screen"
+    Keyword.Overlay => b"overlay"
+    Keyword.Darken => b"darken"
+    Keyword.Lighten => b"lighten"
+    Keyword.ColorDodge => b"color-dodge"
+    Keyword.ColorBurn => b"color-burn"
+    Keyword.HardLight => b"hard-light"
+    Keyword.SoftLight => b"soft-light"
+    Keyword.Difference => b"difference"
+    Keyword.Exclusion => b"exclusion"
+    Keyword.Hue => b"hue"
+    Keyword.Saturation => b"saturation"
+    Keyword.Color => b"color"
+    Keyword.Luminosity => b"luminosity"
+    Keyword.ContextFill => b"context-fill"
+    Keyword.ContextStroke => b"context-stroke"
+    Keyword.Crosshair => b"crosshair"
+    Keyword.Default => b"default"
+    Keyword.Pointer => b"pointer"
+    Keyword.Move => b"move"
+    Keyword.EResize => b"e-resize"
+    Keyword.NeResize => b"ne-resize"
+    Keyword.NwResize => b"nw-resize"
+    Keyword.NResize => b"n-resize"
+    Keyword.SeResize => b"se-resize"
+    Keyword.SwResize => b"sw-resize"
+    Keyword.SResize => b"s-resize"
+    Keyword.WResize => b"w-resize"
+    Keyword.Wait => b"wait"
+    Keyword.Help => b"help"
+    Keyword.Progress => b"progress"
+    Keyword.NotAllowed => b"not-allowed"
+    Keyword.NoDrop => b"no-drop"
+    Keyword.VerticalText => b"vertical-text"
+    Keyword.Cell => b"cell"
+    Keyword.ContextMenu => b"context-menu"
+    Keyword.Alias => b"alias"
+    Keyword.Copy => b"copy"
+    Keyword.Grab => b"grab"
+    Keyword.Grabbing => b"grabbing"
+    Keyword.AllScroll => b"all-scroll"
+    Keyword.ColResize => b"col-resize"
+    Keyword.RowResize => b"row-resize"
+    Keyword.EwResize => b"ew-resize"
+    Keyword.NsResize => b"ns-resize"
+    Keyword.NeswResize => b"nesw-resize"
+    Keyword.NwseResize => b"nwse-resize"
+    Keyword.ZoomIn => b"zoom-in"
+    Keyword.ZoomOut => b"zoom-out"
   }
 }
 
@@ -308,6 +530,17 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
   }
   let first = name[0] | 32
   match name.length {
+    2 => {
+      if first == 108 && insensitive(name, b"lr") {
+        return Option<Keyword>.some(Keyword.Lr)
+      }
+      if first == 114 && insensitive(name, b"rl") {
+        return Option<Keyword>.some(Keyword.Rl)
+      }
+      if first == 116 && insensitive(name, b"tb") {
+        return Option<Keyword>.some(Keyword.Tb)
+      }
+    }
     3 => {
       if first == 108 && insensitive(name, b"ltr") {
         return Option<Keyword>.some(Keyword.Ltr)
@@ -332,6 +565,9 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 115 && insensitive(name, b"sub") {
         return Option<Keyword>.some(Keyword.Sub)
+      }
+      if first == 104 && insensitive(name, b"hue") {
+        return Option<Keyword>.some(Keyword.Hue)
       }
     }
     4 => {
@@ -388,6 +624,36 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 98 && insensitive(name, b"blur") {
         return Option<Keyword>.some(Keyword.Blur)
+      }
+      if first == 115 && insensitive(name, b"srgb") {
+        return Option<Keyword>.some(Keyword.SRGB)
+      }
+      if first == 98 && insensitive(name, b"butt") {
+        return Option<Keyword>.some(Keyword.Butt)
+      }
+      if first == 97 && insensitive(name, b"arcs") {
+        return Option<Keyword>.some(Keyword.Arcs)
+      }
+      if first == 116 && insensitive(name, b"text") {
+        return Option<Keyword>.some(Keyword.Text)
+      }
+      if first == 109 && insensitive(name, b"move") {
+        return Option<Keyword>.some(Keyword.Move)
+      }
+      if first == 119 && insensitive(name, b"wait") {
+        return Option<Keyword>.some(Keyword.Wait)
+      }
+      if first == 104 && insensitive(name, b"help") {
+        return Option<Keyword>.some(Keyword.Help)
+      }
+      if first == 99 && insensitive(name, b"cell") {
+        return Option<Keyword>.some(Keyword.Cell)
+      }
+      if first == 99 && insensitive(name, b"copy") {
+        return Option<Keyword>.some(Keyword.Copy)
+      }
+      if first == 103 && insensitive(name, b"grab") {
+        return Option<Keyword>.some(Keyword.Grab)
       }
     }
     5 => {
@@ -450,6 +716,42 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 100 && insensitive(name, b"dense") {
         return Option<Keyword>.some(Keyword.Dense)
+      }
+      if first == 114 && insensitive(name, b"round") {
+        return Option<Keyword>.some(Keyword.Round)
+      }
+      if first == 109 && insensitive(name, b"miter") {
+        return Option<Keyword>.some(Keyword.Miter)
+      }
+      if first == 98 && insensitive(name, b"bevel") {
+        return Option<Keyword>.some(Keyword.Bevel)
+      }
+      if first == 108 && insensitive(name, b"lr-tb") {
+        return Option<Keyword>.some(Keyword.LrTb)
+      }
+      if first == 114 && insensitive(name, b"rl-tb") {
+        return Option<Keyword>.some(Keyword.RlTb)
+      }
+      if first == 116 && insensitive(name, b"tb-rl") {
+        return Option<Keyword>.some(Keyword.TbRl)
+      }
+      if first == 108 && insensitive(name, b"loose") {
+        return Option<Keyword>.some(Keyword.Loose)
+      }
+      if first == 101 && insensitive(name, b"emoji") {
+        return Option<Keyword>.some(Keyword.Emoji)
+      }
+      if first == 97 && insensitive(name, b"alpha") {
+        return Option<Keyword>.some(Keyword.Alpha)
+      }
+      if first == 116 && insensitive(name, b"table") {
+        return Option<Keyword>.some(Keyword.Table)
+      }
+      if first == 99 && insensitive(name, b"color") {
+        return Option<Keyword>.some(Keyword.Color)
+      }
+      if first == 97 && insensitive(name, b"alias") {
+        return Option<Keyword>.some(Keyword.Alias)
       }
     }
     6 => {
@@ -531,6 +833,33 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 115 && insensitive(name, b"stable") {
         return Option<Keyword>.some(Keyword.Stable)
       }
+      if first == 115 && insensitive(name, b"smooth") {
+        return Option<Keyword>.some(Keyword.Smooth)
+      }
+      if first == 115 && insensitive(name, b"square") {
+        return Option<Keyword>.some(Keyword.Square)
+      }
+      if first == 115 && insensitive(name, b"strict") {
+        return Option<Keyword>.some(Keyword.Strict)
+      }
+      if first == 109 && insensitive(name, b"manual") {
+        return Option<Keyword>.some(Keyword.Manual)
+      }
+      if first == 114 && insensitive(name, b"run-in") {
+        return Option<Keyword>.some(Keyword.RunIn)
+      }
+      if first == 109 && insensitive(name, b"marker") {
+        return Option<Keyword>.some(Keyword.Marker)
+      }
+      if first == 115 && insensitive(name, b"stroke") {
+        return Option<Keyword>.some(Keyword.Stroke)
+      }
+      if first == 115 && insensitive(name, b"screen") {
+        return Option<Keyword>.some(Keyword.Screen)
+      }
+      if first == 100 && insensitive(name, b"darken") {
+        return Option<Keyword>.some(Keyword.Darken)
+      }
     }
     7 => {
       if first == 105 && insensitive(name, b"initial") {
@@ -571,6 +900,39 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 108 && insensitive(name, b"lighter") {
         return Option<Keyword>.some(Keyword.Lighter)
+      }
+      if first == 110 && insensitive(name, b"nonzero") {
+        return Option<Keyword>.some(Keyword.Nonzero)
+      }
+      if first == 101 && insensitive(name, b"evenodd") {
+        return Option<Keyword>.some(Keyword.Evenodd)
+      }
+      if first == 117 && insensitive(name, b"unicode") {
+        return Option<Keyword>.some(Keyword.Unicode)
+      }
+      if first == 99 && insensitive(name, b"compact") {
+        return Option<Keyword>.some(Keyword.Compact)
+      }
+      if first == 112 && insensitive(name, b"painted") {
+        return Option<Keyword>.some(Keyword.Painted)
+      }
+      if first == 111 && insensitive(name, b"overlay") {
+        return Option<Keyword>.some(Keyword.Overlay)
+      }
+      if first == 108 && insensitive(name, b"lighten") {
+        return Option<Keyword>.some(Keyword.Lighten)
+      }
+      if first == 100 && insensitive(name, b"default") {
+        return Option<Keyword>.some(Keyword.Default)
+      }
+      if first == 112 && insensitive(name, b"pointer") {
+        return Option<Keyword>.some(Keyword.Pointer)
+      }
+      if first == 110 && insensitive(name, b"no-drop") {
+        return Option<Keyword>.some(Keyword.NoDrop)
+      }
+      if first == 122 && insensitive(name, b"zoom-in") {
+        return Option<Keyword>.some(Keyword.ZoomIn)
       }
     }
     8 => {
@@ -613,6 +975,36 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 111 && insensitive(name, b"overline") {
         return Option<Keyword>.some(Keyword.Overline)
       }
+      if first == 97 && insensitive(name, b"anywhere") {
+        return Option<Keyword>.some(Keyword.Anywhere)
+      }
+      if first == 107 && insensitive(name, b"keep-all") {
+        return Option<Keyword>.some(Keyword.KeepAll)
+      }
+      if first == 109 && insensitive(name, b"multiply") {
+        return Option<Keyword>.some(Keyword.Multiply)
+      }
+      if first == 101 && insensitive(name, b"e-resize") {
+        return Option<Keyword>.some(Keyword.EResize)
+      }
+      if first == 110 && insensitive(name, b"n-resize") {
+        return Option<Keyword>.some(Keyword.NResize)
+      }
+      if first == 115 && insensitive(name, b"s-resize") {
+        return Option<Keyword>.some(Keyword.SResize)
+      }
+      if first == 119 && insensitive(name, b"w-resize") {
+        return Option<Keyword>.some(Keyword.WResize)
+      }
+      if first == 112 && insensitive(name, b"progress") {
+        return Option<Keyword>.some(Keyword.Progress)
+      }
+      if first == 103 && insensitive(name, b"grabbing") {
+        return Option<Keyword>.some(Keyword.Grabbing)
+      }
+      if first == 122 && insensitive(name, b"zoom-out") {
+        return Option<Keyword>.some(Keyword.ZoomOut)
+      }
     }
     9 => {
       if first == 112 && insensitive(name, b"plaintext") {
@@ -629,6 +1021,48 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 110 && insensitive(name, b"no-repeat") {
         return Option<Keyword>.some(Keyword.NoRepeat)
+      }
+      if first == 112 && insensitive(name, b"pixelated") {
+        return Option<Keyword>.some(Keyword.Pixelated)
+      }
+      if first == 108 && insensitive(name, b"linearrgb") {
+        return Option<Keyword>.some(Keyword.LinearRGB)
+      }
+      if first == 98 && insensitive(name, b"break-all") {
+        return Option<Keyword>.some(Keyword.BreakAll)
+      }
+      if first == 108 && insensitive(name, b"luminance") {
+        return Option<Keyword>.some(Keyword.Luminance)
+      }
+      if first == 108 && insensitive(name, b"list-item") {
+        return Option<Keyword>.some(Keyword.ListItem)
+      }
+      if first == 116 && insensitive(name, b"table-row") {
+        return Option<Keyword>.some(Keyword.TableRow)
+      }
+      if first == 101 && insensitive(name, b"exclusion") {
+        return Option<Keyword>.some(Keyword.Exclusion)
+      }
+      if first == 99 && insensitive(name, b"crosshair") {
+        return Option<Keyword>.some(Keyword.Crosshair)
+      }
+      if first == 110 && insensitive(name, b"ne-resize") {
+        return Option<Keyword>.some(Keyword.NeResize)
+      }
+      if first == 110 && insensitive(name, b"nw-resize") {
+        return Option<Keyword>.some(Keyword.NwResize)
+      }
+      if first == 115 && insensitive(name, b"se-resize") {
+        return Option<Keyword>.some(Keyword.SeResize)
+      }
+      if first == 115 && insensitive(name, b"sw-resize") {
+        return Option<Keyword>.some(Keyword.SwResize)
+      }
+      if first == 101 && insensitive(name, b"ew-resize") {
+        return Option<Keyword>.some(Keyword.EwResize)
+      }
+      if first == 110 && insensitive(name, b"ns-resize") {
+        return Option<Keyword>.some(Keyword.NsResize)
       }
     }
     10 => {
@@ -652,6 +1086,48 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 98 && insensitive(name, b"both-edges") {
         return Option<Keyword>.some(Keyword.BothEdges)
+      }
+      if first == 102 && insensitive(name, b"from-image") {
+        return Option<Keyword>.some(Keyword.FromImage)
+      }
+      if first == 109 && insensitive(name, b"miter-clip") {
+        return Option<Keyword>.some(Keyword.MiterClip)
+      }
+      if first == 99 && insensitive(name, b"crispedges") {
+        return Option<Keyword>.some(Keyword.CrispEdges)
+      }
+      if first == 98 && insensitive(name, b"break-word") {
+        return Option<Keyword>.some(Keyword.BreakWord)
+      }
+      if first == 116 && insensitive(name, b"table-cell") {
+        return Option<Keyword>.some(Keyword.TableCell)
+      }
+      if first == 99 && insensitive(name, b"color-burn") {
+        return Option<Keyword>.some(Keyword.ColorBurn)
+      }
+      if first == 104 && insensitive(name, b"hard-light") {
+        return Option<Keyword>.some(Keyword.HardLight)
+      }
+      if first == 115 && insensitive(name, b"soft-light") {
+        return Option<Keyword>.some(Keyword.SoftLight)
+      }
+      if first == 100 && insensitive(name, b"difference") {
+        return Option<Keyword>.some(Keyword.Difference)
+      }
+      if first == 115 && insensitive(name, b"saturation") {
+        return Option<Keyword>.some(Keyword.Saturation)
+      }
+      if first == 108 && insensitive(name, b"luminosity") {
+        return Option<Keyword>.some(Keyword.Luminosity)
+      }
+      if first == 97 && insensitive(name, b"all-scroll") {
+        return Option<Keyword>.some(Keyword.AllScroll)
+      }
+      if first == 99 && insensitive(name, b"col-resize") {
+        return Option<Keyword>.some(Keyword.ColResize)
+      }
+      if first == 114 && insensitive(name, b"row-resize") {
+        return Option<Keyword>.some(Keyword.RowResize)
       }
     }
     11 => {
@@ -697,6 +1173,27 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 112 && insensitive(name, b"padding-box") {
         return Option<Keyword>.some(Keyword.PaddingBox)
       }
+      if first == 99 && insensitive(name, b"crisp-edges") {
+        return Option<Keyword>.some(Keyword.CrispImageEdges)
+      }
+      if first == 106 && insensitive(name, b"justify-all") {
+        return Option<Keyword>.some(Keyword.JustifyAll)
+      }
+      if first == 118 && insensitive(name, b"visiblefill") {
+        return Option<Keyword>.some(Keyword.VisibleFill)
+      }
+      if first == 99 && insensitive(name, b"color-dodge") {
+        return Option<Keyword>.some(Keyword.ColorDodge)
+      }
+      if first == 110 && insensitive(name, b"not-allowed") {
+        return Option<Keyword>.some(Keyword.NotAllowed)
+      }
+      if first == 110 && insensitive(name, b"nesw-resize") {
+        return Option<Keyword>.some(Keyword.NeswResize)
+      }
+      if first == 110 && insensitive(name, b"nwse-resize") {
+        return Option<Keyword>.some(Keyword.NwseResize)
+      }
     }
     12 => {
       if first == 114 && insensitive(name, b"revert-layer") {
@@ -729,6 +1226,27 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 99 && insensitive(name, b"currentcolor") {
         return Option<Keyword>.some(Keyword.Currentcolor)
       }
+      if first == 104 && insensitive(name, b"high-quality") {
+        return Option<Keyword>.some(Keyword.HighQuality)
+      }
+      if first == 109 && insensitive(name, b"match-parent") {
+        return Option<Keyword>.some(Keyword.MatchParent)
+      }
+      if first == 105 && insensitive(name, b"inline-table") {
+        return Option<Keyword>.some(Keyword.InlineTable)
+      }
+      if first == 116 && insensitive(name, b"table-column") {
+        return Option<Keyword>.some(Keyword.TableColumn)
+      }
+      if first == 98 && insensitive(name, b"bounding-box") {
+        return Option<Keyword>.some(Keyword.BoundingBox)
+      }
+      if first == 99 && insensitive(name, b"context-fill") {
+        return Option<Keyword>.some(Keyword.ContextFill)
+      }
+      if first == 99 && insensitive(name, b"context-menu") {
+        return Option<Keyword>.some(Keyword.ContextMenu)
+      }
     }
     13 => {
       if first == 98 && insensitive(name, b"bidi-override") {
@@ -743,10 +1261,28 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 108 && insensitive(name, b"last baseline") {
         return Option<Keyword>.some(Keyword.LastBaseline)
       }
+      if first == 111 && insensitive(name, b"optimizespeed") {
+        return Option<Keyword>.some(Keyword.OptimizeSpeed)
+      }
+      if first == 116 && insensitive(name, b"table-caption") {
+        return Option<Keyword>.some(Keyword.TableCaption)
+      }
+      if first == 118 && insensitive(name, b"visiblestroke") {
+        return Option<Keyword>.some(Keyword.VisibleStroke)
+      }
+      if first == 118 && insensitive(name, b"vertical-text") {
+        return Option<Keyword>.some(Keyword.VerticalText)
+      }
     }
     14 => {
       if first == 99 && insensitive(name, b"column-reverse") {
         return Option<Keyword>.some(Keyword.ColumnReverse)
+      }
+      if first == 118 && insensitive(name, b"visiblepainted") {
+        return Option<Keyword>.some(Keyword.VisiblePainted)
+      }
+      if first == 99 && insensitive(name, b"context-stroke") {
+        return Option<Keyword>.some(Keyword.ContextStroke)
       }
     }
     15 => {
@@ -762,10 +1298,33 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 108 && insensitive(name, b"linear-gradient") {
         return Option<Keyword>.some(Keyword.LinearGradient)
       }
+      if first == 111 && insensitive(name, b"optimizequality") {
+        return Option<Keyword>.some(Keyword.OptimizeQuality)
+      }
+      if first == 116 && insensitive(name, b"table-row-group") {
+        return Option<Keyword>.some(Keyword.TableRowGroup)
+      }
     }
     16 => {
       if first == 105 && insensitive(name, b"isolate-override") {
         return Option<Keyword>.some(Keyword.IsolateOverride)
+      }
+    }
+    18 => {
+      if first == 103 && insensitive(name, b"geometricprecision") {
+        return Option<Keyword>.some(Keyword.GeometricPrecision)
+      }
+      if first == 111 && insensitive(name, b"optimizelegibility") {
+        return Option<Keyword>.some(Keyword.OptimizeLegibility)
+      }
+      if first == 116 && insensitive(name, b"table-header-group") {
+        return Option<Keyword>.some(Keyword.TableHeaderGroup)
+      }
+      if first == 116 && insensitive(name, b"table-footer-group") {
+        return Option<Keyword>.some(Keyword.TableFooterGroup)
+      }
+      if first == 116 && insensitive(name, b"table-column-group") {
+        return Option<Keyword>.some(Keyword.TableColumnGroup)
       }
     }
     _ => {}

@@ -26,6 +26,10 @@ import computed {
   BorderStyle,
   FontStyle,
   WhiteSpace,
+  FillRule,
+  LineCap,
+  LineJoin,
+  BlendMode,
 }
 import keywords { Keyword }
 import silk.core.option { Option }
@@ -583,5 +587,109 @@ pub fn whiteSpaceOf(value: Keyword) -> Option<WhiteSpace> {
     Keyword.PreWrap => Option<WhiteSpace>.some(WhiteSpace.PreWrap)
     Keyword.PreLine => Option<WhiteSpace>.some(WhiteSpace.PreLine)
     _ => Option<WhiteSpace>.None
+  }
+}
+
+/// The keyword of a computed `FillRule`.
+pub fn fillRuleKeyword(value: FillRule) -> Keyword {
+  return match value {
+    FillRule.Nonzero => Keyword.Nonzero
+    FillRule.EvenOdd => Keyword.Evenodd
+  }
+}
+
+/// The computed `FillRule` a keyword names, if it names one.
+pub fn fillRuleOf(value: Keyword) -> Option<FillRule> {
+  return match value {
+    Keyword.Nonzero => Option<FillRule>.some(FillRule.Nonzero)
+    Keyword.Evenodd => Option<FillRule>.some(FillRule.EvenOdd)
+    _ => Option<FillRule>.None
+  }
+}
+
+/// The keyword of a computed `LineCap`.
+pub fn lineCapKeyword(value: LineCap) -> Keyword {
+  return match value {
+    LineCap.Butt => Keyword.Butt
+    LineCap.Round => Keyword.Round
+    LineCap.Square => Keyword.Square
+  }
+}
+
+/// The computed `LineCap` a keyword names, if it names one.
+pub fn lineCapOf(value: Keyword) -> Option<LineCap> {
+  return match value {
+    Keyword.Butt => Option<LineCap>.some(LineCap.Butt)
+    Keyword.Round => Option<LineCap>.some(LineCap.Round)
+    Keyword.Square => Option<LineCap>.some(LineCap.Square)
+    _ => Option<LineCap>.None
+  }
+}
+
+/// The keyword of a computed `LineJoin`.
+pub fn lineJoinKeyword(value: LineJoin) -> Keyword {
+  return match value {
+    LineJoin.Miter => Keyword.Miter
+    LineJoin.Round => Keyword.Round
+    LineJoin.Bevel => Keyword.Bevel
+    LineJoin.MiterClip => Keyword.MiterClip
+    LineJoin.Arcs => Keyword.Arcs
+  }
+}
+
+/// The computed `LineJoin` a keyword names, if it names one.
+pub fn lineJoinOf(value: Keyword) -> Option<LineJoin> {
+  return match value {
+    Keyword.Miter => Option<LineJoin>.some(LineJoin.Miter)
+    Keyword.Round => Option<LineJoin>.some(LineJoin.Round)
+    Keyword.Bevel => Option<LineJoin>.some(LineJoin.Bevel)
+    Keyword.MiterClip => Option<LineJoin>.some(LineJoin.MiterClip)
+    Keyword.Arcs => Option<LineJoin>.some(LineJoin.Arcs)
+    _ => Option<LineJoin>.None
+  }
+}
+
+/// The keyword of a computed `BlendMode`.
+pub fn blendModeKeyword(value: BlendMode) -> Keyword {
+  return match value {
+    BlendMode.Normal => Keyword.Normal
+    BlendMode.Multiply => Keyword.Multiply
+    BlendMode.Screen => Keyword.Screen
+    BlendMode.Overlay => Keyword.Overlay
+    BlendMode.Darken => Keyword.Darken
+    BlendMode.Lighten => Keyword.Lighten
+    BlendMode.ColorDodge => Keyword.ColorDodge
+    BlendMode.ColorBurn => Keyword.ColorBurn
+    BlendMode.HardLight => Keyword.HardLight
+    BlendMode.SoftLight => Keyword.SoftLight
+    BlendMode.Difference => Keyword.Difference
+    BlendMode.Exclusion => Keyword.Exclusion
+    BlendMode.Hue => Keyword.Hue
+    BlendMode.Saturation => Keyword.Saturation
+    BlendMode.Color => Keyword.Color
+    BlendMode.Luminosity => Keyword.Luminosity
+  }
+}
+
+/// The computed `BlendMode` a keyword names, if it names one.
+pub fn blendModeOf(value: Keyword) -> Option<BlendMode> {
+  return match value {
+    Keyword.Normal => Option<BlendMode>.some(BlendMode.Normal)
+    Keyword.Multiply => Option<BlendMode>.some(BlendMode.Multiply)
+    Keyword.Screen => Option<BlendMode>.some(BlendMode.Screen)
+    Keyword.Overlay => Option<BlendMode>.some(BlendMode.Overlay)
+    Keyword.Darken => Option<BlendMode>.some(BlendMode.Darken)
+    Keyword.Lighten => Option<BlendMode>.some(BlendMode.Lighten)
+    Keyword.ColorDodge => Option<BlendMode>.some(BlendMode.ColorDodge)
+    Keyword.ColorBurn => Option<BlendMode>.some(BlendMode.ColorBurn)
+    Keyword.HardLight => Option<BlendMode>.some(BlendMode.HardLight)
+    Keyword.SoftLight => Option<BlendMode>.some(BlendMode.SoftLight)
+    Keyword.Difference => Option<BlendMode>.some(BlendMode.Difference)
+    Keyword.Exclusion => Option<BlendMode>.some(BlendMode.Exclusion)
+    Keyword.Hue => Option<BlendMode>.some(BlendMode.Hue)
+    Keyword.Saturation => Option<BlendMode>.some(BlendMode.Saturation)
+    Keyword.Color => Option<BlendMode>.some(BlendMode.Color)
+    Keyword.Luminosity => Option<BlendMode>.some(BlendMode.Luminosity)
+    _ => Option<BlendMode>.None
   }
 }
