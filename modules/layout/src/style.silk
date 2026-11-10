@@ -38,6 +38,7 @@ pub import properties.computed {
   BreakBetween,
   BreakInside,
 }
+import silk.core.ownership { Copy }
 import silk.core.equal { Equal }
 import silk.core.reflect { Reflect }
 
@@ -79,6 +80,9 @@ pub struct Style {
   pub visibility: Visibility,
   pub aspectRatio: f32, pub aspectRatioAuto: bool, pub replaced: bool,
 }
+// Plain data: every field is a value or a tree-managed handle.
+impl Copy for Style {}
+
 // Every field takes part, by reflection, so a field added later cannot be left out.
 impl Equal for Style {
   fn equals(left: &Style, right: &Style) -> bool {
