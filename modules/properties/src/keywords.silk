@@ -1,0 +1,790 @@
+//! CSS keywords as plain data: the identifiers the catalog's properties take as values.
+import silk.core.option { Option }
+
+/// A CSS keyword. `name` gives its CSS spelling and `lookup` finds one by it.
+pub enum(u16) Keyword {
+  Initial,
+  Inherit,
+  Unset,
+  Revert,
+  RevertLayer,
+  Auto,
+  None,
+  Normal,
+  ContentBox,
+  BorderBox,
+  Ltr,
+  Rtl,
+  Embed,
+  Isolate,
+  BidiOverride,
+  IsolateOverride,
+  Plaintext,
+  HorizontalTb,
+  VerticalRl,
+  VerticalLr,
+  SidewaysRl,
+  SidewaysLr,
+  Mixed,
+  Upright,
+  Sideways,
+  Row,
+  RowReverse,
+  Column,
+  ColumnReverse,
+  Nowrap,
+  Wrap,
+  WrapReverse,
+  Visible,
+  Clip,
+  Hidden,
+  Scroll,
+  Thin,
+  Static,
+  Relative,
+  Absolute,
+  Fixed,
+  Sticky,
+  Left,
+  Right,
+  Both,
+  Collapse,
+  First,
+  Last,
+  Start,
+  End,
+  Center,
+  Justify,
+  InterWord,
+  InterCharacter,
+  Discard,
+  Preserve,
+  PreserveBreaks,
+  PreserveSpaces,
+  BreakSpaces,
+  Slice,
+  Clone,
+  Keep,
+  Avoid,
+  Always,
+  All,
+  AvoidPage,
+  Page,
+  Recto,
+  Verso,
+  AvoidColumn,
+  AvoidRegion,
+  Region,
+  Fill,
+  Contain,
+  Cover,
+  ScaleDown,
+  Solid,
+  Dashed,
+  Italic,
+  Pre,
+  PreWrap,
+  PreLine,
+  Block,
+  Inline,
+  InlineBlock,
+  Flex,
+  InlineFlex,
+  Flow,
+  FlowRoot,
+  Grid,
+  InlineGrid,
+  Contents,
+  MinContent,
+  MaxContent,
+  FitContent,
+  Content,
+  FlexStart,
+  FlexEnd,
+  Stretch,
+  SpaceBetween,
+  SpaceAround,
+  SpaceEvenly,
+  Baseline,
+  SelfStart,
+  SelfEnd,
+  Safe,
+  Unsafe,
+  Legacy,
+  BothEdges,
+  Middle,
+  TextTop,
+  TextBottom,
+  Top,
+  Bottom,
+  Sub,
+  Super,
+  Hanging,
+  EachLine,
+  Dotted,
+  Double,
+  Groove,
+  Ridge,
+  Inset,
+  Outset,
+  Oblique,
+  Bold,
+  Bolder,
+  Lighter,
+  Underline,
+  Overline,
+  LineThrough,
+  Wavy,
+  Transparent,
+  Currentcolor,
+  Medium,
+  Thick,
+  Dense,
+  Repeat,
+  NoRepeat,
+  PaddingBox,
+  Stable,
+  LinearGradient,
+  Blur,
+  LastBaseline,
+}
+
+pub const COUNT: usize = 144
+
+/// The CSS spelling, lowercase.
+pub fn name(value: Keyword) -> &'static [u8] {
+  return match value {
+    Keyword.Initial => b"initial"
+    Keyword.Inherit => b"inherit"
+    Keyword.Unset => b"unset"
+    Keyword.Revert => b"revert"
+    Keyword.RevertLayer => b"revert-layer"
+    Keyword.Auto => b"auto"
+    Keyword.None => b"none"
+    Keyword.Normal => b"normal"
+    Keyword.ContentBox => b"content-box"
+    Keyword.BorderBox => b"border-box"
+    Keyword.Ltr => b"ltr"
+    Keyword.Rtl => b"rtl"
+    Keyword.Embed => b"embed"
+    Keyword.Isolate => b"isolate"
+    Keyword.BidiOverride => b"bidi-override"
+    Keyword.IsolateOverride => b"isolate-override"
+    Keyword.Plaintext => b"plaintext"
+    Keyword.HorizontalTb => b"horizontal-tb"
+    Keyword.VerticalRl => b"vertical-rl"
+    Keyword.VerticalLr => b"vertical-lr"
+    Keyword.SidewaysRl => b"sideways-rl"
+    Keyword.SidewaysLr => b"sideways-lr"
+    Keyword.Mixed => b"mixed"
+    Keyword.Upright => b"upright"
+    Keyword.Sideways => b"sideways"
+    Keyword.Row => b"row"
+    Keyword.RowReverse => b"row-reverse"
+    Keyword.Column => b"column"
+    Keyword.ColumnReverse => b"column-reverse"
+    Keyword.Nowrap => b"nowrap"
+    Keyword.Wrap => b"wrap"
+    Keyword.WrapReverse => b"wrap-reverse"
+    Keyword.Visible => b"visible"
+    Keyword.Clip => b"clip"
+    Keyword.Hidden => b"hidden"
+    Keyword.Scroll => b"scroll"
+    Keyword.Thin => b"thin"
+    Keyword.Static => b"static"
+    Keyword.Relative => b"relative"
+    Keyword.Absolute => b"absolute"
+    Keyword.Fixed => b"fixed"
+    Keyword.Sticky => b"sticky"
+    Keyword.Left => b"left"
+    Keyword.Right => b"right"
+    Keyword.Both => b"both"
+    Keyword.Collapse => b"collapse"
+    Keyword.First => b"first"
+    Keyword.Last => b"last"
+    Keyword.Start => b"start"
+    Keyword.End => b"end"
+    Keyword.Center => b"center"
+    Keyword.Justify => b"justify"
+    Keyword.InterWord => b"inter-word"
+    Keyword.InterCharacter => b"inter-character"
+    Keyword.Discard => b"discard"
+    Keyword.Preserve => b"preserve"
+    Keyword.PreserveBreaks => b"preserve-breaks"
+    Keyword.PreserveSpaces => b"preserve-spaces"
+    Keyword.BreakSpaces => b"break-spaces"
+    Keyword.Slice => b"slice"
+    Keyword.Clone => b"clone"
+    Keyword.Keep => b"keep"
+    Keyword.Avoid => b"avoid"
+    Keyword.Always => b"always"
+    Keyword.All => b"all"
+    Keyword.AvoidPage => b"avoid-page"
+    Keyword.Page => b"page"
+    Keyword.Recto => b"recto"
+    Keyword.Verso => b"verso"
+    Keyword.AvoidColumn => b"avoid-column"
+    Keyword.AvoidRegion => b"avoid-region"
+    Keyword.Region => b"region"
+    Keyword.Fill => b"fill"
+    Keyword.Contain => b"contain"
+    Keyword.Cover => b"cover"
+    Keyword.ScaleDown => b"scale-down"
+    Keyword.Solid => b"solid"
+    Keyword.Dashed => b"dashed"
+    Keyword.Italic => b"italic"
+    Keyword.Pre => b"pre"
+    Keyword.PreWrap => b"pre-wrap"
+    Keyword.PreLine => b"pre-line"
+    Keyword.Block => b"block"
+    Keyword.Inline => b"inline"
+    Keyword.InlineBlock => b"inline-block"
+    Keyword.Flex => b"flex"
+    Keyword.InlineFlex => b"inline-flex"
+    Keyword.Flow => b"flow"
+    Keyword.FlowRoot => b"flow-root"
+    Keyword.Grid => b"grid"
+    Keyword.InlineGrid => b"inline-grid"
+    Keyword.Contents => b"contents"
+    Keyword.MinContent => b"min-content"
+    Keyword.MaxContent => b"max-content"
+    Keyword.FitContent => b"fit-content"
+    Keyword.Content => b"content"
+    Keyword.FlexStart => b"flex-start"
+    Keyword.FlexEnd => b"flex-end"
+    Keyword.Stretch => b"stretch"
+    Keyword.SpaceBetween => b"space-between"
+    Keyword.SpaceAround => b"space-around"
+    Keyword.SpaceEvenly => b"space-evenly"
+    Keyword.Baseline => b"baseline"
+    Keyword.SelfStart => b"self-start"
+    Keyword.SelfEnd => b"self-end"
+    Keyword.Safe => b"safe"
+    Keyword.Unsafe => b"unsafe"
+    Keyword.Legacy => b"legacy"
+    Keyword.BothEdges => b"both-edges"
+    Keyword.Middle => b"middle"
+    Keyword.TextTop => b"text-top"
+    Keyword.TextBottom => b"text-bottom"
+    Keyword.Top => b"top"
+    Keyword.Bottom => b"bottom"
+    Keyword.Sub => b"sub"
+    Keyword.Super => b"super"
+    Keyword.Hanging => b"hanging"
+    Keyword.EachLine => b"each-line"
+    Keyword.Dotted => b"dotted"
+    Keyword.Double => b"double"
+    Keyword.Groove => b"groove"
+    Keyword.Ridge => b"ridge"
+    Keyword.Inset => b"inset"
+    Keyword.Outset => b"outset"
+    Keyword.Oblique => b"oblique"
+    Keyword.Bold => b"bold"
+    Keyword.Bolder => b"bolder"
+    Keyword.Lighter => b"lighter"
+    Keyword.Underline => b"underline"
+    Keyword.Overline => b"overline"
+    Keyword.LineThrough => b"line-through"
+    Keyword.Wavy => b"wavy"
+    Keyword.Transparent => b"transparent"
+    Keyword.Currentcolor => b"currentcolor"
+    Keyword.Medium => b"medium"
+    Keyword.Thick => b"thick"
+    Keyword.Dense => b"dense"
+    Keyword.Repeat => b"repeat"
+    Keyword.NoRepeat => b"no-repeat"
+    Keyword.PaddingBox => b"padding-box"
+    Keyword.Stable => b"stable"
+    Keyword.LinearGradient => b"linear-gradient"
+    Keyword.Blur => b"blur"
+    Keyword.LastBaseline => b"last baseline"
+  }
+}
+
+/// The keyword spelled `name`, compared ASCII case-insensitively.
+pub fn lookup(name: &[u8]) -> Option<Keyword> {
+  if name.length == 0 {
+    return Option<Keyword>.None
+  }
+  let first = name[0] | 32
+  match name.length {
+    3 => {
+      if first == 108 && insensitive(name, b"ltr") {
+        return Option<Keyword>.some(Keyword.Ltr)
+      }
+      if first == 114 && insensitive(name, b"rtl") {
+        return Option<Keyword>.some(Keyword.Rtl)
+      }
+      if first == 114 && insensitive(name, b"row") {
+        return Option<Keyword>.some(Keyword.Row)
+      }
+      if first == 101 && insensitive(name, b"end") {
+        return Option<Keyword>.some(Keyword.End)
+      }
+      if first == 97 && insensitive(name, b"all") {
+        return Option<Keyword>.some(Keyword.All)
+      }
+      if first == 112 && insensitive(name, b"pre") {
+        return Option<Keyword>.some(Keyword.Pre)
+      }
+      if first == 116 && insensitive(name, b"top") {
+        return Option<Keyword>.some(Keyword.Top)
+      }
+      if first == 115 && insensitive(name, b"sub") {
+        return Option<Keyword>.some(Keyword.Sub)
+      }
+    }
+    4 => {
+      if first == 97 && insensitive(name, b"auto") {
+        return Option<Keyword>.some(Keyword.Auto)
+      }
+      if first == 110 && insensitive(name, b"none") {
+        return Option<Keyword>.some(Keyword.None)
+      }
+      if first == 119 && insensitive(name, b"wrap") {
+        return Option<Keyword>.some(Keyword.Wrap)
+      }
+      if first == 99 && insensitive(name, b"clip") {
+        return Option<Keyword>.some(Keyword.Clip)
+      }
+      if first == 116 && insensitive(name, b"thin") {
+        return Option<Keyword>.some(Keyword.Thin)
+      }
+      if first == 108 && insensitive(name, b"left") {
+        return Option<Keyword>.some(Keyword.Left)
+      }
+      if first == 98 && insensitive(name, b"both") {
+        return Option<Keyword>.some(Keyword.Both)
+      }
+      if first == 108 && insensitive(name, b"last") {
+        return Option<Keyword>.some(Keyword.Last)
+      }
+      if first == 107 && insensitive(name, b"keep") {
+        return Option<Keyword>.some(Keyword.Keep)
+      }
+      if first == 112 && insensitive(name, b"page") {
+        return Option<Keyword>.some(Keyword.Page)
+      }
+      if first == 102 && insensitive(name, b"fill") {
+        return Option<Keyword>.some(Keyword.Fill)
+      }
+      if first == 102 && insensitive(name, b"flex") {
+        return Option<Keyword>.some(Keyword.Flex)
+      }
+      if first == 102 && insensitive(name, b"flow") {
+        return Option<Keyword>.some(Keyword.Flow)
+      }
+      if first == 103 && insensitive(name, b"grid") {
+        return Option<Keyword>.some(Keyword.Grid)
+      }
+      if first == 115 && insensitive(name, b"safe") {
+        return Option<Keyword>.some(Keyword.Safe)
+      }
+      if first == 98 && insensitive(name, b"bold") {
+        return Option<Keyword>.some(Keyword.Bold)
+      }
+      if first == 119 && insensitive(name, b"wavy") {
+        return Option<Keyword>.some(Keyword.Wavy)
+      }
+      if first == 98 && insensitive(name, b"blur") {
+        return Option<Keyword>.some(Keyword.Blur)
+      }
+    }
+    5 => {
+      if first == 117 && insensitive(name, b"unset") {
+        return Option<Keyword>.some(Keyword.Unset)
+      }
+      if first == 101 && insensitive(name, b"embed") {
+        return Option<Keyword>.some(Keyword.Embed)
+      }
+      if first == 109 && insensitive(name, b"mixed") {
+        return Option<Keyword>.some(Keyword.Mixed)
+      }
+      if first == 102 && insensitive(name, b"fixed") {
+        return Option<Keyword>.some(Keyword.Fixed)
+      }
+      if first == 114 && insensitive(name, b"right") {
+        return Option<Keyword>.some(Keyword.Right)
+      }
+      if first == 102 && insensitive(name, b"first") {
+        return Option<Keyword>.some(Keyword.First)
+      }
+      if first == 115 && insensitive(name, b"start") {
+        return Option<Keyword>.some(Keyword.Start)
+      }
+      if first == 115 && insensitive(name, b"slice") {
+        return Option<Keyword>.some(Keyword.Slice)
+      }
+      if first == 99 && insensitive(name, b"clone") {
+        return Option<Keyword>.some(Keyword.Clone)
+      }
+      if first == 97 && insensitive(name, b"avoid") {
+        return Option<Keyword>.some(Keyword.Avoid)
+      }
+      if first == 114 && insensitive(name, b"recto") {
+        return Option<Keyword>.some(Keyword.Recto)
+      }
+      if first == 118 && insensitive(name, b"verso") {
+        return Option<Keyword>.some(Keyword.Verso)
+      }
+      if first == 99 && insensitive(name, b"cover") {
+        return Option<Keyword>.some(Keyword.Cover)
+      }
+      if first == 115 && insensitive(name, b"solid") {
+        return Option<Keyword>.some(Keyword.Solid)
+      }
+      if first == 98 && insensitive(name, b"block") {
+        return Option<Keyword>.some(Keyword.Block)
+      }
+      if first == 115 && insensitive(name, b"super") {
+        return Option<Keyword>.some(Keyword.Super)
+      }
+      if first == 114 && insensitive(name, b"ridge") {
+        return Option<Keyword>.some(Keyword.Ridge)
+      }
+      if first == 105 && insensitive(name, b"inset") {
+        return Option<Keyword>.some(Keyword.Inset)
+      }
+      if first == 116 && insensitive(name, b"thick") {
+        return Option<Keyword>.some(Keyword.Thick)
+      }
+      if first == 100 && insensitive(name, b"dense") {
+        return Option<Keyword>.some(Keyword.Dense)
+      }
+    }
+    6 => {
+      if first == 114 && insensitive(name, b"revert") {
+        return Option<Keyword>.some(Keyword.Revert)
+      }
+      if first == 110 && insensitive(name, b"normal") {
+        return Option<Keyword>.some(Keyword.Normal)
+      }
+      if first == 99 && insensitive(name, b"column") {
+        return Option<Keyword>.some(Keyword.Column)
+      }
+      if first == 110 && insensitive(name, b"nowrap") {
+        return Option<Keyword>.some(Keyword.Nowrap)
+      }
+      if first == 104 && insensitive(name, b"hidden") {
+        return Option<Keyword>.some(Keyword.Hidden)
+      }
+      if first == 115 && insensitive(name, b"scroll") {
+        return Option<Keyword>.some(Keyword.Scroll)
+      }
+      if first == 115 && insensitive(name, b"static") {
+        return Option<Keyword>.some(Keyword.Static)
+      }
+      if first == 115 && insensitive(name, b"sticky") {
+        return Option<Keyword>.some(Keyword.Sticky)
+      }
+      if first == 99 && insensitive(name, b"center") {
+        return Option<Keyword>.some(Keyword.Center)
+      }
+      if first == 97 && insensitive(name, b"always") {
+        return Option<Keyword>.some(Keyword.Always)
+      }
+      if first == 114 && insensitive(name, b"region") {
+        return Option<Keyword>.some(Keyword.Region)
+      }
+      if first == 100 && insensitive(name, b"dashed") {
+        return Option<Keyword>.some(Keyword.Dashed)
+      }
+      if first == 105 && insensitive(name, b"italic") {
+        return Option<Keyword>.some(Keyword.Italic)
+      }
+      if first == 105 && insensitive(name, b"inline") {
+        return Option<Keyword>.some(Keyword.Inline)
+      }
+      if first == 117 && insensitive(name, b"unsafe") {
+        return Option<Keyword>.some(Keyword.Unsafe)
+      }
+      if first == 108 && insensitive(name, b"legacy") {
+        return Option<Keyword>.some(Keyword.Legacy)
+      }
+      if first == 109 && insensitive(name, b"middle") {
+        return Option<Keyword>.some(Keyword.Middle)
+      }
+      if first == 98 && insensitive(name, b"bottom") {
+        return Option<Keyword>.some(Keyword.Bottom)
+      }
+      if first == 100 && insensitive(name, b"dotted") {
+        return Option<Keyword>.some(Keyword.Dotted)
+      }
+      if first == 100 && insensitive(name, b"double") {
+        return Option<Keyword>.some(Keyword.Double)
+      }
+      if first == 103 && insensitive(name, b"groove") {
+        return Option<Keyword>.some(Keyword.Groove)
+      }
+      if first == 111 && insensitive(name, b"outset") {
+        return Option<Keyword>.some(Keyword.Outset)
+      }
+      if first == 98 && insensitive(name, b"bolder") {
+        return Option<Keyword>.some(Keyword.Bolder)
+      }
+      if first == 109 && insensitive(name, b"medium") {
+        return Option<Keyword>.some(Keyword.Medium)
+      }
+      if first == 114 && insensitive(name, b"repeat") {
+        return Option<Keyword>.some(Keyword.Repeat)
+      }
+      if first == 115 && insensitive(name, b"stable") {
+        return Option<Keyword>.some(Keyword.Stable)
+      }
+    }
+    7 => {
+      if first == 105 && insensitive(name, b"initial") {
+        return Option<Keyword>.some(Keyword.Initial)
+      }
+      if first == 105 && insensitive(name, b"inherit") {
+        return Option<Keyword>.some(Keyword.Inherit)
+      }
+      if first == 105 && insensitive(name, b"isolate") {
+        return Option<Keyword>.some(Keyword.Isolate)
+      }
+      if first == 117 && insensitive(name, b"upright") {
+        return Option<Keyword>.some(Keyword.Upright)
+      }
+      if first == 118 && insensitive(name, b"visible") {
+        return Option<Keyword>.some(Keyword.Visible)
+      }
+      if first == 106 && insensitive(name, b"justify") {
+        return Option<Keyword>.some(Keyword.Justify)
+      }
+      if first == 100 && insensitive(name, b"discard") {
+        return Option<Keyword>.some(Keyword.Discard)
+      }
+      if first == 99 && insensitive(name, b"contain") {
+        return Option<Keyword>.some(Keyword.Contain)
+      }
+      if first == 99 && insensitive(name, b"content") {
+        return Option<Keyword>.some(Keyword.Content)
+      }
+      if first == 115 && insensitive(name, b"stretch") {
+        return Option<Keyword>.some(Keyword.Stretch)
+      }
+      if first == 104 && insensitive(name, b"hanging") {
+        return Option<Keyword>.some(Keyword.Hanging)
+      }
+      if first == 111 && insensitive(name, b"oblique") {
+        return Option<Keyword>.some(Keyword.Oblique)
+      }
+      if first == 108 && insensitive(name, b"lighter") {
+        return Option<Keyword>.some(Keyword.Lighter)
+      }
+    }
+    8 => {
+      if first == 115 && insensitive(name, b"sideways") {
+        return Option<Keyword>.some(Keyword.Sideways)
+      }
+      if first == 114 && insensitive(name, b"relative") {
+        return Option<Keyword>.some(Keyword.Relative)
+      }
+      if first == 97 && insensitive(name, b"absolute") {
+        return Option<Keyword>.some(Keyword.Absolute)
+      }
+      if first == 99 && insensitive(name, b"collapse") {
+        return Option<Keyword>.some(Keyword.Collapse)
+      }
+      if first == 112 && insensitive(name, b"preserve") {
+        return Option<Keyword>.some(Keyword.Preserve)
+      }
+      if first == 112 && insensitive(name, b"pre-wrap") {
+        return Option<Keyword>.some(Keyword.PreWrap)
+      }
+      if first == 112 && insensitive(name, b"pre-line") {
+        return Option<Keyword>.some(Keyword.PreLine)
+      }
+      if first == 99 && insensitive(name, b"contents") {
+        return Option<Keyword>.some(Keyword.Contents)
+      }
+      if first == 102 && insensitive(name, b"flex-end") {
+        return Option<Keyword>.some(Keyword.FlexEnd)
+      }
+      if first == 98 && insensitive(name, b"baseline") {
+        return Option<Keyword>.some(Keyword.Baseline)
+      }
+      if first == 115 && insensitive(name, b"self-end") {
+        return Option<Keyword>.some(Keyword.SelfEnd)
+      }
+      if first == 116 && insensitive(name, b"text-top") {
+        return Option<Keyword>.some(Keyword.TextTop)
+      }
+      if first == 111 && insensitive(name, b"overline") {
+        return Option<Keyword>.some(Keyword.Overline)
+      }
+    }
+    9 => {
+      if first == 112 && insensitive(name, b"plaintext") {
+        return Option<Keyword>.some(Keyword.Plaintext)
+      }
+      if first == 102 && insensitive(name, b"flow-root") {
+        return Option<Keyword>.some(Keyword.FlowRoot)
+      }
+      if first == 101 && insensitive(name, b"each-line") {
+        return Option<Keyword>.some(Keyword.EachLine)
+      }
+      if first == 117 && insensitive(name, b"underline") {
+        return Option<Keyword>.some(Keyword.Underline)
+      }
+      if first == 110 && insensitive(name, b"no-repeat") {
+        return Option<Keyword>.some(Keyword.NoRepeat)
+      }
+    }
+    10 => {
+      if first == 98 && insensitive(name, b"border-box") {
+        return Option<Keyword>.some(Keyword.BorderBox)
+      }
+      if first == 105 && insensitive(name, b"inter-word") {
+        return Option<Keyword>.some(Keyword.InterWord)
+      }
+      if first == 97 && insensitive(name, b"avoid-page") {
+        return Option<Keyword>.some(Keyword.AvoidPage)
+      }
+      if first == 115 && insensitive(name, b"scale-down") {
+        return Option<Keyword>.some(Keyword.ScaleDown)
+      }
+      if first == 102 && insensitive(name, b"flex-start") {
+        return Option<Keyword>.some(Keyword.FlexStart)
+      }
+      if first == 115 && insensitive(name, b"self-start") {
+        return Option<Keyword>.some(Keyword.SelfStart)
+      }
+      if first == 98 && insensitive(name, b"both-edges") {
+        return Option<Keyword>.some(Keyword.BothEdges)
+      }
+    }
+    11 => {
+      if first == 99 && insensitive(name, b"content-box") {
+        return Option<Keyword>.some(Keyword.ContentBox)
+      }
+      if first == 118 && insensitive(name, b"vertical-rl") {
+        return Option<Keyword>.some(Keyword.VerticalRl)
+      }
+      if first == 118 && insensitive(name, b"vertical-lr") {
+        return Option<Keyword>.some(Keyword.VerticalLr)
+      }
+      if first == 115 && insensitive(name, b"sideways-rl") {
+        return Option<Keyword>.some(Keyword.SidewaysRl)
+      }
+      if first == 115 && insensitive(name, b"sideways-lr") {
+        return Option<Keyword>.some(Keyword.SidewaysLr)
+      }
+      if first == 114 && insensitive(name, b"row-reverse") {
+        return Option<Keyword>.some(Keyword.RowReverse)
+      }
+      if first == 105 && insensitive(name, b"inline-flex") {
+        return Option<Keyword>.some(Keyword.InlineFlex)
+      }
+      if first == 105 && insensitive(name, b"inline-grid") {
+        return Option<Keyword>.some(Keyword.InlineGrid)
+      }
+      if first == 109 && insensitive(name, b"min-content") {
+        return Option<Keyword>.some(Keyword.MinContent)
+      }
+      if first == 109 && insensitive(name, b"max-content") {
+        return Option<Keyword>.some(Keyword.MaxContent)
+      }
+      if first == 102 && insensitive(name, b"fit-content") {
+        return Option<Keyword>.some(Keyword.FitContent)
+      }
+      if first == 116 && insensitive(name, b"text-bottom") {
+        return Option<Keyword>.some(Keyword.TextBottom)
+      }
+      if first == 116 && insensitive(name, b"transparent") {
+        return Option<Keyword>.some(Keyword.Transparent)
+      }
+      if first == 112 && insensitive(name, b"padding-box") {
+        return Option<Keyword>.some(Keyword.PaddingBox)
+      }
+    }
+    12 => {
+      if first == 114 && insensitive(name, b"revert-layer") {
+        return Option<Keyword>.some(Keyword.RevertLayer)
+      }
+      if first == 119 && insensitive(name, b"wrap-reverse") {
+        return Option<Keyword>.some(Keyword.WrapReverse)
+      }
+      if first == 98 && insensitive(name, b"break-spaces") {
+        return Option<Keyword>.some(Keyword.BreakSpaces)
+      }
+      if first == 97 && insensitive(name, b"avoid-column") {
+        return Option<Keyword>.some(Keyword.AvoidColumn)
+      }
+      if first == 97 && insensitive(name, b"avoid-region") {
+        return Option<Keyword>.some(Keyword.AvoidRegion)
+      }
+      if first == 105 && insensitive(name, b"inline-block") {
+        return Option<Keyword>.some(Keyword.InlineBlock)
+      }
+      if first == 115 && insensitive(name, b"space-around") {
+        return Option<Keyword>.some(Keyword.SpaceAround)
+      }
+      if first == 115 && insensitive(name, b"space-evenly") {
+        return Option<Keyword>.some(Keyword.SpaceEvenly)
+      }
+      if first == 108 && insensitive(name, b"line-through") {
+        return Option<Keyword>.some(Keyword.LineThrough)
+      }
+      if first == 99 && insensitive(name, b"currentcolor") {
+        return Option<Keyword>.some(Keyword.Currentcolor)
+      }
+    }
+    13 => {
+      if first == 98 && insensitive(name, b"bidi-override") {
+        return Option<Keyword>.some(Keyword.BidiOverride)
+      }
+      if first == 104 && insensitive(name, b"horizontal-tb") {
+        return Option<Keyword>.some(Keyword.HorizontalTb)
+      }
+      if first == 115 && insensitive(name, b"space-between") {
+        return Option<Keyword>.some(Keyword.SpaceBetween)
+      }
+      if first == 108 && insensitive(name, b"last baseline") {
+        return Option<Keyword>.some(Keyword.LastBaseline)
+      }
+    }
+    14 => {
+      if first == 99 && insensitive(name, b"column-reverse") {
+        return Option<Keyword>.some(Keyword.ColumnReverse)
+      }
+    }
+    15 => {
+      if first == 105 && insensitive(name, b"inter-character") {
+        return Option<Keyword>.some(Keyword.InterCharacter)
+      }
+      if first == 112 && insensitive(name, b"preserve-breaks") {
+        return Option<Keyword>.some(Keyword.PreserveBreaks)
+      }
+      if first == 112 && insensitive(name, b"preserve-spaces") {
+        return Option<Keyword>.some(Keyword.PreserveSpaces)
+      }
+      if first == 108 && insensitive(name, b"linear-gradient") {
+        return Option<Keyword>.some(Keyword.LinearGradient)
+      }
+    }
+    16 => {
+      if first == 105 && insensitive(name, b"isolate-override") {
+        return Option<Keyword>.some(Keyword.IsolateOverride)
+      }
+    }
+    _ => {}
+  }
+  return Option<Keyword>.None
+}
+
+fn insensitive(a: &[u8], b: &[u8]) -> bool {
+  let mut i: usize = 0
+  while i < a.length {
+    let x = if a[i] >= 65 && a[i] <= 90 {
+      a[i] + 32
+    } else {
+      a[i]
+    }
+    if x != b[i] {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}

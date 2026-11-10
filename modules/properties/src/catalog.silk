@@ -283,11 +283,13 @@ pub enum(u16) Property {
   Orphans,
   Widows,
   CaretColor,
+  SilkSelectionColor,
+  SilkPlaceholderColor,
 }
 
-pub const COUNT: usize = 280
+pub const COUNT: usize = 282
 
-pub fn all() -> [Property; 280] {
+pub fn all() -> [Property; 282] {
   return [
     Property.Fill,
     Property.FillRule,
@@ -569,6 +571,8 @@ pub fn all() -> [Property; 280] {
     Property.Orphans,
     Property.Widows,
     Property.CaretColor,
+    Property.SilkSelectionColor,
+    Property.SilkPlaceholderColor,
   ]
 }
 
@@ -854,6 +858,8 @@ pub fn index(property: Property) -> usize {
     Property.Orphans => 277
     Property.Widows => 278
     Property.CaretColor => 279
+    Property.SilkSelectionColor => 280
+    Property.SilkPlaceholderColor => 281
   }
 }
 
@@ -1139,6 +1145,8 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.Orphans => b"orphans"
     Property.Widows => b"widows"
     Property.CaretColor => b"caret-color"
+    Property.SilkSelectionColor => b"-silk-selection-color"
+    Property.SilkPlaceholderColor => b"-silk-placeholder-color"
   }
 }
 
@@ -1971,6 +1979,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 98 && insensitive(name, b"background-attachment") {
         return Option<Property>.some(Property.BackgroundAttachment)
       }
+      if first == 45 && insensitive(name, b"-silk-selection-color") {
+        return Option<Property>.some(Property.SilkSelectionColor)
+      }
     }
     22 => {
       if first == 102 && insensitive(name, b"font-variant-ligatures") {
@@ -2007,6 +2018,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 98 && insensitive(name, b"border-top-right-radius") {
         return Option<Property>.some(Property.BorderTopRightRadius)
+      }
+      if first == 45 && insensitive(name, b"-silk-placeholder-color") {
+        return Option<Property>.some(Property.SilkPlaceholderColor)
       }
     }
     25 => {
@@ -2331,6 +2345,8 @@ pub fn inherited(property: Property) -> bool {
     Property.Orphans => true
     Property.Widows => true
     Property.CaretColor => true
+    Property.SilkSelectionColor => true
+    Property.SilkPlaceholderColor => true
   }
 }
 
@@ -2618,6 +2634,8 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.Orphans => b"2"
     Property.Widows => b"2"
     Property.CaretColor => b"auto"
+    Property.SilkSelectionColor => b"rgb(180, 213, 254)"
+    Property.SilkPlaceholderColor => b"auto"
   }
 }
 
@@ -2652,7 +2670,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 239
+    Property.All => 241
     Property.Animation => 8
     Property.WhiteSpace => 3
     Property.Marker => 3
@@ -3428,6 +3446,12 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 238 {
         return Property.CaretColor
+      }
+      if index == 239 {
+        return Property.SilkSelectionColor
+      }
+      if index == 240 {
+        return Property.SilkPlaceholderColor
       }
     }
     Property.WhiteSpace => {

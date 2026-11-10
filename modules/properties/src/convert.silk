@@ -1,0 +1,808 @@
+//! Between values as written and computed values. Written to computed resolves units against
+//! a `Context` and turns percentages into fractions; computed to written goes the other way
+//! for an inspector. A conversion returns `None` when the written value has no computed form
+//! for that type, which is how a caller ignores an invalid declaration.
+import computed {
+  Dimension,
+  DimensionKind,
+  Display,
+  DisplayOutside,
+  DisplayInside,
+  Align,
+  OverflowAlignment,
+  ScrollbarGutter,
+  LineHeight,
+  VerticalAlign,
+  VerticalAlignKind,
+  TabSize,
+  TextIndent,
+  DecorationLine,
+  BoxShadow,
+  Fill,
+}
+import keywords { Keyword }
+import values { Value, Unit, MathOperator }
+import silk.collections.list { List }
+import silk.color.rgba { Rgba }
+import silk.core.option { Option }
+import silk.core.ownership { Copy }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+
+/// What relative units resolve against. Sizes are CSS pixels.
+pub struct Context {
+  /// The element's font size, for `em`.
+  pub fontSize: f32,
+  /// The root font size, for `rem`.
+  pub rootFontSize: f32,
+  pub viewportWidth: f32,
+  pub viewportHeight: f32,
+}
+
+impl Copy for Context {}
+
+impl Context {
+  /// A 16 px font and an empty viewport.
+  pub fn make() -> Context {
+    return Context { fontSize: 16.0, rootFontSize: 16.0, viewportWidth: 0.0, viewportHeight: 0.0 }
+  }
+}
+
+/// CSS pixels per one `unit`, or `None` when `unit` is not a length this context resolves.
+pub fn pixelsPer(unit: Unit, context: &Context) -> Option<f32> {
+  let smaller = if context.viewportWidth < context.viewportHeight {
+    context.viewportWidth
+  } else {
+    context.viewportHeight
+  }
+  let larger = if context.viewportWidth < context.viewportHeight {
+    context.viewportHeight
+  } else {
+    context.viewportWidth
+  }
+  return match unit {
+    Unit.Px => Option<f32>.some(1.0)
+    Unit.Cm => Option<f32>.some(96.0 / 2.54)
+    Unit.Mm => Option<f32>.some(96.0 / 25.4)
+    Unit.Q => Option<f32>.some(96.0 / 101.6)
+    Unit.In => Option<f32>.some(96.0)
+    Unit.Pt => Option<f32>.some(96.0 / 72.0)
+    Unit.Pc => Option<f32>.some(16.0)
+    Unit.Em => Option<f32>.some(context.fontSize)
+    Unit.Rem => Option<f32>.some(context.rootFontSize)
+    // Without font metrics CSS Values 4 §6.1 allows 0.5em for ex and ch, and 1em for ic and cap.
+    Unit.Ex => Option<f32>.some(context.fontSize * 0.5)
+    Unit.Ch => Option<f32>.some(context.fontSize * 0.5)
+    Unit.Ic => Option<f32>.some(context.fontSize)
+    Unit.Cap => Option<f32>.some(context.fontSize)
+    Unit.Rex => Option<f32>.some(context.rootFontSize * 0.5)
+    Unit.Rch => Option<f32>.some(context.rootFontSize * 0.5)
+    Unit.Ric => Option<f32>.some(context.rootFontSize)
+    Unit.Rcap => Option<f32>.some(context.rootFontSize)
+    Unit.Vw => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Svw => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Lvw => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Dvw => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Vi => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Svi => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Lvi => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Dvi => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Vh => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Svh => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Lvh => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Dvh => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Vb => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Svb => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Lvb => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Dvb => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Vmin => Option<f32>.some(smaller / 100.0)
+    Unit.Svmin => Option<f32>.some(smaller / 100.0)
+    Unit.Lvmin => Option<f32>.some(smaller / 100.0)
+    Unit.Dvmin => Option<f32>.some(smaller / 100.0)
+    Unit.Vmax => Option<f32>.some(larger / 100.0)
+    Unit.Svmax => Option<f32>.some(larger / 100.0)
+    Unit.Lvmax => Option<f32>.some(larger / 100.0)
+    Unit.Dvmax => Option<f32>.some(larger / 100.0)
+    _ => Option<f32>.None
+  }
+}
+
+/// A length plus a percentage: what a `calc()` over lengths and percentages reduces to.
+/// `percent` is a fraction. `scalar` is true when the value was a plain number.
+struct Linear {
+  pixels: f32,
+  percent: f32,
+  scalar: bool,
+  valid: bool,
+}
+
+impl Copy for Linear {}
+
+fn invalid() -> Linear {
+  return Linear { pixels: 0.0, percent: 0.0, scalar: false, valid: false }
+}
+
+fn linear(value: &Value, context: &Context) -> Linear {
+  match &value.* {
+    Value.Unit { value: amount, unit } => {
+      if unit == Unit.Number {
+        return Linear { pixels: amount, percent: 0.0, scalar: true, valid: true }
+      }
+      if unit == Unit.Percent {
+        return Linear { pixels: 0.0, percent: amount / 100.0, scalar: false, valid: true }
+      }
+      return match pixelsPer(unit, context) {
+        Option.Some { value: scale } => Linear { pixels: amount * scale, percent: 0.0, scalar: false, valid: true }
+        Option.None => invalid()
+      }
+    }
+    Value.Math { operator, values } => {
+      let items = values.asSlice()
+      if items.length == 0 {
+        return invalid()
+      }
+      let mut total = linear(&items[0], context)
+      if !total.valid {
+        return invalid()
+      }
+      match operator {
+        MathOperator.Negate => {
+          total.pixels = 0.0 - total.pixels
+          total.percent = 0.0 - total.percent
+          return total
+        }
+        MathOperator.Invert => {
+          if !total.scalar || total.pixels == 0.0 {
+            return invalid()
+          }
+          total.pixels = 1.0 / total.pixels
+          return total
+        }
+        _ => {}
+      }
+      let mut i: usize = 1
+      while i < items.length {
+        let next = linear(&items[i], context)
+        if !next.valid {
+          return invalid()
+        }
+        match operator {
+          MathOperator.Sum => {
+            if next.scalar != total.scalar {
+              return invalid()
+            }
+            total.pixels = total.pixels + next.pixels
+            total.percent = total.percent + next.percent
+          }
+          MathOperator.Product => {
+            if next.scalar {
+              total.pixels = total.pixels * next.pixels
+              total.percent = total.percent * next.pixels
+            } else if total.scalar {
+              let factor = total.pixels
+              total = Linear { pixels: next.pixels * factor, percent: next.percent * factor, scalar: false, valid: true }
+            } else {
+              return invalid()
+            }
+          }
+          MathOperator.Min => {
+            // Comparing needs the percentage basis, which only layout knows.
+            if next.percent != 0.0 || total.percent != 0.0 || next.scalar != total.scalar {
+              return invalid()
+            }
+            if next.pixels < total.pixels {
+              total.pixels = next.pixels
+            }
+          }
+          MathOperator.Max => {
+            if next.percent != 0.0 || total.percent != 0.0 || next.scalar != total.scalar {
+              return invalid()
+            }
+            if next.pixels > total.pixels {
+              total.pixels = next.pixels
+            }
+          }
+          _ => {
+            return invalid()
+          }
+        }
+        i = i + 1
+      }
+      return total
+    }
+    _ => {
+      return invalid()
+    }
+  }
+}
+
+/// The keyword `value` is, if it is one.
+pub fn keywordOf(value: &Value) -> Option<Keyword> {
+  return match &value.* {
+    Value.Keyword { value: inner } => Option<Keyword>.some(inner)
+    _ => Option<Keyword>.None
+  }
+}
+
+/// Whether `value` is the keyword `expected`.
+pub fn isKeyword(value: &Value, expected: Keyword) -> bool {
+  return match &value.* {
+    Value.Keyword { value: inner } => inner == expected
+    _ => false
+  }
+}
+
+/// A plain number, also from a `calc()` over numbers.
+pub fn number(value: &Value) -> Option<f32> {
+  let reduced = linear(value, &Context.make())
+  if reduced.valid && reduced.scalar {
+    return Option<f32>.some(reduced.pixels)
+  }
+  return Option<f32>.None
+}
+
+/// A length in CSS pixels. A percentage is not a length.
+pub fn length(value: &Value, context: &Context) -> Option<f32> {
+  let reduced = linear(value, context)
+  if reduced.valid && reduced.percent == 0.0 && (!reduced.scalar || reduced.pixels == 0.0) {
+    return Option<f32>.some(reduced.pixels)
+  }
+  return Option<f32>.None
+}
+
+/// A size-like value: a sizing keyword, a length, a percentage or a `calc()` of both.
+pub fn dimension(value: &Value, context: &Context) -> Option<Dimension> {
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      return match inner {
+        Keyword.Auto => Option<Dimension>.some(Dimension.auto())
+        Keyword.None => Option<Dimension>.some(Dimension.keyword(DimensionKind.None))
+        Keyword.Normal => Option<Dimension>.some(Dimension.keyword(DimensionKind.Normal))
+        Keyword.MinContent => Option<Dimension>.some(Dimension.keyword(DimensionKind.MinContent))
+        Keyword.MaxContent => Option<Dimension>.some(Dimension.keyword(DimensionKind.MaxContent))
+        Keyword.FitContent => Option<Dimension>.some(Dimension.keyword(DimensionKind.FitContent))
+        Keyword.Content => Option<Dimension>.some(Dimension.keyword(DimensionKind.Content))
+        _ => Option<Dimension>.None
+      }
+    }
+    Value.Unit { value: amount, unit } => {
+      if unit == Unit.Percent {
+        return Option<Dimension>.some(Dimension.pct(amount / 100.0))
+      }
+    }
+    _ => {}
+  }
+  let reduced = linear(value, context)
+  if !reduced.valid || (reduced.scalar && reduced.pixels != 0.0) {
+    return Option<Dimension>.None
+  }
+  if reduced.percent != 0.0 {
+    return Option<Dimension>.some(Dimension.calc(reduced.pixels, reduced.percent))
+  }
+  return Option<Dimension>.some(Dimension.px(reduced.pixels))
+}
+
+/// A computed size as written: lengths in `px`, percentages 0 to 100.
+pub effect fn fromDimension(value: Dimension) -> Value ! OutOfMemoryError ? &mut Allocator {
+  match value.kind {
+    DimensionKind.Auto => {
+      return Value.Keyword { value: Keyword.Auto }
+    }
+    DimensionKind.Length => {
+      return Value.Unit { value: value.value, unit: Unit.Px }
+    }
+    DimensionKind.Percent => {
+      return Value.Unit { value: value.percent * 100.0, unit: Unit.Percent }
+    }
+    DimensionKind.Calc => {
+      let mut terms = List<Value>.make()
+      run terms.append(Value.Unit { value: value.value, unit: Unit.Px })
+      run terms.append(Value.Unit { value: value.percent * 100.0, unit: Unit.Percent })
+      return Value.Math { operator: MathOperator.Sum, values: move terms }
+    }
+    DimensionKind.MinContent => {
+      return Value.Keyword { value: Keyword.MinContent }
+    }
+    DimensionKind.MaxContent => {
+      return Value.Keyword { value: Keyword.MaxContent }
+    }
+    DimensionKind.FitContent => {
+      return Value.Keyword { value: Keyword.FitContent }
+    }
+    DimensionKind.Content => {
+      return Value.Keyword { value: Keyword.Content }
+    }
+    DimensionKind.None => {
+      return Value.Keyword { value: Keyword.None }
+    }
+    DimensionKind.Normal => {
+      return Value.Keyword { value: Keyword.Normal }
+    }
+  }
+}
+
+/// A color. `transparent` is transparent black.
+pub fn color(value: &Value) -> Option<Rgba<f32>> {
+  return match &value.* {
+    Value.Color { value: inner } => Option<Rgba<f32>>.some(inner)
+    Value.Keyword { value: inner } => if inner == Keyword.Transparent {
+      Option<Rgba<f32>>.some(Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 0.0 })
+    } else {
+      Option<Rgba<f32>>.None
+    }
+    _ => Option<Rgba<f32>>.None
+  }
+}
+
+fn box(outside: DisplayOutside, inside: DisplayInside) -> Option<Display> {
+  return Option<Display>.some(Display.Box { outside: outside, inside: inside })
+}
+
+/// `display` from its single-keyword forms.
+pub fn display(value: &Value) -> Option<Display> {
+  return match &value.* {
+    Value.Keyword { value: inner } => match inner {
+      Keyword.None => Option<Display>.some(Display.None)
+      Keyword.Contents => Option<Display>.some(Display.Contents)
+      Keyword.Block => box(DisplayOutside.Block, DisplayInside.Flow)
+      Keyword.Inline => box(DisplayOutside.Inline, DisplayInside.Flow)
+      Keyword.InlineBlock => box(DisplayOutside.Inline, DisplayInside.FlowRoot)
+      Keyword.FlowRoot => box(DisplayOutside.Block, DisplayInside.FlowRoot)
+      Keyword.Flex => box(DisplayOutside.Block, DisplayInside.Flex)
+      Keyword.InlineFlex => box(DisplayOutside.Inline, DisplayInside.Flex)
+      Keyword.Grid => box(DisplayOutside.Block, DisplayInside.Grid)
+      Keyword.InlineGrid => box(DisplayOutside.Inline, DisplayInside.Grid)
+      _ => Option<Display>.None
+    }
+    _ => Option<Display>.None
+  }
+}
+
+/// The short keyword form of a computed `display`.
+pub fn displayKeyword(value: Display) -> Keyword {
+  return match value {
+    Display.None => Keyword.None
+    Display.Contents => Keyword.Contents
+    Display.Box { outside, inside } => match inside {
+      DisplayInside.Flow => if outside == DisplayOutside.Block { Keyword.Block } else { Keyword.Inline }
+      DisplayInside.FlowRoot => if outside == DisplayOutside.Block { Keyword.FlowRoot } else { Keyword.InlineBlock }
+      DisplayInside.Flex => if outside == DisplayOutside.Block { Keyword.Flex } else { Keyword.InlineFlex }
+      DisplayInside.Grid => if outside == DisplayOutside.Block { Keyword.Grid } else { Keyword.InlineGrid }
+    }
+  }
+}
+
+/// The keyword of a computed alignment. `last baseline` is one keyword here.
+pub fn alignKeyword(value: Align) -> Keyword {
+  return match value {
+    Align.Auto => Keyword.Auto
+    Align.Normal => Keyword.Normal
+    Align.Start => Keyword.Start
+    Align.End => Keyword.End
+    Align.FlexStart => Keyword.FlexStart
+    Align.FlexEnd => Keyword.FlexEnd
+    Align.Center => Keyword.Center
+    Align.Stretch => Keyword.Stretch
+    Align.SpaceBetween => Keyword.SpaceBetween
+    Align.SpaceAround => Keyword.SpaceAround
+    Align.SpaceEvenly => Keyword.SpaceEvenly
+    Align.Baseline => Keyword.Baseline
+    Align.LastBaseline => Keyword.LastBaseline
+    Align.SelfStart => Keyword.SelfStart
+    Align.SelfEnd => Keyword.SelfEnd
+    Align.Left => Keyword.Left
+    Align.Right => Keyword.Right
+  }
+}
+
+fn alignOf(value: Keyword) -> Option<Align> {
+  return match value {
+    Keyword.Auto => Option<Align>.some(Align.Auto)
+    Keyword.Normal => Option<Align>.some(Align.Normal)
+    Keyword.Start => Option<Align>.some(Align.Start)
+    Keyword.End => Option<Align>.some(Align.End)
+    Keyword.FlexStart => Option<Align>.some(Align.FlexStart)
+    Keyword.FlexEnd => Option<Align>.some(Align.FlexEnd)
+    Keyword.Center => Option<Align>.some(Align.Center)
+    Keyword.Stretch => Option<Align>.some(Align.Stretch)
+    Keyword.SpaceBetween => Option<Align>.some(Align.SpaceBetween)
+    Keyword.SpaceAround => Option<Align>.some(Align.SpaceAround)
+    Keyword.SpaceEvenly => Option<Align>.some(Align.SpaceEvenly)
+    Keyword.Baseline => Option<Align>.some(Align.Baseline)
+    Keyword.LastBaseline => Option<Align>.some(Align.LastBaseline)
+    Keyword.SelfStart => Option<Align>.some(Align.SelfStart)
+    Keyword.SelfEnd => Option<Align>.some(Align.SelfEnd)
+    Keyword.Left => Option<Align>.some(Align.Left)
+    Keyword.Right => Option<Align>.some(Align.Right)
+    _ => Option<Align>.None
+  }
+}
+
+/// A computed alignment with its overflow safety.
+pub struct Alignment {
+  pub align: Align,
+  pub safety: OverflowAlignment,
+}
+
+impl Copy for Alignment {}
+
+/// An alignment value: a keyword, or `safe`/`unsafe` or `first`/`last` before one.
+pub fn alignment(value: &Value) -> Option<Alignment> {
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      return match alignOf(inner) {
+        Option.Some { value: align } => Option<Alignment>.some(Alignment { align: align, safety: OverflowAlignment.Default })
+        Option.None => Option<Alignment>.None
+      }
+    }
+    Value.Sequence { separator: _, values } => {
+      let items = values.asSlice()
+      if items.length != 2 {
+        return Option<Alignment>.None
+      }
+      let first = match keywordOf(&items[0]) {
+        Option.Some { value: found } => found
+        Option.None => {
+          return Option<Alignment>.None
+        }
+      }
+      let second = match keywordOf(&items[1]) {
+        Option.Some { value: found } => found
+        Option.None => {
+          return Option<Alignment>.None
+        }
+      }
+      if second == Keyword.Baseline && (first == Keyword.First || first == Keyword.Last) {
+        let align = if first == Keyword.Last { Align.LastBaseline } else { Align.Baseline }
+        return Option<Alignment>.some(Alignment { align: align, safety: OverflowAlignment.Default })
+      }
+      let safety = if first == Keyword.Safe {
+        OverflowAlignment.Safe
+      } else if first == Keyword.Unsafe {
+        OverflowAlignment.Unsafe
+      } else {
+        return Option<Alignment>.None
+      }
+      return match alignOf(second) {
+        Option.Some { value: align } => Option<Alignment>.some(Alignment { align: align, safety: safety })
+        Option.None => Option<Alignment>.None
+      }
+    }
+    _ => {
+      return Option<Alignment>.None
+    }
+  }
+}
+
+/// `scrollbar-gutter`: `auto`, `stable`, or `stable both-edges`.
+pub fn scrollbarGutter(value: &Value) -> Option<ScrollbarGutter> {
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      if inner == Keyword.Auto {
+        return Option<ScrollbarGutter>.some(ScrollbarGutter.Auto)
+      }
+      if inner == Keyword.Stable {
+        return Option<ScrollbarGutter>.some(ScrollbarGutter.Stable)
+      }
+    }
+    Value.Sequence { separator: _, values } => {
+      let items = values.asSlice()
+      if items.length == 2 && isKeyword(&items[0], Keyword.Stable) && isKeyword(&items[1], Keyword.BothEdges) {
+        return Option<ScrollbarGutter>.some(ScrollbarGutter.StableBothEdges)
+      }
+    }
+    _ => {}
+  }
+  return Option<ScrollbarGutter>.None
+}
+
+/// `line-height`: `normal`, a number, or a length. A percentage is that fraction of the
+/// font size.
+pub fn lineHeight(value: &Value, context: &Context) -> Option<LineHeight> {
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      if inner == Keyword.Normal {
+        return Option<LineHeight>.some(LineHeight.Normal)
+      }
+      return Option<LineHeight>.None
+    }
+    Value.Unit { value: amount, unit } => {
+      if unit == Unit.Percent {
+        return Option<LineHeight>.some(LineHeight.Length { value: context.fontSize * amount / 100.0 })
+      }
+    }
+    _ => {}
+  }
+  let reduced = linear(value, context)
+  if !reduced.valid || reduced.percent != 0.0 {
+    return Option<LineHeight>.None
+  }
+  if reduced.scalar {
+    return Option<LineHeight>.some(LineHeight.Number { value: reduced.pixels })
+  }
+  return Option<LineHeight>.some(LineHeight.Length { value: reduced.pixels })
+}
+
+/// `tab-size`: a number of spaces or a length.
+pub fn tabSize(value: &Value, context: &Context) -> Option<TabSize> {
+  let reduced = linear(value, context)
+  if !reduced.valid || reduced.percent != 0.0 {
+    return Option<TabSize>.None
+  }
+  if reduced.scalar {
+    return Option<TabSize>.some(TabSize.Number { value: reduced.pixels })
+  }
+  return Option<TabSize>.some(TabSize.Length { value: reduced.pixels })
+}
+
+/// `vertical-align`: a keyword, or a length or percentage shift.
+pub fn verticalAlign(value: &Value, context: &Context) -> Option<VerticalAlign> {
+  let zero = Dimension.px(0.0)
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      let kind = match inner {
+        Keyword.Baseline => VerticalAlignKind.Baseline
+        Keyword.Middle => VerticalAlignKind.Middle
+        Keyword.TextTop => VerticalAlignKind.TextTop
+        Keyword.TextBottom => VerticalAlignKind.TextBottom
+        Keyword.Top => VerticalAlignKind.Top
+        Keyword.Bottom => VerticalAlignKind.Bottom
+        Keyword.Sub => VerticalAlignKind.Sub
+        Keyword.Super => VerticalAlignKind.Super
+        _ => {
+          return Option<VerticalAlign>.None
+        }
+      }
+      return Option<VerticalAlign>.some(VerticalAlign { kind: kind, shift: zero })
+    }
+    _ => {}
+  }
+  return match dimension(value, context) {
+    Option.Some { value: shift } => Option<VerticalAlign>.some(VerticalAlign { kind: VerticalAlignKind.Shift, shift: shift })
+    Option.None => Option<VerticalAlign>.None
+  }
+}
+
+/// `text-indent`: a length or percentage, optionally followed by `hanging` and `each-line`.
+pub fn textIndent(value: &Value, context: &Context) -> Option<TextIndent> {
+  match &value.* {
+    Value.Sequence { separator: _, values } => {
+      let items = values.asSlice()
+      if items.length == 0 {
+        return Option<TextIndent>.None
+      }
+      let amount = match dimension(&items[0], context) {
+        Option.Some { value: found } => found
+        Option.None => {
+          return Option<TextIndent>.None
+        }
+      }
+      let mut out = TextIndent { value: amount, hanging: false, eachLine: false }
+      let mut i: usize = 1
+      while i < items.length {
+        if isKeyword(&items[i], Keyword.Hanging) {
+          out.hanging = true
+        } else if isKeyword(&items[i], Keyword.EachLine) {
+          out.eachLine = true
+        } else {
+          return Option<TextIndent>.None
+        }
+        i = i + 1
+      }
+      return Option<TextIndent>.some(out)
+    }
+    _ => {}
+  }
+  return match dimension(value, context) {
+    Option.Some { value: amount } => Option<TextIndent>.some(TextIndent { value: amount, hanging: false, eachLine: false })
+    Option.None => Option<TextIndent>.None
+  }
+}
+
+fn addLine(line: &mut DecorationLine, word: Keyword) -> bool {
+  if word == Keyword.Underline {
+    line.underline = true
+    return true
+  }
+  if word == Keyword.Overline {
+    line.overline = true
+    return true
+  }
+  if word == Keyword.LineThrough {
+    line.lineThrough = true
+    return true
+  }
+  return false
+}
+
+/// `text-decoration-line`: `none` or any of `underline`, `overline`, `line-through`.
+pub fn decorationLine(value: &Value) -> Option<DecorationLine> {
+  let mut line = DecorationLine.none()
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      if inner == Keyword.None || addLine(&mut line, inner) {
+        return Option<DecorationLine>.some(line)
+      }
+    }
+    Value.Sequence { separator: _, values } => {
+      let items = values.asSlice()
+      let mut i: usize = 0
+      while i < items.length {
+        let word = match keywordOf(&items[i]) {
+          Option.Some { value: found } => found
+          Option.None => {
+            return Option<DecorationLine>.None
+          }
+        }
+        if !addLine(&mut line, word) {
+          return Option<DecorationLine>.None
+        }
+        i = i + 1
+      }
+      if items.length > 0 {
+        return Option<DecorationLine>.some(line)
+      }
+    }
+    _ => {}
+  }
+  return Option<DecorationLine>.None
+}
+
+/// One `box-shadow`: two to four lengths (offset x, offset y, blur, spread), a color and
+/// `inset`, in any order. `none` is not a shadow and gives `None`.
+pub fn boxShadow(value: &Value, context: &Context) -> Option<BoxShadow> {
+  match &value.* {
+    Value.Sequence { separator: _, values } => {
+      let items = values.asSlice()
+      let mut lengths: [f32; 4] = [0.0; 4]
+      let mut count: usize = 0
+      let mut shadow = BoxShadow {
+        offsetX: 0.0,
+        offsetY: 0.0,
+        blur: 0.0,
+        spread: 0.0,
+        color: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+        inset: false,
+      }
+      let mut i: usize = 0
+      while i < items.length {
+        if isKeyword(&items[i], Keyword.Inset) {
+          shadow.inset = true
+        } else {
+          match color(&items[i]) {
+            Option.Some { value: found } => {
+              shadow.color = found
+            }
+            Option.None => {
+              match length(&items[i], context) {
+                Option.Some { value: found } => {
+                  if count == 4 {
+                    return Option<BoxShadow>.None
+                  }
+                  lengths[count] = found
+                  count = count + 1
+                }
+                Option.None => {
+                  return Option<BoxShadow>.None
+                }
+              }
+            }
+          }
+        }
+        i = i + 1
+      }
+      if count < 2 {
+        return Option<BoxShadow>.None
+      }
+      shadow.offsetX = lengths[0]
+      shadow.offsetY = lengths[1]
+      shadow.blur = lengths[2]
+      shadow.spread = lengths[3]
+      return Option<BoxShadow>.some(shadow)
+    }
+    _ => {
+      return Option<BoxShadow>.None
+    }
+  }
+}
+
+/// A background: a color, `none`, or `linear-gradient(<angle>, <color>, <color>)`.
+pub fn fill(value: &Value) -> Option<Fill> {
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      if inner == Keyword.None {
+        return Option<Fill>.some(Fill.None)
+      }
+    }
+    Value.Function { name, values } => {
+      let items = values.asSlice()
+      if name == Keyword.LinearGradient && items.length == 3 {
+        let angle = match &items[0] {
+          Value.Unit { value: amount, unit } => match unit {
+            Unit.Deg => amount
+            Unit.Grad => amount * 0.9
+            Unit.Rad => amount * 57.29578
+            Unit.Turn => amount * 360.0
+            _ => {
+              return Option<Fill>.None
+            }
+          }
+          _ => {
+            return Option<Fill>.None
+          }
+        }
+        let from = match color(&items[1]) {
+          Option.Some { value: found } => found
+          Option.None => {
+            return Option<Fill>.None
+          }
+        }
+        let to = match color(&items[2]) {
+          Option.Some { value: found } => found
+          Option.None => {
+            return Option<Fill>.None
+          }
+        }
+        return Option<Fill>.some(Fill.Gradient { angle: angle, from: from, to: to })
+      }
+      return Option<Fill>.None
+    }
+    _ => {}
+  }
+  return match color(value) {
+    Option.Some { value: found } => Option<Fill>.some(Fill.Solid { color: found })
+    Option.None => Option<Fill>.None
+  }
+}
+
+/// `backdrop-filter` as a blur radius: `none` is zero and `blur(<length>)` its length.
+pub fn blur(value: &Value, context: &Context) -> Option<f32> {
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      if inner == Keyword.None {
+        return Option<f32>.some(0.0)
+      }
+    }
+    Value.Function { name, values } => {
+      let items = values.asSlice()
+      if name == Keyword.Blur && items.length == 1 {
+        return length(&items[0], context)
+      }
+    }
+    _ => {}
+  }
+  return Option<f32>.None
+}
+
+/// The two components of a pair such as `object-position`. A single value gives it twice.
+pub struct Pair {
+  pub first: Dimension,
+  pub second: Dimension,
+}
+
+impl Copy for Pair {}
+
+pub fn pair(value: &Value, context: &Context) -> Option<Pair> {
+  match &value.* {
+    Value.Sequence { separator: _, values } => {
+      let items = values.asSlice()
+      if items.length != 2 {
+        return Option<Pair>.None
+      }
+      let first = match dimension(&items[0], context) {
+        Option.Some { value: found } => found
+        Option.None => {
+          return Option<Pair>.None
+        }
+      }
+      return match dimension(&items[1], context) {
+        Option.Some { value: second } => Option<Pair>.some(Pair { first: first, second: second })
+        Option.None => Option<Pair>.None
+      }
+    }
+    _ => {}
+  }
+  return match dimension(value, context) {
+    Option.Some { value: found } => Option<Pair>.some(Pair { first: found, second: found })
+    Option.None => Option<Pair>.None
+  }
+}

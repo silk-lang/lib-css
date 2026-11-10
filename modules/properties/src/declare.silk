@@ -1,0 +1,729 @@
+//! Typed constructors for declarations: one function per property, named after it in
+//! camelCase. `declare.width(px(120.0))` is the declaration `width: 120px`. Keyword properties
+//! take the computed enum, so a wrong keyword does not compile. Generated from a table.
+import catalog { Property }
+import computed {
+  Align,
+  OverflowAlignment,
+  BoxSizing,
+  Direction,
+  UnicodeBidi,
+  WritingMode,
+  TextOrientation,
+  FlexDirection,
+  FlexWrap,
+  Overflow,
+  ScrollbarWidth,
+  ScrollbarGutter,
+  Position,
+  Float,
+  Clear,
+  Visibility,
+  BaselineSource,
+  TextAlign,
+  TextJustify,
+  TextWrap,
+  WhiteSpaceCollapse,
+  BoxDecorationBreak,
+  MarginBreak,
+  BreakBetween,
+  BreakInside,
+  ObjectFit,
+  BorderStyle,
+  FontStyle,
+  WhiteSpace,
+  DecorationLine,
+  BoxShadow,
+}
+import convert
+import keyword_enums
+import keywords { Keyword }
+import values { Value, Declaration, Unit, Separator }
+import silk.collections.list { List }
+import silk.color.rgba { Rgba }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.i32
+import silk.num.u32
+import silk.num.usize
+
+fn make(property: Property, value: Value) -> Declaration {
+  return Declaration { property: property, value: move value, important: false }
+}
+
+fn word(property: Property, value: Keyword) -> Declaration {
+  return Declaration { property: property, value: Value.Keyword { value: value }, important: false }
+}
+
+/// `width`.
+pub fn width(value: Value) -> Declaration {
+  return make(Property.Width, move value)
+}
+
+/// `height`.
+pub fn height(value: Value) -> Declaration {
+  return make(Property.Height, move value)
+}
+
+/// `min-width`.
+pub fn minWidth(value: Value) -> Declaration {
+  return make(Property.MinWidth, move value)
+}
+
+/// `min-height`.
+pub fn minHeight(value: Value) -> Declaration {
+  return make(Property.MinHeight, move value)
+}
+
+/// `max-width`.
+pub fn maxWidth(value: Value) -> Declaration {
+  return make(Property.MaxWidth, move value)
+}
+
+/// `max-height`.
+pub fn maxHeight(value: Value) -> Declaration {
+  return make(Property.MaxHeight, move value)
+}
+
+/// `flex-basis`.
+pub fn flexBasis(value: Value) -> Declaration {
+  return make(Property.FlexBasis, move value)
+}
+
+/// `row-gap`.
+pub fn rowGap(value: Value) -> Declaration {
+  return make(Property.RowGap, move value)
+}
+
+/// `column-gap`.
+pub fn columnGap(value: Value) -> Declaration {
+  return make(Property.ColumnGap, move value)
+}
+
+/// `gap`.
+pub fn gap(value: Value) -> Declaration {
+  return make(Property.Gap, move value)
+}
+
+/// `top`.
+pub fn top(value: Value) -> Declaration {
+  return make(Property.Top, move value)
+}
+
+/// `right`.
+pub fn right(value: Value) -> Declaration {
+  return make(Property.Right, move value)
+}
+
+/// `bottom`.
+pub fn bottom(value: Value) -> Declaration {
+  return make(Property.Bottom, move value)
+}
+
+/// `left`.
+pub fn left(value: Value) -> Declaration {
+  return make(Property.Left, move value)
+}
+
+/// `inset`.
+pub fn inset(value: Value) -> Declaration {
+  return make(Property.Inset, move value)
+}
+
+/// `margin-top`.
+pub fn marginTop(value: Value) -> Declaration {
+  return make(Property.MarginTop, move value)
+}
+
+/// `margin-right`.
+pub fn marginRight(value: Value) -> Declaration {
+  return make(Property.MarginRight, move value)
+}
+
+/// `margin-bottom`.
+pub fn marginBottom(value: Value) -> Declaration {
+  return make(Property.MarginBottom, move value)
+}
+
+/// `margin-left`.
+pub fn marginLeft(value: Value) -> Declaration {
+  return make(Property.MarginLeft, move value)
+}
+
+/// `margin`.
+pub fn margin(value: Value) -> Declaration {
+  return make(Property.Margin, move value)
+}
+
+/// `padding-top`.
+pub fn paddingTop(value: Value) -> Declaration {
+  return make(Property.PaddingTop, move value)
+}
+
+/// `padding-right`.
+pub fn paddingRight(value: Value) -> Declaration {
+  return make(Property.PaddingRight, move value)
+}
+
+/// `padding-bottom`.
+pub fn paddingBottom(value: Value) -> Declaration {
+  return make(Property.PaddingBottom, move value)
+}
+
+/// `padding-left`.
+pub fn paddingLeft(value: Value) -> Declaration {
+  return make(Property.PaddingLeft, move value)
+}
+
+/// `padding`.
+pub fn padding(value: Value) -> Declaration {
+  return make(Property.Padding, move value)
+}
+
+/// `border-top-width`.
+pub fn borderTopWidth(value: Value) -> Declaration {
+  return make(Property.BorderTopWidth, move value)
+}
+
+/// `border-right-width`.
+pub fn borderRightWidth(value: Value) -> Declaration {
+  return make(Property.BorderRightWidth, move value)
+}
+
+/// `border-bottom-width`.
+pub fn borderBottomWidth(value: Value) -> Declaration {
+  return make(Property.BorderBottomWidth, move value)
+}
+
+/// `border-left-width`.
+pub fn borderLeftWidth(value: Value) -> Declaration {
+  return make(Property.BorderLeftWidth, move value)
+}
+
+/// `border-width`.
+pub fn borderWidth(value: Value) -> Declaration {
+  return make(Property.BorderWidth, move value)
+}
+
+/// `border-top-left-radius`.
+pub fn borderTopLeftRadius(value: Value) -> Declaration {
+  return make(Property.BorderTopLeftRadius, move value)
+}
+
+/// `border-top-right-radius`.
+pub fn borderTopRightRadius(value: Value) -> Declaration {
+  return make(Property.BorderTopRightRadius, move value)
+}
+
+/// `border-bottom-right-radius`.
+pub fn borderBottomRightRadius(value: Value) -> Declaration {
+  return make(Property.BorderBottomRightRadius, move value)
+}
+
+/// `border-bottom-left-radius`.
+pub fn borderBottomLeftRadius(value: Value) -> Declaration {
+  return make(Property.BorderBottomLeftRadius, move value)
+}
+
+/// `border-radius`.
+pub fn borderRadius(value: Value) -> Declaration {
+  return make(Property.BorderRadius, move value)
+}
+
+/// `line-height`.
+pub fn lineHeight(value: Value) -> Declaration {
+  return make(Property.LineHeight, move value)
+}
+
+/// `tab-size`.
+pub fn tabSize(value: Value) -> Declaration {
+  return make(Property.TabSize, move value)
+}
+
+/// `text-indent`.
+pub fn textIndent(value: Value) -> Declaration {
+  return make(Property.TextIndent, move value)
+}
+
+/// `vertical-align`.
+pub fn verticalAlign(value: Value) -> Declaration {
+  return make(Property.VerticalAlign, move value)
+}
+
+/// `font-size`.
+pub fn fontSize(value: Value) -> Declaration {
+  return make(Property.FontSize, move value)
+}
+
+/// `position`.
+pub fn position(value: Position) -> Declaration {
+  return word(Property.Position, keyword_enums.positionKeyword(value))
+}
+
+/// `box-sizing`.
+pub fn boxSizing(value: BoxSizing) -> Declaration {
+  return word(Property.BoxSizing, keyword_enums.boxSizingKeyword(value))
+}
+
+/// `flex-direction`.
+pub fn flexDirection(value: FlexDirection) -> Declaration {
+  return word(Property.FlexDirection, keyword_enums.flexDirectionKeyword(value))
+}
+
+/// `flex-wrap`.
+pub fn flexWrap(value: FlexWrap) -> Declaration {
+  return word(Property.FlexWrap, keyword_enums.flexWrapKeyword(value))
+}
+
+/// `overflow-x`.
+pub fn overflowX(value: Overflow) -> Declaration {
+  return word(Property.OverflowX, keyword_enums.overflowKeyword(value))
+}
+
+/// `overflow-y`.
+pub fn overflowY(value: Overflow) -> Declaration {
+  return word(Property.OverflowY, keyword_enums.overflowKeyword(value))
+}
+
+/// `overflow`.
+pub fn overflow(value: Overflow) -> Declaration {
+  return word(Property.Overflow, keyword_enums.overflowKeyword(value))
+}
+
+/// `unicode-bidi`.
+pub fn unicodeBidi(value: UnicodeBidi) -> Declaration {
+  return word(Property.UnicodeBidi, keyword_enums.unicodeBidiKeyword(value))
+}
+
+/// `writing-mode`.
+pub fn writingMode(value: WritingMode) -> Declaration {
+  return word(Property.WritingMode, keyword_enums.writingModeKeyword(value))
+}
+
+/// `text-orientation`.
+pub fn textOrientation(value: TextOrientation) -> Declaration {
+  return word(Property.TextOrientation, keyword_enums.textOrientationKeyword(value))
+}
+
+/// `baseline-source`.
+pub fn baselineSource(value: BaselineSource) -> Declaration {
+  return word(Property.BaselineSource, keyword_enums.baselineSourceKeyword(value))
+}
+
+/// `text-align`.
+pub fn textAlign(value: TextAlign) -> Declaration {
+  return word(Property.TextAlign, keyword_enums.textAlignKeyword(value))
+}
+
+/// `text-align-last`.
+pub fn textAlignLast(value: TextAlign) -> Declaration {
+  return word(Property.TextAlignLast, keyword_enums.textAlignKeyword(value))
+}
+
+/// `text-wrap-mode`.
+pub fn textWrapMode(value: TextWrap) -> Declaration {
+  return word(Property.TextWrapMode, keyword_enums.textWrapKeyword(value))
+}
+
+/// `white-space-collapse`.
+pub fn whiteSpaceCollapse(value: WhiteSpaceCollapse) -> Declaration {
+  return word(Property.WhiteSpaceCollapse, keyword_enums.whiteSpaceCollapseKeyword(value))
+}
+
+/// `text-justify`.
+pub fn textJustify(value: TextJustify) -> Declaration {
+  return word(Property.TextJustify, keyword_enums.textJustifyKeyword(value))
+}
+
+/// `box-decoration-break`.
+pub fn boxDecorationBreak(value: BoxDecorationBreak) -> Declaration {
+  return word(Property.BoxDecorationBreak, keyword_enums.boxDecorationBreakKeyword(value))
+}
+
+/// `margin-break`.
+pub fn marginBreak(value: MarginBreak) -> Declaration {
+  return word(Property.MarginBreak, keyword_enums.marginBreakKeyword(value))
+}
+
+/// `break-before`.
+pub fn breakBefore(value: BreakBetween) -> Declaration {
+  return word(Property.BreakBefore, keyword_enums.breakBetweenKeyword(value))
+}
+
+/// `break-after`.
+pub fn breakAfter(value: BreakBetween) -> Declaration {
+  return word(Property.BreakAfter, keyword_enums.breakBetweenKeyword(value))
+}
+
+/// `break-inside`.
+pub fn breakInside(value: BreakInside) -> Declaration {
+  return word(Property.BreakInside, keyword_enums.breakInsideKeyword(value))
+}
+
+/// `scrollbar-width`.
+pub fn scrollbarWidth(value: ScrollbarWidth) -> Declaration {
+  return word(Property.ScrollbarWidth, keyword_enums.scrollbarWidthKeyword(value))
+}
+
+/// `float`.
+pub fn float(value: Float) -> Declaration {
+  return word(Property.Float, keyword_enums.floatKeyword(value))
+}
+
+/// `clear`.
+pub fn clear(value: Clear) -> Declaration {
+  return word(Property.Clear, keyword_enums.clearKeyword(value))
+}
+
+/// `visibility`.
+pub fn visibility(value: Visibility) -> Declaration {
+  return word(Property.Visibility, keyword_enums.visibilityKeyword(value))
+}
+
+/// `object-fit`.
+pub fn objectFit(value: ObjectFit) -> Declaration {
+  return word(Property.ObjectFit, keyword_enums.objectFitKeyword(value))
+}
+
+/// `border-style`.
+pub fn borderStyle(value: BorderStyle) -> Declaration {
+  return word(Property.BorderStyle, keyword_enums.borderStyleKeyword(value))
+}
+
+/// `font-style`.
+pub fn fontStyle(value: FontStyle) -> Declaration {
+  return word(Property.FontStyle, keyword_enums.fontStyleKeyword(value))
+}
+
+/// `direction`.
+pub fn direction(value: Direction) -> Declaration {
+  return word(Property.Direction, keyword_enums.directionKeyword(value))
+}
+
+/// `white-space`.
+pub fn whiteSpace(value: WhiteSpace) -> Declaration {
+  return word(Property.WhiteSpace, keyword_enums.whiteSpaceKeyword(value))
+}
+
+/// `justify-content`.
+pub fn justifyContent(value: Align) -> Declaration {
+  return word(Property.JustifyContent, convert.alignKeyword(value))
+}
+
+/// `justify-content` with `safe` or `unsafe` before the alignment.
+pub effect fn justifyContentWith(value: Align, safety: OverflowAlignment) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let written = run aligned(value, safety)
+  return make(Property.JustifyContent, move written)
+}
+
+/// `align-items`.
+pub fn alignItems(value: Align) -> Declaration {
+  return word(Property.AlignItems, convert.alignKeyword(value))
+}
+
+/// `align-items` with `safe` or `unsafe` before the alignment.
+pub effect fn alignItemsWith(value: Align, safety: OverflowAlignment) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let written = run aligned(value, safety)
+  return make(Property.AlignItems, move written)
+}
+
+/// `align-self`.
+pub fn alignSelf(value: Align) -> Declaration {
+  return word(Property.AlignSelf, convert.alignKeyword(value))
+}
+
+/// `align-self` with `safe` or `unsafe` before the alignment.
+pub effect fn alignSelfWith(value: Align, safety: OverflowAlignment) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let written = run aligned(value, safety)
+  return make(Property.AlignSelf, move written)
+}
+
+/// `align-content`.
+pub fn alignContent(value: Align) -> Declaration {
+  return word(Property.AlignContent, convert.alignKeyword(value))
+}
+
+/// `align-content` with `safe` or `unsafe` before the alignment.
+pub effect fn alignContentWith(value: Align, safety: OverflowAlignment) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let written = run aligned(value, safety)
+  return make(Property.AlignContent, move written)
+}
+
+/// `justify-self`.
+pub fn justifySelf(value: Align) -> Declaration {
+  return word(Property.JustifySelf, convert.alignKeyword(value))
+}
+
+/// `justify-self` with `safe` or `unsafe` before the alignment.
+pub effect fn justifySelfWith(value: Align, safety: OverflowAlignment) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let written = run aligned(value, safety)
+  return make(Property.JustifySelf, move written)
+}
+
+/// `justify-items`.
+pub fn justifyItems(value: Align) -> Declaration {
+  return word(Property.JustifyItems, convert.alignKeyword(value))
+}
+
+/// `justify-items` with `safe` or `unsafe` before the alignment.
+pub effect fn justifyItemsWith(value: Align, safety: OverflowAlignment) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let written = run aligned(value, safety)
+  return make(Property.JustifyItems, move written)
+}
+
+effect fn aligned(value: Align, safety: OverflowAlignment) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let align = Value.Keyword { value: convert.alignKeyword(value) }
+  let first = match safety {
+    OverflowAlignment.Default => {
+      return move align
+    }
+    OverflowAlignment.Safe => Keyword.Safe
+    OverflowAlignment.Unsafe => Keyword.Unsafe
+  }
+  let mut parts = List<Value>.make()
+  run parts.append(Value.Keyword { value: first })
+  run parts.append(move align)
+  return Value.Sequence { separator: Separator.Space, values: move parts }
+}
+
+/// `display`, from a keyword such as `Keyword.Flex` or `Keyword.InlineBlock`.
+pub fn display(value: Keyword) -> Declaration {
+  return word(Property.Display, value)
+}
+
+/// `flex-grow`, a number.
+pub fn flexGrow(value: f32) -> Declaration {
+  return make(Property.FlexGrow, Value.Unit { value: value, unit: Unit.Number })
+}
+
+/// `flex-shrink`, a number.
+pub fn flexShrink(value: f32) -> Declaration {
+  return make(Property.FlexShrink, Value.Unit { value: value, unit: Unit.Number })
+}
+
+/// `opacity`, a number.
+pub fn opacity(value: f32) -> Declaration {
+  return make(Property.Opacity, Value.Unit { value: value, unit: Unit.Number })
+}
+
+/// `font-weight`, a number.
+pub fn fontWeight(value: f32) -> Declaration {
+  return make(Property.FontWeight, Value.Unit { value: value, unit: Unit.Number })
+}
+
+/// `aspect-ratio`, a number.
+pub fn aspectRatio(value: f32) -> Declaration {
+  return make(Property.AspectRatio, Value.Unit { value: value, unit: Unit.Number })
+}
+
+/// `order`.
+pub fn order(value: i32) -> Declaration {
+  return make(Property.Order, Value.Unit { value: i32.toF32(value), unit: Unit.Number })
+}
+
+/// `orphans`.
+pub fn orphans(value: usize) -> Declaration {
+  return make(Property.Orphans, Value.Unit { value: usize.toF32(value), unit: Unit.Number })
+}
+
+/// `widows`.
+pub fn widows(value: usize) -> Declaration {
+  return make(Property.Widows, Value.Unit { value: usize.toF32(value), unit: Unit.Number })
+}
+
+/// `font-family` as the number of a family list the host defined.
+pub fn fontFamily(family: u32) -> Declaration {
+  return make(Property.FontFamily, Value.Unit { value: u32.toF32(family), unit: Unit.Number })
+}
+
+/// `color`.
+pub fn color(value: Rgba<f32>) -> Declaration {
+  return make(Property.Color, Value.Color { value: value })
+}
+
+/// `background-color`.
+pub fn backgroundColor(value: Rgba<f32>) -> Declaration {
+  return make(Property.BackgroundColor, Value.Color { value: value })
+}
+
+/// `border-color`.
+pub fn borderColor(value: Rgba<f32>) -> Declaration {
+  return make(Property.BorderColor, Value.Color { value: value })
+}
+
+/// `text-decoration-color`.
+pub fn textDecorationColor(value: Rgba<f32>) -> Declaration {
+  return make(Property.TextDecorationColor, Value.Color { value: value })
+}
+
+/// `caret-color`.
+pub fn caretColor(value: Rgba<f32>) -> Declaration {
+  return make(Property.CaretColor, Value.Color { value: value })
+}
+
+/// `-silk-selection-color`.
+pub fn selectionColor(value: Rgba<f32>) -> Declaration {
+  return make(Property.SilkSelectionColor, Value.Color { value: value })
+}
+
+/// `-silk-placeholder-color`.
+pub fn placeholderColor(value: Rgba<f32>) -> Declaration {
+  return make(Property.SilkPlaceholderColor, Value.Color { value: value })
+}
+
+/// `pointer-events`: `auto` when enabled, `none` otherwise.
+pub fn pointerEvents(enabled: bool) -> Declaration {
+  return word(Property.PointerEvents, if enabled { Keyword.Auto } else { Keyword.None })
+}
+
+/// `visibility`: `visible` or `hidden`.
+pub fn visible(shown: bool) -> Declaration {
+  return word(Property.Visibility, if shown { Keyword.Visible } else { Keyword.Hidden })
+}
+
+/// `text-decoration-line` with one line: `Keyword.Underline`, `Keyword.None` and so on.
+pub fn textDecorationLine(value: Keyword) -> Declaration {
+  return word(Property.TextDecorationLine, value)
+}
+
+/// `text-decoration-style`: `wavy` or `solid`.
+pub fn textDecorationWavy(wavy: bool) -> Declaration {
+  return word(Property.TextDecorationStyle, if wavy { Keyword.Wavy } else { Keyword.Solid })
+}
+
+/// `box-shadow: none`.
+pub fn noBoxShadow() -> Declaration {
+  return word(Property.BoxShadow, Keyword.None)
+}
+
+/// `background-image: none`.
+pub fn noBackground() -> Declaration {
+  return word(Property.BackgroundImage, Keyword.None)
+}
+
+/// `text-decoration-line` from flags; several lines are written as a sequence.
+pub effect fn textDecorationLines(value: DecorationLine) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  if value.underline {
+    run parts.append(Value.Keyword { value: Keyword.Underline })
+  }
+  if value.overline {
+    run parts.append(Value.Keyword { value: Keyword.Overline })
+  }
+  if value.lineThrough {
+    run parts.append(Value.Keyword { value: Keyword.LineThrough })
+  }
+  if parts.length() == 0 {
+    return word(Property.TextDecorationLine, Keyword.None)
+  }
+  return make(Property.TextDecorationLine, Value.Sequence { separator: Separator.Space, values: move parts })
+}
+
+/// `scrollbar-gutter`.
+pub effect fn scrollbarGutter(value: ScrollbarGutter) -> Declaration ! OutOfMemoryError ? &mut Allocator {
+  match value {
+    ScrollbarGutter.Auto => {
+      return word(Property.ScrollbarGutter, Keyword.Auto)
+    }
+    ScrollbarGutter.Stable => {
+      return word(Property.ScrollbarGutter, Keyword.Stable)
+    }
+    ScrollbarGutter.StableBothEdges => {
+      let mut parts = List<Value>.make()
+      run parts.append(Value.Keyword { value: Keyword.Stable })
+      run parts.append(Value.Keyword { value: Keyword.BothEdges })
+      return make(Property.ScrollbarGutter, Value.Sequence { separator: Separator.Space, values: move parts })
+    }
+  }
+}
+
+/// `aspect-ratio: auto <ratio>`: the ratio applies unless the content has its own.
+pub effect fn aspectRatioAuto(ratio: f32) -> Declaration ! OutOfMemoryError ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(Value.Keyword { value: Keyword.Auto })
+  run parts.append(Value.Unit { value: ratio, unit: Unit.Number })
+  return make(Property.AspectRatio, Value.Sequence { separator: Separator.Space, values: move parts })
+}
+
+/// `border-radius` with one radius per corner, in CSS pixels.
+pub effect fn borderRadii(topLeft: f32, topRight: f32, bottomRight: f32, bottomLeft: f32) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(Value.Unit { value: topLeft, unit: Unit.Px })
+  run parts.append(Value.Unit { value: topRight, unit: Unit.Px })
+  run parts.append(Value.Unit { value: bottomRight, unit: Unit.Px })
+  run parts.append(Value.Unit { value: bottomLeft, unit: Unit.Px })
+  return make(Property.BorderRadius, Value.Sequence { separator: Separator.Space, values: move parts })
+}
+
+/// `box-shadow` with one shadow.
+pub effect fn boxShadow(shadow: BoxShadow) -> Declaration ! OutOfMemoryError ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(Value.Unit { value: shadow.offsetX, unit: Unit.Px })
+  run parts.append(Value.Unit { value: shadow.offsetY, unit: Unit.Px })
+  run parts.append(Value.Unit { value: shadow.blur, unit: Unit.Px })
+  run parts.append(Value.Unit { value: shadow.spread, unit: Unit.Px })
+  run parts.append(Value.Color { value: shadow.color })
+  if shadow.inset {
+    run parts.append(Value.Keyword { value: Keyword.Inset })
+  }
+  return make(Property.BoxShadow, Value.Sequence { separator: Separator.Space, values: move parts })
+}
+
+/// `background-image: linear-gradient(<angle>deg, from, to)`.
+pub effect fn backgroundGradient(angle: f32, from: Rgba<f32>, to: Rgba<f32>) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(Value.Unit { value: angle, unit: Unit.Deg })
+  run parts.append(Value.Color { value: from })
+  run parts.append(Value.Color { value: to })
+  return make(Property.BackgroundImage, Value.Function { name: Keyword.LinearGradient, values: move parts })
+}
+
+/// `backdrop-filter: blur(<radius>px)`, or `none` for zero.
+pub effect fn backdropBlur(radius: f32) -> Declaration ! OutOfMemoryError ? &mut Allocator {
+  if radius <= 0.0 {
+    return word(Property.BackdropFilter, Keyword.None)
+  }
+  let mut parts = List<Value>.make()
+  run parts.append(Value.Unit { value: radius, unit: Unit.Px })
+  return make(Property.BackdropFilter, Value.Function { name: Keyword.Blur, values: move parts })
+}
+
+/// `object-position: x y`.
+pub effect fn objectPosition(x: Value, y: Value) -> Declaration ! OutOfMemoryError ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(move x)
+  run parts.append(move y)
+  return make(Property.ObjectPosition, Value.Sequence { separator: Separator.Space, values: move parts })
+}
+
+/// `text-indent` with its `hanging` and `each-line` flags.
+pub effect fn textIndentWith(amount: Value, hanging: bool, eachLine: bool) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(move amount)
+  if hanging {
+    run parts.append(Value.Keyword { value: Keyword.Hanging })
+  }
+  if eachLine {
+    run parts.append(Value.Keyword { value: Keyword.EachLine })
+  }
+  return make(Property.TextIndent, Value.Sequence { separator: Separator.Space, values: move parts })
+}
