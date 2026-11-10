@@ -27,7 +27,7 @@ import these instead of defining their own.
   `calc()`, a function, a sequence of components, or CSS text for anything without a typed form.
   A percentage is written as in CSS, so `percent(50.0)` is `50%`. `Declaration` is a property, a
   value and the `!important` flag, as in CSSOM. `write` and `writeDeclaration` serialize the way
-  CSSOM does.
+  CSSOM does. css-style's `written` module parses CSS text into these values.
 
 - **Keywords** (`keywords`, `keyword_enums`): one `Keyword` enum with CSS spellings and lookup,
   and for each computed keyword enum a pair of functions to and from `Keyword`.
