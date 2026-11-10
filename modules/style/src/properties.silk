@@ -1,16 +1,49 @@
-//! The property catalog lives in css-properties; css-style re-exports it under its old path.
+//! The property catalog lives in css-properties. css-style re-exports it under its old path,
+//! limited to the properties it parses and computes today.
+import css_properties.catalog as catalog
+import silk.core.option { Option }
 pub import css_properties.catalog {
   Property,
-  COUNT,
-  all,
   index,
   name,
-  lookup,
   inherited,
   initial,
   InitialKind,
   initialKind,
   canonical,
-  longhandCount,
   longhandAt
+}
+
+/// How many catalog properties css-style supports: the catalog's first `COUNT`, which are the
+/// SVG and text properties. The box properties after them are not parsed here yet, so a
+/// declaration naming one is dropped as an unknown property.
+pub const COUNT: usize = 172
+
+/// The supported properties in catalog order.
+pub fn all() -> [Property; 172] {
+  let every = catalog.all()
+  let mut supported = [Property.Fill; 172]
+  let mut i: usize = 0
+  while i < COUNT {
+    supported[i] = every[i]
+    i = i + 1
+  }
+  return supported
+}
+
+pub fn lookup(name: &[u8]) -> Option<Property> {
+  if let Option<Property>.Some { value } = catalog.lookup(name) {
+    if index(value) < COUNT {
+      return Option<Property>.some(value)
+    }
+  }
+  return Option<Property>.None
+}
+
+/// `all` resets the supported longhands, which the catalog lists first.
+pub fn longhandCount(property: Property) -> usize {
+  if property == Property.All {
+    return 155
+  }
+  return catalog.longhandCount(property)
 }

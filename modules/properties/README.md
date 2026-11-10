@@ -12,5 +12,7 @@ import these instead of defining their own.
 
 - **The property catalog** (`catalog`): one `Property` enum with each property's name, index,
   inheritance, initial value and shorthand expansion, taken from the pinned specifications.
-  `css-style` re-exports it as `properties`. It lists the SVG and text properties today; the
-  box properties (margin, padding, border, flex, grid and so on) are being added.
+  It covers 280 properties: the SVG and text properties first, then the box properties (position
+  and insets, sizes, margin, padding, border, radius, flex, grid, gap, alignment, background,
+  shadow, breaks). `css-style` re-exports it as `properties` and limits itself to the first 172,
+  the ones it parses today.

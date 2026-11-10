@@ -2,7 +2,7 @@
 //! shorthand expansion. Facts come from the pinned specifications' defining property tables.
 import silk.core.option { Option }
 
-pub enum Property {
+pub enum(u16) Property {
   Fill,
   FillRule,
   FillOpacity,
@@ -175,11 +175,119 @@ pub enum Property {
   AnimationDirection,
   AnimationFillMode,
   AnimationPlayState,
+  Position,
+  Top,
+  Right,
+  Bottom,
+  Left,
+  Inset,
+  BoxSizing,
+  MinWidth,
+  MinHeight,
+  MaxWidth,
+  MaxHeight,
+  MarginTop,
+  MarginRight,
+  MarginBottom,
+  MarginLeft,
+  Margin,
+  PaddingTop,
+  PaddingRight,
+  PaddingBottom,
+  PaddingLeft,
+  Padding,
+  BorderTopWidth,
+  BorderRightWidth,
+  BorderBottomWidth,
+  BorderLeftWidth,
+  BorderTopStyle,
+  BorderRightStyle,
+  BorderBottomStyle,
+  BorderLeftStyle,
+  BorderTopColor,
+  BorderRightColor,
+  BorderBottomColor,
+  BorderLeftColor,
+  BorderWidth,
+  BorderStyle,
+  BorderColor,
+  BorderTop,
+  BorderRight,
+  BorderBottom,
+  BorderLeft,
+  Border,
+  BorderTopLeftRadius,
+  BorderTopRightRadius,
+  BorderBottomRightRadius,
+  BorderBottomLeftRadius,
+  BorderRadius,
+  FlexDirection,
+  FlexWrap,
+  FlexGrow,
+  FlexShrink,
+  FlexBasis,
+  Order,
+  Flex,
+  FlexFlow,
+  JustifyContent,
+  AlignItems,
+  AlignSelf,
+  AlignContent,
+  JustifySelf,
+  JustifyItems,
+  PlaceContent,
+  PlaceItems,
+  PlaceSelf,
+  RowGap,
+  ColumnGap,
+  Gap,
+  GridTemplateColumns,
+  GridTemplateRows,
+  GridTemplateAreas,
+  GridAutoColumns,
+  GridAutoRows,
+  GridAutoFlow,
+  GridRowStart,
+  GridRowEnd,
+  GridColumnStart,
+  GridColumnEnd,
+  GridRow,
+  GridColumn,
+  GridArea,
+  GridTemplate,
+  Grid,
+  AspectRatio,
+  Float,
+  Clear,
+  ZIndex,
+  BackgroundImage,
+  BackgroundPosition,
+  BackgroundSize,
+  BackgroundRepeat,
+  BackgroundAttachment,
+  BackgroundOrigin,
+  BackgroundClip,
+  BackgroundColor,
+  Background,
+  BoxShadow,
+  BackdropFilter,
+  ObjectFit,
+  ObjectPosition,
+  ScrollbarWidth,
+  ScrollbarGutter,
+  BoxDecorationBreak,
+  MarginBreak,
+  BreakBefore,
+  BreakAfter,
+  BreakInside,
+  Orphans,
+  Widows,
+  CaretColor,
 }
 
-pub const COUNT: usize = 172
+pub const COUNT: usize = 280
 
-pub fn all() -> [Property; 172] {
+pub fn all() -> [Property; 280] {
   return [
     Property.Fill,
     Property.FillRule,
@@ -353,6 +461,114 @@ pub fn all() -> [Property; 172] {
     Property.AnimationDirection,
     Property.AnimationFillMode,
     Property.AnimationPlayState,
+    Property.Position,
+    Property.Top,
+    Property.Right,
+    Property.Bottom,
+    Property.Left,
+    Property.Inset,
+    Property.BoxSizing,
+    Property.MinWidth,
+    Property.MinHeight,
+    Property.MaxWidth,
+    Property.MaxHeight,
+    Property.MarginTop,
+    Property.MarginRight,
+    Property.MarginBottom,
+    Property.MarginLeft,
+    Property.Margin,
+    Property.PaddingTop,
+    Property.PaddingRight,
+    Property.PaddingBottom,
+    Property.PaddingLeft,
+    Property.Padding,
+    Property.BorderTopWidth,
+    Property.BorderRightWidth,
+    Property.BorderBottomWidth,
+    Property.BorderLeftWidth,
+    Property.BorderTopStyle,
+    Property.BorderRightStyle,
+    Property.BorderBottomStyle,
+    Property.BorderLeftStyle,
+    Property.BorderTopColor,
+    Property.BorderRightColor,
+    Property.BorderBottomColor,
+    Property.BorderLeftColor,
+    Property.BorderWidth,
+    Property.BorderStyle,
+    Property.BorderColor,
+    Property.BorderTop,
+    Property.BorderRight,
+    Property.BorderBottom,
+    Property.BorderLeft,
+    Property.Border,
+    Property.BorderTopLeftRadius,
+    Property.BorderTopRightRadius,
+    Property.BorderBottomRightRadius,
+    Property.BorderBottomLeftRadius,
+    Property.BorderRadius,
+    Property.FlexDirection,
+    Property.FlexWrap,
+    Property.FlexGrow,
+    Property.FlexShrink,
+    Property.FlexBasis,
+    Property.Order,
+    Property.Flex,
+    Property.FlexFlow,
+    Property.JustifyContent,
+    Property.AlignItems,
+    Property.AlignSelf,
+    Property.AlignContent,
+    Property.JustifySelf,
+    Property.JustifyItems,
+    Property.PlaceContent,
+    Property.PlaceItems,
+    Property.PlaceSelf,
+    Property.RowGap,
+    Property.ColumnGap,
+    Property.Gap,
+    Property.GridTemplateColumns,
+    Property.GridTemplateRows,
+    Property.GridTemplateAreas,
+    Property.GridAutoColumns,
+    Property.GridAutoRows,
+    Property.GridAutoFlow,
+    Property.GridRowStart,
+    Property.GridRowEnd,
+    Property.GridColumnStart,
+    Property.GridColumnEnd,
+    Property.GridRow,
+    Property.GridColumn,
+    Property.GridArea,
+    Property.GridTemplate,
+    Property.Grid,
+    Property.AspectRatio,
+    Property.Float,
+    Property.Clear,
+    Property.ZIndex,
+    Property.BackgroundImage,
+    Property.BackgroundPosition,
+    Property.BackgroundSize,
+    Property.BackgroundRepeat,
+    Property.BackgroundAttachment,
+    Property.BackgroundOrigin,
+    Property.BackgroundClip,
+    Property.BackgroundColor,
+    Property.Background,
+    Property.BoxShadow,
+    Property.BackdropFilter,
+    Property.ObjectFit,
+    Property.ObjectPosition,
+    Property.ScrollbarWidth,
+    Property.ScrollbarGutter,
+    Property.BoxDecorationBreak,
+    Property.MarginBreak,
+    Property.BreakBefore,
+    Property.BreakAfter,
+    Property.BreakInside,
+    Property.Orphans,
+    Property.Widows,
+    Property.CaretColor,
   ]
 }
 
@@ -530,6 +746,114 @@ pub fn index(property: Property) -> usize {
     Property.AnimationFillMode => 170
     Property.AnimationPlayState => 171
     Property.WhiteSpaceTrim => 161
+    Property.Position => 172
+    Property.Top => 173
+    Property.Right => 174
+    Property.Bottom => 175
+    Property.Left => 176
+    Property.Inset => 177
+    Property.BoxSizing => 178
+    Property.MinWidth => 179
+    Property.MinHeight => 180
+    Property.MaxWidth => 181
+    Property.MaxHeight => 182
+    Property.MarginTop => 183
+    Property.MarginRight => 184
+    Property.MarginBottom => 185
+    Property.MarginLeft => 186
+    Property.Margin => 187
+    Property.PaddingTop => 188
+    Property.PaddingRight => 189
+    Property.PaddingBottom => 190
+    Property.PaddingLeft => 191
+    Property.Padding => 192
+    Property.BorderTopWidth => 193
+    Property.BorderRightWidth => 194
+    Property.BorderBottomWidth => 195
+    Property.BorderLeftWidth => 196
+    Property.BorderTopStyle => 197
+    Property.BorderRightStyle => 198
+    Property.BorderBottomStyle => 199
+    Property.BorderLeftStyle => 200
+    Property.BorderTopColor => 201
+    Property.BorderRightColor => 202
+    Property.BorderBottomColor => 203
+    Property.BorderLeftColor => 204
+    Property.BorderWidth => 205
+    Property.BorderStyle => 206
+    Property.BorderColor => 207
+    Property.BorderTop => 208
+    Property.BorderRight => 209
+    Property.BorderBottom => 210
+    Property.BorderLeft => 211
+    Property.Border => 212
+    Property.BorderTopLeftRadius => 213
+    Property.BorderTopRightRadius => 214
+    Property.BorderBottomRightRadius => 215
+    Property.BorderBottomLeftRadius => 216
+    Property.BorderRadius => 217
+    Property.FlexDirection => 218
+    Property.FlexWrap => 219
+    Property.FlexGrow => 220
+    Property.FlexShrink => 221
+    Property.FlexBasis => 222
+    Property.Order => 223
+    Property.Flex => 224
+    Property.FlexFlow => 225
+    Property.JustifyContent => 226
+    Property.AlignItems => 227
+    Property.AlignSelf => 228
+    Property.AlignContent => 229
+    Property.JustifySelf => 230
+    Property.JustifyItems => 231
+    Property.PlaceContent => 232
+    Property.PlaceItems => 233
+    Property.PlaceSelf => 234
+    Property.RowGap => 235
+    Property.ColumnGap => 236
+    Property.Gap => 237
+    Property.GridTemplateColumns => 238
+    Property.GridTemplateRows => 239
+    Property.GridTemplateAreas => 240
+    Property.GridAutoColumns => 241
+    Property.GridAutoRows => 242
+    Property.GridAutoFlow => 243
+    Property.GridRowStart => 244
+    Property.GridRowEnd => 245
+    Property.GridColumnStart => 246
+    Property.GridColumnEnd => 247
+    Property.GridRow => 248
+    Property.GridColumn => 249
+    Property.GridArea => 250
+    Property.GridTemplate => 251
+    Property.Grid => 252
+    Property.AspectRatio => 253
+    Property.Float => 254
+    Property.Clear => 255
+    Property.ZIndex => 256
+    Property.BackgroundImage => 257
+    Property.BackgroundPosition => 258
+    Property.BackgroundSize => 259
+    Property.BackgroundRepeat => 260
+    Property.BackgroundAttachment => 261
+    Property.BackgroundOrigin => 262
+    Property.BackgroundClip => 263
+    Property.BackgroundColor => 264
+    Property.Background => 265
+    Property.BoxShadow => 266
+    Property.BackdropFilter => 267
+    Property.ObjectFit => 268
+    Property.ObjectPosition => 269
+    Property.ScrollbarWidth => 270
+    Property.ScrollbarGutter => 271
+    Property.BoxDecorationBreak => 272
+    Property.MarginBreak => 273
+    Property.BreakBefore => 274
+    Property.BreakAfter => 275
+    Property.BreakInside => 276
+    Property.Orphans => 277
+    Property.Widows => 278
+    Property.CaretColor => 279
   }
 }
 
@@ -707,6 +1031,114 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.AnimationFillMode => b"animation-fill-mode"
     Property.AnimationPlayState => b"animation-play-state"
     Property.WhiteSpaceTrim => b"white-space-trim"
+    Property.Position => b"position"
+    Property.Top => b"top"
+    Property.Right => b"right"
+    Property.Bottom => b"bottom"
+    Property.Left => b"left"
+    Property.Inset => b"inset"
+    Property.BoxSizing => b"box-sizing"
+    Property.MinWidth => b"min-width"
+    Property.MinHeight => b"min-height"
+    Property.MaxWidth => b"max-width"
+    Property.MaxHeight => b"max-height"
+    Property.MarginTop => b"margin-top"
+    Property.MarginRight => b"margin-right"
+    Property.MarginBottom => b"margin-bottom"
+    Property.MarginLeft => b"margin-left"
+    Property.Margin => b"margin"
+    Property.PaddingTop => b"padding-top"
+    Property.PaddingRight => b"padding-right"
+    Property.PaddingBottom => b"padding-bottom"
+    Property.PaddingLeft => b"padding-left"
+    Property.Padding => b"padding"
+    Property.BorderTopWidth => b"border-top-width"
+    Property.BorderRightWidth => b"border-right-width"
+    Property.BorderBottomWidth => b"border-bottom-width"
+    Property.BorderLeftWidth => b"border-left-width"
+    Property.BorderTopStyle => b"border-top-style"
+    Property.BorderRightStyle => b"border-right-style"
+    Property.BorderBottomStyle => b"border-bottom-style"
+    Property.BorderLeftStyle => b"border-left-style"
+    Property.BorderTopColor => b"border-top-color"
+    Property.BorderRightColor => b"border-right-color"
+    Property.BorderBottomColor => b"border-bottom-color"
+    Property.BorderLeftColor => b"border-left-color"
+    Property.BorderWidth => b"border-width"
+    Property.BorderStyle => b"border-style"
+    Property.BorderColor => b"border-color"
+    Property.BorderTop => b"border-top"
+    Property.BorderRight => b"border-right"
+    Property.BorderBottom => b"border-bottom"
+    Property.BorderLeft => b"border-left"
+    Property.Border => b"border"
+    Property.BorderTopLeftRadius => b"border-top-left-radius"
+    Property.BorderTopRightRadius => b"border-top-right-radius"
+    Property.BorderBottomRightRadius => b"border-bottom-right-radius"
+    Property.BorderBottomLeftRadius => b"border-bottom-left-radius"
+    Property.BorderRadius => b"border-radius"
+    Property.FlexDirection => b"flex-direction"
+    Property.FlexWrap => b"flex-wrap"
+    Property.FlexGrow => b"flex-grow"
+    Property.FlexShrink => b"flex-shrink"
+    Property.FlexBasis => b"flex-basis"
+    Property.Order => b"order"
+    Property.Flex => b"flex"
+    Property.FlexFlow => b"flex-flow"
+    Property.JustifyContent => b"justify-content"
+    Property.AlignItems => b"align-items"
+    Property.AlignSelf => b"align-self"
+    Property.AlignContent => b"align-content"
+    Property.JustifySelf => b"justify-self"
+    Property.JustifyItems => b"justify-items"
+    Property.PlaceContent => b"place-content"
+    Property.PlaceItems => b"place-items"
+    Property.PlaceSelf => b"place-self"
+    Property.RowGap => b"row-gap"
+    Property.ColumnGap => b"column-gap"
+    Property.Gap => b"gap"
+    Property.GridTemplateColumns => b"grid-template-columns"
+    Property.GridTemplateRows => b"grid-template-rows"
+    Property.GridTemplateAreas => b"grid-template-areas"
+    Property.GridAutoColumns => b"grid-auto-columns"
+    Property.GridAutoRows => b"grid-auto-rows"
+    Property.GridAutoFlow => b"grid-auto-flow"
+    Property.GridRowStart => b"grid-row-start"
+    Property.GridRowEnd => b"grid-row-end"
+    Property.GridColumnStart => b"grid-column-start"
+    Property.GridColumnEnd => b"grid-column-end"
+    Property.GridRow => b"grid-row"
+    Property.GridColumn => b"grid-column"
+    Property.GridArea => b"grid-area"
+    Property.GridTemplate => b"grid-template"
+    Property.Grid => b"grid"
+    Property.AspectRatio => b"aspect-ratio"
+    Property.Float => b"float"
+    Property.Clear => b"clear"
+    Property.ZIndex => b"z-index"
+    Property.BackgroundImage => b"background-image"
+    Property.BackgroundPosition => b"background-position"
+    Property.BackgroundSize => b"background-size"
+    Property.BackgroundRepeat => b"background-repeat"
+    Property.BackgroundAttachment => b"background-attachment"
+    Property.BackgroundOrigin => b"background-origin"
+    Property.BackgroundClip => b"background-clip"
+    Property.BackgroundColor => b"background-color"
+    Property.Background => b"background"
+    Property.BoxShadow => b"box-shadow"
+    Property.BackdropFilter => b"backdrop-filter"
+    Property.ObjectFit => b"object-fit"
+    Property.ObjectPosition => b"object-position"
+    Property.ScrollbarWidth => b"scrollbar-width"
+    Property.ScrollbarGutter => b"scrollbar-gutter"
+    Property.BoxDecorationBreak => b"box-decoration-break"
+    Property.MarginBreak => b"margin-break"
+    Property.BreakBefore => b"break-before"
+    Property.BreakAfter => b"break-after"
+    Property.BreakInside => b"break-inside"
+    Property.Orphans => b"orphans"
+    Property.Widows => b"widows"
+    Property.CaretColor => b"caret-color"
   }
 }
 
@@ -750,6 +1182,12 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 97 && insensitive(name, b"all") {
         return Option<Property>.some(Property.All)
       }
+      if first == 116 && insensitive(name, b"top") {
+        return Option<Property>.some(Property.Top)
+      }
+      if first == 103 && insensitive(name, b"gap") {
+        return Option<Property>.some(Property.Gap)
+      }
     }
     4 => {
       if first == 102 && insensitive(name, b"fill") {
@@ -764,6 +1202,15 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 109 && insensitive(name, b"mask") {
         return Option<Property>.some(Property.Mask)
       }
+      if first == 108 && insensitive(name, b"left") {
+        return Option<Property>.some(Property.Left)
+      }
+      if first == 102 && insensitive(name, b"flex") {
+        return Option<Property>.some(Property.Flex)
+      }
+      if first == 103 && insensitive(name, b"grid") {
+        return Option<Property>.some(Property.Grid)
+      }
     }
     5 => {
       if first == 99 && insensitive(name, b"color") {
@@ -774,6 +1221,21 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 115 && insensitive(name, b"scale") {
         return Option<Property>.some(Property.Scale)
+      }
+      if first == 114 && insensitive(name, b"right") {
+        return Option<Property>.some(Property.Right)
+      }
+      if first == 105 && insensitive(name, b"inset") {
+        return Option<Property>.some(Property.Inset)
+      }
+      if first == 111 && insensitive(name, b"order") {
+        return Option<Property>.some(Property.Order)
+      }
+      if first == 102 && insensitive(name, b"float") {
+        return Option<Property>.some(Property.Float)
+      }
+      if first == 99 && insensitive(name, b"clear") {
+        return Option<Property>.some(Property.Clear)
       }
     }
     6 => {
@@ -795,6 +1257,18 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 114 && insensitive(name, b"rotate") {
         return Option<Property>.some(Property.Rotate)
       }
+      if first == 98 && insensitive(name, b"bottom") {
+        return Option<Property>.some(Property.Bottom)
+      }
+      if first == 109 && insensitive(name, b"margin") {
+        return Option<Property>.some(Property.Margin)
+      }
+      if first == 98 && insensitive(name, b"border") {
+        return Option<Property>.some(Property.Border)
+      }
+      if first == 119 && insensitive(name, b"widows") {
+        return Option<Property>.some(Property.Widows)
+      }
     }
     7 => {
       if first == 111 && insensitive(name, b"opacity") {
@@ -809,6 +1283,18 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 104 && insensitive(name, b"hyphens") {
         return Option<Property>.some(Property.Hyphens)
       }
+      if first == 112 && insensitive(name, b"padding") {
+        return Option<Property>.some(Property.Padding)
+      }
+      if first == 114 && insensitive(name, b"row-gap") {
+        return Option<Property>.some(Property.RowGap)
+      }
+      if first == 122 && insensitive(name, b"z-index") {
+        return Option<Property>.some(Property.ZIndex)
+      }
+      if first == 111 && insensitive(name, b"orphans") {
+        return Option<Property>.some(Property.Orphans)
+      }
     }
     8 => {
       if first == 111 && insensitive(name, b"overflow") {
@@ -817,11 +1303,14 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 116 && insensitive(name, b"tab-size") {
         return Option<Property>.some(Property.TabSize)
       }
+      if first == 112 && insensitive(name, b"position") {
+        return Option<Property>.some(Property.Position)
+      }
+      if first == 103 && insensitive(name, b"grid-row") {
+        return Option<Property>.some(Property.GridRow)
+      }
     }
     9 => {
-      if first == 97 && insensitive(name, b"animation") {
-        return Option<Property>.some(Property.Animation)
-      }
       if first == 102 && insensitive(name, b"fill-rule") {
         return Option<Property>.some(Property.FillRule)
       }
@@ -857,6 +1346,27 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 116 && insensitive(name, b"translate") {
         return Option<Property>.some(Property.Translate)
+      }
+      if first == 97 && insensitive(name, b"animation") {
+        return Option<Property>.some(Property.Animation)
+      }
+      if first == 109 && insensitive(name, b"min-width") {
+        return Option<Property>.some(Property.MinWidth)
+      }
+      if first == 109 && insensitive(name, b"max-width") {
+        return Option<Property>.some(Property.MaxWidth)
+      }
+      if first == 102 && insensitive(name, b"flex-wrap") {
+        return Option<Property>.some(Property.FlexWrap)
+      }
+      if first == 102 && insensitive(name, b"flex-grow") {
+        return Option<Property>.some(Property.FlexGrow)
+      }
+      if first == 102 && insensitive(name, b"flex-flow") {
+        return Option<Property>.some(Property.FlexFlow)
+      }
+      if first == 103 && insensitive(name, b"grid-area") {
+        return Option<Property>.some(Property.GridArea)
       }
     }
     10 => {
@@ -895,6 +1405,42 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 109 && insensitive(name, b"mask-image") {
         return Option<Property>.some(Property.MaskImage)
+      }
+      if first == 98 && insensitive(name, b"box-sizing") {
+        return Option<Property>.some(Property.BoxSizing)
+      }
+      if first == 109 && insensitive(name, b"min-height") {
+        return Option<Property>.some(Property.MinHeight)
+      }
+      if first == 109 && insensitive(name, b"max-height") {
+        return Option<Property>.some(Property.MaxHeight)
+      }
+      if first == 109 && insensitive(name, b"margin-top") {
+        return Option<Property>.some(Property.MarginTop)
+      }
+      if first == 98 && insensitive(name, b"border-top") {
+        return Option<Property>.some(Property.BorderTop)
+      }
+      if first == 102 && insensitive(name, b"flex-basis") {
+        return Option<Property>.some(Property.FlexBasis)
+      }
+      if first == 97 && insensitive(name, b"align-self") {
+        return Option<Property>.some(Property.AlignSelf)
+      }
+      if first == 112 && insensitive(name, b"place-self") {
+        return Option<Property>.some(Property.PlaceSelf)
+      }
+      if first == 99 && insensitive(name, b"column-gap") {
+        return Option<Property>.some(Property.ColumnGap)
+      }
+      if first == 98 && insensitive(name, b"background") {
+        return Option<Property>.some(Property.Background)
+      }
+      if first == 98 && insensitive(name, b"box-shadow") {
+        return Option<Property>.some(Property.BoxShadow)
+      }
+      if first == 111 && insensitive(name, b"object-fit") {
+        return Option<Property>.some(Property.ObjectFit)
       }
     }
     11 => {
@@ -940,6 +1486,33 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 112 && insensitive(name, b"perspective") {
         return Option<Property>.some(Property.Perspective)
       }
+      if first == 109 && insensitive(name, b"margin-left") {
+        return Option<Property>.some(Property.MarginLeft)
+      }
+      if first == 112 && insensitive(name, b"padding-top") {
+        return Option<Property>.some(Property.PaddingTop)
+      }
+      if first == 98 && insensitive(name, b"border-left") {
+        return Option<Property>.some(Property.BorderLeft)
+      }
+      if first == 102 && insensitive(name, b"flex-shrink") {
+        return Option<Property>.some(Property.FlexShrink)
+      }
+      if first == 97 && insensitive(name, b"align-items") {
+        return Option<Property>.some(Property.AlignItems)
+      }
+      if first == 112 && insensitive(name, b"place-items") {
+        return Option<Property>.some(Property.PlaceItems)
+      }
+      if first == 103 && insensitive(name, b"grid-column") {
+        return Option<Property>.some(Property.GridColumn)
+      }
+      if first == 98 && insensitive(name, b"break-after") {
+        return Option<Property>.some(Property.BreakAfter)
+      }
+      if first == 99 && insensitive(name, b"caret-color") {
+        return Option<Property>.some(Property.CaretColor)
+      }
     }
     12 => {
       if first == 102 && insensitive(name, b"fill-opacity") {
@@ -961,7 +1534,7 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
         return Option<Property>.some(Property.StopOpacity)
       }
       if first == 102 && insensitive(name, b"font-stretch") {
-        return Option<Property>.some(Property.FontWidth)
+        return Option<Property>.some(Property.FontStretch)
       }
       if first == 102 && insensitive(name, b"font-variant") {
         return Option<Property>.some(Property.FontVariant)
@@ -983,6 +1556,42 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 116 && insensitive(name, b"text-justify") {
         return Option<Property>.some(Property.TextJustify)
+      }
+      if first == 109 && insensitive(name, b"margin-right") {
+        return Option<Property>.some(Property.MarginRight)
+      }
+      if first == 112 && insensitive(name, b"padding-left") {
+        return Option<Property>.some(Property.PaddingLeft)
+      }
+      if first == 98 && insensitive(name, b"border-width") {
+        return Option<Property>.some(Property.BorderWidth)
+      }
+      if first == 98 && insensitive(name, b"border-style") {
+        return Option<Property>.some(Property.BorderStyle)
+      }
+      if first == 98 && insensitive(name, b"border-color") {
+        return Option<Property>.some(Property.BorderColor)
+      }
+      if first == 98 && insensitive(name, b"border-right") {
+        return Option<Property>.some(Property.BorderRight)
+      }
+      if first == 106 && insensitive(name, b"justify-self") {
+        return Option<Property>.some(Property.JustifySelf)
+      }
+      if first == 103 && insensitive(name, b"grid-row-end") {
+        return Option<Property>.some(Property.GridRowEnd)
+      }
+      if first == 97 && insensitive(name, b"aspect-ratio") {
+        return Option<Property>.some(Property.AspectRatio)
+      }
+      if first == 109 && insensitive(name, b"margin-break") {
+        return Option<Property>.some(Property.MarginBreak)
+      }
+      if first == 98 && insensitive(name, b"break-before") {
+        return Option<Property>.some(Property.BreakBefore)
+      }
+      if first == 98 && insensitive(name, b"break-inside") {
+        return Option<Property>.some(Property.BreakInside)
       }
     }
     13 => {
@@ -1010,11 +1619,32 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 116 && insensitive(name, b"transform-box") {
         return Option<Property>.some(Property.TransformBox)
       }
+      if first == 109 && insensitive(name, b"margin-bottom") {
+        return Option<Property>.some(Property.MarginBottom)
+      }
+      if first == 112 && insensitive(name, b"padding-right") {
+        return Option<Property>.some(Property.PaddingRight)
+      }
+      if first == 98 && insensitive(name, b"border-bottom") {
+        return Option<Property>.some(Property.BorderBottom)
+      }
+      if first == 98 && insensitive(name, b"border-radius") {
+        return Option<Property>.some(Property.BorderRadius)
+      }
+      if first == 97 && insensitive(name, b"align-content") {
+        return Option<Property>.some(Property.AlignContent)
+      }
+      if first == 106 && insensitive(name, b"justify-items") {
+        return Option<Property>.some(Property.JustifyItems)
+      }
+      if first == 112 && insensitive(name, b"place-content") {
+        return Option<Property>.some(Property.PlaceContent)
+      }
+      if first == 103 && insensitive(name, b"grid-template") {
+        return Option<Property>.some(Property.GridTemplate)
+      }
     }
     14 => {
-      if first == 97 && insensitive(name, b"animation-name") {
-        return Option<Property>.some(Property.AnimationName)
-      }
       if first == 115 && insensitive(name, b"stroke-opacity") {
         return Option<Property>.some(Property.StrokeOpacity)
       }
@@ -1060,11 +1690,26 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 116 && insensitive(name, b"text-wrap-mode") {
         return Option<Property>.some(Property.TextWrapMode)
       }
+      if first == 97 && insensitive(name, b"animation-name") {
+        return Option<Property>.some(Property.AnimationName)
+      }
+      if first == 112 && insensitive(name, b"padding-bottom") {
+        return Option<Property>.some(Property.PaddingBottom)
+      }
+      if first == 102 && insensitive(name, b"flex-direction") {
+        return Option<Property>.some(Property.FlexDirection)
+      }
+      if first == 103 && insensitive(name, b"grid-auto-rows") {
+        return Option<Property>.some(Property.GridAutoRows)
+      }
+      if first == 103 && insensitive(name, b"grid-auto-flow") {
+        return Option<Property>.some(Property.GridAutoFlow)
+      }
+      if first == 103 && insensitive(name, b"grid-row-start") {
+        return Option<Property>.some(Property.GridRowStart)
+      }
     }
     15 => {
-      if first == 97 && insensitive(name, b"animation-delay") {
-        return Option<Property>.some(Property.AnimationDelay)
-      }
       if first == 115 && insensitive(name, b"stroke-linejoin") {
         return Option<Property>.some(Property.StrokeLinejoin)
       }
@@ -1089,6 +1734,30 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 116 && insensitive(name, b"transform-style") {
         return Option<Property>.some(Property.TransformStyle)
       }
+      if first == 97 && insensitive(name, b"animation-delay") {
+        return Option<Property>.some(Property.AnimationDelay)
+      }
+      if first == 106 && insensitive(name, b"justify-content") {
+        return Option<Property>.some(Property.JustifyContent)
+      }
+      if first == 103 && insensitive(name, b"grid-column-end") {
+        return Option<Property>.some(Property.GridColumnEnd)
+      }
+      if first == 98 && insensitive(name, b"background-size") {
+        return Option<Property>.some(Property.BackgroundSize)
+      }
+      if first == 98 && insensitive(name, b"background-clip") {
+        return Option<Property>.some(Property.BackgroundClip)
+      }
+      if first == 98 && insensitive(name, b"backdrop-filter") {
+        return Option<Property>.some(Property.BackdropFilter)
+      }
+      if first == 111 && insensitive(name, b"object-position") {
+        return Option<Property>.some(Property.ObjectPosition)
+      }
+      if first == 115 && insensitive(name, b"scrollbar-width") {
+        return Option<Property>.some(Property.ScrollbarWidth)
+      }
     }
     16 => {
       if first == 115 && insensitive(name, b"stroke-dasharray") {
@@ -1109,11 +1778,26 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 119 && insensitive(name, b"white-space-trim") {
         return Option<Property>.some(Property.WhiteSpaceTrim)
       }
+      if first == 98 && insensitive(name, b"border-top-width") {
+        return Option<Property>.some(Property.BorderTopWidth)
+      }
+      if first == 98 && insensitive(name, b"border-top-style") {
+        return Option<Property>.some(Property.BorderTopStyle)
+      }
+      if first == 98 && insensitive(name, b"border-top-color") {
+        return Option<Property>.some(Property.BorderTopColor)
+      }
+      if first == 98 && insensitive(name, b"background-image") {
+        return Option<Property>.some(Property.BackgroundImage)
+      }
+      if first == 98 && insensitive(name, b"background-color") {
+        return Option<Property>.some(Property.BackgroundColor)
+      }
+      if first == 115 && insensitive(name, b"scrollbar-gutter") {
+        return Option<Property>.some(Property.ScrollbarGutter)
+      }
     }
     17 => {
-      if first == 105 && insensitive(name, b"image-orientation") {
-        return Option<Property>.some(Property.ImageOrientation)
-      }
       if first == 115 && insensitive(name, b"stroke-miterlimit") {
         return Option<Property>.some(Property.StrokeMiterlimit)
       }
@@ -1135,11 +1819,32 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 109 && insensitive(name, b"mask-border-width") {
         return Option<Property>.some(Property.MaskBorderWidth)
       }
+      if first == 105 && insensitive(name, b"image-orientation") {
+        return Option<Property>.some(Property.ImageOrientation)
+      }
+      if first == 98 && insensitive(name, b"border-left-width") {
+        return Option<Property>.some(Property.BorderLeftWidth)
+      }
+      if first == 98 && insensitive(name, b"border-left-style") {
+        return Option<Property>.some(Property.BorderLeftStyle)
+      }
+      if first == 98 && insensitive(name, b"border-left-color") {
+        return Option<Property>.some(Property.BorderLeftColor)
+      }
+      if first == 103 && insensitive(name, b"grid-auto-columns") {
+        return Option<Property>.some(Property.GridAutoColumns)
+      }
+      if first == 103 && insensitive(name, b"grid-column-start") {
+        return Option<Property>.some(Property.GridColumnStart)
+      }
+      if first == 98 && insensitive(name, b"background-repeat") {
+        return Option<Property>.some(Property.BackgroundRepeat)
+      }
+      if first == 98 && insensitive(name, b"background-origin") {
+        return Option<Property>.some(Property.BackgroundOrigin)
+      }
     }
     18 => {
-      if first == 97 && insensitive(name, b"animation-duration") {
-        return Option<Property>.some(Property.AnimationDuration)
-      }
       if first == 102 && insensitive(name, b"font-variant-emoji") {
         return Option<Property>.some(Property.FontVariantEmoji)
       }
@@ -1158,14 +1863,23 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 112 && insensitive(name, b"perspective-origin") {
         return Option<Property>.some(Property.PerspectiveOrigin)
       }
+      if first == 97 && insensitive(name, b"animation-duration") {
+        return Option<Property>.some(Property.AnimationDuration)
+      }
+      if first == 98 && insensitive(name, b"border-right-width") {
+        return Option<Property>.some(Property.BorderRightWidth)
+      }
+      if first == 98 && insensitive(name, b"border-right-style") {
+        return Option<Property>.some(Property.BorderRightStyle)
+      }
+      if first == 98 && insensitive(name, b"border-right-color") {
+        return Option<Property>.some(Property.BorderRightColor)
+      }
+      if first == 103 && insensitive(name, b"grid-template-rows") {
+        return Option<Property>.some(Property.GridTemplateRows)
+      }
     }
     19 => {
-      if first == 97 && insensitive(name, b"animation-direction") {
-        return Option<Property>.some(Property.AnimationDirection)
-      }
-      if first == 97 && insensitive(name, b"animation-fill-mode") {
-        return Option<Property>.some(Property.AnimationFillMode)
-      }
       if first == 99 && insensitive(name, b"color-interpolation") {
         return Option<Property>.some(Property.ColorInterpolation)
       }
@@ -1184,11 +1898,29 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 98 && insensitive(name, b"backface-visibility") {
         return Option<Property>.some(Property.BackfaceVisibility)
       }
+      if first == 97 && insensitive(name, b"animation-direction") {
+        return Option<Property>.some(Property.AnimationDirection)
+      }
+      if first == 97 && insensitive(name, b"animation-fill-mode") {
+        return Option<Property>.some(Property.AnimationFillMode)
+      }
+      if first == 98 && insensitive(name, b"border-bottom-width") {
+        return Option<Property>.some(Property.BorderBottomWidth)
+      }
+      if first == 98 && insensitive(name, b"border-bottom-style") {
+        return Option<Property>.some(Property.BorderBottomStyle)
+      }
+      if first == 98 && insensitive(name, b"border-bottom-color") {
+        return Option<Property>.some(Property.BorderBottomColor)
+      }
+      if first == 103 && insensitive(name, b"grid-template-areas") {
+        return Option<Property>.some(Property.GridTemplateAreas)
+      }
+      if first == 98 && insensitive(name, b"background-position") {
+        return Option<Property>.some(Property.BackgroundPosition)
+      }
     }
     20 => {
-      if first == 97 && insensitive(name, b"animation-play-state") {
-        return Option<Property>.some(Property.AnimationPlayState)
-      }
       if first == 102 && insensitive(name, b"font-variant-numeric") {
         return Option<Property>.some(Property.FontVariantNumeric)
       }
@@ -1206,6 +1938,12 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 119 && insensitive(name, b"white-space-collapse") {
         return Option<Property>.some(Property.WhiteSpaceCollapse)
+      }
+      if first == 97 && insensitive(name, b"animation-play-state") {
+        return Option<Property>.some(Property.AnimationPlayState)
+      }
+      if first == 98 && insensitive(name, b"box-decoration-break") {
+        return Option<Property>.some(Property.BoxDecorationBreak)
       }
     }
     21 => {
@@ -1227,6 +1965,12 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 116 && insensitive(name, b"text-decoration-color") {
         return Option<Property>.some(Property.TextDecorationColor)
       }
+      if first == 103 && insensitive(name, b"grid-template-columns") {
+        return Option<Property>.some(Property.GridTemplateColumns)
+      }
+      if first == 98 && insensitive(name, b"background-attachment") {
+        return Option<Property>.some(Property.BackgroundAttachment)
+      }
     }
     22 => {
       if first == 102 && insensitive(name, b"font-variant-ligatures") {
@@ -1240,6 +1984,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 116 && insensitive(name, b"text-emphasis-position") {
         return Option<Property>.some(Property.TextEmphasisPosition)
+      }
+      if first == 98 && insensitive(name, b"border-top-left-radius") {
+        return Option<Property>.some(Property.BorderTopLeftRadius)
       }
     }
     23 => {
@@ -1258,24 +2005,33 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 116 && insensitive(name, b"text-underline-position") {
         return Option<Property>.some(Property.TextUnderlinePosition)
       }
+      if first == 98 && insensitive(name, b"border-top-right-radius") {
+        return Option<Property>.some(Property.BorderTopRightRadius)
+      }
     }
     25 => {
-      if first == 97 && insensitive(name, b"animation-timing-function") {
-        return Option<Property>.some(Property.AnimationTimingFunction)
-      }
-      if first == 97 && insensitive(name, b"animation-iteration-count") {
-        return Option<Property>.some(Property.AnimationIterationCount)
-      }
       if first == 102 && insensitive(name, b"font-synthesis-small-caps") {
         return Option<Property>.some(Property.FontSynthesisSmallCaps)
       }
       if first == 116 && insensitive(name, b"text-decoration-thickness") {
         return Option<Property>.some(Property.TextDecorationThickness)
       }
+      if first == 97 && insensitive(name, b"animation-timing-function") {
+        return Option<Property>.some(Property.AnimationTimingFunction)
+      }
+      if first == 97 && insensitive(name, b"animation-iteration-count") {
+        return Option<Property>.some(Property.AnimationIterationCount)
+      }
+      if first == 98 && insensitive(name, b"border-bottom-left-radius") {
+        return Option<Property>.some(Property.BorderBottomLeftRadius)
+      }
     }
     26 => {
       if first == 103 && insensitive(name, b"glyph-orientation-vertical") {
         return Option<Property>.some(Property.GlyphOrientationVertical)
+      }
+      if first == 98 && insensitive(name, b"border-bottom-right-radius") {
+        return Option<Property>.some(Property.BorderBottomRightRadius)
       }
     }
     27 => {
@@ -1467,6 +2223,114 @@ pub fn inherited(property: Property) -> bool {
     Property.AnimationFillMode => false
     Property.AnimationPlayState => false
     Property.WhiteSpaceTrim => false
+    Property.Position => false
+    Property.Top => false
+    Property.Right => false
+    Property.Bottom => false
+    Property.Left => false
+    Property.Inset => false
+    Property.BoxSizing => false
+    Property.MinWidth => false
+    Property.MinHeight => false
+    Property.MaxWidth => false
+    Property.MaxHeight => false
+    Property.MarginTop => false
+    Property.MarginRight => false
+    Property.MarginBottom => false
+    Property.MarginLeft => false
+    Property.Margin => false
+    Property.PaddingTop => false
+    Property.PaddingRight => false
+    Property.PaddingBottom => false
+    Property.PaddingLeft => false
+    Property.Padding => false
+    Property.BorderTopWidth => false
+    Property.BorderRightWidth => false
+    Property.BorderBottomWidth => false
+    Property.BorderLeftWidth => false
+    Property.BorderTopStyle => false
+    Property.BorderRightStyle => false
+    Property.BorderBottomStyle => false
+    Property.BorderLeftStyle => false
+    Property.BorderTopColor => false
+    Property.BorderRightColor => false
+    Property.BorderBottomColor => false
+    Property.BorderLeftColor => false
+    Property.BorderWidth => false
+    Property.BorderStyle => false
+    Property.BorderColor => false
+    Property.BorderTop => false
+    Property.BorderRight => false
+    Property.BorderBottom => false
+    Property.BorderLeft => false
+    Property.Border => false
+    Property.BorderTopLeftRadius => false
+    Property.BorderTopRightRadius => false
+    Property.BorderBottomRightRadius => false
+    Property.BorderBottomLeftRadius => false
+    Property.BorderRadius => false
+    Property.FlexDirection => false
+    Property.FlexWrap => false
+    Property.FlexGrow => false
+    Property.FlexShrink => false
+    Property.FlexBasis => false
+    Property.Order => false
+    Property.Flex => false
+    Property.FlexFlow => false
+    Property.JustifyContent => false
+    Property.AlignItems => false
+    Property.AlignSelf => false
+    Property.AlignContent => false
+    Property.JustifySelf => false
+    Property.JustifyItems => false
+    Property.PlaceContent => false
+    Property.PlaceItems => false
+    Property.PlaceSelf => false
+    Property.RowGap => false
+    Property.ColumnGap => false
+    Property.Gap => false
+    Property.GridTemplateColumns => false
+    Property.GridTemplateRows => false
+    Property.GridTemplateAreas => false
+    Property.GridAutoColumns => false
+    Property.GridAutoRows => false
+    Property.GridAutoFlow => false
+    Property.GridRowStart => false
+    Property.GridRowEnd => false
+    Property.GridColumnStart => false
+    Property.GridColumnEnd => false
+    Property.GridRow => false
+    Property.GridColumn => false
+    Property.GridArea => false
+    Property.GridTemplate => false
+    Property.Grid => false
+    Property.AspectRatio => false
+    Property.Float => false
+    Property.Clear => false
+    Property.ZIndex => false
+    Property.BackgroundImage => false
+    Property.BackgroundPosition => false
+    Property.BackgroundSize => false
+    Property.BackgroundRepeat => false
+    Property.BackgroundAttachment => false
+    Property.BackgroundOrigin => false
+    Property.BackgroundClip => false
+    Property.BackgroundColor => false
+    Property.Background => false
+    Property.BoxShadow => false
+    Property.BackdropFilter => false
+    Property.ObjectFit => false
+    Property.ObjectPosition => false
+    Property.ScrollbarWidth => false
+    Property.ScrollbarGutter => false
+    Property.BoxDecorationBreak => false
+    Property.MarginBreak => false
+    Property.BreakBefore => false
+    Property.BreakAfter => false
+    Property.BreakInside => false
+    Property.Orphans => true
+    Property.Widows => true
+    Property.CaretColor => true
   }
 }
 
@@ -1646,6 +2510,114 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.AnimationFillMode => b"none"
     Property.AnimationPlayState => b"running"
     Property.WhiteSpaceTrim => b"none"
+    Property.Position => b"static"
+    Property.Top => b"auto"
+    Property.Right => b"auto"
+    Property.Bottom => b"auto"
+    Property.Left => b"auto"
+    Property.Inset => b""
+    Property.BoxSizing => b"content-box"
+    Property.MinWidth => b"auto"
+    Property.MinHeight => b"auto"
+    Property.MaxWidth => b"none"
+    Property.MaxHeight => b"none"
+    Property.MarginTop => b"0"
+    Property.MarginRight => b"0"
+    Property.MarginBottom => b"0"
+    Property.MarginLeft => b"0"
+    Property.Margin => b""
+    Property.PaddingTop => b"0"
+    Property.PaddingRight => b"0"
+    Property.PaddingBottom => b"0"
+    Property.PaddingLeft => b"0"
+    Property.Padding => b""
+    Property.BorderTopWidth => b"medium"
+    Property.BorderRightWidth => b"medium"
+    Property.BorderBottomWidth => b"medium"
+    Property.BorderLeftWidth => b"medium"
+    Property.BorderTopStyle => b"none"
+    Property.BorderRightStyle => b"none"
+    Property.BorderBottomStyle => b"none"
+    Property.BorderLeftStyle => b"none"
+    Property.BorderTopColor => b"currentcolor"
+    Property.BorderRightColor => b"currentcolor"
+    Property.BorderBottomColor => b"currentcolor"
+    Property.BorderLeftColor => b"currentcolor"
+    Property.BorderWidth => b""
+    Property.BorderStyle => b""
+    Property.BorderColor => b""
+    Property.BorderTop => b""
+    Property.BorderRight => b""
+    Property.BorderBottom => b""
+    Property.BorderLeft => b""
+    Property.Border => b""
+    Property.BorderTopLeftRadius => b"0"
+    Property.BorderTopRightRadius => b"0"
+    Property.BorderBottomRightRadius => b"0"
+    Property.BorderBottomLeftRadius => b"0"
+    Property.BorderRadius => b""
+    Property.FlexDirection => b"row"
+    Property.FlexWrap => b"nowrap"
+    Property.FlexGrow => b"0"
+    Property.FlexShrink => b"1"
+    Property.FlexBasis => b"auto"
+    Property.Order => b"0"
+    Property.Flex => b""
+    Property.FlexFlow => b""
+    Property.JustifyContent => b"normal"
+    Property.AlignItems => b"normal"
+    Property.AlignSelf => b"auto"
+    Property.AlignContent => b"normal"
+    Property.JustifySelf => b"auto"
+    Property.JustifyItems => b"legacy"
+    Property.PlaceContent => b""
+    Property.PlaceItems => b""
+    Property.PlaceSelf => b""
+    Property.RowGap => b"normal"
+    Property.ColumnGap => b"normal"
+    Property.Gap => b""
+    Property.GridTemplateColumns => b"none"
+    Property.GridTemplateRows => b"none"
+    Property.GridTemplateAreas => b"none"
+    Property.GridAutoColumns => b"auto"
+    Property.GridAutoRows => b"auto"
+    Property.GridAutoFlow => b"row"
+    Property.GridRowStart => b"auto"
+    Property.GridRowEnd => b"auto"
+    Property.GridColumnStart => b"auto"
+    Property.GridColumnEnd => b"auto"
+    Property.GridRow => b""
+    Property.GridColumn => b""
+    Property.GridArea => b""
+    Property.GridTemplate => b""
+    Property.Grid => b""
+    Property.AspectRatio => b"auto"
+    Property.Float => b"none"
+    Property.Clear => b"none"
+    Property.ZIndex => b"auto"
+    Property.BackgroundImage => b"none"
+    Property.BackgroundPosition => b"0% 0%"
+    Property.BackgroundSize => b"auto"
+    Property.BackgroundRepeat => b"repeat"
+    Property.BackgroundAttachment => b"scroll"
+    Property.BackgroundOrigin => b"padding-box"
+    Property.BackgroundClip => b"border-box"
+    Property.BackgroundColor => b"transparent"
+    Property.Background => b""
+    Property.BoxShadow => b"none"
+    Property.BackdropFilter => b"none"
+    Property.ObjectFit => b"fill"
+    Property.ObjectPosition => b"50% 50%"
+    Property.ScrollbarWidth => b"auto"
+    Property.ScrollbarGutter => b"auto"
+    Property.BoxDecorationBreak => b"slice"
+    Property.MarginBreak => b"auto"
+    Property.BreakBefore => b"auto"
+    Property.BreakAfter => b"auto"
+    Property.BreakInside => b"auto"
+    Property.Orphans => b"2"
+    Property.Widows => b"2"
+    Property.CaretColor => b"auto"
   }
 }
 
@@ -1680,7 +2652,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 155
+    Property.All => 239
     Property.Animation => 8
     Property.WhiteSpace => 3
     Property.Marker => 3
@@ -1694,6 +2666,30 @@ pub fn longhandCount(property: Property) -> usize {
     Property.TextAlign => 2
     Property.Overflow => 2
     Property.VerticalAlign => 3
+    Property.Inset => 4
+    Property.Margin => 4
+    Property.Padding => 4
+    Property.BorderWidth => 4
+    Property.BorderStyle => 4
+    Property.BorderColor => 4
+    Property.BorderTop => 3
+    Property.BorderRight => 3
+    Property.BorderBottom => 3
+    Property.BorderLeft => 3
+    Property.Border => 12
+    Property.BorderRadius => 4
+    Property.Flex => 3
+    Property.FlexFlow => 2
+    Property.PlaceContent => 2
+    Property.PlaceItems => 2
+    Property.PlaceSelf => 2
+    Property.Gap => 2
+    Property.GridRow => 2
+    Property.GridColumn => 2
+    Property.GridArea => 4
+    Property.GridTemplate => 3
+    Property.Grid => 6
+    Property.Background => 8
     _ => 1
   }
 }
@@ -2181,6 +3177,258 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       if index == 145 {
         return Property.WhiteSpaceTrim
       }
+      if index == 155 {
+        return Property.Position
+      }
+      if index == 156 {
+        return Property.Top
+      }
+      if index == 157 {
+        return Property.Right
+      }
+      if index == 158 {
+        return Property.Bottom
+      }
+      if index == 159 {
+        return Property.Left
+      }
+      if index == 160 {
+        return Property.BoxSizing
+      }
+      if index == 161 {
+        return Property.MinWidth
+      }
+      if index == 162 {
+        return Property.MinHeight
+      }
+      if index == 163 {
+        return Property.MaxWidth
+      }
+      if index == 164 {
+        return Property.MaxHeight
+      }
+      if index == 165 {
+        return Property.MarginTop
+      }
+      if index == 166 {
+        return Property.MarginRight
+      }
+      if index == 167 {
+        return Property.MarginBottom
+      }
+      if index == 168 {
+        return Property.MarginLeft
+      }
+      if index == 169 {
+        return Property.PaddingTop
+      }
+      if index == 170 {
+        return Property.PaddingRight
+      }
+      if index == 171 {
+        return Property.PaddingBottom
+      }
+      if index == 172 {
+        return Property.PaddingLeft
+      }
+      if index == 173 {
+        return Property.BorderTopWidth
+      }
+      if index == 174 {
+        return Property.BorderRightWidth
+      }
+      if index == 175 {
+        return Property.BorderBottomWidth
+      }
+      if index == 176 {
+        return Property.BorderLeftWidth
+      }
+      if index == 177 {
+        return Property.BorderTopStyle
+      }
+      if index == 178 {
+        return Property.BorderRightStyle
+      }
+      if index == 179 {
+        return Property.BorderBottomStyle
+      }
+      if index == 180 {
+        return Property.BorderLeftStyle
+      }
+      if index == 181 {
+        return Property.BorderTopColor
+      }
+      if index == 182 {
+        return Property.BorderRightColor
+      }
+      if index == 183 {
+        return Property.BorderBottomColor
+      }
+      if index == 184 {
+        return Property.BorderLeftColor
+      }
+      if index == 185 {
+        return Property.BorderTopLeftRadius
+      }
+      if index == 186 {
+        return Property.BorderTopRightRadius
+      }
+      if index == 187 {
+        return Property.BorderBottomRightRadius
+      }
+      if index == 188 {
+        return Property.BorderBottomLeftRadius
+      }
+      if index == 189 {
+        return Property.FlexDirection
+      }
+      if index == 190 {
+        return Property.FlexWrap
+      }
+      if index == 191 {
+        return Property.FlexGrow
+      }
+      if index == 192 {
+        return Property.FlexShrink
+      }
+      if index == 193 {
+        return Property.FlexBasis
+      }
+      if index == 194 {
+        return Property.Order
+      }
+      if index == 195 {
+        return Property.JustifyContent
+      }
+      if index == 196 {
+        return Property.AlignItems
+      }
+      if index == 197 {
+        return Property.AlignSelf
+      }
+      if index == 198 {
+        return Property.AlignContent
+      }
+      if index == 199 {
+        return Property.JustifySelf
+      }
+      if index == 200 {
+        return Property.JustifyItems
+      }
+      if index == 201 {
+        return Property.RowGap
+      }
+      if index == 202 {
+        return Property.ColumnGap
+      }
+      if index == 203 {
+        return Property.GridTemplateColumns
+      }
+      if index == 204 {
+        return Property.GridTemplateRows
+      }
+      if index == 205 {
+        return Property.GridTemplateAreas
+      }
+      if index == 206 {
+        return Property.GridAutoColumns
+      }
+      if index == 207 {
+        return Property.GridAutoRows
+      }
+      if index == 208 {
+        return Property.GridAutoFlow
+      }
+      if index == 209 {
+        return Property.GridRowStart
+      }
+      if index == 210 {
+        return Property.GridRowEnd
+      }
+      if index == 211 {
+        return Property.GridColumnStart
+      }
+      if index == 212 {
+        return Property.GridColumnEnd
+      }
+      if index == 213 {
+        return Property.AspectRatio
+      }
+      if index == 214 {
+        return Property.Float
+      }
+      if index == 215 {
+        return Property.Clear
+      }
+      if index == 216 {
+        return Property.ZIndex
+      }
+      if index == 217 {
+        return Property.BackgroundImage
+      }
+      if index == 218 {
+        return Property.BackgroundPosition
+      }
+      if index == 219 {
+        return Property.BackgroundSize
+      }
+      if index == 220 {
+        return Property.BackgroundRepeat
+      }
+      if index == 221 {
+        return Property.BackgroundAttachment
+      }
+      if index == 222 {
+        return Property.BackgroundOrigin
+      }
+      if index == 223 {
+        return Property.BackgroundClip
+      }
+      if index == 224 {
+        return Property.BackgroundColor
+      }
+      if index == 225 {
+        return Property.BoxShadow
+      }
+      if index == 226 {
+        return Property.BackdropFilter
+      }
+      if index == 227 {
+        return Property.ObjectFit
+      }
+      if index == 228 {
+        return Property.ObjectPosition
+      }
+      if index == 229 {
+        return Property.ScrollbarWidth
+      }
+      if index == 230 {
+        return Property.ScrollbarGutter
+      }
+      if index == 231 {
+        return Property.BoxDecorationBreak
+      }
+      if index == 232 {
+        return Property.MarginBreak
+      }
+      if index == 233 {
+        return Property.BreakBefore
+      }
+      if index == 234 {
+        return Property.BreakAfter
+      }
+      if index == 235 {
+        return Property.BreakInside
+      }
+      if index == 236 {
+        return Property.Orphans
+      }
+      if index == 237 {
+        return Property.Widows
+      }
+      if index == 238 {
+        return Property.CaretColor
+      }
     }
     Property.WhiteSpace => {
       if index == 0 {
@@ -2411,6 +3659,324 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 2 {
         return Property.BaselineShift
+      }
+    }
+    Property.Inset => {
+      if index == 0 {
+        return Property.Top
+      }
+      if index == 1 {
+        return Property.Right
+      }
+      if index == 2 {
+        return Property.Bottom
+      }
+      if index == 3 {
+        return Property.Left
+      }
+    }
+    Property.Margin => {
+      if index == 0 {
+        return Property.MarginTop
+      }
+      if index == 1 {
+        return Property.MarginRight
+      }
+      if index == 2 {
+        return Property.MarginBottom
+      }
+      if index == 3 {
+        return Property.MarginLeft
+      }
+    }
+    Property.Padding => {
+      if index == 0 {
+        return Property.PaddingTop
+      }
+      if index == 1 {
+        return Property.PaddingRight
+      }
+      if index == 2 {
+        return Property.PaddingBottom
+      }
+      if index == 3 {
+        return Property.PaddingLeft
+      }
+    }
+    Property.BorderWidth => {
+      if index == 0 {
+        return Property.BorderTopWidth
+      }
+      if index == 1 {
+        return Property.BorderRightWidth
+      }
+      if index == 2 {
+        return Property.BorderBottomWidth
+      }
+      if index == 3 {
+        return Property.BorderLeftWidth
+      }
+    }
+    Property.BorderStyle => {
+      if index == 0 {
+        return Property.BorderTopStyle
+      }
+      if index == 1 {
+        return Property.BorderRightStyle
+      }
+      if index == 2 {
+        return Property.BorderBottomStyle
+      }
+      if index == 3 {
+        return Property.BorderLeftStyle
+      }
+    }
+    Property.BorderColor => {
+      if index == 0 {
+        return Property.BorderTopColor
+      }
+      if index == 1 {
+        return Property.BorderRightColor
+      }
+      if index == 2 {
+        return Property.BorderBottomColor
+      }
+      if index == 3 {
+        return Property.BorderLeftColor
+      }
+    }
+    Property.BorderTop => {
+      if index == 0 {
+        return Property.BorderTopWidth
+      }
+      if index == 1 {
+        return Property.BorderTopStyle
+      }
+      if index == 2 {
+        return Property.BorderTopColor
+      }
+    }
+    Property.BorderRight => {
+      if index == 0 {
+        return Property.BorderRightWidth
+      }
+      if index == 1 {
+        return Property.BorderRightStyle
+      }
+      if index == 2 {
+        return Property.BorderRightColor
+      }
+    }
+    Property.BorderBottom => {
+      if index == 0 {
+        return Property.BorderBottomWidth
+      }
+      if index == 1 {
+        return Property.BorderBottomStyle
+      }
+      if index == 2 {
+        return Property.BorderBottomColor
+      }
+    }
+    Property.BorderLeft => {
+      if index == 0 {
+        return Property.BorderLeftWidth
+      }
+      if index == 1 {
+        return Property.BorderLeftStyle
+      }
+      if index == 2 {
+        return Property.BorderLeftColor
+      }
+    }
+    Property.Border => {
+      if index == 0 {
+        return Property.BorderTopWidth
+      }
+      if index == 1 {
+        return Property.BorderRightWidth
+      }
+      if index == 2 {
+        return Property.BorderBottomWidth
+      }
+      if index == 3 {
+        return Property.BorderLeftWidth
+      }
+      if index == 4 {
+        return Property.BorderTopStyle
+      }
+      if index == 5 {
+        return Property.BorderRightStyle
+      }
+      if index == 6 {
+        return Property.BorderBottomStyle
+      }
+      if index == 7 {
+        return Property.BorderLeftStyle
+      }
+      if index == 8 {
+        return Property.BorderTopColor
+      }
+      if index == 9 {
+        return Property.BorderRightColor
+      }
+      if index == 10 {
+        return Property.BorderBottomColor
+      }
+      if index == 11 {
+        return Property.BorderLeftColor
+      }
+    }
+    Property.BorderRadius => {
+      if index == 0 {
+        return Property.BorderTopLeftRadius
+      }
+      if index == 1 {
+        return Property.BorderTopRightRadius
+      }
+      if index == 2 {
+        return Property.BorderBottomRightRadius
+      }
+      if index == 3 {
+        return Property.BorderBottomLeftRadius
+      }
+    }
+    Property.Flex => {
+      if index == 0 {
+        return Property.FlexGrow
+      }
+      if index == 1 {
+        return Property.FlexShrink
+      }
+      if index == 2 {
+        return Property.FlexBasis
+      }
+    }
+    Property.FlexFlow => {
+      if index == 0 {
+        return Property.FlexDirection
+      }
+      if index == 1 {
+        return Property.FlexWrap
+      }
+    }
+    Property.PlaceContent => {
+      if index == 0 {
+        return Property.AlignContent
+      }
+      if index == 1 {
+        return Property.JustifyContent
+      }
+    }
+    Property.PlaceItems => {
+      if index == 0 {
+        return Property.AlignItems
+      }
+      if index == 1 {
+        return Property.JustifyItems
+      }
+    }
+    Property.PlaceSelf => {
+      if index == 0 {
+        return Property.AlignSelf
+      }
+      if index == 1 {
+        return Property.JustifySelf
+      }
+    }
+    Property.Gap => {
+      if index == 0 {
+        return Property.RowGap
+      }
+      if index == 1 {
+        return Property.ColumnGap
+      }
+    }
+    Property.GridRow => {
+      if index == 0 {
+        return Property.GridRowStart
+      }
+      if index == 1 {
+        return Property.GridRowEnd
+      }
+    }
+    Property.GridColumn => {
+      if index == 0 {
+        return Property.GridColumnStart
+      }
+      if index == 1 {
+        return Property.GridColumnEnd
+      }
+    }
+    Property.GridArea => {
+      if index == 0 {
+        return Property.GridRowStart
+      }
+      if index == 1 {
+        return Property.GridColumnStart
+      }
+      if index == 2 {
+        return Property.GridRowEnd
+      }
+      if index == 3 {
+        return Property.GridColumnEnd
+      }
+    }
+    Property.GridTemplate => {
+      if index == 0 {
+        return Property.GridTemplateRows
+      }
+      if index == 1 {
+        return Property.GridTemplateColumns
+      }
+      if index == 2 {
+        return Property.GridTemplateAreas
+      }
+    }
+    Property.Grid => {
+      if index == 0 {
+        return Property.GridTemplateRows
+      }
+      if index == 1 {
+        return Property.GridTemplateColumns
+      }
+      if index == 2 {
+        return Property.GridTemplateAreas
+      }
+      if index == 3 {
+        return Property.GridAutoRows
+      }
+      if index == 4 {
+        return Property.GridAutoColumns
+      }
+      if index == 5 {
+        return Property.GridAutoFlow
+      }
+    }
+    Property.Background => {
+      if index == 0 {
+        return Property.BackgroundImage
+      }
+      if index == 1 {
+        return Property.BackgroundPosition
+      }
+      if index == 2 {
+        return Property.BackgroundSize
+      }
+      if index == 3 {
+        return Property.BackgroundRepeat
+      }
+      if index == 4 {
+        return Property.BackgroundAttachment
+      }
+      if index == 5 {
+        return Property.BackgroundOrigin
+      }
+      if index == 6 {
+        return Property.BackgroundClip
+      }
+      if index == 7 {
+        return Property.BackgroundColor
       }
     }
     _ => {}
