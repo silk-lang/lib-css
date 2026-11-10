@@ -1,0 +1,107 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.mem.pointer { Pointer }
+import silk.system.filesystem { FileError, FileSystem, Path }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.string { InvalidUtf8, String }
+
+@foreign(noCapture: .("path"))
+unsafe extern "C" fn access(path: ?[*]const u8, mode: i32) -> i32
+
+effect fn executable(path: &Path) -> bool ! OutOfMemoryError ? &mut Allocator {
+  let mut terminated = run Bytes.copy(Path.rawBytes(path))
+  run Bytes.append(&mut terminated, b"\0")
+  return unsafe access(Pointer.fromSlice<u8>(Bytes.asSlice(&terminated)), 1) == 0
+}
+
+pub effect fn text(bytes: &[u8]) -> String ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return match String.fromUtf8(bytes) {
+    Result<string, InvalidUtf8>.Success { value } => run String.copy(value)
+    Result<string, InvalidUtf8>.Failure { .. } => run Task.abort("Expected a UTF-8 host path")
+  }
+}
+pub effect fn pathText(path: &Path) -> String ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return run text(Path.rawBytes(path))
+}
+effect fn install(directory: &Path, temporary: &Path) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let archive = run Path.join(temporary, "llvm.tar.xz")
+  let archiveText = run pathText(&archive)
+  run Task.exec("curl", &["-fsSL", "--retry", "3", "-o", String.view(&archiveText), "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz"])
+  let checksum = run Task.capture("sha256sum", &[String.view(&archiveText)])
+  let checked = run text(Bytes.asSlice(&checksum))
+  if !String.startsWith(String.view(&checked), "df0e1ecf16caf3489a272a5eea4eec9b0d82878f6477fa309504f918a0006384 ") {
+    run Task.abort("LLVM 22.1.8 archive checksum mismatch")
+  }
+  let extracted = run Path.join(temporary, "install")
+  run FileSystem.createDirectory(&extracted)
+  let extractedText = run pathText(&extracted)
+  run Task.exec("tar", &["-xf", String.view(&archiveText), "--strip-components=1", "-C", String.view(&extractedText), "--wildcards", "*/bin/clang", "*/bin/clang-22", "*/lib/clang/*"])
+  let directoryText = run pathText(directory)
+  run Task.exec("mkdir", &["-p", String.view(&directoryText)])
+  run FileSystem.removeDirectoryRecursively(directory)
+  run Task.exec("mv", &[String.view(&extractedText), String.view(&directoryText)])
+}
+
+pub effect fn installLLVM() -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let root = run Task.root()
+  let layout = run Path.join(&root, "modules/layout")
+  let mut directory = run Path.join(&layout, ".cache/llvm-22.1.8")
+  if let Option<Bytes>.Some { value } = move run HostInput.variableNamed("LLVM_HOME") {
+    let supplied = run text(Bytes.asSlice(&value))
+    if String.view(&supplied) != "" {
+      directory = if String.startsWith(String.view(&supplied), "/") { run Path.make(String.view(&supplied)) } else { run Path.resolve(&layout, String.view(&supplied)) }
+    }
+  }
+  let clang = run Path.join(&directory, "bin/clang")
+  if !run executable(&clang) {
+    static if Intrinsic.targetOperatingSystem() != "linux" || Intrinsic.targetArchitecture() != "x86_64" {
+      run Task.abort("install-llvm supports Linux x86_64 only")
+    }
+    let cache = run Path.join(&layout, ".cache")
+    run FileSystem.createDirectoriesRecursively(&cache)
+    let temporary = run FileSystem.createTemporaryDirectory(&cache, b"llvm-install-")
+    let outcome = run Effect.result(install(&directory, &temporary))
+    run FileSystem.removeDirectoryRecursively(&temporary)
+    match move outcome {
+      Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Success { .. } => {}
+      Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Failure { error } => { fail move error }
+    }
+  }
+  let mut out = StdoutWriter.make()
+  run Writer.writeAll(Path.rawBytes(&clang)) |> Effect.provideMut<Writer>(&mut out)
+  run Writer.writeString("\n") |> Effect.provideMut<Writer>(&mut out)
+}
+
+pub fn target() -> string<'static> {
+  static if Intrinsic.targetOperatingSystem() == "darwin" && Intrinsic.targetArchitecture() == "aarch64" {
+    return "aarch64-apple-darwin"
+  } else {
+    static if Intrinsic.targetOperatingSystem() == "linux" && Intrinsic.targetArchitecture() == "x86_64" {
+      return "x86_64-unknown-linux-gnu"
+    } else {
+      static if Intrinsic.targetOperatingSystem() == "linux" && Intrinsic.targetArchitecture() == "aarch64" {
+        return "aarch64-unknown-linux-gnu"
+      } else { return "" }
+    }
+  }
+}
+pub effect fn harness(release: bool) -> String ! TaskError | FileError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator {
+  if target() == "" { run Task.abort("Unsupported native host for the layout harness") }
+  let mut relative = run String.copy("build/llvm/")
+  run String.append(&mut relative, target())
+  run String.append(&mut relative, if release { "/release/css-layout-test-harness" } else { "/debug/css-layout-test-harness" })
+  let root = run Task.root()
+  let path = run Path.join(&root, String.view(&relative))
+  return run pathText(&path)
+}

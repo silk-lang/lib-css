@@ -1,0 +1,115 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.core.effect { Effect }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StderrWriter }
+import silk.json.value { Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.format { Format }
+import silk.text.string { String }
+import silk.num.i64
+import silk.num.usize
+import task_json { J }
+import task_update_process { Captured, runInput }
+
+pub struct U {}
+impl U {
+  pub effect fn json(text: string) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator { return run J.parse(String.utf8Bytes(text)) }
+  pub effect fn singleton(value: Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+    let mut result = J.array()
+    run J.push(&mut result, move value)
+    return move result
+  }
+  pub effect fn pair(a: Value, b: Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+    let mut result = J.array()
+    run J.push(&mut result, move a)
+    run J.push(&mut result, move b)
+    return move result
+  }
+  pub effect fn setStep(node: usize, key: string, value: Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+    let mut change = J.object()
+    run J.set(&mut change, "node", J.int(usize.toI64(node)))
+    run J.set(&mut change, key, move value)
+    let mut step = J.object()
+    run J.set(&mut step, "set", run U.singleton(move change))
+    return move step
+  }
+  pub effect fn viewport(width: f64, height: f64) -> Value ! OutOfMemoryError ? &mut Allocator {
+    let mut viewport = J.object()
+    run J.set(&mut viewport, "width", J.float(width))
+    run J.set(&mut viewport, "height", J.float(height))
+    return move viewport
+  }
+  pub effect fn viewportStep(width: f64, height: f64) -> Value ! OutOfMemoryError ? &mut Allocator {
+    let mut step = J.object()
+    run J.set(&mut step, "viewport", run U.viewport(width, height))
+    return move step
+  }
+  pub effect fn final(document: &Value, cycle: &Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+    let mut result = run J.copy(document)
+    let steps = J.items(cycle)
+    let mut i: usize = 0
+    while i < steps.length {
+      let step = &steps[i]
+      if J.has(step, "viewport") { run J.set(&mut result, "viewport", run J.copy(J.get(step, "viewport"))) }
+      let changes = J.items(J.get(step, "set"))
+      let mut c: usize = 0
+      while c < changes.length {
+        let node = i64.toUsize(J.integer(J.get(&changes[c], "node")))
+        let keys = ["style", "text", "scrollOffset"]
+        let mut k: usize = 0
+        while k < keys.length {
+          if J.has(&changes[c], keys[k]) { run J.set(J.atMut(J.getMut(&mut result, "nodes"), node), keys[k], run J.copy(J.get(&changes[c], keys[k]))) }
+          k = k + 1
+        }
+        c = c + 1
+      }
+      i = i + 1
+    }
+    return move result
+  }
+  pub effect fn updated(document: &Value, cycle: &Value, iterations: usize) -> Value ! OutOfMemoryError ? &mut Allocator {
+    let mut result = run J.copy(document)
+    let mut updates = J.object()
+    run J.set(&mut updates, "iterations", J.int(usize.toI64(iterations)))
+    run J.set(&mut updates, "cycle", run J.copy(cycle))
+    run J.set(&mut result, "updates", move updates)
+    return move result
+  }
+  pub effect fn invoke(cli: string, document: &Value, timeout: i32) -> Captured
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    let bytes = run J.encode(document)
+    return run runInput(cli, Bytes.asSlice(&bytes), timeout)
+  }
+  pub effect fn checked(cli: string, document: &Value, timeout: i32) -> Value
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    let result = run U.invoke(cli, document, timeout)
+    if result.code != 0 { let bytes = run J.encode(document)
+    run U.evidence(Bytes.asSlice(&bytes), &result)
+    run Task.abort("adapter request failed") }
+    return run J.parse(Bytes.asSlice(&result.output))
+  }
+  pub effect fn evidence(input: &[u8], result: &Captured) -> () ! WriterError {
+    let mut err = StderrWriter.make()
+    run Format.format("request: {:?}\nexit: {}\nstdout: {:?}\nstderr: {:?}\n", &(input, result.code, Bytes.asSlice(&result.output), Bytes.asSlice(&result.errors))) |> Effect.provideMut<Writer>(&mut err)
+  }
+  pub effect fn require(condition: bool, message: string) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+    if !condition { run Task.abort(message) }
+  }
+  pub fn contains(bytes: &[u8], needle: &[u8]) -> bool {
+    if needle.length > bytes.length { return false }
+    let mut i: usize = 0
+    while i <= bytes.length - needle.length {
+      let mut j: usize = 0
+      while j < needle.length && bytes[i + j] == needle[j] { j = j + 1 }
+      if j == needle.length { return true }
+      i = i + 1
+    }
+    return false
+  }
+}

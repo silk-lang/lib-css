@@ -1,0 +1,611 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.core.ownership { Copy }
+import silk.core.option { Option }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter, StderrWriter }
+import silk.json.value { Json, Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.format { Format }
+import silk.text.string { String }
+import silk.num.i64
+import silk.num.usize
+import task_json { J }
+import task_update_common { U }
+import task_update_random { Random }
+
+pub struct FuzzUpdatesOptions { pub cli: String, pub seeds: i64, pub first: i64, pub mode: String }
+struct Mode { relative: f64, text: f64, inlineChance: f64, typo: bool, kind: string<'static>, repeat: usize, subgrid: bool, structure: bool }
+impl Copy for Mode {}
+const WORDS: [string; 5] = ["ab", "word", "x", "longer", "q"]
+
+effect fn mode(name: string) -> Mode ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if name == "mixed" || name == "structure" { return Mode { relative: 0.1, text: 0.2, inlineChance: 0.1, typo: false, kind: "any", repeat: 1, subgrid: false, structure: name == "structure" } }
+  if name == "inner" { return Mode { relative: 0.0, text: 0.3, inlineChance: 0.0, typo: true, kind: "inner", repeat: 3, subgrid: false, structure: false } }
+  if name == "insets" { return Mode { relative: 0.0, text: 0.3, inlineChance: 0.2, typo: false, kind: "insets", repeat: 2, subgrid: false, structure: false } }
+  if name == "text" { return Mode { relative: 0.0, text: 1.0, inlineChance: 0.2, typo: true, kind: "any", repeat: 2, subgrid: false, structure: false } }
+  if name == "grid" || name == "subgrid" || name == "gridstructure" { return Mode { relative: 0.1, text: if name == "gridstructure" { 0.2 } else { 0.3 }, inlineChance: 0.1, typo: name != "gridstructure", kind: "grid", repeat: if name == "gridstructure" { 1 } else { 3 }, subgrid: name == "subgrid", structure: name == "gridstructure" } }
+  return run Task.abort("unknown update fuzz mode")
+}
+
+effect fn tracks(r: &mut Random) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let kind = r.below(5)
+  let mut result = J.array()
+  if kind < 3 {
+    let count = r.integer(1, 4)
+    let mut i: i64 = 0
+    while i < count {
+      if kind == 0 { run J.push(&mut result, J.int(r.integer(10, 80))) }
+      else if kind == 1 { let choices = run U.json("[\"auto\",\"min-content\",\"max-content\",{\"fitContent\":60}]")
+      run J.push(&mut result, run J.copy(J.at(&choices, r.below(4)))) }
+      else {
+        let fractions: [f64; 3] = [0.5, 1.0, 2.0]
+        let mut fraction = J.object()
+        run J.set(&mut fraction, "fr", J.float(fractions[r.below(3)]))
+        let mut track = J.object()
+        run J.set(&mut track, "minmax", run U.pair(J.int(0), move fraction))
+        run J.push(&mut result, move track)
+      }
+      i = i + 1
+    }
+  } else if kind == 3 {
+    let choices = run U.json("[2,3,\"auto-fill\",\"auto-fit\"]")
+    let count = run J.copy(J.at(&choices, r.below(4)))
+    let mut repeat = J.object()
+    run J.set(&mut repeat, "count", move count)
+    run J.set(&mut repeat, "tracks", run U.pair(J.int(r.integer(20, 70)), run U.json("{\"names\":[\"cell\"]}")))
+    let mut track = J.object()
+    run J.set(&mut track, "repeat", move repeat)
+    run J.push(&mut result, move track)
+  } else {
+    run J.push(&mut result, run U.json("{\"names\":[\"cell\"]}"))
+    run J.push(&mut result, J.int(r.integer(20, 80)))
+    run J.push(&mut result, run U.json("{\"names\":[\"cell\"]}"))
+    run J.push(&mut result, J.int(r.integer(20, 80)))
+    run J.push(&mut result, run U.json("{\"names\":[\"cell\"]}"))
+  }
+  return move result
+}
+effect fn gridStyle(r: &mut Random) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut style = run U.json("{\"display\":\"grid\"}")
+  run J.set(&mut style, "gridTemplateColumns", run tracks(&mut r))
+  run J.set(&mut style, "gridTemplateRows", run tracks(&mut r))
+  run J.set(&mut style, "gridAutoColumns", run U.pair(J.int(r.integer(10, 40)), run J.text("auto")))
+  run J.set(&mut style, "gridAutoRows", run U.pair(run J.text("auto"), J.int(r.integer(10, 40))))
+  run J.set(&mut style, "gridAutoFlow", run J.text(r.pick(&["row", "column", "row dense", "column dense"])))
+  run J.set(&mut style, "columnGap", J.int(r.integer(0, 8)))
+  run J.set(&mut style, "rowGap", J.int(r.integer(0, 8)))
+  if r.random() < 0.2 { run J.set(&mut style, "gridTemplateAreas", run U.json("[[\"a\",\"a\"],[\"b\",\"c\"]]")) }
+  return move style
+}
+effect fn gridLine(r: &mut Random) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  // Python evaluates every list member before choice, including these two draws.
+  let span = r.integer(1, 3)
+  let lines: [i64; 4] = [-2, -1, 1, 2]
+  let line = lines[r.below(4)]
+  let mut choices = run U.json("[\"auto\",1,2,-1,-2,\"cell\",{}, {\"name\":\"cell\"},{\"span\":1,\"name\":\"cell\"}]")
+  run J.set(J.atMut(&mut choices, 6), "span", J.int(span))
+  run J.set(J.atMut(&mut choices, 7), "line", J.int(line))
+  return run J.copy(J.at(&choices, r.below(9)))
+}
+effect fn subgridAxis(r: &mut Random) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if r.random() < 0.5 { return run J.text("subgrid") }
+  let mut value = run U.json("{\"subgrid\":[{\"names\":[\"cell\"]},{\"repeat\":{\"tracks\":[{\"names\":[]},{\"names\":[\"cell\"]}]}},{\"names\":[\"edge\"]}]}")
+  let count = if r.below(2) == 0 { J.int(2) } else { run J.text("auto-fill") }
+  run J.set(J.getMut(J.atMut(J.getMut(&mut value, "subgrid"), 1), "repeat"), "count", move count)
+  return move value
+}
+effect fn randomStyle(r: &mut Random, m: Mode) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if r.random() < m.inlineChance { return run U.json("{\"display\":\"inline\"}") }
+  let kind = if m.kind == "grid" { r.pick(&["block", "flex", "grid"]) } else { r.pick(&["block", "flex"]) }
+  let mut style = run U.json("{\"boxSizing\":\"border-box\"}")
+  run J.set(&mut style, "display", run J.text(kind))
+  if kind == "flex" {
+    run J.set(&mut style, "flexDirection", run J.text(r.pick(&["row", "column"])))
+    run J.set(&mut style, "flexWrap", run J.text(r.pick(&["nowrap", "wrap"])))
+    run J.set(&mut style, "alignItems", run J.text(r.pick(&["stretch", "flex-start", "center", "baseline"])))
+    if r.random() < 0.3 { run J.set(&mut style, "justifyContent", run J.text(r.pick(&["flex-start", "center", "space-between"]))) }
+    if r.random() < 0.5 { run J.set(&mut style, "columnGap", J.int(r.integer(0, 8))) }
+  } else if kind == "grid" { let generated = run gridStyle(&mut r)
+  run J.merge(&mut style, &generated) }
+  if m.kind == "grid" { let keys = ["gridRowStart", "gridRowEnd", "gridColumnStart", "gridColumnEnd"]
+  let mut i: usize = 0
+  while i < keys.length { if r.random() < 0.35 { run J.set(&mut style, keys[i], run gridLine(&mut r)) }
+  i = i + 1 } }
+  if r.random() < 0.5 { run J.set(&mut style, "padding", J.int(r.integer(0, 6))) }
+  if r.random() < 0.3 { run J.set(&mut style, "marginTop", J.int(r.integer(0, 6))) }
+  if r.random() < 0.3 { run J.set(&mut style, "width", J.int(r.integer(10, 200))) }
+  if r.random() < 0.3 { run J.set(&mut style, "height", J.int(r.integer(5, 80))) }
+  if r.random() < 0.3 { run J.set(&mut style, "flexGrow", J.int(r.integer(0, 2))) }
+  if r.random() < m.relative { run J.set(&mut style, "position", run J.text("relative")) }
+  if r.random() < 0.1 { run J.set(&mut style, "order", J.int(r.integer(-1, 2))) }
+  if r.random() < 0.1 { run J.set(&mut style, "alignSelf", run J.text(r.pick(&["auto", "center", "baseline"]))) }
+  if r.random() < 0.1 { run J.set(&mut style, "minWidth", J.int(r.integer(0, 50))) }
+  if r.random() < 0.1 { run J.set(&mut style, "border", J.int(r.integer(0, 3))) }
+  return move style
+}
+effect fn words(r: &mut Random, maximum: i64, choices: usize) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let count = r.integer(1, maximum)
+  let mut text = String.make()
+  let mut i: i64 = 0
+  while i < count { if i != 0 { run String.append(&mut text, " ") }
+  run String.append(&mut text, WORDS[r.below(choices)])
+  i = i + 1 }
+  return Value.String { text: move text }
+}
+effect fn textEdit(r: &mut Random, m: Mode, nodes: &Value, node: usize) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let text = J.str(J.get(J.at(nodes, node), "text"))
+  let bytes = String.utf8Bytes(text)
+  let mut change = J.object()
+  run J.set(&mut change, "node", J.int(usize.toI64(node)))
+  if m.typo && bytes.length > 1 {
+    let at = r.below(bytes.length)
+    if bytes[at] != 32 {
+      let mut edited = run Bytes.copy(bytes)
+      let alphabet = b"abwxl"
+      let editedBytes = Bytes.asMutSlice(&mut edited)
+      editedBytes[at] = alphabet[r.below(5)]
+      run J.set(&mut change, "text", run J.text(unsafe String.fromUtf8Unchecked(Bytes.asSlice(&edited))))
+      return move change
+    }
+  }
+  run J.set(&mut change, "text", run words(&mut r, 9, 5))
+  return move change
+}
+effect fn styleEdit(r: &mut Random, m: Mode, nodes: &mut Value, node: usize) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut style = run J.copy(J.get(J.at(&nodes, node), "style"))
+  if m.kind == "grid" {
+    let key = r.pick(&["gridTemplateColumns", "gridTemplateRows", "gridAutoColumns", "gridAutoRows", "gridTemplateAreas", "gridAutoFlow", "gridRowStart", "gridRowEnd", "gridColumnStart", "gridColumnEnd", "order", "columnGap", "rowGap", "width", "height", "padding", "border", "display"])
+    if key == "gridTemplateColumns" || key == "gridTemplateRows" {
+      let value = if r.random() < 0.2 { run J.text("none") } else { run tracks(&mut r) }
+      run J.set(&mut style, key, move value)
+      if m.subgrid && r.random() < 0.35 { run J.set(&mut style, key, run subgridAxis(&mut r)) }
+    } else if key == "gridAutoColumns" || key == "gridAutoRows" { run J.set(&mut style, key, run U.pair(run J.text("auto"), J.int(r.integer(10, 60)))) }
+    else if key == "gridTemplateAreas" { let choices = run U.json("[[],[[\"cell\"]],[[\"a\",\"a\"],[\"b\",\"c\"]]]")
+    run J.set(&mut style, key, run J.copy(J.at(&choices, r.below(3)))) }
+    else if key == "gridAutoFlow" { run J.set(&mut style, key, run J.text(r.pick(&["row", "column", "row dense", "column dense"]))) }
+    else if key == "gridRowStart" || key == "gridRowEnd" || key == "gridColumnStart" || key == "gridColumnEnd" { run J.set(&mut style, key, run gridLine(&mut r)) }
+    else if key == "display" { run J.set(&mut style, key, run J.text(r.pick(&["grid", "flex", "block", "none", "contents"]))) }
+    else if key == "order" { run J.set(&mut style, key, J.int(r.integer(-2, 3))) }
+    else if key == "width" || key == "height" { run J.set(&mut style, key, J.int(r.integer(10, 160))) }
+    else if (key == "columnGap" || key == "rowGap") && m.subgrid { let choices = run U.json("[\"normal\",0,3,9]")
+    run J.set(&mut style, key, run J.copy(J.at(&choices, r.below(4)))) }
+    else { run J.set(&mut style, key, J.int(r.integer(0, 9))) }
+  } else if m.kind == "insets" {
+    // Assignment evaluates its right-hand choice before the subscript choice.
+    let choices: [i64; 5] = [0, 0, 1, 3, 9]
+    let value = choices[r.below(5)]
+    let key = r.pick(&["padding", "paddingLeft", "paddingTop", "paddingBottom", "border", "borderTop"])
+    run J.set(&mut style, key, J.int(value))
+  } else if m.kind == "inner" {
+    let width = r.integer(20, 300)
+    let height = r.integer(10, 150)
+    if !J.has(&style, "width") { run J.set(&mut style, "width", J.int(width)) }
+    if !J.has(&style, "height") { run J.set(&mut style, "height", J.int(height)) }
+    if !J.has(&style, "flexShrink") { run J.set(&mut style, "flexShrink", J.int(0)) }
+    run J.set(J.atMut(&mut nodes, node), "style", run J.copy(&style))
+    let key = r.pick(&["padding", "paddingLeft", "border", "flexDirection", "alignItems", "justifyContent", "columnGap", "flexWrap"])
+    if key == "flexDirection" { run J.set(&mut style, key, run J.text(r.pick(&["row", "column"]))) }
+    else if key == "alignItems" { run J.set(&mut style, key, run J.text(r.pick(&["stretch", "center", "baseline"]))) }
+    else if key == "justifyContent" { run J.set(&mut style, key, run J.text(r.pick(&["center", "flex-end"]))) }
+    else if key == "flexWrap" { run J.set(&mut style, key, run J.text(r.pick(&["wrap", "nowrap"]))) }
+    else { run J.set(&mut style, key, J.int(r.integer(0, 9))) }
+  } else {
+    let key = r.pick(&["padding", "width", "height", "marginTop", "flexGrow", "flexShrink", "order", "alignSelf", "minWidth", "maxHeight", "border", "insetTop", "paddingLeft"])
+    if key == "alignSelf" { run J.set(&mut style, key, run J.text(r.pick(&["auto", "center", "baseline", "flex-end"]))) }
+    else if key == "width" || key == "height" || key == "minWidth" || key == "maxHeight" { run J.set(&mut style, key, J.int(r.integer(0, 120))) }
+    else { run J.set(&mut style, key, J.int(r.integer(0, 6))) }
+  }
+  let mut change = J.object()
+  run J.set(&mut change, "node", J.int(usize.toI64(node)))
+  run J.set(&mut change, "style", move style)
+  return move change
+}
+struct Case { document: Value, cycle: Value }
+effect fn makeCase(seed: i64, m: Mode) -> Case ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut r = Random.make(seed)
+  let mut root = run U.json("{\"boxSizing\":\"border-box\",\"padding\":4}")
+  run J.set(&mut root, "display", run J.text(r.pick(&["block", "flex"])))
+  if m.kind == "grid" { let grid = run gridStyle(&mut r)
+  run J.merge(&mut root, &grid) }
+  if r.random() < 0.5 { run J.set(&mut root, "width", J.int(800)) }
+  let mut first = J.object()
+  run J.set(&mut first, "parent", Value.Null)
+  run J.set(&mut first, "style", move root)
+  let mut nodes = run U.singleton(move first)
+  let mut depth = List<usize>.make()
+  run depth.append(0)
+  let count = r.integer(20, 150)
+  let mut ordinal: i64 = 1
+  while ordinal < count {
+    let mut candidates = List<usize>.make()
+    let mut i: usize = 0
+    while i < J.length(&nodes) { if depth.asSlice()[i] < 7 && !J.has(J.at(&nodes, i), "text") { run candidates.append(i) }
+    i = i + 1 }
+    let parent = candidates.asSlice()[r.below(candidates.length())]
+    let mut node = J.object()
+    run J.set(&mut node, "parent", J.int(usize.toI64(parent)))
+    if r.random() < 0.15 { run J.set(&mut node, "text", run words(&mut r, 8, 4)) }
+    else { run J.set(&mut node, "style", run randomStyle(&mut r, m)) }
+    run J.push(&mut nodes, move node)
+    let nextDepth = depth.asSlice()[parent] + 1
+    run depth.append(nextDepth)
+    ordinal = ordinal + 1
+  }
+  if m.subgrid {
+    let mut candidates = List<usize>.make()
+    let mut i: usize = 0
+    while i < J.length(&nodes) {
+      let node = J.at(&nodes, i)
+      let parent = J.get(node, "parent")
+      if !J.isNull(parent) && J.has(node, "style") && J.str(J.get(J.get(J.at(&nodes, i64.toUsize(J.integer(parent))), "style"), "display")) == "grid" { run candidates.append(i) }
+      i = i + 1
+    }
+    if candidates.length() == 0 { run candidates.append(J.length(&nodes))
+    run J.push(&mut nodes, run U.json("{\"parent\":0,\"style\":{\"display\":\"grid\"}}")) }
+    i = 0
+    while i < candidates.length() {
+      if i == 0 || r.random() >= 0.5 {
+        let style = J.getMut(J.atMut(&mut nodes, candidates.asSlice()[i]), "style")
+        run J.set(&mut style, "display", run J.text("grid"))
+        let axes = r.below(3) + 1
+        if axes == 1 || axes == 3 { run J.set(&mut style, "gridTemplateColumns", run subgridAxis(&mut r))
+        run J.set(&mut style, "gridColumnStart", J.int(1))
+        run J.set(&mut style, "gridColumnEnd", run U.json("{\"span\":2}")) }
+        if axes == 2 || axes == 3 { run J.set(&mut style, "gridTemplateRows", run subgridAxis(&mut r))
+        run J.set(&mut style, "gridRowStart", J.int(1))
+        run J.set(&mut style, "gridRowEnd", run U.json("{\"span\":2}")) }
+      }
+      i = i + 1
+    }
+  }
+  let mut texts = List<usize>.make()
+  let mut elements = List<usize>.make()
+  let mut i: usize = 0
+  while i < J.length(&nodes) { let node = J.at(&nodes, i)
+  if J.has(node, "text") { run texts.append(i) }
+  if J.has(node, "style") && (i > 0 || m.kind == "grid") { run elements.append(i) }
+  i = i + 1 }
+  let mut cycle = J.array()
+  let steps = r.integer(1, 4)
+  let mut stepIndex: i64 = 0
+  while stepIndex < steps {
+    let mut changes = J.array()
+    let count = r.integer(1, 2)
+    let mut c: i64 = 0
+    while c < count {
+      if texts.length() != 0 && r.random() < m.text { let node = texts.asSlice()[r.below(texts.length())]
+      run J.push(&mut changes, run textEdit(&mut r, m, &nodes, node)) }
+      else { let node = elements.asSlice()[r.below(elements.length())]
+      run J.push(&mut changes, run styleEdit(&mut r, m, &mut nodes, node)) }
+      c = c + 1
+    }
+    let mut step = J.object()
+    run J.set(&mut step, "set", move changes)
+    if r.random() < 0.2 { run J.set(&mut step, "viewport", run U.viewport(i64.toF64(r.integer(500, 900)), 600.0)) }
+    run J.push(&mut cycle, move step)
+    stepIndex = stepIndex + 1
+  }
+  let mut document = J.object()
+  run J.set(&mut document, "viewport", run U.viewport(800.0, 600.0))
+  run J.set(&mut document, "nodes", move nodes)
+  return Case { document: move document, cycle: move cycle }
+}
+
+struct Slots { nodes: Value, free: List<usize> }
+impl Slots {
+  effect fn make(nodes: &Value) -> Slots ! OutOfMemoryError ? &mut Allocator {
+    let mut slots = Slots { nodes: J.array(), free: List<usize>.make() }
+    let mut i: usize = 0
+    while i < J.length(nodes) {
+      let mut entry = run J.copy(J.at(nodes, i))
+      run J.set(&mut entry, "children", J.array())
+      run J.set(&mut entry, "live", J.boolean(true))
+      run J.push(&mut slots.nodes, move entry)
+      let parent = J.get(J.at(nodes, i), "parent")
+      if !J.isNull(parent) { run J.push(J.getMut(J.atMut(&mut slots.nodes, i64.toUsize(J.integer(parent))), "children"), J.int(usize.toI64(i))) }
+      i = i + 1
+    }
+    return move slots
+  }
+  effect fn create(self: &mut Self, content: &Value) -> usize ! OutOfMemoryError ? &mut Allocator {
+    let mut entry = run J.copy(content)
+    run J.set(&mut entry, "parent", Value.Null)
+    run J.set(&mut entry, "children", J.array())
+    run J.set(&mut entry, "live", J.boolean(true))
+    if self.free.length() != 0 {
+      let lastFree = self.free.length() - 1
+      let index = self.free.remove(lastFree)
+      J.setAt(&mut self.nodes, index, move entry)
+      return index
+    }
+    let index = J.length(&self.nodes)
+    run J.push(&mut self.nodes, move entry)
+    return index
+  }
+  effect fn unlink(self: &mut Self, index: usize) -> () ! OutOfMemoryError ? &mut Allocator {
+    let parent = J.get(J.at(&self.nodes, index), "parent")
+    if J.isNull(parent) { return () }
+    let owner = i64.toUsize(J.integer(parent))
+    let children = J.getMut(J.atMut(&mut self.nodes, owner), "children")
+    match &mut children.* {
+      Value.Array { values } => {
+        let mut i: usize = 0
+        while i < values.length() {
+          if J.integer(&values.asSlice()[i]) == usize.toI64(index) { drop values.remove(i)
+          break }
+          i = i + 1
+        }
+      }
+      _ => Intrinsic.trap("slot children must be an array")
+    }
+    run J.set(J.atMut(&mut self.nodes, index), "parent", Value.Null)
+  }
+  effect fn insert(self: &mut Self, parent: usize, child: usize, before: i64) -> () ! OutOfMemoryError ? &mut Allocator {
+    let mut next = before
+    if next == usize.toI64(child) {
+      let siblings = J.items(J.get(J.at(&self.nodes, parent), "children"))
+      let mut i: usize = 0
+      while i < siblings.length && J.integer(&siblings[i]) != next { i = i + 1 }
+      next = if i + 1 < siblings.length { J.integer(&siblings[i + 1]) } else { -1 }
+    }
+    run self.unlink(child)
+    let children = J.getMut(J.atMut(&mut self.nodes, parent), "children")
+    match &mut children.* {
+      Value.Array { values } => {
+        let mut at = values.length()
+        if next >= 0 { at = 0
+        while at < values.length() && J.integer(&values.asSlice()[at]) != next { at = at + 1 } }
+        run values.insert(at, J.int(usize.toI64(child)))
+      }
+      _ => Intrinsic.trap("slot children must be an array")
+    }
+    run J.set(J.atMut(&mut self.nodes, child), "parent", J.int(usize.toI64(parent)))
+  }
+  effect fn visit(self: &Self, index: usize, order: &mut List<usize>) -> () ! OutOfMemoryError ? &mut Allocator {
+    run order.append(index)
+    let children = J.items(J.get(J.at(&self.nodes, index), "children"))
+    let mut i: usize = 0
+    while i < children.length { run self.visit(i64.toUsize(J.integer(&children[i])), &mut order)
+    i = i + 1 }
+  }
+  effect fn subtree(self: &Self, index: usize) -> List<usize> ! OutOfMemoryError ? &mut Allocator {
+    let mut order = List<usize>.make()
+    run self.visit(index, &mut order)
+    return move order
+  }
+  effect fn destroy(self: &mut Self, index: usize) -> () ! OutOfMemoryError ? &mut Allocator {
+    run self.unlink(index)
+    let order = run self.subtree(index)
+    let mut i: usize = 0
+    while i < order.length() {
+      let node = order.asSlice()[i]
+      run J.set(J.atMut(&mut self.nodes, node), "live", J.boolean(false))
+      run self.free.append(node)
+      i = i + 1
+    }
+  }
+  effect fn detached(self: &Self) -> List<usize> ! OutOfMemoryError ? &mut Allocator {
+    let mut result = List<usize>.make()
+    let mut i: usize = 1
+    while i < J.length(&self.nodes) {
+      let node = J.at(&self.nodes, i)
+      if J.isTrue(J.get(node, "live")) && J.isNull(J.get(node, "parent")) { run result.append(i) }
+      i = i + 1
+    }
+    return move result
+  }
+}
+fn contains(values: &List<usize>, value: usize) -> bool {
+  let mut i: usize = 0
+  while i < values.length() { if values.asSlice()[i] == value { return true }
+  i = i + 1 }
+  return false
+}
+effect fn structureOp(r: &mut Random, m: Mode, slots: &mut Slots) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let attached = run slots.subtree(0)
+  let mut elements = List<usize>.make()
+  let mut i: usize = 0
+  while i < attached.length() { let index = attached.asSlice()[i]
+  if J.has(J.at(&slots.nodes, index), "style") { run elements.append(index) }
+  i = i + 1 }
+  let detached = run slots.detached()
+  let mut kind = if detached.length() != 0 { r.pick(&["insert", "insert", "move", "move", "remove", "destroy", "reinsert", "reinsert"]) } else { r.pick(&["insert", "insert", "move", "move", "remove", "destroy"]) }
+  if (kind == "move" || kind == "remove" || kind == "destroy") && attached.length() == 1 { kind = "insert" }
+  if kind == "destroy" && detached.length() != 0 && r.random() < 0.3 {
+    let node = detached.asSlice()[r.below(detached.length())]
+    run slots.destroy(node)
+    let mut op = run U.json("{\"op\":\"destroy\"}")
+    run J.set(&mut op, "node", J.int(usize.toI64(node)))
+    return move op
+  }
+  if kind == "remove" || kind == "destroy" {
+    let node = attached.asSlice()[1 + r.below(attached.length() - 1)]
+    if kind == "remove" { run slots.unlink(node) } else { run slots.destroy(node) }
+    let mut op = J.object()
+    run J.set(&mut op, "op", run J.text(kind))
+    run J.set(&mut op, "node", J.int(usize.toI64(node)))
+    return move op
+  }
+  let mut op = J.object()
+  let mut node: usize = 0
+  if kind == "insert" {
+    let mut content = J.object()
+    if r.random() < m.text { run J.set(&mut content, "text", run words(&mut r, 6, 4)) }
+    else { run J.set(&mut content, "style", run randomStyle(&mut r, m)) }
+    run J.set(&mut op, "op", run J.text("insert"))
+    run J.merge(&mut op, &content)
+    node = run slots.create(&content)
+    if r.random() < 0.1 { return move op }
+  } else {
+    node = if kind == "move" { attached.asSlice()[1 + r.below(attached.length() - 1)] } else { detached.asSlice()[r.below(detached.length())] }
+    run J.set(&mut op, "op", run J.text("move"))
+    run J.set(&mut op, "node", J.int(usize.toI64(node)))
+  }
+  let inside = run slots.subtree(node)
+  let mut parents = List<usize>.make()
+  i = 0
+  while i < elements.length() { let parent = elements.asSlice()[i]
+  if !contains(&inside, parent) { run parents.append(parent) }
+  i = i + 1 }
+  let parent = parents.asSlice()[r.below(parents.length())]
+  let children = J.items(J.get(J.at(&slots.nodes, parent), "children"))
+  let mut before: i64 = -1
+  if children.length != 0 { let chosen = r.below(children.length + 2)
+  if chosen < children.length { before = J.integer(&children[chosen]) } }
+  run slots.insert(parent, node, before)
+  run J.set(&mut op, "parent", J.int(usize.toI64(parent)))
+  run J.set(&mut op, "before", if before < 0 { Value.Null } else { J.int(before) })
+  return move op
+}
+struct StructureCase { document: Value, cycle: Value, fresh: Value, order: List<usize> }
+effect fn structureCase(seed: i64, m: Mode) -> StructureCase ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let initial = run makeCase(seed, m)
+  let mut r = Random.structure(seed)
+  let mut slots = run Slots.make(J.get(&initial.document, "nodes"))
+  let mut viewport = run J.copy(J.get(&initial.document, "viewport"))
+  let mut cycle = J.array()
+  let count = r.integer(1, 6)
+  let mut i: i64 = 0
+  while i < count {
+    let mut ops = J.array()
+    let count = r.integer(1, 3)
+    let mut j: i64 = 0
+    while j < count { run J.push(&mut ops, run structureOp(&mut r, m, &mut slots))
+    j = j + 1 }
+    let mut step = J.object()
+    run J.set(&mut step, "ops", move ops)
+    let attached = run slots.subtree(0)
+    let mut live = List<usize>.make()
+    let mut at: usize = 0
+    while at < attached.length() { if attached.asSlice()[at] > 0 { run live.append(attached.asSlice()[at]) }
+    at = at + 1 }
+    let mut changes = J.array()
+    let edits = r.integer(0, 2)
+    j = 0
+    while j < edits {
+      if live.length() == 0 { break }
+      let node = live.asSlice()[r.below(live.length())]
+      if J.has(J.at(&slots.nodes, node), "text") {
+        let change = run textEdit(&mut r, m, &slots.nodes, node)
+        run J.set(J.atMut(&mut slots.nodes, node), "text", run J.copy(J.get(&change, "text")))
+        run J.push(&mut changes, move change)
+      } else {
+        let change = run styleEdit(&mut r, m, &mut slots.nodes, node)
+        run J.set(J.atMut(&mut slots.nodes, node), "style", run J.copy(J.get(&change, "style")))
+        run J.push(&mut changes, move change)
+      }
+      j = j + 1
+    }
+    if J.length(&changes) != 0 { run J.set(&mut step, "set", move changes) }
+    if r.random() < 0.2 { viewport = run U.viewport(i64.toF64(r.integer(500, 900)), 600.0)
+    run J.set(&mut step, "viewport", run J.copy(&viewport)) }
+    run J.push(&mut cycle, move step)
+    i = i + 1
+  }
+  let order = run slots.subtree(0)
+  let mut nodes = J.array()
+  let mut at: usize = 0
+  while at < order.length() {
+    let slot = J.at(&slots.nodes, order.asSlice()[at])
+    let parent = J.get(slot, "parent")
+    let mut node = J.object()
+    if J.isNull(parent) { run J.set(&mut node, "parent", Value.Null) }
+    else { run J.set(&mut node, "parent", J.int(position(&order, J.integer(parent)))) }
+    let key = if J.has(slot, "text") { "text" } else { "style" }
+    run J.set(&mut node, key, run J.copy(J.get(slot, key)))
+    run J.push(&mut nodes, move node)
+    at = at + 1
+  }
+  let mut fresh = J.object()
+  run J.set(&mut fresh, "viewport", move viewport)
+  run J.set(&mut fresh, "nodes", move nodes)
+  return StructureCase { document: move initial.document, cycle: move cycle, fresh: move fresh, order: move order }
+}
+fn position(order: &List<usize>, slot: i64) -> i64 {
+  let mut i: usize = 0
+  while i < order.length() { if usize.toI64(order.asSlice()[i]) == slot { return usize.toI64(i) }
+  i = i + 1 }
+  return -1
+}
+effect fn structureMatches(kept: &[u8], fresh: &[u8], order: &List<usize>) -> bool ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut a = run J.parse(kept)
+  let b = run J.parse(fresh)
+  let boxes = J.getMut(&mut a, "boxes")
+  let mut i: usize = 0
+  while i < J.length(&boxes) {
+    let box = J.atMut(&mut boxes, i)
+    let keys = ["source", "styleOwner"]
+    let mut k: usize = 0
+    while k < keys.length {
+      let value = J.get(&box, keys[k])
+      if !J.isNull(value) { let remapped = position(order, J.integer(value))
+      run J.set(&mut box, keys[k], J.int(remapped)) }
+      k = k + 1
+    }
+    i = i + 1
+  }
+  if !Json.equal(J.get(&a, "boxes"), J.get(&b, "boxes")) { return false }
+  i = 0
+  while i < order.length() {
+    if !Json.equal(J.at(J.get(&a, "sources"), order.asSlice()[i]), J.at(J.get(&b, "sources"), i)) { return false }
+    i = i + 1
+  }
+  return true
+}
+
+pub effect fn fuzzUpdates(options: &FuzzUpdatesOptions) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let cli = String.view(&options.cli)
+  let mut names = String.split(String.view(&options.mode), ",")
+  let mut failures: usize = 0
+  let mut total: usize = 0
+  let mut err = StderrWriter.make()
+  while let Option<string>.Some { value: name } = names.next() {
+    let m = run mode(name)
+    let mut ordinal: i64 = 0
+    while ordinal < options.seeds {
+      let seed = options.first + ordinal
+      total = total + 1
+      if m.structure {
+        let case = run structureCase(seed, m)
+        let fresh = run U.invoke(cli, &case.fresh, 120)
+        let updates = run U.updated(&case.document, &case.cycle, J.length(&case.cycle))
+        let kept = run U.invoke(cli, &updates, 120)
+        if fresh.code != 0 || kept.code != 0 || !(run structureMatches(Bytes.asSlice(&kept.output), Bytes.asSlice(&fresh.output), &case.order)) {
+          failures = failures + 1
+          run Format.format("differs from a fresh layout: mode {} seed {} (exit {}, fresh {})\n", &(name, seed, kept.code, fresh.code)) |> Effect.provideMut<Writer>(&mut err)
+        }
+      } else {
+        let case = run makeCase(seed, m)
+        let final = run U.final(&case.document, &case.cycle)
+        let fresh = run U.invoke(cli, &final, 120)
+        if fresh.code != 0 {
+          failures = failures + 1
+          run Format.format("fresh layout failed: mode {} seed {}, exit {}\n", &(name, seed, fresh.code)) |> Effect.provideMut<Writer>(&mut err)
+        } else {
+          let updates = run U.updated(&case.document, &case.cycle, J.length(&case.cycle) * m.repeat)
+          let kept = run U.invoke(cli, &updates, 120)
+          let mut failed = kept.code != 0
+          if !failed { let a = run J.parse(Bytes.asSlice(&kept.output))
+          let b = run J.parse(Bytes.asSlice(&fresh.output))
+          failed = !Json.equal(&a, &b) }
+          if failed {
+            failures = failures + 1
+            run Format.format("differs from a fresh layout: mode {} seed {}\n", &(name, seed)) |> Effect.provideMut<Writer>(&mut err)
+          }
+        }
+      }
+      ordinal = ordinal + 1
+    }
+  }
+  let mut out = StdoutWriter.make()
+  run Format.format("{} random update cycles, {} failures\n", &(total, failures)) |> Effect.provideMut<Writer>(&mut out)
+  if failures != 0 { run Task.abort("random update checks failed") }
+}

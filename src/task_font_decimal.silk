@@ -1,0 +1,233 @@
+import silk.collections.bytes { Bytes }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.u8
+import silk.num.u32
+import silk.num.i64
+import silk.num.usize
+
+// Little-endian decimal digits, normalized by removing both leading and trailing
+// zeroes. No fixed-width significand or floating-point divisibility test is used.
+pub struct Decimal {
+  pub digits: Bytes,
+  pub exponent: i64,
+  pub negative: bool,
+  pub native: f64,
+}
+pub fn zero(value: &Decimal) -> bool { return Bytes.length(&value.digits) == 0 }
+
+pub effect fn parse(text: &[u8], native: f64) -> Decimal ! OutOfMemoryError ? &mut Allocator {
+  let negative = text[0] == 45
+  let mut start: usize = if negative { 1 } else { 0 }
+  let mut end = start
+  let mut fraction: i64 = 0
+  let mut fractional = false
+  while end < text.length && text[end] != 101 && text[end] != 69 {
+    if text[end] == 46 { fractional = true }
+    else if fractional { fraction = fraction + 1 }
+    end = end + 1
+  }
+  let mut exponent: i64 = 0
+  if end < text.length {
+    let mut at = end + 1
+    let mut minus = false
+    if text[at] == 43 || text[at] == 45 { minus = text[at] == 45
+    at = at + 1 }
+    // More than the input length plus the binary64 exponent range can only
+    // denote zero, overflow, or underflow; the caller checks the latter two.
+    let bound = usize.toI64(text.length) + 1000
+    while at < text.length {
+      if exponent <= bound { exponent = exponent * 10 + u8.toI64(text[at] - 48) }
+      at = at + 1
+    }
+    if minus { exponent = -exponent }
+  }
+  exponent = exponent - fraction
+  while start < end && (text[start] == 48 || text[start] == 46) { start = start + 1 }
+  let mut digits = Bytes.make()
+  let mut at = end
+  let mut trailing = true
+  while at > start {
+    at = at - 1
+    if text[at] != 46 {
+      if trailing && text[at] == 48 { exponent = exponent + 1 }
+      else { trailing = false
+      run Bytes.append(&mut digits, &[text[at] - 48]) }
+    }
+  }
+  if Bytes.length(&digits) == 0 { exponent = 0 }
+  return Decimal { digits: move digits, exponent: exponent, negative: negative && start < end, native: native }
+}
+
+pub fn compareMagnitude(left: &Decimal, right: &Decimal) -> i32 {
+  let a = Bytes.asSlice(&left.digits)
+  let b = Bytes.asSlice(&right.digits)
+  if a.length == 0 { return if b.length == 0 { 0 } else { -1 } }
+  if b.length == 0 { return 1 }
+  let al = usize.toI64(a.length) + left.exponent
+  let bl = usize.toI64(b.length) + right.exponent
+  if al < bl { return -1 }
+  if al > bl { return 1 }
+  let length = if a.length > b.length { a.length } else { b.length }
+  let mut i: usize = 0
+  while i < length {
+    let av = if i < a.length { a[a.length - 1 - i] } else { 0 }
+    let bv = if i < b.length { b[b.length - 1 - i] } else { 0 }
+    if av < bv { return -1 }
+    if av > bv { return 1 }
+    i = i + 1
+  }
+  return 0
+}
+pub fn equal(left: &Decimal, right: &Decimal) -> bool {
+  return left.negative == right.negative && compareMagnitude(left, right) == 0
+}
+effect fn multiply(digits: &mut Bytes, factor: u32) ! OutOfMemoryError ? &mut Allocator {
+  let mut carry: u32 = 0
+  let values = Bytes.asMutSlice(&mut digits)
+  let mut i: usize = 0
+  while i < values.length {
+    let n = u8.toU32(values[i]) * factor + carry
+    values[i] = u32.toU8(n % 10)
+    carry = n / 10
+    i = i + 1
+  }
+  while carry != 0 { run Bytes.append(&mut digits, &[u32.toU8(carry % 10)])
+  carry = carry / 10 }
+}
+fn divide(digits: &mut Bytes, divisor: u32) {
+  let values = Bytes.asMutSlice(&mut digits)
+  let mut i = values.length
+  let mut carry: u32 = 0
+  while i != 0 {
+    i = i - 1
+    let n = carry * 10 + u8.toU32(values[i])
+    values[i] = u32.toU8(n / divisor)
+    carry = n % divisor
+  }
+  let mut length = values.length
+  while length != 0 && values[length - 1] == 0 { length = length - 1 }
+  Bytes.truncate(&mut digits, length)
+}
+effect fn product(out: &mut Decimal, source: &Decimal, factor: u32) ! OutOfMemoryError ? &mut Allocator {
+  Bytes.truncate(&mut out.digits, 0)
+  out.exponent = source.exponent
+  if factor == 0 { return }
+  run Bytes.append(&mut out.digits, Bytes.asSlice(&source.digits))
+  run multiply(&mut out.digits, factor)
+}
+fn rawCompare(a: &[u8], b: &[u8]) -> i32 {
+  if a.length < b.length { return -1 }
+  if a.length > b.length { return 1 }
+  let mut i = a.length
+  while i != 0 {
+    i = i - 1
+    if a[i] < b[i] { return -1 }
+    if a[i] > b[i] { return 1 }
+  }
+  return 0
+}
+fn subtract(a: &mut Bytes, b: &[u8]) {
+  let digits = Bytes.asMutSlice(&mut a)
+  let mut borrow: u8 = 0
+  let mut i: usize = 0
+  while i < digits.length {
+    let sub = (if i < b.length { b[i] } else { 0 }) + borrow
+    if digits[i] < sub { digits[i] = digits[i] + 10 - sub
+    borrow = 1 }
+    else { digits[i] = digits[i] - sub
+    borrow = 0 }
+    i = i + 1
+  }
+  let mut length = digits.length
+  while length != 0 && digits[length - 1] == 0 { length = length - 1 }
+  Bytes.truncate(&mut a, length)
+}
+// For an out-of-range ratio, still distinguish a fractional value before
+// reporting the range error, as Fraction-based validation did.
+effect fn integral(numerator: &Decimal, denominator: &Decimal) -> bool ! OutOfMemoryError ? &mut Allocator {
+  let delta = numerator.exponent - denominator.exponent
+  let extra = if delta > 0 { i64.toUsize(delta) } else { 0 }
+  let mut divisor = Bytes.make()
+  let mut i: i64 = 0
+  while i < -delta { run Bytes.append(&mut divisor, &[0])
+  i = i + 1 }
+  run Bytes.append(&mut divisor, Bytes.asSlice(&denominator.digits))
+  let divisorDigits = Bytes.asSlice(&divisor)
+  let source = Bytes.asSlice(&numerator.digits)
+  let mut remaining = source.length + extra
+  let mut remainder = Bytes.make()
+  while remaining != 0 {
+    remaining = remaining - 1
+    let digit = if remaining >= extra { source[remaining - extra] } else { 0 }
+    let length = Bytes.length(&remainder)
+    if length != 0 || digit != 0 {
+      run Bytes.append(&mut remainder, &[0])
+      let digits = Bytes.asMutSlice(&mut remainder)
+      let mut j = length
+      while j != 0 { digits[j] = digits[j - 1]
+      j = j - 1 }
+      digits[0] = digit
+    }
+    while rawCompare(Bytes.asSlice(&remainder), divisorDigits) >= 0 {
+      subtract(&mut remainder, divisorDigits)
+    }
+  }
+  return Bytes.length(&remainder) == 0
+}
+// -1 means a non-integral ratio; 32769 means outside the signed OpenType range.
+pub effect fn units(value: &Decimal, size: &Decimal) -> i32 ! OutOfMemoryError ? &mut Allocator {
+  if zero(value) { return 0 }
+  let mut numerator = Decimal { digits: Bytes.make(), exponent: 0, negative: false, native: 0.0 }
+  let mut denominator = Decimal { digits: Bytes.make(), exponent: 0, negative: false, native: 0.0 }
+  run product(&mut numerator, value, 15360)
+  let mut low: u32 = 0
+  let mut high: u32 = 32769
+  while low < high {
+    let middle = (low + high) / 2
+    run product(&mut denominator, size, middle)
+    let comparison = compareMagnitude(&numerator, &denominator)
+    if comparison > 0 { low = middle + 1 } else { high = middle }
+  }
+  if low > 32768 {
+    if run integral(&numerator, size) { return 32769 }
+    return -1
+  }
+  run product(&mut denominator, size, low)
+  if compareMagnitude(&numerator, &denominator) != 0 { return -1 }
+  if low == 32768 && !value.negative { return 32769 }
+  return u32.toI32(low)
+}
+effect fn writeDigits(out: &mut Bytes, digits: &Bytes) ! OutOfMemoryError ? &mut Allocator {
+  let values = Bytes.asSlice(digits)
+  let mut i = values.length
+  while i != 0 { i = i - 1
+  run Bytes.append(&mut out, &[48 + values[i]]) }
+}
+pub effect fn fraction(out: &mut Bytes, value: &Decimal) ! OutOfMemoryError ? &mut Allocator {
+  if zero(value) { run Bytes.append(&mut out, b"0")
+  return }
+  if value.negative { run Bytes.append(&mut out, b"-") }
+  if value.exponent >= 0 {
+    run writeDigits(&mut out, &value.digits)
+    let mut n = value.exponent
+    while n != 0 { run Bytes.append(&mut out, b"0")
+    n = n - 1 }
+    return
+  }
+  let mut numerator = run Bytes.copy(Bytes.asSlice(&value.digits))
+  let mut twos = -value.exponent
+  let mut fives = twos
+  while twos != 0 && Bytes.asSlice(&numerator)[0] % 2 == 0 { divide(&mut numerator, 2)
+  twos = twos - 1 }
+  while fives != 0 && Bytes.asSlice(&numerator)[0] % 5 == 0 { divide(&mut numerator, 5)
+  fives = fives - 1 }
+  run writeDigits(&mut out, &numerator)
+  if twos == 0 && fives == 0 { return }
+  run Bytes.append(&mut out, b"/")
+  let mut denominator = run Bytes.copy(&[1])
+  while twos != 0 { run multiply(&mut denominator, 2)
+  twos = twos - 1 }
+  while fives != 0 { run multiply(&mut denominator, 5)
+  fives = fives - 1 }
+  run writeDigits(&mut out, &denominator)
+}

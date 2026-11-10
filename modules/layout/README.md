@@ -71,22 +71,24 @@ layout request on stdin, returning one result on stdout.
 
 ## Tests
 
-From `modules/layout`:
+From the repository root:
 
 ```sh
-scripts/check
+silk task check
 ```
 
 The gate runs the native tests, 689 specification fixtures that cite the section they test,
 283 fixtures that agree with Chrome, 271 malformed adapter requests, and a cache-correctness
-check that compares layouts after updates with fresh layouts. `scripts/chrome-diff.mjs` compares
-against Chrome and fuzzes block, flex and grid trees; it is a diagnostic, not a gate.
+check that compares layouts after updates with fresh layouts. `silk task chrome-diff` compares
+against Chrome and fuzzes block, flex and grid trees; it is a diagnostic, not a gate. Its only
+JavaScript asset runs inside Chrome to observe the DOM; orchestration and authored font
+generation run in Silk, without Node or Python.
 
 ## Performance
 
-`scripts/bench-compare` times `compute` alone against [taffy](https://github.com/DioxusLabs/taffy)
+`silk task bench-compare` times `compute` alone against [taffy](https://github.com/DioxusLabs/taffy)
 (Rust) and [yoga](https://github.com/facebook/yoga) (C++) on shared workloads, after checking
-that all engines produce the same geometry. `scripts/bench-compare --updates` does the same for
+that all engines produce the same geometry. `silk task bench-compare --updates` does the same for
 re-layout after small edits. On the grid workloads, Silk takes between 0.11× and 1.10× taffy's
 wall time.
 

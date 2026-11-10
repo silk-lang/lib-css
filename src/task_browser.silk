@@ -1,0 +1,475 @@
+import task_json { J }
+import task_browser_checks as Checks
+import task_browser_fuzz as Fuzz
+import task_browser_fuzz { Random }
+import task_browser_transport as Browser
+import task_browser_transport { Chrome }
+import task_fixture_font as Font
+import task_update_process { runInput }
+import task_browser_options { Options }
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter }
+
+import silk.json.value { Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { DirectoryEntry, DirectoryInfo, FileError, FileInfo, FileSystem, Path }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.string { InvalidUtf8, String }
+import silk.num.f64
+import silk.num.i64
+import silk.num.u32
+import silk.num.usize
+
+
+struct State { summary: Value, browser: Option<Chrome>, fontCache: Value }
+
+fn contains(values: &Value, text: string) -> bool {
+  let entries = J.items(values)
+  let mut i: usize = 0
+  while i < entries.length { if J.str(&entries[i]) == text { return true }
+  i = i + 1 }
+  return false
+}
+fn hasText(input: &Value) -> bool {
+  let nodes = J.items(J.get(input, "nodes"))
+  let mut i: usize = 0
+  while i < nodes.length { if J.has(&nodes[i], "text") { return true }
+  i = i + 1 }
+  return false
+}
+effect fn text(bytes: &[u8]) -> String ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return match String.fromUtf8(bytes) {
+    Result<string, InvalidUtf8>.Success { value } => run String.copy(value)
+    Result<string, InvalidUtf8>.Failure { .. } => run Task.abort("expected UTF-8 text")
+  }
+}
+effect fn pathText(path: &Path) -> String ! TaskError | OutOfMemoryError ? &mut Allocator { return run text(Path.rawBytes(path)) }
+effect fn suppliedPath(value: string) -> Path ! TaskError | FileError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator {
+  if String.startsWith(value, "/") { return run Path.make(value) }
+  let base = run Task.invocationDirectory()
+  return run Path.resolve(&base, value)
+}
+effect fn files(path: &Path, result: &mut List<Path>) -> () ! FileError | OutOfMemoryError ? &mut FileSystem | &mut Allocator {
+  match move run FileSystem.stat(path) {
+    FileInfo _ => { run List<Path>.append(&mut result, run Path.fromBytes(Path.rawBytes(path))) }
+    DirectoryInfo _ => {
+      let entries = run FileSystem.listDirectory(path)
+      let values = List<DirectoryEntry>.asSlice(&entries)
+      let mut i: usize = 0
+      while i < values.length {
+        if values[i].kind.code == 1 { run files(&values[i].path, &mut result) }
+        else if values[i].kind.code == 0 {
+          if let Option<string>.Some { value: name } = Path.name(&values[i].path) {
+            if String.endsWith(name, ".json") { run List<Path>.append(&mut result, run Path.fromBytes(Path.rawBytes(&values[i].path))) }
+          }
+        }
+        i = i + 1
+      }
+    }
+  }
+}
+effect fn increment(summary: &mut Value, key: string, count: i64) -> () ! OutOfMemoryError ? &mut Allocator {
+  let totals = J.getMut(&mut summary, "totals")
+  let before = J.integer(J.get(&totals, key))
+  run J.set(&mut totals, key, J.int(before + count))
+}
+effect fn native(input: &Value, options: &Options) -> Value
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let encoded = run J.encode(input)
+  let captured = run runInput(String.view(&options.cli), Bytes.asSlice(&encoded), 30)
+  if captured.code != 0 {
+    let detail = run text(Bytes.asSlice(&captured.errors))
+    let mut message = run String.copy("Native CLI failed: ")
+    run String.append(&mut message, String.view(&detail))
+    run Task.abort(String.view(&message))
+  }
+  if Bytes.length(&captured.output) > 16 * 1024 * 1024 { run Task.abort("Native CLI output exceeds 16 MiB") }
+  let output = run J.parse(Bytes.asSlice(&captured.output))
+  run Checks.native(input, &output)
+  return move output
+}
+effect fn chrome(state: &mut State, input: &Value, options: &Options) -> Value
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let mut assets = Value.Null
+  if hasText(input) {
+    let mut request = J.object()
+    run J.set(&mut request, "fonts", if J.has(input, "fonts") { run J.copy(J.get(input, "fonts")) } else { J.array() })
+    let raw = run J.encode(&request)
+    let cacheKey = run text(Bytes.asSlice(&raw))
+    if J.has(&state.fontCache, String.view(&cacheKey)) { assets = run J.copy(J.get(&state.fontCache, String.view(&cacheKey))) }
+    else {
+      let encoded = run Font.generateBytes(Bytes.asSlice(&raw))
+      assets = run J.parse(Bytes.asSlice(&encoded))
+      run J.set(&mut state.fontCache, String.view(&cacheKey), run J.copy(&assets))
+    }
+  }
+  if match &state.browser { Option<Chrome>.None => true
+  _ => false } {
+    state.browser = Option<Chrome>.Some { value: run Browser.open(String.view(&options.chrome), String.view(&options.chromeVersion)) }
+  }
+  let columns = run Checks.columns(input)
+  if J.has(&columns, "unsupported") { run Task.abort(J.str(J.get(&columns, "unsupported"))) }
+  return match &mut state.browser {
+    Option<Chrome>.Some { value } => {
+      let result = run Browser.observe(&mut value, input, &assets, &columns)
+      run J.set(&mut state.summary, "browser", run J.copy(&value.browser))
+      move result
+    }
+    Option<Chrome>.None => run Task.abort("Chrome process is not available")
+  }
+}
+effect fn save(name: string, input: &Value, detail: &Value, suffix: string) -> String
+  ! TaskError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut FileSystem {
+  let root = run Task.root()
+  let directory = run Path.join(&root, "modules/layout/.cache/chrome-diff")
+  let mut stem = Bytes.make()
+  let bytes = String.utf8Bytes(name)
+  let mut at: usize = 0
+  while at < bytes.length {
+    let byte = bytes[at]
+    let permitted = (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 95 || byte == 46 || byte == 45
+    let character: [u8; 1] = [if permitted { byte } else { 95 }]
+    run Bytes.append(&mut stem, &character)
+    at = at + 1
+  }
+  run Bytes.append(&mut stem, String.utf8Bytes(suffix))
+  let filename = run text(Bytes.asSlice(&stem))
+  let mut inputName = run String.copy(String.view(&filename))
+  run String.append(&mut inputName, ".json")
+  let path = run Path.join(&directory, String.view(&inputName))
+  let mut raw = run J.encode(input)
+  run Bytes.append(&mut raw, b"\n")
+  run FileSystem.writeFileWithParents(&path, Bytes.asSlice(&raw))
+  if !J.isNull(detail) {
+    let mut detailName = run String.copy(String.view(&filename))
+    run String.append(&mut detailName, ".result.json")
+    let detailPath = run Path.join(&directory, String.view(&detailName))
+    let mut detailRaw = run J.encode(detail)
+    run Bytes.append(&mut detailRaw, b"\n")
+    run FileSystem.writeFileWithParents(&detailPath, Bytes.asSlice(&detailRaw))
+  }
+  return run pathText(&path)
+}
+effect fn failureName(result: &Value) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut name = run String.copy(J.str(J.get(result, "kind")))
+  run String.append(&mut name, "-")
+  run String.append(&mut name, J.str(J.get(result, "name")))
+  return move name
+}
+effect fn fixtureBody(state: &mut State, fixture: &Value, result: &mut Value, options: &Options) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let input = J.get(fixture, "input")
+  run Checks.input(input)
+  let actual = run native(input, options)
+  if J.str(J.get(fixture, "kind")) == "spec" {
+    if J.length(J.get(fixture, "spec")) == 0 { run Task.abort("Spec fixtures require normative source URLs") }
+    run J.set(&mut result, "spec", run J.copy(J.get(fixture, "spec")))
+    run J.set(&mut result, "mismatches", run Checks.compare(&actual, J.get(fixture, "expected"), true, options.tolerance.value))
+  } else {
+    let emptyEvidence = J.array()
+    let mut unsupported = run Checks.unsupported(input, &actual, &emptyEvidence)
+    let mut fragmentation = false
+    let reasons = J.items(&unsupported)
+    let mut i: usize = 0
+    while i < reasons.length {
+      if J.str(J.get(&reasons[i], "feature")) == "fragmentation-geometry" { fragmentation = true }
+      i = i + 1
+    }
+    if fragmentation || (J.length(&unsupported) > 0 && !hasText(input)) {
+      run J.set(&mut result, "status", run J.text("unsupported"))
+      run J.set(&mut result, "unsupported", move unsupported)
+      run increment(&mut state.summary, "excludedUnsupported", 1)
+      return ()
+    }
+    let expected = run chrome(&mut state, input, options)
+    unsupported = run Checks.unsupported(input, &actual, J.get(&expected, "fontEvidence"))
+    let evidenceFields = ["fontEvidence", "textEvidence", "textJustifyEvidence", "textIndentEvidence", "marginBreakEvidence", "gridEvidence", "resources", "scrollbarEvidence"]
+    i = 0
+    while i < evidenceFields.length {
+      let field = evidenceFields[i]
+      if J.length(J.get(&expected, field)) > 0 { run J.set(&mut result, field, run J.copy(J.get(&expected, field))) }
+      i = i + 1
+    }
+    if J.has(input, "fragmentation") || hasText(input) { run J.set(&mut result, "browserSources", run J.copy(J.get(&expected, "sources"))) }
+    run J.set(&mut result, "scrollOffsets", run J.copy(J.get(&expected, "scrollOffsets")))
+    let extra = J.items(J.get(&expected, "unsupported"))
+    i = 0
+    while i < extra.length { run J.push(&mut unsupported, run J.copy(&extra[i]))
+    i = i + 1 }
+    if J.length(&unsupported) > 0 {
+      run J.set(&mut result, "status", run J.text("unsupported"))
+      run J.set(&mut result, "unsupported", move unsupported)
+      run increment(&mut state.summary, "excludedUnsupported", 1)
+      return ()
+    }
+    let compareRects = J.has(input, "fragmentation") || contains(J.get(&result, "features"), "inline-fragments")
+    run J.set(&mut result, "mismatches", run Checks.compare(&actual, &expected, compareRects, options.tolerance.value))
+  }
+  let count = J.length(J.get(&result, "mismatches"))
+  run increment(&mut state.summary, "mismatches", usize.toI64(count))
+  let status = if count == 0 { "passed" } else { "failed" }
+  run J.set(&mut result, "status", run J.text(status))
+  if count != 0 {
+    let name = run failureName(&result)
+    let path = run save(String.view(&name), if J.str(J.get(fixture, "kind")) == "spec" { fixture } else { input }, &result, "")
+    run J.set(&mut result, "reproduction", Value.String { text: move path })
+  }
+  run increment(&mut state.summary, status, 1)
+}
+effect fn message(error: TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError) -> String ! OutOfMemoryError ? &mut Allocator {
+  return match move error {
+    TaskError failure => move failure.message
+    ProcessError _ => run String.copy("Could not execute a child process")
+    FileError _ => run String.copy("Could not access a fixture or evidence file")
+    HostInputError _ => run String.copy("Could not read the task environment")
+    WriterError _ => run String.copy("Could not write task output")
+    OutOfMemoryError failure => { fail move failure }
+  }
+}
+effect fn fixture(state: &mut State, value: &Value, source: string, isFuzz: bool, options: &Options) -> Value
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let mut result = J.object()
+  run J.set(&mut result, "name", if J.has(value, "name") { run J.copy(J.get(value, "name")) } else { run J.text(source) })
+  run J.set(&mut result, "source", run J.text(source))
+  run J.set(&mut result, "kind", run J.copy(J.get(value, "kind")))
+  run J.set(&mut result, "features", if J.has(value, "features") { run J.copy(J.get(value, "features")) } else { J.array() })
+  run increment(&mut state.summary, "discovered", 1)
+  if isFuzz { run increment(&mut state.summary, "fuzz", 1) }
+  else { run increment(&mut state.summary, J.str(J.get(value, "kind")), 1) }
+  match move run Effect.result(fixtureBody(&mut state, value, &mut result, options)) {
+    Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Success { .. } => {}
+    Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Failure { error } => {
+      run J.set(&mut result, "status", run J.text("failed"))
+      run J.set(&mut result, "error", Value.String { text: run message(move error) })
+      run increment(&mut state.summary, "failed", 1)
+      if J.has(value, "input") {
+        let name = run failureName(&result)
+        let path = run save(String.view(&name), if J.str(J.get(value, "kind")) == "spec" { value } else { J.get(value, "input") }, &result, "")
+        run J.set(&mut result, "reproduction", Value.String { text: move path })
+      }
+    }
+  }
+  return move result
+}
+effect fn candidate(input: &Value, removed: usize) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = run J.copy(input)
+  let mut nodes = J.array()
+  let original = J.items(J.get(input, "nodes"))
+  let mut at: usize = 0
+  while at < original.length {
+    if at != removed {
+      let mut node = run J.copy(&original[at])
+      let parent = J.get(&node, "parent")
+      let parentIndex = J.integer(parent)
+      if !J.isNull(parent) && parentIndex > usize.toI64(removed) { run J.set(&mut node, "parent", J.int(parentIndex - 1)) }
+      run J.push(&mut nodes, move node)
+    }
+    at = at + 1
+  }
+  run J.set(&mut result, "nodes", move nodes)
+  return move result
+}
+fn sign(value: f64) -> i32 { return if value < 0.0 { -1 } else if value > 0.0 { 1 } else { 0 } }
+effect fn discrepancy(state: &mut State, input: &Value, mismatch: &Value, options: &Options) -> bool
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let expected = run chrome(&mut state, input, options)
+  if J.length(J.get(&expected, "unsupported")) != 0 { return false }
+  let actual = run native(input, options)
+  let diffs = run Checks.compare(&actual, &expected, false, options.tolerance.value)
+  let values = J.items(&diffs)
+  let mut i: usize = 0
+  while i < values.length {
+    if J.str(J.get(&values[i], "field")) == J.str(J.get(mismatch, "field")) && sign(J.num(J.get(&values[i], "delta"))) == sign(J.num(J.get(mismatch, "delta"))) { return true }
+    i = i + 1
+  }
+  return false
+}
+effect fn reduce(state: &mut State, input: &Value, mismatch: &Value, options: &Options) -> Value
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let mut reduced = run J.copy(input)
+  let mut attempts: i64 = 0
+  let mut changed = true
+  while changed && attempts < 40 {
+    changed = false
+    let mut at = J.length(J.get(&reduced, "nodes"))
+    while at > 1 && attempts < 40 {
+      at = at - 1
+      let nodes = J.items(J.get(&reduced, "nodes"))
+      let mut parent = false
+      let mut i: usize = 0
+      while i < nodes.length { if !J.isNull(J.get(&nodes[i], "parent")) && J.integer(J.get(&nodes[i], "parent")) == usize.toI64(at) { parent = true }
+      i = i + 1 }
+      if parent { continue }
+      let trial = run candidate(&reduced, at)
+      attempts = attempts + 1
+      let preserved = match move run Effect.result(discrepancy(&mut state, &trial, mismatch, options)) {
+        Result<bool, TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Success { value } => value
+        Result<bool, TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Failure { error } => match move error {
+          OutOfMemoryError exhausted => { fail move exhausted }
+          _ => false
+        }
+      }
+      if preserved { reduced = move trial
+      changed = true
+      break }
+    }
+  }
+  let mut result = J.object()
+  run J.set(&mut result, "input", move reduced)
+  run J.set(&mut result, "attempts", J.int(attempts))
+  run J.set(&mut result, "reduction", run J.text("Leaf deletion preserving a field and delta-sign discrepancy; at most 40 attempts."))
+  return move result
+}
+effect fn fuzzName(prefix: string, seed: u32, index: usize) -> String ! TaskError | OutOfMemoryError | WriterError ? &mut Allocator {
+  let mut result = run String.copy(prefix)
+  let seedBytes = run J.encode(&J.int(u32.toI64(seed)))
+  let seedText = run text(Bytes.asSlice(&seedBytes))
+  run String.append(&mut result, String.view(&seedText))
+  run String.append(&mut result, "-")
+  let indexBytes = run J.encode(&J.int(usize.toI64(index)))
+  let indexText = run text(Bytes.asSlice(&indexBytes))
+  run String.append(&mut result, String.view(&indexText))
+  return move result
+}
+effect fn loadFixture(path: &Path, source: string) -> Value ! TaskError | FileError | OutOfMemoryError ? &mut Allocator | &mut FileSystem {
+  let raw = run FileSystem.readFile(path)
+  let mut value = run J.parse(Bytes.asSlice(&raw))
+  if J.has(&value, "nodes") {
+    let mut wrapped = J.object()
+    run J.set(&mut wrapped, "name", run J.text(source))
+    run J.set(&mut wrapped, "kind", run J.text("chrome"))
+    run J.set(&mut wrapped, "input", move value)
+    value = move wrapped
+  }
+  let kind = J.str(J.get(&value, "kind"))
+  if kind != "spec" && kind != "chrome" { run Task.abort("Fixture kind must be spec or chrome") }
+  return move value
+}
+effect fn execute(state: &mut State, options: &Options) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let directory = if String.view(&options.path) == "" { run Path.join(&run Task.root(), "modules/layout/tests/fixtures") } else { run suppliedPath(String.view(&options.path)) }
+  let mut selected = List<Path>.make()
+  run files(&directory, &mut selected)
+  if selected.length() == 0 && options.fuzz == 0 && options.gridFuzz == 0 { run Task.abort("No fixture files found") }
+  let paths = selected.asSlice()
+  let mut at: usize = 0
+  while at < paths.length {
+    let source = run pathText(&paths[at])
+    match move run Effect.result(loadFixture(&paths[at], String.view(&source))) {
+      Result<Value, TaskError | FileError | OutOfMemoryError>.Success { value } => {
+        if String.view(&options.mode) == "all" || J.str(J.get(&value, "kind")) == String.view(&options.mode) {
+          let result = run fixture(&mut state, &value, String.view(&source), false, options)
+          run J.push(J.getMut(&mut state.summary, "results"), move result)
+        }
+      }
+      Result<Value, TaskError | FileError | OutOfMemoryError>.Failure { error } => {
+        run increment(&mut state.summary, "discovered", 1)
+        run increment(&mut state.summary, "failed", 1)
+        let mut result = J.object()
+        run J.set(&mut result, "source", Value.String { text: move source })
+        run J.set(&mut result, "status", run J.text("failed"))
+        run J.set(&mut result, "error", Value.String { text: run message(move error) })
+        run J.push(J.getMut(&mut state.summary, "results"), move result)
+      }
+    }
+    at = at + 1
+  }
+  let mut stream = Random.make(options.seed)
+  let mut gridStream = Random.make(u32.bitXor(options.seed, 0x67726964))
+  let mut family: usize = 0
+  while family < 2 {
+    let count = if family == 0 { options.fuzz } else { options.gridFuzz }
+    at = 0
+    while at < count {
+      let input = if family == 0 { run Fuzz.block(&mut stream) } else { run Fuzz.grid(&mut gridStream, at, options.seed) }
+      let name = run fuzzName(if family == 0 { "fuzz-" } else { "grid-fuzz-" }, options.seed, at)
+      let mut value = J.object()
+      run J.set(&mut value, "name", run J.text(String.view(&name)))
+      run J.set(&mut value, "kind", run J.text("chrome"))
+      run J.set(&mut value, "input", run J.copy(&input))
+      run J.set(&mut value, "features", run J.parse(if family == 0 { b"[\"seeded-rectangle-tree\"]" } else { b"[\"seeded-grid-auto-placement\",\"seeded-grid-names-areas-repeat\",\"seeded-grid-alignment-baselines-scroll\"]" }))
+      let mut result = run fixture(&mut state, &value, String.view(&name), true, options)
+      if J.length(J.get(&result, "mismatches")) > 0 {
+        let mut reduced = run reduce(&mut state, &input, J.at(J.get(&result, "mismatches"), 0), options)
+        let reducedInput = run J.copy(J.get(&reduced, "input"))
+        J.remove(&mut reduced, "input")
+        if family == 1 {
+          run J.set(&mut reduced, "seed", J.int(u32.toI64(options.seed)))
+          run J.set(&mut reduced, "index", J.int(usize.toI64(at)))
+        }
+        let path = run save(String.view(&name), &reducedInput, &reduced, ".reduced")
+        run J.set(&mut result, "reducedReproduction", Value.String { text: move path })
+      }
+      run J.push(J.getMut(&mut state.summary, "results"), move result)
+      at = at + 1
+    }
+    family = family + 1
+  }
+  if J.integer(J.get(J.get(&state.summary, "totals"), "discovered")) == 0 { run Task.abort("No fixtures selected") }
+}
+
+effect fn closeBrowser(browser: Chrome) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  return run Browser.close(move browser)
+}
+
+pub effect fn perform(options: Options) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let mut chosen = move options
+  if !f64.isFinite(chosen.tolerance.value) || chosen.tolerance.value < 0.0 { run Task.abort("Tolerance must be finite and nonnegative") }
+  let mode = String.view(&chosen.mode)
+  if mode != "all" && mode != "spec" && mode != "chrome" { run Task.abort("Invalid --mode") }
+  if mode == "spec" && (chosen.fuzz > 0 || chosen.gridFuzz > 0) { run Task.abort("Fuzzing requires Chrome mode") }
+  if String.view(&chosen.cli) == "" { run Task.abort("Supply the prebuilt native CLI using --cli PATH or SILK_LAYOUT_CLI; this harness never builds it") }
+  let cli = run suppliedPath(String.view(&chosen.cli))
+  chosen.cli = run pathText(&cli)
+  let mut state = State {
+    summary: run J.parse(b"{\"schemaVersion\":3,\"tolerance\":0.05,\"seed\":1,\"browser\":null,\"totals\":{\"discovered\":0,\"passed\":0,\"failed\":0,\"excludedUnsupported\":0,\"spec\":0,\"chrome\":0,\"fuzz\":0,\"mismatches\":0},\"comparison\":{\"chromeGeometry\":[\"x\",\"y\",\"width\",\"height\",\"contentWidth\",\"contentHeight\"],\"chromeBaselines\":\"Measured leaf baselines only; other baseline assertions belong to spec fixtures.\",\"chromeResources\":\"Loaded and decoded data-SVG images. Resource records retain exact supplied metadata and generated markup, not HTMLImageElement.naturalWidth/naturalHeight, which can synthesize missing SVG dimensions. Two absolute SVG dimensions determine the ratio; incompatible independent triples are unsupported and exit nonzero.\"},\"scrollbarObservation\":\"Classic content boxes and gutters use CDP content-box quads, not rounded CSSOM client dimensions. Host-policy mismatches and inconsistent tiny mirrored geometry are unsupported. Scrollbar-width:thin cannot represent custom classic metrics.\",\"results\":[],\"errors\":[]}"),
+    browser: Option<Chrome>.None, fontCache: J.object(),
+  }
+  run J.set(&mut state.summary, "tolerance", J.float(chosen.tolerance.value))
+  run J.set(&mut state.summary, "seed", J.int(u32.toI64(chosen.seed)))
+  match move run Effect.result(execute(&mut state, &chosen)) {
+    Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Success { .. } => {}
+    Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Failure { error } => {
+      run J.push(J.getMut(&mut state.summary, "errors"), Value.String { text: run message(move error) })
+    }
+  }
+  let browser = Intrinsic.replace(state.browser, Option<Chrome>.None)
+  if let Option<Chrome>.Some { value } = move browser {
+    match move run Effect.result(closeBrowser(move value)) {
+      Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Success { .. } => {}
+      Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Failure { error } => {
+        let mut detail = run String.copy("Chrome cleanup: ")
+        let cause = run message(move error)
+        run String.append(&mut detail, String.view(&cause))
+        run J.push(J.getMut(&mut state.summary, "errors"), Value.String { text: move detail })
+      }
+    }
+  }
+  let totals = J.get(&state.summary, "totals")
+  let ok = J.integer(J.get(totals, "failed")) == 0 && J.integer(J.get(totals, "excludedUnsupported")) == 0 && J.length(J.get(&state.summary, "errors")) == 0
+  run J.set(&mut state.summary, "ok", J.boolean(ok))
+  let mut output = run J.encode(&state.summary)
+  run Bytes.append(&mut output, b"\n")
+  let mut writer = StdoutWriter.make()
+  run Writer.writeAll(Bytes.asSlice(&output)) |> Effect.provideMut<Writer>(&mut writer)
+  if !ok { run Task.abort("Layout conformance comparison failed; see JSON report") }
+}

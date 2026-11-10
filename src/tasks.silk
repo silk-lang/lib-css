@@ -1,0 +1,161 @@
+import task_specs as Specs
+import task_encodings as Encodings
+import task_browser_options { Options as BrowserOptions, Tolerance }
+import task_fixture_font as Font
+static if Intrinsic.targetOperatingSystem() != "windows" {
+  import task_bench as Bench
+  import task_browser as Browser
+  import task_fixture_updates { FixtureUpdatesOptions, fixtureUpdates }
+  import task_fuzz_updates { FuzzUpdatesOptions, fuzzUpdates }
+  import task_smoke { SmokeOptions, smoke }
+  import task_toolchain as Toolchain
+}
+import silk.cli.command { Command, CommandLine, Opt }
+import silk.cli.task { Task, TaskError, TaskSet }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
+import silk.core.result { Result }
+import silk.io.standard_input { ReadOutcome, StandardInput, StreamReadError }
+import silk.io.standard_input_native { OsStandardInput }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.string { String }
+
+union Tasks {
+  Ci,
+  Check,
+  InstallLlvm,
+  FetchSpecs { pub update: bool, pub offline: bool, pub only: List<String>, pub lock: String, pub cache: String },
+  FetchStyleSpecs { pub update: bool, pub offline: bool },
+  FetchLayoutSpecs { pub update: bool, pub only: List<String> },
+  GenerateEncodings { pub fetch: bool, pub revision: String },
+  Smoke { pub cli: String },
+  FixtureUpdates { pub cli: String },
+  FuzzUpdates { pub cli: String, pub seeds: i64, pub first: i64, pub mode: String },
+  FixtureFont,
+  ChromeDiff { pub browser: BrowserOptions },
+  Bench { pub cli: String, pub runs: i32, pub record: bool },
+  BenchUpdates { pub cli: String, pub iterations: i32, pub onlyName: String, pub json: String, pub small: bool },
+  BenchCompare { pub updates: bool, pub compareIterations: i32, pub onlyName: String, pub json: String, pub docs: String, pub silk: String, pub taffy: String, pub yoga: String, pub generate: String },
+  PgoBuild { pub docs: String },
+}
+impl CommandLine for Tasks {
+  static fn command() -> Command<Tasks> {
+    return Command<Tasks>.make("tasks", "CSS development automation in Silk")
+      |> Command.variant("Ci", "Check the workspace, run both native suites and build the layout harness")
+      |> Command.variant("Check", "Run the full layout specification, malformed-input and incremental correctness gate")
+      |> Command.variant("InstallLlvm", "Install checksum-pinned Linux x86_64 LLVM 22.1.8")
+      |> Command.variant("FetchSpecs", "Fetch or verify the root specification baseline")
+      |> Command.variant("FetchStyleSpecs", "Fetch or verify CSSOM and normative bibliography sources")
+      |> Command.variant("FetchLayoutSpecs", "Fetch or verify the layout specification baseline")
+      |> Command.variant("GenerateEncodings", "Materialize verified WHATWG Encoding data as packed Silk tables")
+      |> Command.variant("Smoke", "Reject every malformed native harness request")
+      |> Command.variant("FixtureUpdates", "Compare retained and fresh layouts on committed fixtures")
+      |> Command.variant("FuzzUpdates", "Seeded incremental correctness and structural mutation fuzzing")
+      |> Command.variant("FixtureFont", "Generate authored ASCII TrueType fixtures from JSON stdin to JSON stdout")
+      |> Command.variant("ChromeDiff", "Normative fixtures and independent Chromium differential comparisons")
+      |> Command.variant("Bench", "Record native harness wall-time benchmarks")
+      |> Command.variant("BenchUpdates", "Time incremental layout and check retained results")
+      |> Command.variant("BenchCompare", "Compare geometry and timing with native taffy and yoga harnesses")
+      |> Command.variant("PgoBuild", "Train and build a profile-guided optimized layout harness")
+      |> Command.option("lock", Opt.about("Root specification lockfile") |> Opt.default("modules/specs.lock.json"))
+      |> Command.option("cache", Opt.about("Root specification content-addressed cache") |> Opt.default("modules/.cache/specs"))
+      |> Command.option("revision", Opt.about("Explicit immutable lowercase 40-hex upstream commit") |> Opt.long("update"))
+      |> Command.option("cli", Opt.about("Prebuilt native layout harness path"))
+      |> Command.option("seeds", Opt.about("Number of update fuzz seeds") |> Opt.default("200"))
+      |> Command.option("first", Opt.about("First update fuzz seed") |> Opt.default("0"))
+      |> Command.option("mode", Opt.about("Comma-separated update fuzz families") |> Opt.default("mixed,inner,insets,text,grid,subgrid,structure,gridstructure"))
+      |> Command.option("runs", Opt.about("Wall-time repetitions") |> Opt.default("7"))
+      |> Command.option("iterations", Opt.about("Incremental timing repetitions") |> Opt.default("40"))
+      |> Command.option("compareIterations", Opt.about("Comparison repetitions; 0 selects 15 cold or 40 updates") |> Opt.long("iterations") |> Opt.default("0"))
+      |> Command.option("onlyName", Opt.about("Select a named benchmark workload") |> Opt.long("only"))
+      |> Command.flatten("browser")
+  }
+}
+
+effect fn font() -> () ! TaskError | OutOfMemoryError | WriterError ? &mut Allocator {
+  let mut input = OsStandardInput.make()
+  let mut buffer: [u8; 4096] = [0; 4096]
+  let mut raw = Bytes.make()
+  while true {
+    let outcome = match move run Effect.result(StandardInput.receive(&mut buffer)) |> Effect.provideMut<StandardInput>(&mut input) {
+      Result<ReadOutcome, StreamReadError>.Success { value } => move value
+      Result<ReadOutcome, StreamReadError>.Failure { .. } => run Task.abort("Could not read fixture-font request")
+    }
+    if StandardInput.isEndOfInput(&outcome) { break }
+    run Bytes.append(&mut raw, Slice.view<u8>(&buffer, 0, StandardInput.count(&outcome)))
+  }
+  let output = run Font.generateBytes(Bytes.asSlice(&raw))
+  let mut writer = StdoutWriter.make()
+  run Writer.writeAll(Bytes.asSlice(&output)) |> Effect.provideMut<Writer>(&mut writer)
+}
+
+static if Intrinsic.targetOperatingSystem() != "windows" {
+effect fn check() -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  run Task.silk(&["check", "--manifest-path", "modules/layout/silk.toml"])
+  run Task.silk(&["check", "--package", "css-layout-test-harness"])
+  run Task.silk(&["test", "--manifest-path", "modules/layout/silk.toml", "--root", "src/tests.silk"])
+  run Task.silk(&["build", "--package", "css-layout-test-harness"])
+  let cli = run Toolchain.harness(false)
+  run smoke(&SmokeOptions { cli: run String.copy(String.view(&cli)) })
+  run Bench.benchUpdates(run String.copy(String.view(&cli)), 2, String.make(), String.make(), true)
+  run fixtureUpdates(&FixtureUpdatesOptions { cli: run String.copy(String.view(&cli)) })
+  run fuzzUpdates(&FuzzUpdatesOptions { cli: run String.copy(String.view(&cli)), seeds: 15, first: 0, mode: run String.copy("mixed,inner,insets,text,grid,subgrid,structure,gridstructure") })
+  run Browser.perform(BrowserOptions { cli: move cli, chrome: String.make(), chromeVersion: String.make(), mode: run String.copy("spec"), tolerance: Tolerance { value: 0.05 }, fuzz: 0, gridFuzz: 0, seed: 1, path: String.make() })
+}
+}
+impl TaskSet for Tasks {
+  effect fn perform(self: Tasks) -> ()
+    ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+    static if Intrinsic.targetOperatingSystem() == "windows" {
+      match move self {
+        Tasks.Ci => {
+          run Task.silk(&["check", "--workspace"])
+          run Task.silk(&["test", "--manifest-path", "modules/layout/silk.toml", "--root", "src/tests.silk"])
+          run Task.silk(&["test", "--manifest-path", "modules/style/silk.toml", "--root", "src/tests.silk"])
+          run Task.silk(&["build", "--package", "css-layout-test-harness"])
+        }
+        Tasks.FetchSpecs { update, offline, only, lock, cache } => run Specs.root(update, offline, &only, String.view(&lock), String.view(&cache))
+        Tasks.FetchStyleSpecs { update, offline } => run Specs.style(update, offline)
+        Tasks.FetchLayoutSpecs { update, only } => run Specs.layout(update, &only)
+        Tasks.GenerateEncodings { fetch, revision } => run Encodings.generate(fetch, &revision)
+        Tasks.FixtureFont => run font()
+        _ => run Task.abort("Managed task subprocesses on Windows require Silk #3034; see modules/layout/LIMITATIONS.md")
+      }
+    } else {
+    match move self {
+      Tasks.Ci => {
+        run Task.silk(&["check", "--workspace"])
+        run Task.silk(&["test", "--manifest-path", "modules/layout/silk.toml", "--root", "src/tests.silk"])
+        run Task.silk(&["test", "--manifest-path", "modules/style/silk.toml", "--root", "src/tests.silk"])
+        run Task.silk(&["build", "--package", "css-layout-test-harness"])
+      }
+      Tasks.Check => run check()
+      Tasks.InstallLlvm => run Toolchain.installLLVM()
+      Tasks.FetchSpecs { update, offline, only, lock, cache } => run Specs.root(update, offline, &only, String.view(&lock), String.view(&cache))
+      Tasks.FetchStyleSpecs { update, offline } => run Specs.style(update, offline)
+      Tasks.FetchLayoutSpecs { update, only } => run Specs.layout(update, &only)
+      Tasks.GenerateEncodings { fetch, revision } => run Encodings.generate(fetch, &revision)
+      Tasks.Smoke { cli } => run smoke(&SmokeOptions { cli: move cli })
+      Tasks.FixtureUpdates { cli } => run fixtureUpdates(&FixtureUpdatesOptions { cli: move cli })
+      Tasks.FuzzUpdates { cli, seeds, first, mode } => run fuzzUpdates(&FuzzUpdatesOptions { cli: move cli, seeds: seeds, first: first, mode: move mode })
+      Tasks.FixtureFont => run font()
+      Tasks.ChromeDiff { browser } => run Browser.perform(move browser)
+      Tasks.Bench { cli, runs, record } => run Bench.bench(move cli, runs, record)
+      Tasks.BenchUpdates { cli, iterations, onlyName, json, small } => run Bench.benchUpdates(move cli, iterations, move onlyName, move json, small)
+      Tasks.BenchCompare { updates, compareIterations, onlyName, json, docs, silk, taffy, yoga, generate } => run Bench.benchCompare(updates, compareIterations, move onlyName, move json, move docs, move silk, move taffy, move yoga, move generate)
+      Tasks.PgoBuild { docs } => run Bench.pgoBuild(move docs)
+    }
+    }
+  }
+}
+pub effect fn main() -> i32 ? &mut HostInput { return run Task.main<Tasks>() }

@@ -28,6 +28,9 @@ silk build --package css-layout-test-harness
 
 On macOS, set `SDKROOT` to `xcrun --sdk macosx --show-sdk-path` before running tests. Set `SILK_CLANG` if LLVM's Clang is not your default compiler.
 
-The workspace pins Silk `0.1.0-dev.63+657e3c900f65`. CI invokes Silk directly; ordinary builds and native tests do not use Python. Layout's existing differential, benchmark and specification-maintenance tools are retained, including their optional Python dependencies. The two helpers under root `scripts/` support CSS's existing specification downloader and encoding-table generator; no SVG library is included.
+The workspace pins Silk `0.1.0-dev.64+8214c402307b`. Development automation is written in Silk under `src/`; `silk task` lists the commands. CI runs `silk task ci`. The full layout gate is `silk task check`; differential browser checks use `silk task chrome-diff --cli PATH`. Native tools such as curl, tar, Cargo, CMake and Chrome remain external executables, not interpreter dependencies.
+Native automation supports macOS and GNU/Linux. Windows managed-child-process support is blocked by [Silk #3034](https://github.com/silk-lang/silk/issues/3034); affected tasks report that capability as unavailable, with no legacy interpreter fallback. Specification and encoding maintenance and fixture-font generation remain available. See [layout limitations](modules/layout/LIMITATIONS.md).
+
+Specification maintenance uses `silk task fetch-layout-specs`, `silk task fetch-style-specs` and `silk task fetch-specs`. Updates are explicit (`--update`); the root and style baselines support `--offline`. Run `silk task generate-encodings` offline against the locked cache, add `--fetch` to hydrate missing immutable inputs, or use `--update REVISION` to select a new upstream commit. No SVG library is included.
 
 See the package READMEs for APIs, conformance boundaries, optional tooling and licensing.

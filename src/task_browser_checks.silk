@@ -1,0 +1,765 @@
+import silk.cli.task { Task, TaskError }
+import silk.core.option { Option }
+import silk.json.value { Json, Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.string { String, Split }
+import silk.num.f64
+import silk.num.usize
+import task_json { J }
+
+const RECT: string = "x|y|width|height"
+const GUTTERS: string = "scrollbarGutterTop|scrollbarGutterRight|scrollbarGutterBottom|scrollbarGutterLeft"
+const BOOLEANS: string = "hasFirstBaseline|hasLastBaseline|horizontalScrollbar|verticalScrollbar"
+const USED: string = "x|y|width|height|contentWidth|contentHeight|hasFirstBaseline|hasLastBaseline|horizontalScrollbar|verticalScrollbar|measurementOffsetX|measurementOffsetY|scrollableOverflowX|scrollableOverflowY|scrollableOverflowWidth|scrollableOverflowHeight|scrollbarGutterTop|scrollbarGutterRight|scrollbarGutterBottom|scrollbarGutterLeft"
+const SOURCE: string = "x|y|width|height|contentWidth|contentHeight|hasFirstBaseline|hasLastBaseline|horizontalScrollbar|verticalScrollbar|measurementOffsetX|measurementOffsetY|scrollableOverflowX|scrollableOverflowY|scrollableOverflowWidth|scrollableOverflowHeight|scrollbarGutterTop|scrollbarGutterRight|scrollbarGutterBottom|scrollbarGutterLeft|firstBaseline|lastBaseline"
+const FONT_BASELINES: string = "alphabetic|ideographic|central|mathematical"
+const BASELINES: string = "alphabetic|ideographic|central|mathematical|xMiddle|textOver|textUnder"
+const FONT: string = "fontSize|ascent|descent|lineGap|xHeight|capHeight|subscriptOffset|superscriptOffset|baselines"
+const MODES: string = "horizontal-tb|vertical-rl|vertical-lr|sideways-rl|sideways-lr"
+const BREAKS: string = "auto|avoid|always|all|avoid-page|page|left|right|recto|verso|avoid-column|column|avoid-region|region"
+
+fn object(v: &Value) -> bool { return match &v.* { Value.Object { .. } => true
+_ => false } }
+fn array(v: &Value) -> bool { return match &v.* { Value.Array { .. } => true
+_ => false } }
+fn stringValue(v: &Value) -> bool { return match &v.* { Value.String { .. } => true
+_ => false } }
+fn boolean(v: &Value) -> bool { return match &v.* { Value.Bool { .. } => true
+_ => false } }
+fn null(v: &Value) -> bool { return match &v.* { Value.Null => true
+_ => false } }
+fn finite(v: &Value) -> bool {
+  return match Json.asF64(Option<&Value>.some(v)) { Option<f64>.Some { .. } => true
+  _ => false }
+}
+fn integer(v: &Value) -> bool { return finite(v) && f64.floor(J.num(v)) == J.num(v) }
+fn truth(v: &Value) -> bool {
+  return match &v.* {
+    Value.Null => false
+    Value.Bool { value } => value
+    Value.Number { .. } => finite(v) && J.num(v) != 0.0
+    Value.String { .. } => J.str(v) != ""
+    _ => true
+  }
+}
+fn member(values: string, value: string) -> bool {
+  let mut parts = String.split(values, "|")
+  while true {
+    let key = match Split.next(&mut parts) { Option<string>.Some { value: token } => token
+    _ => { return false } }
+    if key == value { return true }
+  }
+}
+fn oneOf(v: &Value, values: string) -> bool { return stringValue(v) && member(values, J.str(v)) }
+fn allowed(v: &Value, fields: string) -> bool {
+  if !object(v) { return false }
+  let entries = J.members(v)
+  let mut i: usize = 0
+  while i < entries.length {
+    if !member(fields, String.view(&entries[i].key)) { return false }
+    i = i + 1
+  }
+  return true
+}
+fn required(v: &Value, fields: string) -> bool {
+  if !object(v) { return false }
+  let mut parts = String.split(fields, "|")
+  while true {
+    let key = match Split.next(&mut parts) { Option<string>.Some { value: token } => token
+    _ => { return true } }
+    if !J.has(v, key) { return false }
+  }
+}
+fn exact(v: &Value, fields: string) -> bool { return allowed(v, fields) && required(v, fields) }
+fn numbers(v: &Value, fields: string, nonnegative: bool) -> bool {
+  let mut parts = String.split(fields, "|")
+  while true {
+    let key = match Split.next(&mut parts) { Option<string>.Some { value: token } => token
+    _ => { return true } }
+    let n = J.get(v, key)
+    if !finite(n) || (nonnegative && J.num(n) < 0.0) { return false }
+  }
+}
+fn rectangle(v: &Value) -> bool { return numbers(v, RECT, false) && numbers(v, "width|height", true) }
+fn nonnegative(v: &Value) -> bool { return finite(v) && J.num(v) >= 0.0 }
+fn same(a: &Value, b: &Value) -> bool {
+  if finite(a) && finite(b) { return J.num(a) == J.num(b) }
+  if stringValue(a) && stringValue(b) { return J.str(a) == J.str(b) }
+  if boolean(a) && boolean(b) { return J.isTrue(a) == J.isTrue(b) }
+  return null(a) && null(b)
+}
+fn fallback<'a>(v: &'a Value, alternative: &'a Value) -> &'a Value { if null(v) { return alternative }
+return v }
+fn defaultString<'a>(v: &'a Value, alternative: string<'a>) -> string<'a> { if null(v) { return alternative }
+return J.str(v) }
+fn defaultNumber(v: &Value, alternative: f64) -> f64 { if null(v) { return alternative }
+return J.num(v) }
+fn indexed<'a>(v: &'a Value, index: &Value) -> &'a Value {
+  if !integer(index) || J.num(index) < 0.0 || J.num(index) >= usize.toF64(J.length(v)) { return J.get(v, "") }
+  return J.at(v, f64.toUsize(J.num(index)))
+}
+effect fn join(a: string, b: string, c: string) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut result = run String.copy(a)
+  run String.append(&mut result, b)
+  run String.append(&mut result, c)
+  return move result
+}
+effect fn indexPath(prefix: string, index: usize, suffix: string) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut digits: [u8; 20] = [0; 20]
+  let mut remaining = index
+  let mut start: usize = 20
+  while true {
+    start = start - 1
+    digits[start] = usize.toU8(remaining % 10) + 48
+    remaining = remaining / 10
+    if remaining == 0 { break }
+  }
+  let mut result = run String.copy(prefix)
+  let text = unsafe String.fromUtf8Unchecked(&digits)
+  run String.append(&mut result, String.slice(text, start, 20 - start))
+  run String.append(&mut result, suffix)
+  return move result
+}
+effect fn invalid(prefix: string, path: string, suffix: string) -> never ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let message = run join(prefix, path, suffix)
+  run Task.abort(String.view(&message))
+}
+effect fn nodeError(index: usize, suffix: string) -> never ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let message = run indexPath("Invalid node ", index, suffix)
+  run Task.abort(String.view(&message))
+}
+effect fn scrollOffset(v: &Value, path: string) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if !exact(v, "x|y") || !numbers(v, "x|y", false) { run invalid("", path, " requires exactly finite numeric x and y fields") }
+}
+effect fn scrollbars(v: &Value) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if !exact(v, "auto|thin") { run Task.abort("scrollbars requires exactly auto, thin") }
+  let widths = ["auto", "thin"]
+  let mut i: usize = 0
+  while i < widths.length {
+    let record = J.get(v, widths[i])
+    let path = run join("scrollbars.", widths[i], "")
+    if !exact(record, "horizontal|vertical|overlay|horizontalOnTop|verticalOnLeft") { run invalid("", String.view(&path), " requires exactly horizontal, vertical, overlay, horizontalOnTop, verticalOnLeft") }
+    let mut keys = String.split("horizontal|vertical|overlay|horizontalOnTop|verticalOnLeft", "|")
+    while true {
+      let key = match Split.next(&mut keys) { Option<string>.Some { value: token } => token
+      _ => { break } }
+      let field = J.get(record, key)
+      if member("horizontal|vertical", key) {
+        if !nonnegative(field) { let p = run join(String.view(&path), ".", key)
+        run invalid("", String.view(&p), " must be finite and nonnegative") }
+      } else if !boolean(field) { let p = run join(String.view(&path), ".", key)
+      run invalid("", String.view(&p), " must be boolean") }
+    }
+    i = i + 1
+  }
+}
+effect fn fragmentation(v: &Value) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let frames = J.get(v, "frames")
+  if !allowed(v, "kind|frames|repeatStep|writingMode|direction|firstPage|recto|contexts|ancestors") || !required(v, "kind|frames") || !oneOf(J.get(v, "kind"), "column|page|region") || !array(frames) || J.length(frames) == 0 { run Task.abort("fragmentation requires a kind and nonempty frames array") }
+  let mut i: usize = 0
+  while i < J.length(frames) {
+    let frame = J.at(frames, i)
+    if !exact(frame, RECT) || !rectangle(frame) { let path = run indexPath("fragmentation.frames[", i, "]")
+    run invalid("Invalid ", String.view(&path), "") }
+    i = i + 1
+  }
+  if J.has(v, "contexts") != J.has(v, "ancestors") { run Task.abort("fragmentation contexts and ancestors must be supplied together") }
+  if J.has(v, "contexts") {
+    let contexts = J.get(v, "contexts")
+    let ancestors = J.get(v, "ancestors")
+    if !array(contexts) || !array(ancestors) || J.length(ancestors) != J.length(frames) { run Task.abort("Invalid fragmentation context ancestry") }
+    i = 0
+    while i < J.length(contexts) {
+      if !oneOf(J.at(contexts, i), "page|column|region") { run Task.abort("Invalid fragmentation context ancestry") }
+      i = i + 1
+    }
+    i = 0
+    while i < J.length(ancestors) {
+      let row = J.at(ancestors, i)
+      if !array(row) || J.length(row) != J.length(contexts) { let path = run indexPath("fragmentation.ancestors[", i, "]")
+      run invalid("Invalid ", String.view(&path), "") }
+      let mut parentChanged = false
+      let mut depth: usize = 0
+      while depth < J.length(row) {
+        let entry = J.at(row, depth)
+        let ordinal = J.get(entry, "index")
+        if !exact(entry, "index|x|y|width|height") || !integer(ordinal) || J.num(ordinal) < 0.0 || J.num(ordinal) > 2147483647.0 || !rectangle(entry) {
+          let framePath = run indexPath("Invalid fragmentation ancestor ", i, ":")
+          let message = run indexPath(String.view(&framePath), depth, "")
+          run Task.abort(String.view(&message))
+        }
+        if i == 0 {
+          if J.num(ordinal) != 0.0 { run Task.abort("Fragment ancestor ordinals must begin at zero") }
+        } else {
+          let previous = J.at(J.at(ancestors, i - 1), depth)
+          let changed = !same(ordinal, J.get(previous, "index"))
+          if (changed && J.num(ordinal) != J.num(J.get(previous, "index")) + 1.0) || (parentChanged && !changed) { run Task.abort("Fragment ancestor ordinals must advance consecutively with their parents") }
+          if !changed {
+            let mut keys = String.split(RECT, "|")
+            while true {
+              let key = match Split.next(&mut keys) { Option<string>.Some { value: token } => token
+              _ => { break } }
+              if !same(J.get(entry, key), J.get(previous, key)) { run Task.abort("An unchanged ancestor must retain its physical geometry") }
+            }
+          }
+          parentChanged = changed
+        }
+        depth = depth + 1
+      }
+      i = i + 1
+    }
+  }
+  if J.has(v, "repeatStep") && (!exact(J.get(v, "repeatStep"), "x|y") || !numbers(J.get(v, "repeatStep"), "x|y", false)) { run Task.abort("fragmentation.repeatStep requires finite x and y") }
+  run enumField(v, "writingMode", MODES, "fragmentation")
+  run enumField(v, "direction", "ltr|rtl", "fragmentation")
+  run enumField(v, "firstPage", "left|right", "fragmentation")
+  run enumField(v, "recto", "left|right", "fragmentation")
+}
+effect fn enumField(v: &Value, key: string, values: string, path: string) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if J.has(v, key) && !oneOf(J.get(v, key), values) { let field = run join(path, ".", key)
+  run invalid("Invalid ", String.view(&field), "") }
+}
+
+pub effect fn input(v: &Value) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let nodes = J.get(v, "nodes")
+  let viewport = J.get(v, "viewport")
+  if !truth(viewport) || !array(nodes) || J.length(nodes) == 0 { run Task.abort("Protocol requires viewport and a nonempty nodes array") }
+  let dimensions = ["width", "height"]
+  let mut i: usize = 0
+  while i < dimensions.length {
+    let n = J.get(viewport, dimensions[i])
+    if !integer(n) || J.num(n) <= 0.0 { run invalid("Chrome viewport.", dimensions[i], " must be a positive integer") }
+    i = i + 1
+  }
+  if J.has(v, "viewportScrollOffset") { run scrollOffset(J.get(v, "viewportScrollOffset"), "viewportScrollOffset") }
+  if J.has(v, "fragmentation") { run fragmentation(J.get(v, "fragmentation")) }
+  if J.has(v, "scrollbars") { run scrollbars(J.get(v, "scrollbars")) }
+  let fonts = J.get(v, "fonts")
+  if J.has(v, "fonts") && !array(fonts) { run Task.abort("fonts must be an array") }
+  i = 0
+  while i < J.length(fonts) {
+    let font = J.at(fonts, i)
+    if !exact(font, FONT) || !exact(J.get(font, "baselines"), FONT_BASELINES) || !numbers(font, "fontSize|ascent|descent|lineGap|xHeight|capHeight|subscriptOffset|superscriptOffset", false) || !numbers(font, "fontSize|ascent|descent|xHeight|capHeight", true) || !numbers(J.get(font, "baselines"), FONT_BASELINES, false) { let path = run indexPath("Invalid fonts[", i, "] metrics")
+    run Task.abort(String.view(&path)) }
+    i = i + 1
+  }
+  i = 0
+  while i < J.length(nodes) {
+    let node = J.at(nodes, i)
+    let parent = J.get(node, "parent")
+    if !object(node) { run nodeError(i, "") }
+    if (i == 0 && (!J.has(node, "parent") || !null(parent))) || (i > 0 && (!integer(parent) || J.num(parent) < 0.0 || J.num(parent) >= usize.toF64(i))) { run nodeError(i, " parent") }
+    if i > 0 && J.has(indexed(nodes, parent), "text") { run nodeError(i, ": text node cannot be a parent") }
+    if J.has(node, "text") {
+      if i == 0 || !stringValue(J.get(node, "text")) || !allowed(node, "parent|text") { run nodeError(i, ": requires exactly parent and text; root must be an element") }
+      i = i + 1
+      continue
+    }
+    let style = J.get(node, "style")
+    if !object(style) || !allowed(node, "parent|style|measure|natural|scrollOffset") { run nodeError(i, ": requires an element style object") }
+    if J.has(style, "whiteSpace") { run nodeError(i, ".style.whiteSpace is not supported; use whiteSpaceCollapse and textWrap") }
+    if J.has(style, "tabSize") {
+      let size = J.get(style, "tabSize")
+      if !nonnegative(size) && !(exact(size, "length") && nonnegative(J.get(size, "length"))) { run nodeError(i, ".style.tabSize") }
+    }
+    if J.has(style, "textIndent") {
+      let indent = J.get(style, "textIndent")
+      let wrapped = object(indent) && J.has(indent, "value")
+      if wrapped && (!allowed(indent, "value|hanging|eachLine") || (J.has(indent, "hanging") && !boolean(J.get(indent, "hanging"))) || (J.has(indent, "eachLine") && !boolean(J.get(indent, "eachLine")))) { run nodeError(i, ".style.textIndent options") }
+      let amount = if wrapped { J.get(indent, "value") } else { indent }
+      if !finite(amount) && !(exact(amount, "percent") && numbers(amount, "percent", false)) && !(exact(amount, "length|percent") && numbers(amount, "length|percent", false)) { run nodeError(i, ".style.textIndent amount") }
+    }
+    let fontKey = J.get(style, "fontKey")
+    if !null(fontKey) && (!integer(fontKey) || J.num(fontKey) < 0.0 || J.num(fontKey) > usize.toF64(J.length(fonts))) { run nodeError(i, ".style.fontKey") }
+    if J.has(style, "lineHeight") {
+      let height = J.get(style, "lineHeight")
+      if !oneOf(height, "normal") && !nonnegative(height) && !(exact(height, "length") && nonnegative(J.get(height, "length"))) { run nodeError(i, ".style.lineHeight") }
+    }
+    let mut counts = String.split("orphans|widows", "|")
+    while true {
+      let key = match Split.next(&mut counts) { Option<string>.Some { value: token } => token
+      _ => { break } }
+      let count = J.get(style, key)
+      if J.has(style, key) && (!integer(count) || J.num(count) <= 0.0 || J.num(count) >= 18446744073709551616.0) { run nodeError(i, ".style orphans/widows: expected a positive usize integer") }
+    }
+    if J.has(style, "verticalAlign") {
+      let align = J.get(style, "verticalAlign")
+      if !oneOf(align, "baseline|middle|text-top|text-bottom|top|bottom|sub|super") && !finite(align) && !((exact(align, "percent") || exact(align, "length|percent")) && finite(J.get(align, "percent")) && (!J.has(align, "length") || finite(J.get(align, "length")))) { run nodeError(i, ".style.verticalAlign") }
+    }
+    let path = run indexPath("node ", i, ".style")
+    run enumField(style, "baselineSource", "auto|first|last", String.view(&path))
+    run enumField(style, "textAlign", "start|end|left|right|center|justify", String.view(&path))
+    run enumField(style, "textAlignLast", "auto|start|end|left|right|center|justify", String.view(&path))
+    run enumField(style, "textJustify", "auto|none|inter-word|inter-character|distribute", String.view(&path))
+    run enumField(style, "textOrientation", "mixed|upright|sideways", String.view(&path))
+    run enumField(style, "unicodeBidi", "normal|embed|isolate|bidi-override|isolate-override|plaintext", String.view(&path))
+    run enumField(style, "textWrap", "wrap|nowrap", String.view(&path))
+    run enumField(style, "boxDecorationBreak", "slice|clone", String.view(&path))
+    run enumField(style, "marginBreak", "auto|keep|discard", String.view(&path))
+    run enumField(style, "breakBefore", BREAKS, String.view(&path))
+    run enumField(style, "breakAfter", BREAKS, String.view(&path))
+    run enumField(style, "breakInside", "auto|avoid|avoid-page|avoid-column|avoid-region", String.view(&path))
+    run enumField(style, "whiteSpaceCollapse", "collapse|discard|preserve|preserve-breaks|preserve-spaces|break-spaces", String.view(&path))
+    if J.has(node, "scrollOffset") { let p = run indexPath("Node ", i, ".scrollOffset")
+    run scrollOffset(J.get(node, "scrollOffset"), String.view(&p)) }
+    let measured = J.has(node, "measure")
+    let natural = J.has(node, "natural")
+    if measured && natural { run nodeError(i, ": cannot combine measure and natural") }
+    if measured || natural || truth(J.get(style, "replaced")) {
+      let mut child: usize = 0
+      while child < J.length(nodes) {
+        let p = J.get(J.at(nodes, child), "parent")
+        if finite(p) && J.num(p) == usize.toF64(i) { run nodeError(i, ": measured or replaced node must be a leaf") }
+        child = child + 1
+      }
+    }
+    if natural {
+      let resource = J.get(node, "natural")
+      if !object(resource) { run nodeError(i, ".natural must be an object") }
+      let entries = J.members(resource)
+      let mut n: usize = 0
+      while n < entries.length {
+        if !member("width|height|aspectRatio", String.view(&entries[n].key)) || !nonnegative(&entries[n].value) { run nodeError(i, ".natural dimensions") }
+        n = n + 1
+      }
+    }
+    if J.has(style, "aspectRatioAuto") && !boolean(J.get(style, "aspectRatioAuto")) { run nodeError(i, ".style.aspectRatioAuto must be boolean") }
+    run enumField(style, "scrollbarWidth", "auto|thin|none", String.view(&path))
+    run enumField(style, "scrollbarGutter", "auto|stable|stable both-edges|both-edges stable", String.view(&path))
+    i = i + 1
+  }
+}
+
+effect fn unsupportedGeometry(reason: string) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = J.object()
+  run J.set(&mut result, "unsupported", run J.text(reason))
+  return move result
+}
+pub effect fn columns(input: &Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let value = J.get(input, "fragmentation")
+  if !truth(value) { return Value.Null }
+  if J.length(J.get(value, "contexts")) > 0 { return run unsupportedGeometry("Host-supplied nested contexts require spec-only fixtures; Chrome multicol cannot substitute their ancestry.") }
+  if J.str(J.get(value, "kind")) != "column" { return run unsupportedGeometry("Page and region fragmentation require spec-only fixtures; Chrome multicol is not their oracle.") }
+  let frames = J.get(value, "frames")
+  let first = J.at(frames, 0)
+  let mode = defaultString(J.get(value, "writingMode"), "horizontal-tb")
+  let direction = defaultString(J.get(value, "direction"), "ltr")
+  let width = J.num(J.get(first, "width"))
+  let height = J.num(J.get(first, "height"))
+  if width <= 0.0 || height <= 0.0 { return run unsupportedGeometry("Zero-extent fragmentainers require spec-only fixtures.") }
+  let horizontal = mode == "horizontal-tb"
+  let extent = if horizontal { width } else { height }
+  let sign = (if direction == "rtl" { -1.0 } else { 1.0 }) * (if mode == "sideways-lr" { -1.0 } else { 1.0 })
+  let repeat = J.get(value, "repeatStep")
+  let mut stepX = if horizontal { sign * extent } else { 0.0 }
+  let mut stepY = if horizontal { 0.0 } else { sign * extent }
+  if J.length(frames) > 1 {
+    stepX = J.num(J.get(J.at(frames, 1), "x")) - J.num(J.get(first, "x"))
+    stepY = J.num(J.get(J.at(frames, 1), "y")) - J.num(J.get(first, "y"))
+  } else if !null(repeat) { stepX = J.num(J.get(repeat, "x"))
+  stepY = J.num(J.get(repeat, "y")) }
+  let along = if horizontal { stepX } else { stepY }
+  let across = if horizontal { stepY } else { stepX }
+  let mut invalid = across != 0.0 || along * sign < extent || (truth(repeat) && (J.num(J.get(repeat, "x")) != stepX || J.num(J.get(repeat, "y")) != stepY))
+  let mut i: usize = 0
+  while i < J.length(frames) {
+    let frame = J.at(frames, i)
+    if J.num(J.get(frame, "width")) != width || J.num(J.get(frame, "height")) != height || J.num(J.get(frame, "x")) != J.num(J.get(first, "x")) + stepX * usize.toF64(i) || J.num(J.get(frame, "y")) != J.num(J.get(first, "y")) + stepY * usize.toF64(i) { invalid = true }
+    i = i + 1
+  }
+  if invalid { return run unsupportedGeometry("Nonuniform or non-inline-progressing frames require spec-only fixtures, not a substituted Chrome geometry.") }
+  let mut result = run J.copy(first)
+  let mut step = J.object()
+  run J.set(&mut step, "x", J.float(stepX))
+  run J.set(&mut step, "y", J.float(stepY))
+  run J.set(&mut result, "mode", run J.text(mode))
+  run J.set(&mut result, "direction", run J.text(direction))
+  run J.set(&mut result, "gap", J.float(along * sign - extent))
+  run J.set(&mut result, "step", move step)
+  return move result
+}
+
+fn indexValue(record: &Value, key: string, count: usize) -> bool {
+  if !J.has(record, key) { return false }
+  let v = J.get(record, key)
+  return null(v) || (integer(v) && J.num(v) >= 0.0 && J.num(v) < usize.toF64(count))
+}
+effect fn nativeRectangle(v: &Value, path: string) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut keys = String.split(RECT, "|")
+  while true {
+    let key = match Split.next(&mut keys) { Option<string>.Some { value: token } => token
+    _ => { break } }
+    let value = J.get(v, key)
+    if !finite(value) || (member("width|height", key) && J.num(value) < 0.0) {
+      let field = run join(path, ".", key)
+      run invalid("Invalid native ", String.view(&field), "")
+    }
+  }
+}
+effect fn nativeBaselines(v: &Value, path: string) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let names = ["firstBaselines", "lastBaselines"]
+  let mut i: usize = 0
+  while i < names.length {
+    let set = J.get(v, names[i])
+    if !exact(set, BASELINES) || !numbers(set, BASELINES, false) { let field = run join(path, ".", names[i])
+    run invalid("Invalid native ", String.view(&field), "") }
+    i = i + 1
+  }
+  if J.has(v, "firstBaseline") || J.has(v, "lastBaseline") { run invalid("Invalid native ", path, " scalar baselines") }
+}
+effect fn nativeUsed(v: &Value, path: string, fields: string) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut keys = String.split(fields, "|")
+  while true {
+    let key = match Split.next(&mut keys) { Option<string>.Some { value: token } => token
+    _ => { break } }
+    let valid = if member(BOOLEANS, key) { boolean(J.get(v, key)) } else { finite(J.get(v, key)) }
+    if !valid { let field = run join(path, ".", key)
+    run invalid("Invalid native ", String.view(&field), "") }
+  }
+  if J.num(J.get(v, "scrollableOverflowWidth")) < 0.0 || J.num(J.get(v, "scrollableOverflowHeight")) < 0.0 || !numbers(v, GUTTERS, true) { run invalid("Invalid native ", path, " used dimensions") }
+}
+effect fn nativeIndices(v: &Value, path: string, keys: string, count: usize) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut fields = String.split(keys, "|")
+  while true {
+    let key = match Split.next(&mut fields) { Option<string>.Some { value: token } => token
+    _ => { break } }
+    if !indexValue(v, key, count) { let field = run join(path, ".", key)
+    run invalid("Invalid native ", String.view(&field), "") }
+  }
+}
+
+pub effect fn native(input: &Value, output: &Value) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let nodes = J.get(input, "nodes")
+  let sources = J.get(output, "sources")
+  let boxes = J.get(output, "boxes")
+  let fragments = J.get(output, "fragments")
+  let texts = J.get(output, "texts")
+  if !array(sources) || J.length(sources) != J.length(nodes) { run Task.abort("Native CLI returned the wrong source count") }
+  if !finite(J.get(output, "schemaVersion")) || J.num(J.get(output, "schemaVersion")) != 3.0 || !array(boxes) || !array(fragments) || !array(texts) { run Task.abort("Native CLI requires schema v3 generated boxes, fragments, and texts") }
+  let mut i: usize = 0
+  while i < J.length(boxes) {
+    let box = J.at(boxes, i)
+    let path = run indexPath("boxes[", i, "]")
+    run nativeUsed(box, String.view(&path), USED)
+    run nativeBaselines(box, String.view(&path))
+    if !oneOf(J.get(box, "kind"), "block|flex|grid|inline|inline-formatting|text") || !indexValue(box, "source", J.length(nodes)) { run invalid("Invalid native ", String.view(&path), " metadata") }
+    run nativeIndices(box, String.view(&path), "parent|firstChild|lastChild|nextSibling|previousContinuation|nextContinuation", J.length(boxes))
+    run nativeIndices(box, String.view(&path), "firstFragment|lastFragment", J.length(fragments))
+    i = i + 1
+  }
+  i = 0
+  while i < J.length(fragments) {
+    let fragment = J.at(fragments, i)
+    let path = run indexPath("fragments[", i, "]")
+    if !oneOf(J.get(fragment, "kind"), "box|inline|text|line") || !indexValue(fragment, "source", J.length(nodes)) || !indexValue(fragment, "box", J.length(boxes)) { run invalid("Invalid native ", String.view(&path), " metadata") }
+    run nativeIndices(fragment, String.view(&path), "parent|firstChild|lastChild|previousSibling|nextSibling|previousForBox|nextForBox", J.length(fragments))
+    let mut keys = String.split("location|visualOffset|worldLocation", "|")
+    while true {
+      let key = match Split.next(&mut keys) { Option<string>.Some { value: token } => token
+      _ => { break } }
+      if !numbers(J.get(fragment, key), "x|y", false) { let field = run join(String.view(&path), ".", key)
+      run invalid("Invalid native ", String.view(&field), "") }
+    }
+    let size = J.get(fragment, "size")
+    let sizeFields = ["x", "y", "width", "height"]
+    let mut s: usize = 0
+    while s < sizeFields.length {
+      let key = sizeFields[s]
+      if (s >= 2 || J.has(size, key)) && (!finite(J.get(size, key)) || (s >= 2 && J.num(J.get(size, key)) < 0.0)) {
+        let field = run join(String.view(&path), ".size.", key)
+        run invalid("Invalid native ", String.view(&field), "")
+      }
+      s = s + 1
+    }
+    let mut rectangles = String.split("contentRect|paddingRect|layoutBounds|scrollableOverflow", "|")
+    while true {
+      let key = match Split.next(&mut rectangles) { Option<string>.Some { value: token } => token
+      _ => { break } }
+      let field = run join(String.view(&path), ".", key)
+      run nativeRectangle(J.get(fragment, key), String.view(&field))
+    }
+    run nativeBaselines(fragment, String.view(&path))
+    let edges = J.get(fragment, "decorationEdges")
+    let frame = J.get(fragment, "fragmentainer")
+    if !integer(edges) || J.num(edges) < 0.0 || J.num(edges) > 15.0 || !integer(frame) || J.num(frame) < 0.0 || !indexValue(fragment, "textData", J.length(texts)) { run invalid("Invalid native ", String.view(&path), " text or decoration metadata") }
+    let fragmentation = J.get(input, "fragmentation")
+    if truth(fragmentation) && !truth(J.get(fragmentation, "repeatStep")) && J.num(frame) >= usize.toF64(J.length(J.get(fragmentation, "frames"))) { run invalid("Native ", String.view(&path), " exceeds the finite frame sequence") }
+    if J.str(J.get(fragment, "kind")) == "text" {
+      let text = indexed(texts, J.get(fragment, "textData"))
+      let source = indexed(nodes, J.get(fragment, "source"))
+      let box = indexed(boxes, J.get(fragment, "box"))
+      let start = J.get(text, "sourceStart")
+      let end = J.get(text, "sourceEnd")
+      let font = J.get(text, "fontKey")
+      let bidi = J.get(text, "bidiLevel")
+      let shape = J.get(text, "shapeKey")
+      if !truth(text) || !stringValue(J.get(source, "text")) || J.str(J.get(box, "kind")) != "text" || !integer(start) || J.num(start) < 0.0 || !integer(end) || J.num(end) <= J.num(start) || J.num(end) > usize.toF64(String.byteLength(J.str(J.get(source, "text")))) || !integer(font) || J.num(font) < 0.0 || J.num(font) > usize.toF64(J.length(J.get(input, "fonts"))) || !integer(bidi) || J.num(bidi) < 0.0 || J.num(bidi) > 126.0 || !integer(shape) || J.num(shape) < 0.0 { run invalid("Invalid native ", String.view(&path), " text data") }
+    } else if !null(J.get(fragment, "textData")) { run invalid("Non-text native ", String.view(&path), " owns text data") }
+    let mut flags = String.split("hasFirstBaseline|hasLastBaseline|first|last|phantom|nonpainting|repeated|overflowOnly", "|")
+    while true {
+      let key = match Split.next(&mut flags) { Option<string>.Some { value: token } => token
+      _ => { break } }
+      if !boolean(J.get(fragment, key)) { let field = run join(String.view(&path), ".", key)
+      run invalid("Invalid native ", String.view(&field), "") }
+    }
+    i = i + 1
+  }
+  i = 0
+  while i < J.length(sources) {
+    let source = J.at(sources, i)
+    let node = J.at(nodes, i)
+    let path = run indexPath("sources[", i, "]")
+    let text = J.has(node, "text")
+    if J.str(J.get(source, "kind")) != (if text { "text" } else { "element" }) || (text && !same(J.get(source, "text"), J.get(node, "text"))) || (!text && J.has(source, "text")) { run invalid("Invalid native ", String.view(&path), " source content") }
+    run nativeRectangle(source, String.view(&path))
+    let rects = J.get(source, "rects")
+    if !indexValue(source, "firstBox", J.length(boxes)) || !array(rects) { run invalid("Invalid native ", String.view(&path), " mapping") }
+    let mut r: usize = 0
+    while r < J.length(rects) {
+      let prefix = run join(String.view(&path), ".rects[", "")
+      let rectPath = run indexPath(String.view(&prefix), r, "]")
+      run nativeRectangle(J.at(rects, r), String.view(&rectPath))
+      r = r + 1
+    }
+    let box = indexed(boxes, J.get(source, "firstBox"))
+    if truth(box) && (!finite(J.get(box, "source")) || J.num(J.get(box, "source")) != usize.toF64(i)) { run invalid("Invalid native ", String.view(&path), ".firstBox source") }
+    let ordinary = truth(box) && oneOf(J.get(box, "kind"), "block|flex|grid") && null(J.get(box, "nextContinuation")) && J.length(rects) == 1 && J.str(J.get(indexed(fragments, J.get(box, "firstFragment")), "kind")) == "box"
+    if null(J.get(source, "firstBox")) || ordinary { run nativeUsed(source, String.view(&path), SOURCE) }
+    else {
+      let mut fields = String.split(SOURCE, "|")
+      while true {
+        let field = match Split.next(&mut fields) { Option<string>.Some { value: token } => token
+        _ => { break } }
+        if !member(RECT, field) && J.has(source, field) { run invalid("Native ", String.view(&path), " fabricates single-box metrics") }
+      }
+    }
+    i = i + 1
+  }
+  run nativeRectangle(J.get(output, "viewportOverflow"), "viewportOverflow")
+}
+
+fn evidenceFor<'a>(evidence: &'a Value, key: f64) -> &'a Value {
+  let mut i: usize = 0
+  while i < J.length(evidence) {
+    let entry = J.at(evidence, i)
+    if finite(J.get(entry, "key")) && J.num(J.get(entry, "key")) == key { return entry }
+    i = i + 1
+  }
+  return J.get(evidence, "")
+}
+fn fontOwner(input: &Value, output: &Value, node: usize) -> bool {
+  let boxes = J.get(output, "boxes")
+  let mut i: usize = 0
+  while i < J.length(boxes) {
+    let box = J.at(boxes, i)
+    let owner = J.get(box, "styleOwner")
+    if finite(owner) && J.num(owner) == usize.toF64(node) {
+      if oneOf(J.get(box, "kind"), "inline|inline-formatting|text") { return true }
+      let style = J.get(indexed(J.get(input, "nodes"), J.get(box, "source")), "style")
+      if oneOf(J.get(indexed(boxes, J.get(box, "parent")), "kind"), "inline|inline-formatting") && truth(style) && !oneOf(J.get(style, "position"), "absolute|fixed") && defaultString(J.get(style, "float"), "none") == "none" && object(J.get(style, "verticalAlign")) && J.has(J.get(style, "verticalAlign"), "percent") { return true }
+    }
+    i = i + 1
+  }
+  return false
+}
+fn nonzeroFont(font: &Value) -> bool {
+  let entries = J.members(font)
+  let mut i: usize = 0
+  while i < entries.length {
+    if finite(&entries[i].value) && J.num(&entries[i].value) != 0.0 { return true }
+    i = i + 1
+  }
+  let baselines = J.members(J.get(font, "baselines"))
+  i = 0
+  while i < baselines.length {
+    if J.num(&baselines[i].value) != 0.0 { return true }
+    i = i + 1
+  }
+  return false
+}
+effect fn reason(node: Value, feature: string, message: string) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = J.object()
+  run J.set(&mut result, "node", move node)
+  run J.set(&mut result, "feature", run J.text(feature))
+  run J.set(&mut result, "reason", run J.text(message))
+  return move result
+}
+effect fn nodeReason(reasons: &mut Value, node: usize, feature: string, message: string) -> () ! OutOfMemoryError ? &mut Allocator {
+  run J.push(&mut reasons, run reason(J.float(usize.toF64(node)), feature, message))
+}
+effect fn fontReason(reasons: &mut Value, node: usize, feature: string, message: string, key: f64) -> () ! OutOfMemoryError ? &mut Allocator {
+  let mut entry = run reason(J.float(usize.toF64(node)), feature, message)
+  run J.set(&mut entry, "fontKey", J.float(key))
+  run J.push(&mut reasons, move entry)
+}
+
+pub effect fn unsupported(input: &Value, output: &Value, fontEvidence: &Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut reasons = J.array()
+  let geometry = run columns(input)
+  if truth(J.get(&geometry, "unsupported")) { run J.push(&mut reasons, run reason(Value.Null, "fragmentation-geometry", J.str(J.get(&geometry, "unsupported")))) }
+  let nodes = J.get(input, "nodes")
+  let fonts = J.get(input, "fonts")
+  let mut i: usize = 0
+  while i < J.length(nodes) {
+    let node = J.at(nodes, i)
+    if J.has(node, "text") { i = i + 1
+    continue }
+    let style = J.get(node, "style")
+    let key = defaultNumber(J.get(style, "fontKey"), 0.0)
+    let font = if key == 0.0 { J.get(fonts, "") } else { J.at(fonts, f64.toUsize(key - 1.0)) }
+    let evidence = evidenceFor(fontEvidence, key)
+    let owner = fontOwner(input, output, i)
+    let horizontal = defaultString(J.get(style, "writingMode"), "horizontal-tb") == "horizontal-tb"
+    if owner && truth(font) && nonzeroFont(font) && (!truth(J.get(evidence, "matched")) || !horizontal) {
+      run fontReason(&mut reasons, i, "fixture-font-metrics", defaultString(J.get(evidence, "reason"), "The exercised fixture font metrics have no corresponding measured horizontal browser font."), key)
+    }
+    if owner && truth(J.get(evidence, "matched")) && defaultString(J.get(style, "lineHeight"), "normal") == "normal" && !J.isTrue(J.get(J.get(evidence, "metricMatches"), "normalLineHeight")) {
+      run fontReason(&mut reasons, i, "fixture-font-line-height", "The browser font’s measured normal line height does not match the supplied font metrics.", key)
+    }
+    if owner && !null(J.get(node, "parent")) {
+      let parentStyle = J.get(indexed(nodes, J.get(node, "parent")), "style")
+      let parentKey = defaultNumber(J.get(parentStyle, "fontKey"), 0.0)
+      let parentEvidence = evidenceFor(fontEvidence, parentKey)
+      let align = J.str(J.get(style, "verticalAlign"))
+      let metric = if align == "middle" { "xHeight" } else if align == "sub" { "subscriptOffset" } else if align == "super" { "superscriptOffset" } else { "" }
+      if metric != "" && J.length(fontEvidence) > 0 && !J.isTrue(J.get(J.get(parentEvidence, "metricMatches"), metric)) {
+        let message = run join("The browser font's measured ", metric, " cannot represent the supplied parent font metric.")
+        run fontReason(&mut reasons, i, "fixture-font-alignment", String.view(&message), parentKey)
+      }
+    }
+    let measure = J.get(node, "measure")
+    if truth(J.get(style, "replaced")) && truth(measure) { run nodeReason(&mut reasons, i, "replaced-measure", "Text measurement metadata cannot be represented as an actual replaced resource; use natural for resource dimensions.") }
+    let natural = J.get(node, "natural")
+    if truth(natural) && J.has(natural, "width") && J.has(natural, "height") {
+      let width = J.num(J.get(natural, "width"))
+      let height = J.num(J.get(natural, "height"))
+      let derived = if width > 0.0 && height > 0.0 { width / height } else { 0.0 }
+      if derived != defaultNumber(J.get(natural, "aspectRatio"), 0.0) {
+        let mut entry = run reason(J.float(usize.toF64(i)), "natural-resource-triple", "A data-SVG with both natural dimensions derives its ratio from width/height (zero dimensions give no ratio). It cannot represent an absent, zero, or conflicting independent ratio. Supply an exactly matching positive ratio, or use a normative native fixture for this triple.")
+        run J.set(&mut entry, "natural", run J.copy(natural))
+        run J.set(&mut entry, "svgAspectRatio", J.float(derived))
+        run J.push(&mut reasons, move entry)
+      }
+    }
+    if truth(measure) {
+      if J.has(measure, "minWidth") != J.has(measure, "maxWidth") || !same(J.get(measure, "minWidth"), J.get(measure, "maxWidth")) || truth(J.get(measure, "wrap")) { run nodeReason(&mut reasons, i, "variable-intrinsic-measure", "The DOM adapter is an atomic fixed intrinsic box, not a text shaping or wrapping provider.") }
+      let first = fallback(J.get(measure, "firstBaseline"), fallback(J.get(measure, "lastBaseline"), J.get(measure, "height")))
+      let last = fallback(J.get(measure, "lastBaseline"), first)
+      let height = J.get(measure, "height")
+      if !same(first, last) && (J.num(first) < 0.0 || J.num(last) < 0.0 || (J.has(measure, "height") && (J.num(first) > J.num(height) || J.num(last) > J.num(height)))) { run nodeReason(&mut reasons, i, "out-of-box-measure-baselines", "Distinct fixed-box metric lines require both baselines within the supplied height.") }
+      if !horizontal && (J.has(measure, "firstBaseline") || J.has(measure, "lastBaseline")) { run nodeReason(&mut reasons, i, "nonhorizontal-measure-baseline", "The synthetic baseline marker represents horizontal-tb only; vertical and sideways baseline measurements require a matching provider.") }
+      if truth(J.get(style, "display")) && !oneOf(J.get(style, "display"), "block|inline-block") { run nodeReason(&mut reasons, i, "measured-formatting-context", "Measured DOM leaves use a block or inline-block inline formatting context.") }
+    }
+    i = i + 1
+  }
+  return move reasons
+}
+
+// Omit missing observations just as JSON.stringify omits JavaScript undefined;
+// a non-finite delta is represented by null, never by an invented measurement.
+effect fn mismatch(result: &mut Value, node: Value, field: string, expected: &Value, actual: &Value, present: bool, numeric: bool) -> () ! OutOfMemoryError ? &mut Allocator {
+  let mut entry = J.object()
+  run J.set(&mut entry, "node", move node)
+  run J.set(&mut entry, "field", run J.text(field))
+  run J.set(&mut entry, "expected", run J.copy(expected))
+  if present { run J.set(&mut entry, "actual", run J.copy(actual)) }
+  if numeric {
+    let delta = if present && (finite(actual) || null(actual) || boolean(actual)) {
+      let observed = if boolean(actual) { if J.isTrue(actual) { 1.0 } else { 0.0 } } else { J.num(actual) }
+      J.float(observed - J.num(expected))
+    } else { Value.Null }
+    run J.set(&mut entry, "delta", move delta)
+  }
+  run J.push(&mut result, move entry)
+}
+fn outside(actual: &Value, expected: &Value, tolerance: f64) -> bool {
+  return !finite(actual) || f64.abs(J.num(actual) - J.num(expected)) > tolerance
+}
+pub effect fn compare(actual: &Value, expected: &Value, compareRects: bool, tolerance: f64) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let actualSources = J.get(actual, "sources")
+  let expectedSources = J.get(expected, "sources")
+  if !array(expectedSources) || J.length(expectedSources) != J.length(actualSources) { run Task.abort("Expected sources must match the protocol node count") }
+  let mut result = J.array()
+  let mut node: usize = 0
+  while node < J.length(expectedSources) {
+    let box = J.at(expectedSources, node)
+    let observed = J.at(actualSources, node)
+    let fields = J.members(box)
+    if !truth(box) || fields.length == 0 { let p = run indexPath("Expected source ", node, " has no assertions")
+    run Task.abort(String.view(&p)) }
+    let mut f: usize = 0
+    while f < fields.length {
+      let field = String.view(&fields[f].key)
+      let value = &fields[f].value
+      f = f + 1
+      if field == "rects" {
+        if !compareRects { continue }
+        if !array(value) { let p = run indexPath("Expected source ", node, ".rects must be an array")
+        run Task.abort(String.view(&p)) }
+        let rects = J.get(observed, "rects")
+        if J.length(rects) != J.length(value) {
+          let wanted = J.float(usize.toF64(J.length(value)))
+          let found = J.float(usize.toF64(J.length(rects)))
+          run mismatch(&mut result, J.float(usize.toF64(node)), "rects.length", &wanted, &found, true, true)
+        }
+        let mut r: usize = 0
+        while r < J.length(value) {
+          let rect = J.at(value, r)
+          if !exact(rect, RECT) || !rectangle(rect) { let p = run indexPath("Invalid expected source ", node, ".rects[")
+          let q = run indexPath(String.view(&p), r, "]")
+          run Task.abort(String.view(&q)) }
+          let measured = J.at(rects, r)
+          let mut keys = String.split(RECT, "|")
+          while true {
+            let key = match Split.next(&mut keys) { Option<string>.Some { value: token } => token
+            _ => { break } }
+            if outside(J.get(measured, key), J.get(rect, key), tolerance) {
+              let p = run indexPath("rects[", r, "].")
+              let name = run join(String.view(&p), key, "")
+              run mismatch(&mut result, J.float(usize.toF64(node)), String.view(&name), J.get(rect, key), J.get(measured, key), J.has(measured, key), true)
+            }
+          }
+          r = r + 1
+        }
+        continue
+      }
+      if field == "kind" || field == "text" {
+        if (field == "kind" && !oneOf(value, "element|text")) || (field == "text" && !stringValue(value)) { let p = run indexPath("Invalid expected source ", node, ".")
+        run invalid(String.view(&p), field, "") }
+        if !J.has(observed, field) || !same(J.get(observed, field), value) { run mismatch(&mut result, J.float(usize.toF64(node)), field, value, J.get(observed, field), J.has(observed, field), false) }
+        continue
+      }
+      if field == "firstBox" {
+        if !null(value) && (!integer(value) || J.num(value) < 0.0) { let p = run indexPath("Invalid expected source ", node, ".firstBox")
+        run Task.abort(String.view(&p)) }
+        if !J.has(observed, field) || !same(J.get(observed, field), value) { run mismatch(&mut result, J.float(usize.toF64(node)), field, value, J.get(observed, field), J.has(observed, field), false) }
+        continue
+      }
+      if !member(SOURCE, field) { run invalid("Unknown expected field ", field, "") }
+      if (member(BOOLEANS, field) && !boolean(value)) || (!member(BOOLEANS, field) && !finite(value)) || (member(GUTTERS, field) && J.num(value) < 0.0) { let p = run indexPath("Invalid expected source ", node, ".")
+      run invalid(String.view(&p), field, "") }
+      let measured = J.get(observed, field)
+      let different = if boolean(value) { !same(measured, value) } else { outside(measured, value, tolerance) }
+      if different { run mismatch(&mut result, J.float(usize.toF64(node)), field, value, measured, J.has(observed, field), !boolean(value)) }
+    }
+    node = node + 1
+  }
+  if J.has(expected, "viewportOverflow") {
+    let rectangle = J.get(expected, "viewportOverflow")
+    if !exact(rectangle, RECT) { run Task.abort("Expected viewportOverflow must be an x/y/width/height rectangle") }
+    let actualRectangle = J.get(actual, "viewportOverflow")
+    let mut fields = String.split(RECT, "|")
+    while true {
+      let field = match Split.next(&mut fields) { Option<string>.Some { value: token } => token
+      _ => { break } }
+      let value = J.get(rectangle, field)
+      if !finite(value) || (member("width|height", field) && J.num(value) < 0.0) { run invalid("Invalid expected viewportOverflow.", field, "") }
+      let measured = J.get(actualRectangle, field)
+      if outside(measured, value, tolerance) {
+        let name = run join("viewportOverflow.", field, "")
+        run mismatch(&mut result, Value.Null, String.view(&name), value, measured, J.has(actualRectangle, field), true)
+      }
+    }
+  }
+  return move result
+}

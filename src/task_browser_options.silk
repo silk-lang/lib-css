@@ -1,0 +1,57 @@
+import silk.cli.command { Command, CommandLine, Opt }
+import silk.cli.value { Arg, ArgValue }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.json.scanner { JsonError }
+import silk.json.value { Json, Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.string { String }
+import silk.num.f64
+
+pub struct Tolerance { pub value: f64 }
+impl ArgValue for Tolerance {
+  fn takesValue() -> bool { return true }
+  fn repeats() -> bool { return false }
+  effect fn initial() -> Self ! OutOfMemoryError ? &mut Allocator { return Tolerance { value: 0.05 } }
+  effect fn accept(self: &mut Self, arg: Arg<'_>) -> bool ! OutOfMemoryError ? &mut Allocator {
+    let parsed = match move run Effect.result(Json.parse(arg.bytes)) {
+      Result<Value, JsonError | OutOfMemoryError>.Success { value } => move value
+      Result<Value, JsonError | OutOfMemoryError>.Failure { error } => match move error {
+        OutOfMemoryError exhausted => { fail move exhausted }
+        JsonError _ => { return false }
+      }
+    }
+    return match Json.asF64(Option<&Value>.some(&parsed)) {
+      Option<f64>.Some { value } => {
+        if !f64.isFinite(value) || value < 0.0 { return false }
+        self.value = value
+        true
+      }
+      Option<f64>.None => false
+    }
+  }
+}
+pub struct Options {
+  pub cli: String,
+  pub chrome: String,
+  pub chromeVersion: String,
+  pub mode: String,
+  pub tolerance: Tolerance,
+  pub fuzz: usize,
+  pub gridFuzz: usize,
+  pub seed: u32,
+  pub path: String,
+}
+impl CommandLine for Options {
+  static fn command() -> Command<Options> {
+    return Command<Options>.make("chrome-diff", "Compare normative fixtures and independent Chromium observations")
+      |> Command.option("cli", Opt.about("Prebuilt layout harness") |> Opt.env("SILK_LAYOUT_CLI"))
+      |> Command.option("chrome", Opt.about("Chromium executable; never downloaded") |> Opt.env("CHROME_PATH"))
+      |> Command.option("chromeVersion", Opt.about("Require exact Chrome/VERSION") |> Opt.env("CHROME_VERSION"))
+      |> Command.option("mode", Opt.about("all, spec, or chrome") |> Opt.default("all"))
+      |> Command.option("tolerance", Opt.about("Finite nonnegative geometry tolerance") |> Opt.default("0.05"))
+      |> Command.option("seed", Opt.about("Unsigned 32-bit random seed") |> Opt.default("1"))
+      |> Command.option("path", Opt.about("Fixture JSON or directory; defaults to all committed fixtures"))
+  }
+}

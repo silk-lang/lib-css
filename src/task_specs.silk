@@ -1,0 +1,223 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.core.result { Result }
+import silk.io.writer { WriterError }
+import silk.json.value { Json, Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileSystem, FileError }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.string { String }
+import silk.num.usize
+import task_sources_common as S
+import task_sources_catalogs as Catalogs
+import task_sources_html as Html
+
+effect fn locked(lock: string, urls: &Value) -> Value ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  if !run S.exists(lock) { run Task.abort("missing lock; use --update to establish the baseline") }
+  let bytes = run S.read(lock)
+  let document = run S.parse(Bytes.asSlice(&bytes))
+  if (run S.number(run S.field(&document, "format"))) != 1 { run Task.abort("unsupported specification lock format") }
+  let records = run S.field(&document, "specs")
+  let all = run S.entries(records)
+  let catalog = run S.entries(urls)
+  if all.length != catalog.length { run Task.abort("specification catalog differs from lock; review --update") }
+  let mut i: usize = 0
+  while i < all.length {
+    let record = &all[i].value
+    let name = all[i].key.view()
+    if !S.hexadecimal(run S.stringField(record, "sha256"), 64) { run Task.abort("invalid SHA-256 in lock") }
+    if (run S.stringField(record, "url")) != (run S.stringField(urls, name)) { run Task.abort("catalog URL changed; review --update") }
+    if !String.startsWith(run S.stringField(record, "resolved"), "https://") { run Task.abort("invalid resolved URL in lock") }
+    i = i + 1
+  }
+  return run Json.copy(records)
+}
+effect fn selected(urls: &Value, only: &List<String>) -> List<String> ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if List<String>.length(only) == 0 { return run S.sortedKeys(urls) }
+  let mut names = List<String>.make()
+  let values = List<String>.asSlice(only)
+  let mut i: usize = 0
+  while i < values.length {
+    let name = values[i].view()
+    drop run S.field(urls, name)
+    if !S.contains(&names, name) { run List<String>.append(&mut names, run String.copy(name)) }
+    i = i + 1
+  }
+  run S.sort(&mut names)
+  return move names
+}
+effect fn publish(lock: string, records: &Value) -> () ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let mut document = S.object()
+  run S.set(&mut document, "format", S.num(1))
+  let keys = run S.sortedKeys(records)
+  let names = List<String>.asSlice(&keys)
+  let mut ordered = S.object()
+  let mut i: usize = 0
+  while i < names.length {
+    run S.set(&mut ordered, names[i].view(), run Json.copy(run S.field(records, names[i].view())))
+    i = i + 1
+  }
+  run S.set(&mut document, "specs", move ordered)
+  run S.saveSpecJson(lock, &document)
+}
+effect fn record(url: string, resolved: string, hash: string) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut value = S.object()
+  run S.set(&mut value, "url", run S.str(url))
+  run S.set(&mut value, "resolved", run S.str(resolved))
+  run S.set(&mut value, "sha256", run S.str(hash))
+  return move value
+}
+effect fn synchronize(lock: string, cache: string, urls: &Value, update: bool, offline: bool, only: &List<String>) -> usize ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  if update && offline { run Task.abort("--update cannot be combined with --offline") }
+  if update && List<String>.length(only) != 0 { run Task.abort("--update cannot be combined with --only; review the complete baseline") }
+  let names = run selected(urls, only)
+  let mut records = if update { S.object() } else { run locked(lock, urls) }
+  let prefix = run S.join(cache, "/")
+  let values = List<String>.asSlice(&names)
+  let mut failures = String.make()
+  let mut i: usize = 0
+  while i < values.length {
+    let name = values[i].view()
+    // Complete independent downloads even after a failed record, but never publish a partial lock.
+    match move run Effect.result(syncOne(prefix.view(), urls, &mut records, name, update, offline)) {
+      Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Success { .. } => {}
+      Result<(), TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError>.Failure { error } => {
+        run String.append(&mut failures, name)
+        run String.append(&mut failures, ": ")
+        match move error {
+          TaskError { message, .. } => run String.append(&mut failures, message.view())
+          OutOfMemoryError {} => { fail OutOfMemoryError {} }
+          _ => run String.append(&mut failures, "source download or file operation failed")
+        }
+        run String.append(&mut failures, "\n")
+      }
+    }
+    i = i + 1
+  }
+  if String.byteLength(failures.view()) != 0 { run Task.abort(failures.view()) }
+  if update { run publish(lock, &records) }
+  return values.length
+}
+effect fn syncOne(prefix: string, urls: &Value, records: &mut Value, name: string, update: bool, offline: bool) -> () ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let url = run S.stringField(urls, name)
+  if !update {
+    let pinned = run S.field(&records, name)
+    let hash = run S.stringField(pinned, "sha256")
+    let cached = run S.join(prefix, hash)
+    if run S.exists(cached.view()) {
+      let body = run S.read(cached.view())
+      let actual = run S.digest(Bytes.asSlice(&body))
+      if actual.view() != hash { run Task.abort("cached SHA-256 mismatch; remove corrupt cache explicitly") }
+      return ()
+    }
+    if offline { run Task.abort("missing cache in offline mode") }
+  }
+  let downloaded = run S.download(url, "read-fonts-svg-specs/1.0", true)
+  let hash = run S.digest(Bytes.asSlice(&downloaded.body))
+  if !update && hash.view() != run S.stringField(run S.field(&records, name), "sha256") { run Task.abort("upstream SHA-256 changed; inspect before --update") }
+  let cached = run S.join(prefix, hash.view())
+  run S.save(cached.view(), Bytes.asSlice(&downloaded.body))
+  if update { run S.set(&mut records, name, run record(url, downloaded.resolved.view(), hash.view())) }
+}
+pub effect fn root(update: bool, offline: bool, only: &List<String>, lock: string, cache: string) -> () ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let urls = run Catalogs.rootCatalog()
+  let selectedCount = run synchronize(lock, cache, &urls, update, offline, only)
+  let count = run S.decimal(selectedCount)
+  run S.message(&[if update { "Pinned " } else { "Verified " }, count.view(), " specifications in ", cache])
+}
+pub effect fn style(update: bool, offline: bool) -> () ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  if update && offline { run Task.abort("--update cannot be combined with --offline") }
+  let roots = run Catalogs.styleCatalog()
+  let mut urls = S.object()
+  if update {
+    urls = run Json.copy(&roots)
+    let entries = run S.entries(&roots)
+    let mut i: usize = 0
+    while i < entries.length {
+      let source = run S.download(run S.stringValue(&entries[i].value), "read-fonts-svg-specs/1.0", true)
+      let references = run Html.references(run S.text(Bytes.asSlice(&source.body)), source.resolved.view())
+      let refs = run S.entries(&references)
+      if refs.length == 0 { run Task.abort("normative bibliography not found") }
+      let prefix = run S.join(entries[i].key.view(), "--")
+      let mut j: usize = 0
+      while j < refs.length {
+        let name = run S.join(prefix.view(), refs[j].key.view())
+        run S.set(&mut urls, name.view(), run Json.copy(&refs[j].value))
+        j = j + 1
+      }
+      i = i + 1
+    }
+  } else {
+    let bytes = run S.read("modules/style/specs.lock.json")
+    let document = run S.parse(Bytes.asSlice(&bytes))
+    let records = run S.entries(run S.field(&document, "specs"))
+    let mut i: usize = 0
+    while i < records.length { run S.set(&mut urls, records[i].key.view(), run S.str(run S.stringField(&records[i].value, "url")))
+       i = i + 1 }
+    let entries = run S.entries(&roots)
+    i = 0
+    while i < entries.length {
+      if (run S.stringField(&urls, entries[i].key.view())) != (run S.stringValue(&entries[i].value)) { run Task.abort("CSSOM roots differ from lock; review --update") }
+      i = i + 1
+    }
+  }
+  let only = List<String>.make()
+  let selectedCount = run synchronize("modules/style/specs.lock.json", "modules/style/.cache/specs", &urls, update, offline, &only)
+  let count = run S.decimal(selectedCount)
+  run S.message(&[if update { "Pinned " } else { "Verified " }, count.view(), " specification records in modules/style/.cache/specs"])
+}
+pub effect fn layout(update: bool, only: &List<String>) -> () ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let lock = "modules/layout/specs.lock.json"
+  let present = run S.exists(lock)
+  if !present && (!update || List<String>.length(only) > 0) { run Task.abort("no lockfile; selective updates require an existing baseline; use --update") }
+  let mut pinned = S.object()
+  if present { let bytes = run S.read(lock)
+     pinned = run S.parse(Bytes.asSlice(&bytes)) }
+  let catalog = run Catalogs.layoutCatalog()
+  let requested = List<String>.asSlice(only)
+  let mut i: usize = 0
+  while i < requested.length { drop run S.field(&catalog, requested[i].view())
+     i = i + 1 }
+  let mut urls = S.object()
+  if update { urls = run Json.copy(&catalog) }
+  else {
+    let entries = run S.entries(run S.field(&pinned, "specs"))
+    i = 0
+    while i < entries.length { run S.set(&mut urls, entries[i].key.view(), run S.str(run S.stringField(&entries[i].value, "url")))
+       i = i + 1 }
+  }
+  let names = run selected(&urls, only)
+  let mut records = if update && List<String>.length(only) > 0 { run Json.copy(run S.field(&pinned, "specs")) } else { S.object() }
+  let values = List<String>.asSlice(&names)
+  i = 0
+  while i < values.length {
+    let name = values[i].view()
+    let stem = run S.join("modules/layout/.cache/specs/", name)
+    let cached = run S.join(stem.view(), ".html")
+    let mut valid = false
+    if !update && run S.exists(cached.view()) {
+      let body = run S.read(cached.view())
+      let hash = run S.digest(Bytes.asSlice(&body))
+      valid = hash.view() == run S.stringField(run S.field(run S.field(&pinned, "specs"), name), "sha256")
+    }
+    if valid { run S.set(&mut records, name, run Json.copy(run S.field(run S.field(&pinned, "specs"), name))) }
+    else {
+      let url = run S.stringField(&urls, name)
+      let source = run S.download(url, "silk-layout-spec-fetch/1.0", false)
+      let hash = run S.digest(Bytes.asSlice(&source.body))
+      if !update && hash.view() != run S.stringField(run S.field(run S.field(&pinned, "specs"), name), "sha256") { run Task.abort("upstream bytes changed; inspect before --update") }
+      run S.save(cached.view(), Bytes.asSlice(&source.body))
+      run S.set(&mut records, name, run record(url, source.resolved.view(), hash.view()))
+      let length = run S.decimal(Bytes.length(&source.body))
+      run S.message(&[name, ": ", length.view(), " bytes ", hash.view()])
+    }
+    i = i + 1
+  }
+  if update { run publish(lock, &records) }
+  let count = run S.decimal(values.length)
+  let retained = run S.decimal((run S.entries(&records)).length)
+  run S.message(&[if update { "Updated " } else { "Verified " }, count.view(), " specifications in modules/layout/.cache/specs; ", retained.view(), " lock records retained"])
+}

@@ -3,7 +3,7 @@ name = "css-style"
 description = "CSS parsing, selectors and the cascade, from bytes to computed values"
 repository = "https://github.com/silk-lang/lib-css"
 version = "0.1.0"
-silk-version = "0.1.0-dev.63+657e3c900f65"
+silk-version = "0.1.0-dev.64+8214c402307b"
 kind = "library"
 exports = [
   "tokens", "input", "element", "lexer", "syntax", "selectors", "selector_index",
@@ -23,4 +23,4 @@ exports = [
 ]
 
 [dependencies]
-svg_geometry = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "3e4532ee810f7b28d6eb6c7331809de81cdcbc7e", path = "modules/geometry", package = "graphics-geometry" }
+svg_geometry = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "546371353e21eaef73365709ba3673dde1005181", path = "modules/geometry", package = "graphics-geometry" }

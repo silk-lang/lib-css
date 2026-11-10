@@ -1,0 +1,202 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.ownership { Drop }
+import silk.core.result { Result }
+import silk.io.writer { WriterError }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.mem.pointer { Pointer }
+import silk.platform.native.clock { NativeClock }
+import silk.platform.native.file { NativeFile, NativeFileError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem, Path }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.system.subprocess { Subprocess, SubprocessError, SpawnOptions, Stdio, ExitWatch }
+import silk.system.system_clock { SystemClock }
+import silk.text.string { String, Split }
+import silk.num.i32
+import silk.num.i64
+import silk.num.isize
+import silk.num.usize
+
+pub struct Captured { pub code: i32, pub output: Bytes, pub errors: Bytes }
+pub struct Variable<'a> { pub name: string<'a>, pub value: string<'a> }
+extern "C" struct PollFd { fd: i32, events: i16, revents: i16 }
+static if Intrinsic.targetOperatingSystem() == "darwin" {
+  @foreign(noCapture: .("fds"))
+  unsafe extern "C" fn poll(fds: ?[*]mut PollFd, count: u32, timeout: i32) -> i32
+  unsafe extern "C" fn __error() -> *mut i32
+  fn errno() -> i32 { return unsafe Pointer.read(unsafe __error()) }
+  const WOULD_BLOCK: i32 = 35
+  const NO_SIGNAL: i32 = 524288
+} else {
+  @foreign(noCapture: .("fds"))
+  unsafe extern "C" fn poll(fds: ?[*]mut PollFd, count: usize, timeout: i32) -> i32
+  unsafe extern "C" fn __errno_location() -> *mut i32
+  fn errno() -> i32 { return unsafe Pointer.read(unsafe __errno_location()) }
+  const WOULD_BLOCK: i32 = 11
+  const NO_SIGNAL: i32 = 16384
+}
+@foreign(noCapture: .("data"))
+unsafe extern "C" fn send(fd: i32, data: ?[*]const u8, length: usize, flags: i32) -> isize
+@foreign(noCapture: .("status"))
+unsafe extern "C" fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32
+
+struct Pipes { input: i32, output: i32, errors: i32 }
+impl Drop for Pipes {
+  fn drop(self: &mut Self) -> () {
+    Subprocess.closeDescriptor(self.input)
+    Subprocess.closeDescriptor(self.output)
+    Subprocess.closeDescriptor(self.errors)
+  }
+}
+fn pipe(child: &mut Subprocess, index: usize) -> i32 {
+  return match Subprocess.takePipe(&mut child, index) {
+    Option<i32>.Some { value } => value
+    Option<i32>.None => Intrinsic.trap("missing subprocess pipe")
+  }
+}
+fn close(fd: &mut i32) -> () { Subprocess.closeDescriptor(Intrinsic.replace(fd.*, -1)) }
+
+effect fn drain(fd: &mut i32, target: &mut Bytes) -> ()
+  ! NativeFileError | OutOfMemoryError ? &mut Allocator {
+  if fd.* < 0 { return () }
+  let mut buffer: [u8; 65536] = [0; 65536]
+  while true {
+    let read = run Effect.result(NativeFile.read(fd.*, &mut buffer, Option<u64>.none()))
+    match move read {
+      Result<usize, NativeFileError>.Success { value: count } => {
+        if count == 0 { close(&mut fd)
+        return () }
+        run Bytes.append(&mut target, Slice.view<u8>(&buffer, 0, count))
+      }
+      Result<usize, NativeFileError>.Failure { error } => {
+        if error.code == WOULD_BLOCK { return () }
+        fail move error
+      }
+    }
+  }
+}
+
+pub effect fn locate(cli: string) -> Path
+  ! TaskError | FileError | HostInputError | OutOfMemoryError
+  ? &mut HostInput | &mut FileSystem | &mut Allocator {
+  if String.startsWith(cli, "/") { return run Path.make(cli) }
+  let root = run Task.root()
+  if String.contains(cli, "/") { return run Path.join(&root, cli) }
+  if let Option<Bytes>.Some { value } = move run HostInput.variableNamed("PATH") {
+    let pathText = unsafe String.fromUtf8Unchecked(Bytes.asSlice(&value))
+    let mut parts = String.split(pathText, ":")
+    while let Option<string>.Some { value: part } = Split.next(&mut parts) {
+      let base = if String.startsWith(part, "/") { run Path.make(part) } else { run Path.join(&root, part) }
+      let candidate = run Path.join(&base, cli)
+      if run FileSystem.exists(&candidate) { return move candidate }
+    }
+  }
+  run Task.abort("cannot locate benchmark program on PATH")
+}
+
+effect fn communicate(child: &mut Subprocess, input: &[u8], timeoutSeconds: i32) -> Captured
+  ! TaskError | NativeFileError | SubprocessError | OutOfMemoryError ? &mut Allocator {
+  let mut pipes = Pipes { input: pipe(&mut child, 0), output: pipe(&mut child, 1), errors: pipe(&mut child, 2) }
+  let watch = run ExitWatch.open(Subprocess.pid(&child))
+  let start = run NativeClock.now(true)
+  let deadline = SystemClock.seconds(&start) * 1000000000 + SystemClock.nanoseconds(&start) + i32.toI64(timeoutSeconds) * 1000000000
+  let mut output = Bytes.make()
+  let mut errors = Bytes.make()
+  let mut offset: usize = 0
+  let mut ended = false
+  while true {
+    if pipes.input >= 0 {
+      if offset == input.length { close(&mut pipes.input) }
+      else {
+        let pending = Slice.view<u8>(input, offset, input.length - offset)
+        let count = unsafe send(pipes.input, Pointer.fromSlice<u8>(pending), pending.length, NO_SIGNAL)
+        if count >= 0 { offset = offset + isize.toUsize(count) }
+        else {
+          let error = errno()
+          if error == 32 { close(&mut pipes.input) }
+          else if error != WOULD_BLOCK && error != 4 { run Task.abort("failed to write benchmark process input") }
+        }
+      }
+    }
+    run drain(&mut pipes.output, &mut output)
+    run drain(&mut pipes.errors, &mut errors)
+    if ended && pipes.output < 0 && pipes.errors < 0 { break }
+    let now = run NativeClock.now(true)
+    let remaining = deadline - SystemClock.seconds(&now) * 1000000000 - SystemClock.nanoseconds(&now)
+    if timeoutSeconds > 0 && remaining <= 0 { run Task.abort("benchmark process timed out") }
+    let mut watched = [
+      PollFd { fd: pipes.input, events: 4, revents: 0 },
+      PollFd { fd: pipes.output, events: 1, revents: 0 },
+      PollFd { fd: pipes.errors, events: 1, revents: 0 },
+      PollFd { fd: if ended { -1 } else { ExitWatch.descriptor(&watch) }, events: 1, revents: 0 }
+    ]
+    let timeout = if timeoutSeconds > 0 { i64.toI32((remaining + 999999) / 1000000) } else { -1 }
+    let ready = unsafe poll(Pointer.fromMutSlice<PollFd>(&mut watched), 4, timeout)
+    if ready < 0 && errno() != 4 { run Task.abort("failed to poll benchmark process") }
+    if watched[3].revents != 0 { ended = true
+    close(&mut pipes.input) }
+  }
+  let status = run ExitWatch.collect(&watch)
+  let code = if status.signaled { -status.signal } else { status.code }
+  return Captured { code: code, output: move output, errors: move errors }
+}
+
+pub effect fn runProcess<'a>(cli: string, args: &[string], input: &[u8], timeoutSeconds: i32, env: &[Variable<'a>], cwd: Option<&Path>) -> Captured
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let program = run locate(cli)
+  let mut request = match cwd {
+    Option<&Path>.Some { value } => run ChildProcess.requestWithin(&program, value)
+    Option<&Path>.None => run ChildProcess.request(&program)
+  }
+  run Subprocess.inheritEnvironment(&mut request)
+  let mut i: usize = 0
+  while i < args.length { run ChildProcess.addArgument(&mut request, args[i])
+  i = i + 1 }
+  i = 0
+  while i < env.length { run ChildProcess.setVariable(&mut request, env[i].name, env[i].value)
+  i = i + 1 }
+  let mut options = SpawnOptions.make()
+  run SpawnOptions.setStdio(&mut options, 0, Stdio.pipe())
+  run SpawnOptions.setStdio(&mut options, 1, Stdio.pipe())
+  run SpawnOptions.setStdio(&mut options, 2, Stdio.pipe())
+  let mut child = match move run Effect.result(Subprocess.spawn(&request, &options)) {
+    Result<Subprocess, SubprocessError | OutOfMemoryError>.Success { value } => move value
+    Result<Subprocess, SubprocessError | OutOfMemoryError>.Failure { error } => match move error {
+      OutOfMemoryError exhausted => { fail move exhausted }
+      SubprocessError failed => { drop failed
+      run Task.abort("cannot start benchmark process") }
+    }
+  }
+  let result = run Effect.result(communicate(&mut child, input, timeoutSeconds))
+  return match move result {
+    Result<Captured, TaskError | NativeFileError | SubprocessError | OutOfMemoryError>.Success { value } => move value
+    Result<Captured, TaskError | NativeFileError | SubprocessError | OutOfMemoryError>.Failure { error } => {
+      let _killed = run Effect.result(Subprocess.kill(Subprocess.pid(&child), 9))
+      reap(Subprocess.pid(&child))
+      match move error {
+        TaskError failed => { fail move failed }
+        OutOfMemoryError exhausted => { fail move exhausted }
+        NativeFileError failed => { drop failed
+        run Task.abort("cannot capture benchmark output") }
+        SubprocessError failed => { drop failed
+        run Task.abort("cannot wait for benchmark process") }
+      }
+    }
+  }
+}
+fn reap(pid: i32) -> () {
+  let mut status: i32 = 0
+  while unsafe waitpid(pid, Pointer.fromMutRef<i32>(&mut status), 0) < 0 {
+    if errno() != 4 { break }
+  }
+}
+pub effect fn runInput(cli: string, input: &[u8], timeoutSeconds: i32) -> Captured
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  return run runProcess(cli, &[], input, timeoutSeconds, &[], Option<&Path>.none())
+}

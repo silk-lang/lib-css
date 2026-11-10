@@ -1,0 +1,184 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.core.effect { Effect }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter }
+import silk.json.value { Json }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.format { Format }
+import silk.text.string { String }
+import silk.num.i64
+import silk.num.usize
+import task_json { J }
+import task_update_common { U }
+import task_update_process { runInput }
+import task_update_smoke_cases { MALFORMED }
+
+pub struct SmokeOptions { pub cli: String }
+
+pub effect fn smoke(options: &SmokeOptions) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let cli = String.view(&options.cli)
+  let mut i: usize = 0
+  while i < MALFORMED.length {
+    let input = String.utf8Bytes(MALFORMED[i])
+    let result = run runInput(cli, input, 10)
+    if result.code != 1 || Bytes.length(&result.output) != 0 {
+      run U.evidence(input, &result)
+      run Task.abort("malformed request was not rejected cleanly")
+    }
+    i = i + 1
+  }
+  let request = run U.json("{\"viewport\":{\"width\":800,\"height\":600},\"nodes\":[{\"parent\":null,\"style\":{}}]}")
+  let font = run U.json("{\"fontSize\":10,\"ascent\":8,\"descent\":2,\"lineGap\":0,\"xHeight\":5,\"capHeight\":7,\"subscriptOffset\":-2,\"superscriptOffset\":3,\"baselines\":{\"alphabetic\":8,\"ideographic\":10,\"central\":5,\"mathematical\":6}}")
+  let gridStyle = run U.json("{\"display\":\"grid\",\"gridTemplateColumns\":[{\"names\":[\"edge\"]},{\"repeat\":{\"count\":2,\"tracks\":[{\"minmax\":[10,{\"fr\":1}]},{\"names\":[\"inner\"]}]}},{\"fitContent\":{\"percent\":0.5}},{\"length\":-10,\"percent\":0.5},{\"length\":20,\"percent\":-0.1}],\"gridTemplateRows\":[{\"repeat\":{\"count\":\"auto-fit\",\"tracks\":[10]}}],\"gridTemplateAreas\":[[\"auto\",\"auto\"],[\"1a\",\"right\"]],\"gridAutoRows\":[\"auto\",\"min-content\",\"max-content\"],\"gridAutoColumns\":{\"fr\":0},\"gridAutoFlow\":\"column dense\",\"gridRowStart\":{\"line\":-1,\"name\":\"none\"},\"gridRowEnd\":{\"span\":2,\"name\":\"inner\"},\"gridColumnStart\":\"head\",\"gridColumnEnd\":\"auto\"}")
+  let fragmentation = run U.json("{\"kind\":\"column\",\"frames\":[{\"x\":0,\"y\":0,\"width\":100,\"height\":50}]}")
+  let output = run U.checked(cli, &request, 10)
+  run U.require(J.integer(J.get(&output, "schemaVersion")) == 3 && J.length(J.get(&output, "texts")) == 0, "basic output schema/texts mismatch")
+  run U.require(J.length(J.get(&output, "sources")) == 1, "basic source count mismatch")
+  let source = J.at(J.get(&output, "sources"), 0)
+  run U.require(J.str(J.get(source, "kind")) == "element" && !J.has(source, "text"), "basic source kind mismatch")
+  run U.require(J.num(J.get(source, "x")) == 0.0 && J.num(J.get(source, "y")) == 0.0 && J.num(J.get(source, "width")) == 800.0 && J.num(J.get(source, "height")) == 0.0, "basic source geometry mismatch")
+  run U.require(!J.isNull(J.get(source, "firstBox")), "basic firstBox missing")
+  let firstBox = i64.toUsize(J.integer(J.get(source, "firstBox")))
+  run U.require(J.integer(J.get(J.at(J.get(&output, "boxes"), firstBox), "source")) == 0, "basic box source mismatch")
+  run U.require(J.length(J.get(&output, "fragments")) != 0 && J.length(J.get(source, "rects")) != 0, "basic fragments/rects missing")
+  run U.require(J.has(source, "hasFirstBaseline") && J.has(source, "hasLastBaseline") && !J.has(source, "hasBaseline"), "baseline schema mismatch")
+  let displays = ["grid", "block grid", "inline-grid", "inline grid"]
+  i = 0
+  while i < displays.length {
+    let mut gridRequest = run J.copy(&request)
+    let mut style = run J.copy(&gridStyle)
+    run J.set(&mut style, "display", run J.text(displays[i]))
+    run J.set(&mut style, "width", J.int(80))
+    let mut nodes = run U.json("[{\"parent\":null,\"style\":{}},{\"parent\":0,\"style\":{\"height\":10}},{\"parent\":0,\"style\":{\"height\":20}}]")
+    run J.set(J.atMut(&mut nodes, 0), "style", move style)
+    run J.set(&mut gridRequest, "nodes", move nodes)
+    let gridOutput = run U.checked(cli, &gridRequest, 10)
+    let root = J.at(J.get(&gridOutput, "sources"), 0)
+    let boxIndex = i64.toUsize(J.integer(J.get(root, "firstBox")))
+    run U.require(J.str(J.get(J.at(J.get(&gridOutput, "boxes"), boxIndex), "kind")) == "grid", "grid box kind mismatch")
+    let mut replacement = run J.overlay(&gridStyle, "{\"width\":90,\"gridTemplateRows\":\"none\",\"gridTemplateAreas\":[],\"gridAutoRows\":{\"length\":3,\"percent\":0.25},\"gridAutoFlow\":\"row dense\",\"gridRowStart\":10001}")
+    run J.set(&mut replacement, "display", run J.text(displays[i]))
+    let mut reset = run U.json("{\"width\":90}")
+    run J.set(&mut reset, "display", run J.text(displays[i]))
+    let mut cycle = J.array()
+    run J.push(&mut cycle, run U.setStep(0, "style", run J.copy(&replacement)))
+    run J.push(&mut cycle, run U.setStep(0, "style", move reset))
+    run J.push(&mut cycle, run U.setStep(0, "style", move replacement))
+    let updatedRequest = run U.updated(&gridRequest, &cycle, 3)
+    let freshRequest = run U.final(&gridRequest, &cycle)
+    let updated = run U.checked(cli, &updatedRequest, 10)
+    let fresh = run U.checked(cli, &freshRequest, 10)
+    run U.require(Json.equal(&updated, &fresh), "grid retained/fresh mismatch")
+    i = i + 1
+  }
+  let mut fragmented = run J.copy(&request)
+  run J.set(&mut fragmented, "fragmentation", run J.copy(&fragmentation))
+  run J.set(J.atMut(J.getMut(&mut fragmented, "nodes"), 0), "style", run U.json("{\"height\":120}"))
+  let exhausted = run U.invoke(cli, &fragmented, 10)
+  if exhausted.code != 1 || Bytes.length(&exhausted.output) != 0 || !U.contains(Bytes.asSlice(&exhausted.errors), b"FragmentationError") || !U.contains(Bytes.asSlice(&exhausted.errors), b"frame 1") {
+    let input = run J.encode(&fragmented)
+    run U.evidence(Bytes.asSlice(&input), &exhausted)
+    run Task.abort("fragmentation exhaustion is not a typed driver error")
+  }
+  run J.set(J.getMut(&mut fragmented, "fragmentation"), "repeatStep", run U.json("{\"x\":110,\"y\":0}"))
+  let repeated = run U.checked(cli, &fragmented, 10)
+  let fragments = J.items(J.get(&repeated, "fragments"))
+  let mut found: [bool; 3] = [false; 3]
+  i = 0
+  while i < fragments.length {
+    let index = J.integer(J.get(&fragments[i], "fragmentainer"))
+    run U.require(index >= 0 && index < 3, "unexpected repeated fragmentainer")
+    found[i64.toUsize(index)] = true
+    i = i + 1
+  }
+  run U.require(found[0] && found[1] && found[2], "repeating fragmentation missed a frame")
+  let mut fontKey: i64 = 0
+  while fontKey < 2 {
+    let mut textRequest = run J.copy(&request)
+    run J.set(&mut textRequest, "fonts", run U.singleton(run J.copy(&font)))
+    run J.set(&mut textRequest, "nodes", run U.json("[{\"parent\":null,\"style\":{}},{\"parent\":0,\"text\":\"Ab12\"}]"))
+    run J.set(J.getMut(J.atMut(J.getMut(&mut textRequest, "nodes"), 0), "style"), "fontKey", J.int(fontKey))
+    let textOutput = run U.checked(cli, &textRequest, 10)
+    run U.require(J.integer(J.get(&textOutput, "schemaVersion")) == 3, "text schema mismatch")
+    let textSource = J.at(J.get(&textOutput, "sources"), 1)
+    run U.require(J.str(J.get(textSource, "kind")) == "text" && J.str(J.get(textSource, "text")) == "Ab12", "text source mismatch")
+    run U.require(J.length(J.get(textSource, "rects")) != 0, "text rects missing")
+    let all = J.items(J.get(&textOutput, "fragments"))
+    let mut count: usize = 0
+    let mut width: f64 = 0.0
+    let mut start: i64 = 9223372036854775807
+    let mut end: i64 = 0
+    i = 0
+    while i < all.length {
+      let fragment = &all[i]
+      if J.str(J.get(fragment, "kind")) == "text" {
+        count = count + 1
+        width = width + J.num(J.get(J.get(fragment, "size"), "width"))
+        let record = J.at(J.get(&textOutput, "texts"), i64.toUsize(J.integer(J.get(fragment, "textData"))))
+        let a = J.integer(J.get(record, "sourceStart"))
+        let b = J.integer(J.get(record, "sourceEnd"))
+        if a < start { start = a }
+        if b > end { end = b }
+        run U.require(J.integer(J.get(record, "fontKey")) == fontKey, "fragment font key mismatch")
+        run U.require(J.integer(J.get(fragment, "source")) == 1 && J.str(J.get(J.at(J.get(&textOutput, "boxes"), i64.toUsize(J.integer(J.get(fragment, "box")))), "kind")) == "text", "text fragment source/box mismatch")
+      } else { run U.require(J.isNull(J.get(fragment, "textData")), "nontext fragment owns textData") }
+      i = i + 1
+    }
+    run U.require(count != 0 && width == (if fontKey == 0 { 0.0 } else { 20.0 }) && start == 0 && end == 4, "text fragment widths/ranges mismatch")
+    fontKey = fontKey + 1
+  }
+  let bidiCases = run U.json("[[\"\\u061c12\",\"ltr\",\"normal\",[2,2]],[\"a\\u061c12b\",\"ltr\",\"normal\",[0,2,2,0]],[\"\\u202e\\u2068ab\\u2069\\u202c\",\"ltr\",\"normal\",[2,2]],[\"\\u202eab\\u202c\",\"rtl\",\"normal\",[3,3]],[\"\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u2067\\u061c12\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069\\u2069ab\",\"ltr\",\"normal\",[126,126,0,0]],[\"\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b\\u202b12\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202c\\u202cab\",\"ltr\",\"normal\",[126,126,0,0]],[\"ab\",\"rtl\",\"plaintext\",[0,0]],[\"\\u2067\\u200f\\u2069ab\",\"rtl\",\"plaintext\",[0,0]],[\"ab\",\"rtl\",\"isolate-override\",[3,3]]]")
+  i = 0
+  while i < J.length(&bidiCases) {
+    let case = J.at(&bidiCases, i)
+    let text = J.str(J.at(case, 0))
+    let mut bidiRequest = run J.copy(&request)
+    run J.set(&mut bidiRequest, "fonts", run U.singleton(run J.copy(&font)))
+    let mut nodes = run U.json("[{\"parent\":null,\"style\":{\"fontKey\":1}},{\"parent\":0}]")
+    run J.set(J.getMut(J.atMut(&mut nodes, 0), "style"), "direction", run J.copy(J.at(case, 1)))
+    run J.set(J.getMut(J.atMut(&mut nodes, 0), "style"), "unicodeBidi", run J.copy(J.at(case, 2)))
+    run J.set(J.atMut(&mut nodes, 1), "text", run J.text(text))
+    run J.set(&mut bidiRequest, "nodes", move nodes)
+    let bidiOutput = run U.checked(cli, &bidiRequest, 10)
+    let records = J.items(J.get(&bidiOutput, "texts"))
+    let bytes = String.utf8Bytes(text)
+    let mut offset: usize = 0
+    let mut levels = J.array()
+    while offset < bytes.length {
+      if bytes[offset] < 128 {
+        let mut covering: usize = 0
+        let mut level: i64 = 0
+        let mut r: usize = 0
+        while r < records.length {
+          if J.integer(J.get(&records[r], "sourceStart")) <= usize.toI64(offset) && usize.toI64(offset) < J.integer(J.get(&records[r], "sourceEnd")) { covering = covering + 1
+          level = J.integer(J.get(&records[r], "bidiLevel")) }
+          r = r + 1
+        }
+        if covering != 1 {
+          let allRecords = run J.encode(J.get(&bidiOutput, "texts"))
+          let mut out = StdoutWriter.make()
+          run Format.format("bidi text {:?}, source byte {}, covering count {}, records {:?}\n", &(text, offset, covering, Bytes.asSlice(&allRecords))) |> Effect.provideMut<Writer>(&mut out)
+          run Task.abort("bidi source offset has ambiguous/missing record")
+        }
+        run J.push(&mut levels, J.int(level))
+      }
+      offset = offset + 1
+    }
+    if !Json.equal(&levels, J.at(case, 3)) {
+      let mut out = StdoutWriter.make()
+      let actual = run J.encode(&levels)
+      let expected = run J.encode(J.at(case, 3))
+      run Format.format("bidi text {:?}, direction {}, unicodeBidi {}, actual {:?}, expected {:?}\n", &(text, J.str(J.at(case, 1)), J.str(J.at(case, 2)), Bytes.asSlice(&actual), Bytes.asSlice(&expected))) |> Effect.provideMut<Writer>(&mut out)
+      run Task.abort("bidi source levels mismatch")
+    }
+    i = i + 1
+  }
+  let mut out = StdoutWriter.make()
+  run Format.format("Native bidi profile passed: {} source-level cases\nNative adapter smoke passed: {} malformed requests\n", &(J.length(&bidiCases), MALFORMED.length)) |> Effect.provideMut<Writer>(&mut out)
+}

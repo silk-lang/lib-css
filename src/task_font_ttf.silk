@@ -1,0 +1,360 @@
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.string { String }
+import silk.num.u8
+import silk.num.u32
+import silk.num.usize
+import silk.num.i32
+
+// Original repository-authored diagnostic outlines, not imported font data.
+const ROWS: [[u8; 7]; 36] = [
+  [14,17,19,21,25,17,14], [4,12,4,4,4,4,14], [14,17,1,2,4,8,31],
+  [30,1,1,14,1,1,30], [2,6,10,18,31,2,2], [31,16,16,30,1,1,30],
+  [7,8,16,30,17,17,14], [31,1,2,4,8,8,8], [14,17,17,14,17,17,14],
+  [14,17,17,15,1,2,28], [4,10,17,17,31,17,17], [30,17,17,30,17,17,30],
+  [7,8,16,16,16,8,7], [28,18,17,17,17,18,28], [31,16,16,30,16,16,31],
+  [31,16,16,30,16,16,16], [14,17,16,23,17,17,15], [17,17,17,31,17,17,17],
+  [14,4,4,4,4,4,14], [7,2,2,2,18,18,12], [17,18,20,24,20,18,17],
+  [16,16,16,16,16,16,31], [17,27,21,21,17,17,17], [17,25,25,21,19,19,17],
+  [14,17,17,17,17,17,14], [30,17,17,30,16,16,16], [14,17,17,17,21,18,13],
+  [30,17,17,30,20,18,17], [15,16,16,14,1,1,30], [31,4,4,4,4,4,4],
+  [17,17,17,17,17,17,14], [17,17,17,17,10,10,4], [17,17,17,21,21,27,17],
+  [17,17,10,4,10,17,17], [17,17,10,4,4,4,4], [31,1,2,4,8,16,31],
+]
+const LICENSE: string = "MIT License\n\nCopyright (c) 2026 Julia Ortiz\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+
+pub effect fn byte(out: &mut Bytes, value: u8) ! OutOfMemoryError ? &mut Allocator {
+  run Bytes.append(&mut out, &[value])
+}
+pub effect fn word(out: &mut Bytes, value: i32) ! OutOfMemoryError ? &mut Allocator {
+  let bits = if value < 0 { i32.toU32(value + 65536) } else { i32.toU32(value) }
+  run Bytes.append(&mut out, &[u32.toU8(bits / 256), u32.toU8(bits % 256)])
+}
+pub effect fn long(out: &mut Bytes, value: u32) ! OutOfMemoryError ? &mut Allocator {
+  run Bytes.append(&mut out, &[u32.toU8(value / 16777216), u32.toU8(value / 65536 % 256), u32.toU8(value / 256 % 256), u32.toU8(value % 256)])
+}
+pub effect fn zeros(out: &mut Bytes, count: usize) ! OutOfMemoryError ? &mut Allocator {
+  let mut i: usize = 0
+  while i < count { run byte(&mut out, 0)
+  i = i + 1 }
+}
+fn patch(out: &mut Bytes, at: usize, value: u32) {
+  let bytes = Bytes.asMutSlice(&mut out)
+  bytes[at] = u32.toU8(value / 16777216)
+  bytes[at + 1] = u32.toU8(value / 65536 % 256)
+  bytes[at + 2] = u32.toU8(value / 256 % 256)
+  bytes[at + 3] = u32.toU8(value % 256)
+}
+fn checksum(bytes: &[u8]) -> u32 {
+  let mut sum: u32 = 0
+  let mut i: usize = 0
+  while i < bytes.length {
+    let mut n: u32 = 0
+    let mut j: usize = 0
+    while j < 4 {
+      n = n * 256
+      if i + j < bytes.length { n = n + u8.toU32(bytes[i + j]) }
+      j = j + 1
+    }
+    sum = u32.wrappingAdd(sum, n)
+    i = i + 4
+  }
+  return sum
+}
+struct Point { x: i32, y: i32 }
+effect fn rectangle(points: &mut List<Point>, left: i32, bottom: i32, right: i32, top: i32) ! OutOfMemoryError ? &mut Allocator {
+  if bottom >= top { return }
+  run List<Point>.append(&mut points, Point { x: left, y: bottom })
+  run List<Point>.append(&mut points, Point { x: left, y: top })
+  run List<Point>.append(&mut points, Point { x: right, y: top })
+  run List<Point>.append(&mut points, Point { x: right, y: bottom })
+}
+struct Table { tag: string<'static>, data: Bytes }
+effect fn table(tables: &mut List<Table>, tag: string<'static>, data: Bytes) ! OutOfMemoryError ? &mut Allocator {
+  run List<Table>.append(&mut tables, Table { tag: tag, data: move data })
+}
+// units: ascent, descent, lineGap, xHeight, capHeight, subscriptOffset, superscriptOffset.
+pub effect fn build(units: &[i32; 7], family: string) -> Bytes ! OutOfMemoryError ? &mut Allocator {
+  let mut tables = List<Table>.make()
+  let mut glyf = Bytes.make()
+  let mut loca = Bytes.make()
+  let mut hmtx = Bytes.make()
+  let mut maxPoints: usize = 0
+  let mut xMin: i32 = 32767
+  let mut yMin: i32 = 0
+  let mut xMax: i32 = 0
+  let mut yMax: i32 = 0
+  let mut minRsb: i32 = 7680
+  let mut gid: usize = 0
+  while gid < 64 {
+    run long(&mut loca, usize.toU32(Bytes.length(&glyf)))
+    let mut points = List<Point>.make()
+    if gid == 0 { run rectangle(&mut points, 640, 0, 7040, units[4]) }
+    if gid >= 2 {
+      let lower = gid >= 38
+      let shape = if lower { gid - 28 } else { gid - 2 }
+      let height = if lower { units[3] } else { units[4] }
+      let mut row: usize = 0
+      while row < 7 {
+        let top = height - usize.toI32(row) * height / 7
+        let mut bottom = height - usize.toI32(row + 1) * height / 7
+        if row != 6 { bottom = bottom + (top - bottom) / 3 }
+        let mut col: usize = 0
+        while col < 5 {
+          if u8.bitAnd(ROWS[shape][row], u8.shiftLeft(1, usize.toU8(4 - col))) != 0 {
+            let left = 640 + usize.toI32(col) * 1280
+            run rectangle(&mut points, left, bottom, left + 960, top)
+          }
+          col = col + 1
+        }
+        row = row + 1
+      }
+      if gid == 44 || gid == 47 || gid == 53 || gid == 54 || gid == 62 {
+        run rectangle(&mut points, 3200, -units[1], 4160, 0)
+      }
+    }
+    let p = List<Point>.asSlice(&points)
+    let mut left: i32 = 0
+    let mut right: i32 = 0
+    let mut bottom: i32 = 0
+    let mut top: i32 = 0
+    if p.length != 0 {
+      left = p[0].x
+      right = left
+      bottom = p[0].y
+      top = bottom
+      let mut i: usize = 1
+      while i < p.length {
+        if p[i].x < left { left = p[i].x }
+        if p[i].x > right { right = p[i].x }
+        if p[i].y < bottom { bottom = p[i].y }
+        if p[i].y > top { top = p[i].y }
+        i = i + 1
+      }
+      if left < xMin { xMin = left }
+      if right > xMax { xMax = right }
+      if bottom < yMin { yMin = bottom }
+      if top > yMax { yMax = top }
+      if p.length > maxPoints { maxPoints = p.length }
+      run word(&mut glyf, usize.toI32(p.length / 4))
+      run word(&mut glyf, left)
+      run word(&mut glyf, bottom)
+      run word(&mut glyf, right)
+      run word(&mut glyf, top)
+      i = 3
+      while i < p.length { run word(&mut glyf, usize.toI32(i))
+      i = i + 4 }
+      run word(&mut glyf, 0)
+      i = 0
+      while i < p.length { run byte(&mut glyf, 1)
+      i = i + 1 }
+      let mut previous: i32 = 0
+      i = 0
+      while i < p.length { run word(&mut glyf, p[i].x - previous)
+      previous = p[i].x
+      i = i + 1 }
+      previous = 0
+      i = 0
+      while i < p.length { run word(&mut glyf, p[i].y - previous)
+      previous = p[i].y
+      i = i + 1 }
+    }
+    if 7680 - right < minRsb { minRsb = 7680 - right }
+    run word(&mut hmtx, 7680)
+    run word(&mut hmtx, left)
+    gid = gid + 1
+  }
+  run long(&mut loca, usize.toU32(Bytes.length(&glyf)))
+  let mut head = Bytes.make()
+  run long(&mut head, 65536)
+  run long(&mut head, 65536)
+  run long(&mut head, 0)
+  run long(&mut head, 0x5f0f3cf5)
+  run word(&mut head, 3)
+  run word(&mut head, 15360)
+  run long(&mut head, 0)
+  run long(&mut head, 2082844800)
+  run long(&mut head, 0)
+  run long(&mut head, 2082844800)
+  run word(&mut head, xMin)
+  run word(&mut head, yMin)
+  run word(&mut head, xMax)
+  run word(&mut head, yMax)
+  run word(&mut head, 0)
+  run word(&mut head, 3)
+  run word(&mut head, 2)
+  run word(&mut head, 1)
+  run word(&mut head, 0)
+  let mut hhea = Bytes.make()
+  run long(&mut hhea, 65536)
+  run word(&mut hhea, units[0])
+  run word(&mut hhea, -units[1])
+  run word(&mut hhea, units[2])
+  run word(&mut hhea, 7680)
+  run word(&mut hhea, 0)
+  run word(&mut hhea, minRsb)
+  run word(&mut hhea, xMax)
+  run word(&mut hhea, 1)
+  run word(&mut hhea, 0)
+  run word(&mut hhea, 0)
+  run zeros(&mut hhea, 10)
+  run word(&mut hhea, 64)
+  let mut maxp = Bytes.make()
+  run long(&mut maxp, 65536)
+  run word(&mut maxp, 64)
+  run word(&mut maxp, usize.toI32(maxPoints))
+  run word(&mut maxp, usize.toI32(maxPoints / 4))
+  run word(&mut maxp, 0)
+  run word(&mut maxp, 0)
+  run word(&mut maxp, 2)
+  run zeros(&mut maxp, 16)
+  let mut os2 = Bytes.make()
+  run word(&mut os2, 4)
+  run word(&mut os2, 7680)
+  run word(&mut os2, 400)
+  run word(&mut os2, 5)
+  run word(&mut os2, 0)
+  run word(&mut os2, 7680)
+  run word(&mut os2, 7680)
+  run word(&mut os2, 0)
+  run word(&mut os2, units[5])
+  run word(&mut os2, 7680)
+  run word(&mut os2, 7680)
+  run word(&mut os2, 0)
+  run word(&mut os2, units[6])
+  run word(&mut os2, 0)
+  run word(&mut os2, 0)
+  run word(&mut os2, 0)
+  run zeros(&mut os2, 10)
+  run long(&mut os2, 1)
+  run zeros(&mut os2, 12)
+  run Bytes.append(&mut os2, b"SILK")
+  run word(&mut os2, 192)
+  run word(&mut os2, 32)
+  run word(&mut os2, 122)
+  run word(&mut os2, units[0])
+  run word(&mut os2, -units[1])
+  run word(&mut os2, units[2])
+  run word(&mut os2, units[0])
+  run word(&mut os2, units[1])
+  run zeros(&mut os2, 8)
+  run word(&mut os2, units[3])
+  run word(&mut os2, units[4])
+  run word(&mut os2, 0)
+  run word(&mut os2, 32)
+  run word(&mut os2, 1)
+  let mut cmap = Bytes.make()
+  run word(&mut cmap, 0)
+  run word(&mut cmap, 2)
+  run word(&mut cmap, 0)
+  run word(&mut cmap, 3)
+  run long(&mut cmap, 20)
+  run word(&mut cmap, 3)
+  run word(&mut cmap, 1)
+  run long(&mut cmap, 20)
+  run word(&mut cmap, 4)
+  run word(&mut cmap, 56)
+  run word(&mut cmap, 0)
+  run word(&mut cmap, 10)
+  run word(&mut cmap, 8)
+  run word(&mut cmap, 2)
+  run word(&mut cmap, 2)
+  let ends: [i32; 5] = [32, 57, 90, 122, 65535]
+  let starts: [i32; 5] = [32, 48, 65, 97, 65535]
+  let deltas: [i32; 5] = [-31, -46, -53, -59, 1]
+  let mut i: usize = 0
+  while i < 5 { run word(&mut cmap, ends[i])
+  i = i + 1 }
+  run word(&mut cmap, 0)
+  i = 0
+  while i < 5 { run word(&mut cmap, starts[i])
+  i = i + 1 }
+  i = 0
+  while i < 5 { run word(&mut cmap, deltas[i])
+  i = i + 1 }
+  run zeros(&mut cmap, 10)
+  let mut post = Bytes.make()
+  run long(&mut post, 196608)
+  run zeros(&mut post, 8)
+  run long(&mut post, 1)
+  run zeros(&mut post, 16)
+  let mut names = List<String>.make()
+  run List<String>.append(&mut names, run String.copy("Copyright (c) 2026 Julia Ortiz"))
+  run List<String>.append(&mut names, run String.copy(family))
+  run List<String>.append(&mut names, run String.copy("Regular"))
+  let mut unique = run String.copy("silk-original-ascii-1:")
+  run String.append(&mut unique, family)
+  run List<String>.append(&mut names, move unique)
+  let mut full = run String.copy(family)
+  run String.append(&mut full, " Regular")
+  run List<String>.append(&mut names, move full)
+  run List<String>.append(&mut names, run String.copy("Version 1.000"))
+  let mut ps = run String.copy(family)
+  run String.append(&mut ps, "-Regular")
+  run List<String>.append(&mut names, move ps)
+  run List<String>.append(&mut names, run String.copy("Original ASCII diagnostic outlines authored for silk-layout. Half-em advances; no kerning, ligatures, or external glyph input."))
+  run List<String>.append(&mut names, run String.copy(LICENSE))
+  let ids: [i32; 9] = [0,1,2,3,4,5,6,10,13]
+  let mut name = Bytes.make()
+  let mut text = Bytes.make()
+  run word(&mut name, 0)
+  run word(&mut name, 9)
+  run word(&mut name, 114)
+  i = 0
+  let values = List<String>.asSlice(&names)
+  while i < 9 {
+    let value = String.utf8Bytes(String.view(&values[i]))
+    run word(&mut name, 3)
+    run word(&mut name, 1)
+    run word(&mut name, 1033)
+    run word(&mut name, ids[i])
+    run word(&mut name, usize.toI32(value.length * 2))
+    run word(&mut name, usize.toI32(Bytes.length(&text)))
+    let mut j: usize = 0
+    while j < value.length { run word(&mut text, u8.toI32(value[j]))
+    j = j + 1 }
+    i = i + 1
+  }
+  run Bytes.append(&mut name, Bytes.asSlice(&text))
+  // Tag-sorted directory; table order and padding are deterministic.
+  run table(&mut tables, "OS/2", move os2)
+  run table(&mut tables, "cmap", move cmap)
+  run table(&mut tables, "glyf", move glyf)
+  run table(&mut tables, "head", move head)
+  run table(&mut tables, "hhea", move hhea)
+  run table(&mut tables, "hmtx", move hmtx)
+  run table(&mut tables, "loca", move loca)
+  run table(&mut tables, "maxp", move maxp)
+  run table(&mut tables, "name", move name)
+  run table(&mut tables, "post", move post)
+  let mut out = Bytes.make()
+  run long(&mut out, 65536)
+  run word(&mut out, 10)
+  run word(&mut out, 128)
+  run word(&mut out, 3)
+  run word(&mut out, 32)
+  let entries = List<Table>.asSlice(&tables)
+  let mut offset: usize = 172
+  let mut headOffset: usize = 0
+  i = 0
+  while i < entries.length {
+    let data = Bytes.asSlice(&entries[i].data)
+    run Bytes.append(&mut out, String.utf8Bytes(entries[i].tag))
+    run long(&mut out, checksum(data))
+    run long(&mut out, usize.toU32(offset))
+    run long(&mut out, usize.toU32(data.length))
+    if entries[i].tag == "head" { headOffset = offset }
+    offset = offset + (data.length + 3) / 4 * 4
+    i = i + 1
+  }
+  i = 0
+  while i < entries.length {
+    run Bytes.append(&mut out, Bytes.asSlice(&entries[i].data))
+    while Bytes.length(&out) % 4 != 0 { run byte(&mut out, 0) }
+    i = i + 1
+  }
+  let adjustment = u32.wrappingSubtract(0xb1b0afba, checksum(Bytes.asSlice(&out)))
+  patch(&mut out, headOffset + 8, adjustment)
+  return move out
+}

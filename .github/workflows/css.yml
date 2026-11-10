@@ -27,31 +27,28 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          SILK_RELEASE: v0.1.0-dev.64+8214c402307b
         run: |
           set -euo pipefail
-          version=''
-          while IFS= read -r line; do
-            case "$line" in
-              silk-version\ =\ *) version=${line#*\"}; version=${version%%\"*} ;;
-            esac
-          done < silk.toml
-          test -n "$version"
           curl --fail --silent --show-error --location --retry 3 \
-            "https://raw.githubusercontent.com/silk-lang/silk/v${version}/install.sh" \
+            "https://raw.githubusercontent.com/silk-lang/silk/8214c402307b/install.sh" \
             -o "$RUNNER_TEMP/install-silk.sh"
-          SILK_RELEASE="v$version" sh "$RUNNER_TEMP/install-silk.sh"
+          sh "$RUNNER_TEMP/install-silk.sh"
           echo "$HOME/.silk/bin" >> "$GITHUB_PATH"
-      - name: Select Linux Clang
+      # Tasks are compiled programs: provision Clang 22 (and the macOS SDK) before any task.
+      - name: Bootstrap Linux Clang
         if: runner.os == 'Linux'
-        run: echo "SILK_CLANG=$(command -v clang-22)" >> "$GITHUB_ENV"
-      - name: Select macOS Clang and SDK
+        run: |
+          test -x /usr/bin/clang-22 && test -x /usr/lib/llvm-22/bin/ld.lld || { sudo apt-get update && sudo apt-get install -y clang-22 lld-22; }
+          echo "SILK_CLANG=/usr/bin/clang-22" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+      - name: Bootstrap macOS Clang and SDK
         if: runner.os == 'macOS'
         run: |
-          brew list llvm >/dev/null 2>&1 || brew install llvm
-          echo "SILK_CLANG=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          test -x /opt/homebrew/opt/llvm@22/bin/clang || brew install llvm@22
+          test -x /opt/homebrew/opt/lld@22/bin/ld64.lld || brew install lld@22
+          echo "SILK_CLANG=/opt/homebrew/opt/llvm@22/bin/clang" >> "$GITHUB_ENV"
+          echo "/opt/homebrew/opt/lld@22/bin" >> "$GITHUB_PATH"
           echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - run: silk use
-      - run: silk check --workspace
-      - run: silk test --manifest-path modules/layout/silk.toml --root src/tests.silk
-      - run: silk test --manifest-path modules/style/silk.toml --root src/tests.silk
-      - run: silk build --package css-layout-test-harness
+      - run: silk task ci

@@ -1,0 +1,482 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.core.option { Option }
+import silk.io.writer { WriterError }
+import silk.json.value { Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileSystem, FileError }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.string { String, Split }
+import silk.num.usize
+import silk.num.u8
+import silk.num.u64
+import task_sources_common as S
+
+const LOCK: string = "modules/style/encodings.lock.json"
+const CACHE: string = "modules/style/.cache/encodings/"
+const OUTPUT: string = "modules/style/src/encoding_data.silk"
+const SPEC: string = "e1421f1791b202717883c452a6267129ce5fb3ca13652e5022a2b6d2a11fc262"
+struct Source { name: String, body: Bytes }
+struct Inputs { lock: Value, sources: List<Source> }
+fn variant(name: string) -> string<'static> {
+  if name == "UTF-8" { return "Utf8" }
+  if name == "IBM866" { return "Ibm866" }
+  if name == "ISO-8859-2" { return "Iso8859_2" }
+  if name == "ISO-8859-3" { return "Iso8859_3" }
+  if name == "ISO-8859-4" { return "Iso8859_4" }
+  if name == "ISO-8859-5" { return "Iso8859_5" }
+  if name == "ISO-8859-6" { return "Iso8859_6" }
+  if name == "ISO-8859-7" { return "Iso8859_7" }
+  if name == "ISO-8859-8" { return "Iso8859_8" }
+  if name == "ISO-8859-10" { return "Iso8859_10" }
+  if name == "ISO-8859-13" { return "Iso8859_13" }
+  if name == "ISO-8859-14" { return "Iso8859_14" }
+  if name == "ISO-8859-15" { return "Iso8859_15" }
+  if name == "ISO-8859-16" { return "Iso8859_16" }
+  if name == "ISO-8859-8-I" { return "Iso8859_8I" }
+  if name == "KOI8-R" { return "Koi8R" }
+  if name == "KOI8-U" { return "Koi8U" }
+  if name == "macintosh" { return "Macintosh" }
+  if name == "windows-874" { return "Windows874" }
+  if name == "windows-1250" { return "Windows1250" }
+  if name == "windows-1251" { return "Windows1251" }
+  if name == "windows-1252" { return "Windows1252" }
+  if name == "windows-1253" { return "Windows1253" }
+  if name == "windows-1254" { return "Windows1254" }
+  if name == "windows-1255" { return "Windows1255" }
+  if name == "windows-1256" { return "Windows1256" }
+  if name == "windows-1257" { return "Windows1257" }
+  if name == "windows-1258" { return "Windows1258" }
+  if name == "x-mac-cyrillic" { return "XMacCyrillic" }
+  if name == "GBK" { return "Gbk" }
+  if name == "gb18030" { return "Gb18030" }
+  if name == "Big5" { return "Big5" }
+  if name == "EUC-JP" { return "EucJp" }
+  if name == "ISO-2022-JP" { return "Iso2022Jp" }
+  if name == "Shift_JIS" { return "ShiftJis" }
+  if name == "EUC-KR" { return "EucKr" }
+  if name == "replacement" { return "Replacement" }
+  if name == "UTF-16BE" { return "Utf16Be" }
+  if name == "UTF-16LE" { return "Utf16Le" }
+  if name == "x-user-defined" { return "XUserDefined" }
+  return ""
+}
+
+effect fn source<'a>(sources: &'a List<Source>, name: string) -> &'a Bytes ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let values = List<Source>.asSlice(sources)
+  let mut i: usize = 0
+  while i < values.length { if values[i].name.view() == name { return &values[i].body }
+     i = i + 1 }
+  return run Task.abort("missing required encoding source")
+}
+fn hasSource(sources: &List<Source>, name: string) -> bool {
+  let values = List<Source>.asSlice(sources)
+  let mut i: usize = 0
+  while i < values.length { if values[i].name.view() == name { return true }
+     i = i + 1 }
+  return false
+}
+effect fn lower(value: string) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut bytes = run Bytes.copy(String.utf8Bytes(value))
+  let data = Bytes.asMutSlice(&mut bytes)
+  let mut i: usize = 0
+  while i < data.length { if data[i] >= 65 && data[i] <= 90 { data[i] = data[i] + 32 }
+     i = i + 1 }
+  return run String.copy(unsafe String.fromUtf8Unchecked(Bytes.asSlice(&bytes)))
+}
+effect fn encodings(bytes: &[u8]) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let groups = run S.parse(bytes)
+  let values = run S.items(&groups)
+  let mut seen = List<String>.make()
+  let mut i: usize = 0
+  while i < values.length {
+    let entries = run S.items(run S.field(&values[i], "encodings"))
+    let mut j: usize = 0
+    while j < entries.length {
+      let name = run S.stringField(&entries[j], "name")
+      if variant(name) == "" { run Task.abort("upstream encoding names changed; review enum and algorithm support") }
+      if !S.contains(&seen, name) { run List<String>.append(&mut seen, run String.copy(name)) }
+      j = j + 1
+    }
+    i = i + 1
+  }
+  if List<String>.length(&seen) != 40 { run Task.abort("upstream encoding names changed; review enum and algorithm support") }
+  return move groups
+}
+effect fn singles(groups: &Value) -> &[Value] ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let values = run S.items(groups)
+  let mut i: usize = 0
+  while i < values.length {
+    if (run S.stringField(&values[i], "heading")) == "Legacy single-byte encodings" { return run S.items(run S.field(&values[i], "encodings")) }
+    i = i + 1
+  }
+  return run Task.abort("missing legacy single-byte group")
+}
+effect fn sourceNames(bytes: &[u8]) -> List<String> ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let groups = run encodings(bytes)
+  let entries = run singles(&groups)
+  let mut indexes = List<String>.make()
+  let mut i: usize = 0
+  while i < entries.length {
+    let name = run S.stringField(&entries[i], "name")
+    if name != "ISO-8859-8-I" {
+      let normalized = run lower(name)
+      if !S.contains(&indexes, normalized.view()) { run List<String>.append(&mut indexes, move normalized) }
+    }
+    i = i + 1
+  }
+  let multi = ["gb18030", "big5", "jis0208", "jis0212", "euc-kr", "gb18030-ranges"]
+  i = 0
+  while i < multi.length { if !S.contains(&indexes, multi[i]) { run List<String>.append(&mut indexes, run String.copy(multi[i])) }
+     i = i + 1 }
+  run S.sort(&mut indexes)
+  let mut names = List<String>.make()
+  run List<String>.append(&mut names, run String.copy("LICENSE"))
+  run List<String>.append(&mut names, run String.copy("encodings.json"))
+  let items = List<String>.asSlice(&indexes)
+  i = 0
+  while i < items.length {
+    let mut name = run S.join("index-", items[i].view())
+    run String.append(&mut name, ".txt")
+    run List<String>.append(&mut names, move name)
+    i = i + 1
+  }
+  return move names
+}
+effect fn baseUrl(revision: string) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut base = run S.join("https://raw.githubusercontent.com/whatwg/encoding/", revision)
+  run String.append(&mut base, "/")
+  return move base
+}
+effect fn load(fetch: bool) -> Inputs ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let bytes = run S.read(LOCK)
+  let lock = run S.parse(Bytes.asSlice(&bytes))
+  let revision = run S.stringField(&lock, "revision")
+  if (run S.number(run S.field(&lock, "format"))) != 1 || !S.hexadecimal(revision, 40) { run Task.abort("invalid encoding lock format or revision") }
+  let base = run baseUrl(revision)
+  let records = run S.items(run S.field(&lock, "sources"))
+  let mut sources = List<Source>.make()
+  let mut i: usize = 0
+  while i < records.length {
+    let record = &records[i]
+    let name = run S.stringField(record, "name")
+    let expected = run S.join(base.view(), name)
+    let url = run S.stringField(record, "url")
+    if url != expected.view() { run Task.abort("source URL is not pinned to the locked official revision") }
+    let hash = run S.stringField(record, "sha256")
+    if !S.hexadecimal(hash, 64) { run Task.abort("invalid source hash") }
+    let cached = run S.join(CACHE, hash)
+    let mut data = Bytes.make()
+    if run S.exists(cached.view()) { data = run S.read(cached.view()) }
+    else {
+      if !fetch { run Task.abort("missing cached encoding source; use --fetch to hydrate the locked cache") }
+      let downloaded = run S.download(url, "silk-svg-encoding-data/1", false)
+      data = move downloaded.body
+    }
+    let actual = run S.digest(Bytes.asSlice(&data))
+    if actual.view() != hash || Bytes.length(&data) != run S.number(run S.field(record, "bytes")) { run Task.abort("hash/length mismatch for encoding source") }
+    run S.save(cached.view(), Bytes.asSlice(&data))
+    if hasSource(&sources, name) { run Task.abort("duplicate source record") }
+    run List<Source>.append(&mut sources, Source { name: run String.copy(name), body: move data })
+    i = i + 1
+  }
+  let required = run sourceNames(Bytes.asSlice(run source(&sources, "encodings.json")))
+  if List<String>.length(&required) != List<Source>.length(&sources) { run Task.abort("lock does not contain exactly the required index and license sources") }
+  let names = List<String>.asSlice(&required)
+  i = 0
+  while i < names.length { drop run source(&sources, names[i].view())
+     i = i + 1 }
+  let hash = run S.digest(Bytes.asSlice(run source(&sources, "LICENSE")))
+  if (run S.stringField(run S.field(&lock, "license"), "sha256")) != hash.view() { run Task.abort("license provenance hash mismatch") }
+  return Inputs { lock: move lock, sources: move sources }
+}
+effect fn update(revision: string) -> Inputs ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  if !S.hexadecimal(revision, 40) { run Task.abort("--update requires an immutable lowercase 40-hex commit") }
+  let base = run baseUrl(revision)
+  let labelsUrl = run S.join(base.view(), "encodings.json")
+  let labels = run S.download(labelsUrl.view(), "silk-svg-encoding-data/1", false)
+  let mut names = run sourceNames(Bytes.asSlice(&labels.body))
+  let mut sources = List<Source>.make()
+  run List<Source>.append(&mut sources, Source { name: run String.copy("encodings.json"), body: move labels.body })
+  let values = List<String>.asSlice(&names)
+  let mut i: usize = 0
+  while i < values.length {
+    if values[i].view() != "encodings.json" {
+      let url = run S.join(base.view(), values[i].view())
+      let downloaded = run S.download(url.view(), "silk-svg-encoding-data/1", false)
+      run List<Source>.append(&mut sources, Source { name: run String.copy(values[i].view()), body: move downloaded.body })
+    }
+    i = i + 1
+  }
+  run S.sort(&mut names)
+  let mut records = List<Value>.make()
+  let sorted = List<String>.asSlice(&names)
+  i = 0
+  while i < sorted.length {
+    let name = sorted[i].view()
+    let data = run source(&sources, name)
+    let hash = run S.digest(Bytes.asSlice(data))
+    let url = run S.join(base.view(), name)
+    let mut record = S.object()
+    run S.set(&mut record, "name", run S.str(name))
+    run S.set(&mut record, "url", run S.str(url.view()))
+    run S.set(&mut record, "sha256", run S.str(hash.view()))
+    run S.set(&mut record, "bytes", S.num(Bytes.length(data)))
+    let content = run S.text(Bytes.asSlice(data))
+    let mut lines = String.split(content, "\n")
+    while let Option<string>.Some { value: line } = Split.next(&mut lines) {
+      if String.startsWith(line, "# Identifier: ") && String.byteLength(line) > 14 && !S.has(&record, "identifier") { run S.set(&mut record, "identifier", run S.str(String.slice(line, 14, String.byteLength(line) - 14))) }
+      if String.startsWith(line, "# Date: ") && String.byteLength(line) > 8 && !S.has(&record, "date") { run S.set(&mut record, "date", run S.str(String.slice(line, 8, String.byteLength(line) - 8))) }
+    }
+    let cached = run S.join(CACHE, hash.view())
+    run S.save(cached.view(), Bytes.asSlice(data))
+    run List<Value>.append(&mut records, move record)
+    i = i + 1
+  }
+  let mut lock = S.object()
+  run S.set(&mut lock, "format", S.num(1))
+  run S.set(&mut lock, "repository", run S.str("https://github.com/whatwg/encoding"))
+  run S.set(&mut lock, "revision", run S.str(revision))
+  let mut spec = S.object()
+  run S.set(&mut spec, "url", run S.str("https://encoding.spec.whatwg.org/"))
+  run S.set(&mut spec, "sha256", run S.str(SPEC))
+  run S.set(&mut lock, "specification", move spec)
+  let mut license = S.object()
+  let licenseUrl = run S.join(base.view(), "LICENSE")
+  let licenseHash = run S.digest(Bytes.asSlice(run source(&sources, "LICENSE")))
+  run S.set(&mut license, "source", run S.str(licenseUrl.view()))
+  run S.set(&mut license, "sha256", run S.str(licenseHash.view()))
+  run S.set(&mut license, "copyright", run S.str("Copyright © WHATWG (Apple, Google, Mozilla, Microsoft)."))
+  run S.set(&mut license, "upstream", run S.str("CC-BY-4.0; portions incorporated into source code are BSD-3-Clause"))
+  run S.set(&mut license, "generated_data", run S.str("BSD-3-Clause"))
+  run S.set(&mut lock, "license", move license)
+  run S.set(&mut lock, "sources", Value.Array { values: move records })
+  return Inputs { lock: move lock, sources: move sources }
+}
+effect fn integer(text: string, radix: usize) -> usize ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let stripped = String.trim(text)
+  let mut bytes = String.utf8Bytes(stripped)
+  if bytes.length > 0 && bytes[0] == 43 { bytes = Slice.view<u8>(bytes, 1, bytes.length - 1) }
+  if radix == 16 && bytes.length >= 2 && bytes[0] == 48 && (bytes[1] == 120 || bytes[1] == 88) { bytes = Slice.view<u8>(bytes, 2, bytes.length - 2) }
+  if bytes.length == 0 { run Task.abort("invalid index integer") }
+  let mut value: usize = 0
+  let mut i: usize = 0
+  while i < bytes.length {
+    let b = bytes[i]
+    let digit = if b >= 48 && b <= 57 { u8.toUsize(b - 48) } else if b >= 65 && b <= 70 { u8.toUsize(b - 55) } else if b >= 97 && b <= 102 { u8.toUsize(b - 87) } else { 100 }
+    if digit >= radix || value > (usize.MAX - digit) / radix { run Task.abort("invalid index integer") }
+    value = value * radix + digit
+    i = i + 1
+  }
+  return value
+}
+effect fn index(bytes: &[u8]) -> List<u64> ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let text = run S.text(bytes)
+  let mut lines = String.split(text, "\n")
+  let mut entries = List<u64>.make()
+  while let Option<string>.Some { value: line } = Split.next(&mut lines) {
+    if line == "" || String.startsWith(line, "#") { continue }
+    let mut fields = String.split(line, "\t")
+    let pointerText = Split.next(&mut fields) |> Option<string>.unwrapOr("")
+    let cpText = Split.next(&mut fields) |> Option<string>.unwrapOr("")
+    let pointer = run integer(pointerText, 10)
+    let cp = run integer(cpText, 16)
+    if pointer > 0xFFFFFF || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF) { run Task.abort("invalid index entry") }
+    run List<u64>.append(&mut entries, usize.toU64(pointer) * 16777216 + usize.toU64(cp))
+  }
+  run List<u64>.sort(&mut entries)
+  let values = List<u64>.asSlice(&entries)
+  let mut i: usize = 1
+  while i < values.length { if values[i] / 16777216 == values[i - 1] / 16777216 { run Task.abort("invalid duplicate index pointer") }
+     i = i + 1 }
+  return move entries
+}
+effect fn byteLiteral(output: &mut String, byte: u8) -> () ! OutOfMemoryError ? &mut Allocator {
+  let escaped: [u8; 4] = [92, 120, S.hexDigit(byte / 16), S.hexDigit(byte % 16)]
+  run String.append(&mut output, unsafe String.fromUtf8Unchecked(&escaped))
+}
+effect fn be24(output: &mut String, value: usize) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if value > 0xFFFFFF { run Task.abort("packed integer exceeds 24 bits") }
+  run byteLiteral(&mut output, usize.toU8(value / 65536))
+  run byteLiteral(&mut output, usize.toU8(value / 256 % 256))
+  run byteLiteral(&mut output, usize.toU8(value % 256))
+}
+effect fn functionStart(output: &mut String, name: string) -> () ! OutOfMemoryError ? &mut Allocator {
+  run String.append(&mut output, "fn ")
+  run String.append(&mut output, name)
+  run String.append(&mut output, "() -> &'static [u8] {\n  return b\"")
+}
+effect fn functionEnd(output: &mut String) -> () ! OutOfMemoryError ? &mut Allocator { run String.append(&mut output, "\"\n}\n\n") }
+effect fn packedIndex(output: &mut String, name: string, values: &List<u64>, length: usize) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let entries = List<u64>.asSlice(values)
+  if entries.length == 0 || entries[entries.length - 1] / 16777216 >= usize.toU64(length) { run Task.abort("index exceeds its pointer space") }
+  run functionStart(&mut output, name)
+  let mut at: usize = 0
+  let mut pointer: usize = 0
+  while pointer < length {
+    let mut cp: usize = 0xFFFFFF
+    if at < entries.length && entries[at] / 16777216 == usize.toU64(pointer) { cp = u64.toUsize(entries[at] % 16777216)
+       at = at + 1 }
+    run be24(&mut output, cp)
+    pointer = pointer + 1
+  }
+  run functionEnd(&mut output)
+}
+effect fn tableSource(sources: &List<Source>, name: string) -> List<u64> ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let normalized = run lower(name)
+  let mut filename = run S.join("index-", normalized.view())
+  run String.append(&mut filename, ".txt")
+  return run index(Bytes.asSlice(run source(sources, filename.view())))
+}
+effect fn render(inputs: &Inputs) -> String ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let groups = run encodings(Bytes.asSlice(run source(&inputs.sources, "encodings.json")))
+  let single = run singles(&groups)
+  let license = run S.text(Bytes.asSlice(run source(&inputs.sources, "LICENSE")))
+  let delimiter = "BSD 3-Clause License\n"
+  let begin = match String.find(license, delimiter) {
+    Option<usize>.Some { value } => value + String.byteLength(delimiter)
+    Option<usize>.None => run Task.abort("missing BSD license text")
+  }
+  let rest = String.slice(license, begin, String.byteLength(license) - begin)
+  let end = String.find(rest, "- - - -") |> Option<usize>.unwrapOr(String.byteLength(rest))
+  let bsd = String.trim(String.slice(rest, 0, end))
+  let mut output = run String.makeWithCapacity(1500000)
+  run String.append(&mut output, "// Generated by silk task generate-encodings; DO NOT EDIT.\n// WHATWG Encoding revision ")
+  run String.append(&mut output, run S.stringField(&inputs.lock, "revision"))
+  run String.append(&mut output, "; modules/style/encodings.lock.json pins every input.\n// Encoding Standard snapshot SHA-256: ")
+  run String.append(&mut output, SPEC)
+  run String.append(&mut output, ".\n// Original table materialization: big-endian packed 24-bit scalars, FFFFFF = null.\n// Labels are sorted packed records; no allocation or host codec is used.\n// Copyright © WHATWG (Apple, Google, Mozilla, Microsoft).\n// Source and license: ")
+  run String.append(&mut output, run S.stringField(run S.field(&inputs.lock, "license"), "source"))
+  run String.append(&mut output, "\n// Incorporated data is licensed under BSD-3-Clause:\n")
+  let mut lines = String.split(bsd, "\n")
+  while let Option<string>.Some { value: line } = Split.next(&mut lines) { run String.append(&mut output, "// ")
+     run String.append(&mut output, line)
+     run String.append(&mut output, "\n") }
+  run String.append(&mut output, "\nimport encoding_types { Encoding }\nimport silk.core.option { Option }\nimport silk.num.u8\nimport silk.num.u32\nimport silk.num.usize\n\n")
+  run String.append(&mut output, "// Callers establish the packed-record bounds before multiplying offsets.\nfn be24(data: &[u8], at: usize) -> u32 {\n  return u8.toU32(data[at]) * 65536 + u8.toU32(data[at + 1]) * 256 + u8.toU32(data[at + 2])\n}\n\nfn lookup(data: &[u8], pointer: usize) -> u32 {\n  if pointer >= data.length / 3 { return 0xFFFFFFFF }\n  let value = be24(data, pointer * 3)\n  return if value == 0xFFFFFF { 0xFFFFFFFF } else { value }\n}\n\n// https://encoding.spec.whatwg.org/#index-code-point\npub fn single(encoding: Encoding, pointer: usize) -> u32 {\n  if pointer >= 128 { return 0xFFFFFFFF }\n  let data = match encoding {\n")
+
+  let mut i: usize = 0
+  while i < single.length {
+    let name = run S.stringField(&single[i], "name")
+    run String.append(&mut output, "    Encoding.")
+    run String.append(&mut output, variant(name))
+    run String.append(&mut output, " => table")
+    let variantName: string = if name == "ISO-8859-8-I" { "Iso8859_8" } else { variant(name) }
+    run String.append(&mut output, variantName)
+    run String.append(&mut output, "()\n")
+    i = i + 1
+  }
+  run String.append(&mut output, "    _ => { return 0xFFFFFFFF }\n  }\n  return lookup(data, pointer)\n}\n\n")
+  i = 0
+  while i < single.length {
+    let name = run S.stringField(&single[i], "name")
+    if name != "ISO-8859-8-I" {
+      let values = run tableSource(&inputs.sources, name)
+      let function = run S.join("table", variant(name))
+      run packedIndex(&mut output, function.view(), &values, 128)
+    }
+    i = i + 1
+  }
+  let multi = ["gb18030", "big5", "jis0208", "jis0212", "euc-kr"]
+  let apis = ["gb18030", "big5", "jis0208", "jis0212", "eucKr"]
+  i = 0
+  while i < multi.length {
+    let values = run tableSource(&inputs.sources, multi[i])
+    let entries = List<u64>.asSlice(&values)
+    if entries.length == 0 { run Task.abort("empty multibyte index") }
+    run String.append(&mut output, "// https://encoding.spec.whatwg.org/#index-")
+    run String.append(&mut output, multi[i])
+    run String.append(&mut output, "\npub fn ")
+    run String.append(&mut output, apis[i])
+    run String.append(&mut output, "(pointer: usize) -> u32 {\n  return lookup(table")
+    run String.append(&mut output, apis[i])
+    run String.append(&mut output, "(), pointer)\n}\n\n")
+    let function = run S.join("table", apis[i])
+    run packedIndex(&mut output, function.view(), &values, u64.toUsize(entries[entries.length - 1] / 16777216) + 1)
+    i = i + 1
+  }
+  let ranges = run tableSource(&inputs.sources, "gb18030-ranges")
+  let rangeEntries = List<u64>.asSlice(&ranges)
+  if rangeEntries.length == 0 || rangeEntries[0] / 16777216 != 0 { run Task.abort("gb18030 ranges must begin at zero") }
+  run functionStart(&mut output, "rangeData")
+  i = 0
+  while i < rangeEntries.length { run be24(&mut output, u64.toUsize(rangeEntries[i] / 16777216))
+     run be24(&mut output, u64.toUsize(rangeEntries[i] % 16777216))
+     i = i + 1 }
+  run functionEnd(&mut output)
+  run String.append(&mut output, "// https://encoding.spec.whatwg.org/#index-gb18030-ranges-code-point\npub fn gb18030Range(pointer: usize) -> u32 {\n  if (pointer > 39419 && pointer < 189000) || pointer > 1237575 { return 0xFFFFFFFF }\n  if pointer == 7457 { return 0xE7C7 }\n  let data = rangeData()\n  let mut low: usize = 0\n  let mut high = data.length / 6\n  while low < high {\n    let middle = low + (high - low) / 2\n    if u32.toUsize(be24(data, middle * 6)) <= pointer { low = middle + 1 }\n    else { high = middle }\n  }\n  // The first range begins at zero, hence low is at least one.\n  let at = (low - 1) * 6\n  return be24(data, at + 3) + usize.toU32(pointer) - be24(data, at)\n}\n\nfn whitespace(byte: u8) -> bool {\n  return byte == 9 || byte == 10 || byte == 12 || byte == 13 || byte == 32\n}\n\nfn lowercase(byte: u8) -> u8 {\n  return if byte >= 65 && byte <= 90 { byte + 32 } else { byte }\n}\n\n// https://encoding.spec.whatwg.org/#concept-encoding-get\npub fn label(input: &[u8]) -> Option<Encoding> {\n  let mut start: usize = 0\n  let mut end = input.length\n  while start < end && whitespace(input[start]) { start = start + 1 }\n  while end > start && whitespace(input[end - 1]) { end = end - 1 }\n  if start == end { return Option<Encoding>.None }\n  let text = labelText()\n  let records = labelRecords()\n  let mut low: usize = 0\n  let mut high = records.length / 5\n  while low < high {\n    let middle = low + (high - low) / 2\n    let at = middle * 5\n    let offset = u32.toUsize(be24(records, at))\n    let length = u32.toUsize(u8.toU32(records[at + 3]))\n    let mut i: usize = 0\n    while i < end - start && i < length && lowercase(input[start + i]) == text[offset + i] {\n      i = i + 1\n    }\n    if i == end - start && i == length { return encodingId(records[at + 4]) }\n    if i == end - start || (i < length && lowercase(input[start + i]) < text[offset + i]) {\n      high = middle\n    } else { low = middle + 1 }\n  }\n  return Option<Encoding>.None\n}\n\nfn encodingId(id: u8) -> Option<Encoding> {\n  return match id {\n")
+
+  let mut labels = S.object()
+  let mut id: usize = 0
+  let all = run S.items(&groups)
+  i = 0
+  while i < all.length {
+    let entries = run S.items(run S.field(&all[i], "encodings"))
+    let mut j: usize = 0
+    while j < entries.length {
+      let name = run S.stringField(&entries[j], "name")
+      let identifier = run S.decimal(id)
+      run String.append(&mut output, "    ")
+      run String.append(&mut output, identifier.view())
+      run String.append(&mut output, " => Option<Encoding>.Some { value: Encoding.")
+      run String.append(&mut output, variant(name))
+      run String.append(&mut output, " }\n")
+      let entryLabels = run S.items(run S.field(&entries[j], "labels"))
+      let mut k: usize = 0
+      while k < entryLabels.length {
+        let label = run S.stringValue(&entryLabels[k])
+        if S.has(&labels, label) { run Task.abort("duplicate encoding label") }
+        run S.set(&mut labels, label, S.num(id))
+        k = k + 1
+      }
+      id = id + 1
+      j = j + 1
+    }
+    i = i + 1
+  }
+  run String.append(&mut output, "    _ => Option<Encoding>.None\n  }\n}\n\n")
+  let keys = run S.sortedKeys(&labels)
+  let sorted = List<String>.asSlice(&keys)
+  let mut records = String.make()
+  run functionStart(&mut output, "labelText")
+  run functionStart(&mut records, "labelRecords")
+  let mut offset: usize = 0
+  i = 0
+  while i < sorted.length {
+    let label = sorted[i].view()
+    let bytes = String.utf8Bytes(label)
+    if bytes.length == 0 || bytes.length > 255 { run Task.abort("invalid label") }
+    let identifier = run S.number(run S.field(&labels, label))
+    if identifier > 255 { run Task.abort("encoding identifier exceeds one byte") }
+    run be24(&mut records, offset)
+    run byteLiteral(&mut records, usize.toU8(bytes.length))
+    run byteLiteral(&mut records, usize.toU8(identifier))
+    let mut j: usize = 0
+    while j < bytes.length {
+      if bytes[j] >= 128 || (bytes[j] >= 65 && bytes[j] <= 90) { run Task.abort("invalid label") }
+      run byteLiteral(&mut output, bytes[j])
+      j = j + 1
+    }
+    offset = offset + bytes.length
+    i = i + 1
+  }
+  run functionEnd(&mut output)
+  run functionEnd(&mut records)
+  run String.append(&mut output, records.view())
+  return move output
+}
+pub effect fn generate(fetch: bool, revision: &String) -> () ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  if fetch && revision.view() != "" { run Task.abort("--fetch cannot be combined with --update") }
+  let inputs = if revision.view() == "" { run load(fetch) } else { run update(revision.view()) }
+  let output = run render(&inputs)
+  if revision.view() != "" { run S.saveJson(LOCK, &inputs.lock) }
+  run S.save(OUTPUT, String.utf8Bytes(output.view()))
+  // The committed tables are formatted Silk; format here so regeneration reproduces them exactly.
+  run Task.silk(&["format", OUTPUT])
+  let count = run S.decimal(List<Source>.length(&inputs.sources))
+  let length = run S.decimal(String.byteLength(output.view()))
+  run S.message(&["Materialized ", OUTPUT, " from ", count.view(), " pinned sources (", length.view(), " bytes)"])
+}

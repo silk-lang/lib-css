@@ -1,0 +1,690 @@
+import task_json { J }
+import task_bench_workloads as W
+import task_bench_updates_workloads as U
+import task_update_process { Captured, Variable, runInput, runProcess, locate }
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter, StderrWriter }
+import silk.json.value { Json, Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.platform.native.clock { NativeClock }
+import silk.platform.native.file { CopyMethod, NativeFile, NativeFileError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem, Path, DirectoryEntry }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.system.system_clock { SystemClock }
+import silk.text.format { Format }
+import silk.text.string { String, Split }
+import silk.num.f64
+import silk.num.i32
+import silk.num.i64
+import silk.num.usize
+
+const LAYOUT: string = "modules/layout"
+const PIN: string = "0.1.0-dev.64+8214c402307b"
+
+fn pathText(path: &Path) -> string { return unsafe String.fromUtf8Unchecked(Path.rawBytes(path)) }
+effect fn path(value: string) -> Path ! TaskError | FileError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator {
+  if String.startsWith(value,"/") { return run Path.make(value) }
+  let root = run Task.root()
+  return run Path.join(&root,value)
+}
+effect fn layoutPath(value: string) -> Path ! TaskError | FileError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator {
+  let root = run path(LAYOUT)
+  return run Path.join(&root,value)
+}
+effect fn writeJson(path: &Path, value: &Value) -> () ! TaskError | FileError | OutOfMemoryError | WriterError ? &mut FileSystem | &mut Allocator {
+  let mut data = run J.encode(value)
+  run Bytes.append(&mut data,b"\n")
+  run FileSystem.writeFileWithParents(path,Bytes.asSlice(&data))
+}
+effect fn readJson(path: &Path) -> Value ! TaskError | FileError | OutOfMemoryError ? &mut FileSystem | &mut Allocator {
+  let bytes = run FileSystem.readFile(path)
+  return run J.parse(Bytes.asSlice(&bytes))
+}
+effect fn say(text: string) -> () ! WriterError {
+  let mut out = StdoutWriter.make()
+  run Writer.writeString(text) |> Effect.provideMut<Writer>(&mut out)
+}
+effect fn checked(result: Captured) -> Captured ! TaskError | OutOfMemoryError | WriterError ? &mut Allocator {
+  if result.code != 0 {
+    let mut err = StderrWriter.make()
+    run Writer.writeAll(Bytes.asSlice(&result.errors)) |> Effect.provideMut<Writer>(&mut err)
+    fail TaskError { message: run String.copy("benchmark child failed"), status: if result.code > 0 { result.code } else { 1 } }
+  }
+  return move result
+}
+effect fn stats(stderr: &[u8]) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut end = stderr.length
+  while end > 0 && (stderr[end - 1] == 10 || stderr[end - 1] == 13 || stderr[end - 1] == 32) { end = end - 1 }
+  let mut start = end
+  while start > 0 && stderr[start - 1] != 10 { start = start - 1 }
+  return run J.parse(Slice.view<u8>(stderr,start,end - start))
+}
+effect fn samples(value: &Value) -> List<f64> ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let input = J.items(value)
+  if input.length == 0 { run Task.abort("benchmark returned no timing samples") }
+  let mut values = List<f64>.make()
+  let mut i: usize = 0
+  while i < input.length { run List<f64>.append(&mut values,J.num(&input[i]))
+  i = i + 1 }
+  run List<f64>.sort(&mut values)
+  return move values
+}
+fn median(values: &List<f64>) -> f64 {
+  let values = List<f64>.asSlice(values)
+  let mid = values.length / 2
+  if values.length % 2 == 1 { return values[mid] }
+  return (values[mid - 1] + values[mid]) / 2.0
+}
+effect fn request(document: &Value, cycle: &Value, iterations: i32, updates: bool) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut request = run J.copy(document)
+  let mut mode = J.object()
+  run J.set(&mut mode,"iterations",J.int(i32.toI64(iterations)))
+  if updates { run J.set(&mut mode,"cycle",run J.copy(cycle)) }
+  run J.set(&mut request,if updates { "updates" } else { "benchmark" },move mode)
+  return move request
+}
+
+pub effect fn bench(cli: String, runs: i32, record: bool) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  if runs < 1 { run Task.abort("--runs must be positive") }
+  let names = ["block-1000","flex-grow-1000","flex-wrap-1000","nested-100","measured-500"]
+  let widths: [i64; 5] = [600,1000,500,500,1000]
+  let heights: [i64; 5] = [10000,20,630,200,840]
+  let roots = ["{\"width\":600}","{\"display\":\"flex\",\"width\":1000}","{\"display\":\"flex\",\"width\":500,\"flexWrap\":\"wrap\"}","{\"width\":500}","{\"display\":\"flex\",\"width\":1000,\"flexWrap\":\"wrap\"}"]
+  let baselinePath = run layoutPath("bench/results/baseline.json")
+  let old = if run FileSystem.exists(&baselinePath) { run readJson(&baselinePath) } else { Value.Null }
+  let mut results = J.object()
+  let mut index: usize = 0
+  while index < names.length {
+    let mut nodes = J.array()
+    let _root = run W.add(&mut nodes,-1,run W.literal(roots[index]),Value.Null)
+    let count: i64 = if index == 3 { 100 } else if index == 4 { 500 } else { 1000 }
+    let mut i: i64 = 0
+    while i < count {
+      let mut style = run W.literal(if index == 0 { "{\"height\":10}" } else if index == 1 { "{\"flexGrow\":1,\"flexBasis\":0,\"height\":20}" } else if index == 2 { "{\"width\":30,\"height\":10,\"flexShrink\":0}" } else { "{}" })
+      if index == 3 { run J.set(&mut style,"display",run J.text(if i % 2 != 0 { "block" } else { "flex" }))
+      run J.set(&mut style,"padding",J.int(1)) }
+      let measure = if index == 4 { run W.measured(20,80,20,false) } else { Value.Null }
+      let _node = run W.add(&mut nodes,if index == 3 { i } else { 0 },move style,move measure)
+      i = i + 1
+    }
+    let document = run W.document(move nodes,1000,800)
+    let encoded = run J.encode(&document)
+    let mut timings = List<f64>.make()
+    let mut iteration: i32 = 0
+    while iteration <= runs {
+      let start = run NativeClock.now(true)
+      let done = run checked(run runInput(String.view(&cli),Bytes.asSlice(&encoded),30))
+      let end = run NativeClock.now(true)
+      let elapsed = i64.toF64((SystemClock.seconds(&end) - SystemClock.seconds(&start)) * 1000000000 + SystemClock.nanoseconds(&end) - SystemClock.nanoseconds(&start)) / 1000000.0
+      let parsed = run J.parse(Bytes.asSlice(&done.output))
+      let sources = J.get(&parsed,"sources")
+      let root = J.at(sources,0)
+      if J.length(sources) != i64.toUsize(count + 1) || f64.abs(J.num(J.get(root,"width")) - i64.toF64(widths[index])) > 0.01 || f64.abs(J.num(J.get(root,"height")) - i64.toF64(heights[index])) > 0.01 {
+        run say(names[index])
+        run Task.abort(": incorrect benchmark root geometry")
+      }
+      if iteration > 0 { run List<f64>.append(&mut timings,elapsed) }
+      iteration = iteration + 1
+    }
+    run List<f64>.sort(&mut timings)
+    let ms = median(&timings)
+    let mut result = J.object()
+    run J.set(&mut result,"median_ms",J.float(ms))
+    run J.set(&mut result,"nodes",J.int(count + 1))
+    let mut geometry = J.array()
+    run J.push(&mut geometry,J.int(widths[index]))
+    run J.push(&mut geometry,J.int(heights[index]))
+    run J.set(&mut result,"root",move geometry)
+    let mut out = StdoutWriter.make()
+    run Format.format("{}: {:.3} ms",&.(names[index],ms)) |> Effect.provideMut<Writer>(&mut out)
+    let previous = J.get(J.get(&old,"workloads"),names[index])
+    if J.has(previous,"median_ms") { run Format.format(" ({:.3}x baseline)",&.(ms / J.num(J.get(previous,"median_ms")))) |> Effect.provideMut<Writer>(&mut out) }
+    run say("\n")
+    run J.set(&mut results,names[index],move result)
+    index = index + 1
+  }
+  if record {
+    let platform = run checked(run runProcess("uname",&["-a"],b"",30,&[],Option<&Path>.none()))
+    let mut baseline = J.object()
+    run J.set(&mut baseline,"method",run J.text("native adapter wall time; one warmup excluded; median"))
+    run J.set(&mut baseline,"platform",run J.text(unsafe String.fromUtf8Unchecked(Bytes.asSlice(&platform.output))))
+    run J.set(&mut baseline,"silk",run J.text(PIN))
+    run J.set(&mut baseline,"runs",J.int(i32.toI64(runs)))
+    run J.set(&mut baseline,"workloads",move results)
+    run writeJson(&baselinePath,&baseline)
+  }
+}
+
+pub effect fn benchUpdates(cli: String, iterations: i32, only: String, json: String, small: bool) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let names = ["cards","article","rows","grid"]
+  let mut results = J.object()
+  run say("scenario                          median ms   full  probes   hits  reused  analyze   shape\n")
+  let mut i: usize = 0
+  while i < names.length {
+    let scene = run U.scene(names[i],small)
+    let cases = J.members(&scene.scenarios)
+    let mut j: usize = 0
+    while j < cases.length {
+      let mut name = run String.copy(names[i])
+      run String.append(&mut name,"/")
+      run String.append(&mut name,String.view(&cases[j].key))
+      if String.view(&only) != "" && !String.contains(String.view(&name),String.view(&only)) { j = j + 1
+      continue }
+      let incrementalRequest = run request(&scene.document,&cases[j].value,iterations,true)
+      let data = run J.encode(&incrementalRequest)
+      let incremental = run checked(run runInput(String.view(&cli),Bytes.asSlice(&data),600))
+      let final = run U.finalDocument(&scene.document,&cases[j].value,iterations)
+      let finalData = run J.encode(&final)
+      let fresh = run checked(run runInput(String.view(&cli),Bytes.asSlice(&finalData),600))
+      let a = run J.parse(Bytes.asSlice(&incremental.output))
+      let b = run J.parse(Bytes.asSlice(&fresh.output))
+      if !Json.equal(&a,&b) { run say(String.view(&name))
+      run Task.abort(": geometry after updates differs from fresh layout") }
+      let mut report = run stats(Bytes.asSlice(&incremental.errors))
+      let times = run samples(J.get(&report,"layoutNs"))
+      let ms = median(&times) / 1000000.0
+      J.remove(&mut report,"layoutNs")
+      run J.set(&mut report,"median_ms",J.float(ms))
+      let mut out = StdoutWriter.make()
+      run Format.format("{:<32} {:10.3} {:6} {:7} {:6} {:7} {:8} {:7}\n",&.(String.view(&name),ms,J.integer(J.get(&report,"fullLayouts")),J.integer(J.get(&report,"sizeProbes")),J.integer(J.get(&report,"cacheHits")),J.integer(J.get(&report,"reusedLayouts")),J.integer(J.get(&report,"analyzeCalls")),J.integer(J.get(&report,"shapeCalls")))) |> Effect.provideMut<Writer>(&mut out)
+      run J.set(&mut results,String.view(&name),move report)
+      j = j + 1
+    }
+    i = i + 1
+  }
+  if String.view(&json) != "" { let output = run path(String.view(&json))
+  run writeJson(&output,&results) }
+}
+
+struct Timing { times: List<f64>, boxes: Value }
+effect fn absolute(document: &Value, sources: &Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let nodes = J.items(J.get(document,"nodes"))
+  let mut boxes = J.array()
+  let mut i: usize = 0
+  while i < nodes.length && i < J.length(sources) {
+    let parent = J.get(&nodes[i],"parent")
+    let source = J.at(sources,i)
+    let mut x = J.num(J.get(source,"x"))
+    let mut y = J.num(J.get(source,"y"))
+    if !J.isNull(parent) {
+      let previous = J.at(&boxes,i64.toUsize(J.integer(parent)))
+      x = x + J.num(J.at(previous,0))
+      y = y + J.num(J.at(previous,1))
+    }
+    let mut box = J.array()
+    run J.push(&mut box,J.float(x))
+    run J.push(&mut box,J.float(y))
+    run J.push(&mut box,run J.copy(J.get(source,"width")))
+    run J.push(&mut box,run J.copy(J.get(source,"height")))
+    run J.push(&mut boxes,move box)
+    i = i + 1
+  }
+  return move boxes
+}
+effect fn silkTiming(cli: string, document: &Value, cycle: &Value, iterations: i32, updates: bool) -> Timing
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let request = run request(document,cycle,iterations,updates)
+  let encoded = run J.encode(&request)
+  let done = run checked(run runInput(cli,Bytes.asSlice(&encoded),1800))
+  let report = run stats(Bytes.asSlice(&done.errors))
+  let output = run J.parse(Bytes.asSlice(&done.output))
+  return Timing { times: run samples(J.get(&report,"layoutNs")), boxes: run absolute(document,J.get(&output,"sources")) }
+}
+effect fn harnessTiming(cli: string, document: &Path, cycle: &Path, iterations: i32, updates: bool) -> Timing
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let count = run W.decimal(i32.toI64(iterations))
+  let done = if updates {
+    run checked(run runProcess(cli,&[pathText(document),String.view(&count),"--dump","--updates",pathText(cycle)],b"",1800,&[],Option<&Path>.none()))
+  } else { run checked(run runProcess(cli,&[pathText(document),String.view(&count),"--dump"],b"",1800,&[],Option<&Path>.none())) }
+  let output = run J.parse(Bytes.asSlice(&done.output))
+  return Timing { times: run samples(J.get(&output,"layoutNs")), boxes: run J.copy(J.get(&output,"boxes")) }
+}
+fn grid(document: &Value) -> bool {
+  let nodes = J.items(J.get(document,"nodes"))
+  let mut i: usize = 0
+  while i < nodes.length {
+    if J.str(J.get(J.get(&nodes[i],"style"),"display")) == "grid" { return true }
+    i = i + 1
+  }
+  return false
+}
+struct Differences { count: usize, first: usize }
+fn mismatches(a: &Value, b: &Value) -> Differences {
+  let mut count: usize = 0
+  let mut first: usize = 0
+  let mut i: usize = 0
+  while i < J.length(a) && i < J.length(b) {
+    let x = J.items(J.at(a,i))
+    let y = J.items(J.at(b,i))
+    let mut j: usize = 0
+    while j < x.length && j < y.length {
+      if f64.abs(J.num(&x[j]) - J.num(&y[j])) > 0.05 {
+        if count == 0 { first = i }
+        count = count + 1
+        break
+      }
+      j = j + 1
+    }
+    i = i + 1
+  }
+  return Differences { count: count, first: first }
+}
+struct Engines { silk: String, taffy: String, yoga: String }
+fn nativeTriple() -> string<'static> {
+  static if Intrinsic.targetOperatingSystem() == "darwin" && Intrinsic.targetArchitecture() == "aarch64" {
+    return "aarch64-apple-darwin"
+  } else {
+    static if Intrinsic.targetOperatingSystem() == "linux" && Intrinsic.targetArchitecture() == "x86_64" {
+      return "x86_64-unknown-linux-gnu"
+    } else {
+      static if Intrinsic.targetOperatingSystem() == "linux" && Intrinsic.targetArchitecture() == "aarch64" {
+        return "aarch64-unknown-linux-gnu"
+      } else { return "" }
+    }
+  }
+}
+effect fn binaryPath() -> Path ! TaskError | FileError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator {
+  if nativeTriple() == "" { run Task.abort("unsupported native benchmark host") }
+  let build = run path("build/llvm")
+  let target = run Path.join(&build,nativeTriple())
+  return run Path.join(&target,"release/css-layout-test-harness")
+}
+effect fn engines(silk: String, taffy: String, yoga: String) -> Engines
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  if String.view(&silk) != "" { return Engines { silk: move silk, taffy: move taffy, yoga: move yoga } }
+  let yogaRoot = run layoutPath(".cache/yoga")
+  let gitDirectory = run Path.join(&yogaRoot,".git")
+  let revision = "6c79cca0eca9a688e3f8e16bb562016933f4e703"
+  let mut pinned = false
+  if run FileSystem.exists(&gitDirectory) {
+    let current = run checked(run runProcess("git",&["-C",pathText(&yogaRoot),"rev-parse","HEAD"],b"",30,&[],Option<&Path>.none()))
+    pinned = String.startsWith(unsafe String.fromUtf8Unchecked(Bytes.asSlice(&current.output)),revision)
+  }
+  if !pinned {
+    if run FileSystem.exists(&yogaRoot) { run FileSystem.removeDirectoryRecursively(&yogaRoot) }
+    run Task.exec("git",&["init","-q",pathText(&yogaRoot)])
+    run Task.exec("git",&["-C",pathText(&yogaRoot),"fetch","-q","--depth","1","https://github.com/facebook/yoga.git",revision])
+    run Task.exec("git",&["-C",pathText(&yogaRoot),"checkout","-q","FETCH_HEAD"])
+  }
+  run Task.silk(&["build","--package","css-layout-test-harness","--release"])
+  run Task.exec("cargo",&["build","--quiet","--release","--manifest-path","modules/layout/bench/compare/taffy/Cargo.toml"])
+  let mut yogaDefinition = run String.copy("-DYOGA_ROOT=")
+  run String.append(&mut yogaDefinition,pathText(&yogaRoot))
+  let _configured = run checked(run runProcess("cmake",&["-S","modules/layout/bench/compare/yoga","-B","modules/layout/bench/compare/yoga/build",String.view(&yogaDefinition),"-DCMAKE_BUILD_TYPE=Release"],b"",600,&[],Option<&Path>.none()))
+  let _built = run checked(run runProcess("cmake",&["--build","modules/layout/bench/compare/yoga/build","--parallel"],b"",1800,&[],Option<&Path>.none()))
+  let binary = run binaryPath()
+  return Engines {
+    silk: run String.copy(pathText(&binary)),
+    taffy: if String.view(&taffy) == "" { run String.copy("modules/layout/bench/compare/taffy/target/release/taffy-harness") } else { move taffy },
+    yoga: if String.view(&yoga) == "" { run String.copy("modules/layout/bench/compare/yoga/build/yoga-harness") } else { move yoga },
+  }
+}
+effect fn compareCase(name: string, document: &Value, cycle: &Value, engines: &Engines, scratch: &Path, iterations: i32, updates: bool, ratios: &mut Value) -> Value
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let documentPath = run Path.join(scratch,"document.json")
+  let cyclePath = run Path.join(scratch,"cycle.json")
+  run writeJson(&documentPath,document)
+  if updates { run writeJson(&cyclePath,cycle) }
+  let silk = run silkTiming(String.view(&engines.silk),document,cycle,iterations,updates)
+  let silkMedian = median(&silk.times) / 1000000.0
+  let silkMs = if updates { silkMedian } else { List<f64>.get(&silk.times,0) / 1000000.0 }
+  let mut row = J.object()
+  run J.set(&mut row,"silk_median_ms",J.float(silkMedian))
+  if !updates { run J.set(&mut row,"nodes",J.int(usize.toI64(J.length(J.get(document,"nodes")))))
+  run J.set(&mut row,"silk_ms",J.float(silkMs)) }
+  let isGrid = grid(document)
+  if isGrid && !updates { run J.set(&mut row,"comparison",run J.text("taffy-only (grid; Yoga unsupported)")) }
+  let mut out = StdoutWriter.make()
+  if updates { run Format.format("{:<30}{:10.3}",&.(name,silkMs)) |> Effect.provideMut<Writer>(&mut out) }
+  else { run Format.format("{:<20}{:10.3}",&.(name,silkMs)) |> Effect.provideMut<Writer>(&mut out) }
+  let names = ["taffy","yoga"]
+  let paths = [String.view(&engines.taffy),String.view(&engines.yoga)]
+  let mut i: usize = 0
+  while i < names.length {
+    if paths[i] == "" { i = i + 1
+    continue }
+    if isGrid && !updates && names[i] == "yoga" {
+      run J.set(&mut row,names[i],run W.literal("{\"skipped\":\"Yoga does not support CSS Grid\"}"))
+      run say("       skip       -       -")
+      i = i + 1
+      continue
+    }
+    let other = run harnessTiming(paths[i],&documentPath,&cyclePath,iterations,updates)
+    let ms = if updates { median(&other.times) / 1000000.0 } else { List<f64>.get(&other.times,0) / 1000000.0 }
+    let ratio = if ms > 0.0 { silkMs / ms } else { f64.fromBits(9218868437227405312) }
+    let Differences { count: bad, first } = mismatches(&silk.boxes,&other.boxes)
+    let mut result = J.object()
+    if !updates { run J.set(&mut result,"ms",J.float(ms)) }
+    run J.set(&mut result,"median_ms",J.float(median(&other.times) / 1000000.0))
+    run J.set(&mut result,"ratio",J.float(ratio))
+    run J.set(&mut result,"mismatched_nodes",J.int(usize.toI64(bad)))
+    if !updates && bad > 0 {
+      let mut mismatch = J.object()
+      run J.set(&mut mismatch,"node",J.int(usize.toI64(first)))
+      run J.set(&mut mismatch,"silk",run J.copy(J.at(&silk.boxes,first)))
+      run J.set(&mut mismatch,names[i],run J.copy(J.at(&other.boxes,first)))
+      run J.set(&mut result,"first_mismatch",move mismatch)
+    }
+    run J.set(&mut row,names[i],move result)
+    if !J.has(&ratios,names[i]) { run J.set(&mut ratios,names[i],J.array()) }
+    run J.push(J.getMut(&mut ratios,names[i]),J.float(ratio))
+    run Format.format("{:11.3}{:7.2}x{:8}",&.(ms,ratio,bad)) |> Effect.provideMut<Writer>(&mut out)
+    i = i + 1
+  }
+  if isGrid && !updates { run say("  [taffy-only grid; Yoga unsupported]") }
+  run say("\n")
+  return move row
+}
+effect fn namedDocuments(docs: string, only: string) -> List<String>
+  ! TaskError | FileError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator | &mut FileSystem {
+  let mut names = List<String>.make()
+  if only != "" {
+    let mut split = String.split(only,",")
+    while let Option<string>.Some { value } = Split.next(&mut split) { run List<String>.append(&mut names,run String.copy(value)) }
+  } else if docs != "" {
+    let directory = run path(docs)
+    let entryStorage = run FileSystem.listDirectory(&directory)
+    let entries = List<DirectoryEntry>.asSlice(&entryStorage)
+    let mut i: usize = 0
+    while i < entries.length {
+      let full = pathText(&entries[i].path)
+      if String.endsWith(full,".json") {
+        let bytes = String.utf8Bytes(full)
+        let mut start = bytes.length
+        while start > 0 && bytes[start - 1] != 47 { start = start - 1 }
+        run List<String>.append(&mut names,run String.copy(unsafe String.fromUtf8Unchecked(Slice.view<u8>(bytes,start,bytes.length - start - 5))))
+      }
+      i = i + 1
+    }
+  } else {
+    let mut i: usize = 0
+    while i < W.NAMES.length { run List<String>.append(&mut names,run String.copy(W.NAMES[i]))
+    i = i + 1 }
+  }
+  return move names
+}
+effect fn documentNamed(name: string, docs: string) -> Value
+  ! TaskError | FileError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator | &mut FileSystem {
+  if docs == "" { return run W.workload(name) }
+  let directory = run path(docs)
+  let mut filename = run String.copy(name)
+  run String.append(&mut filename,".json")
+  let source = run Path.join(&directory,String.view(&filename))
+  return run readJson(&source)
+}
+effect fn comparisons(engines: &Engines, scratch: &Path, updates: bool, iterations: i32, only: string, json: string, docs: string) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let nameStorage = run namedDocuments(docs,only)
+  let names = List<String>.asSlice(&nameStorage)
+  let mut results = J.object()
+  let mut ratios = J.object()
+  if updates { run say("scenario                         silk ms") } else { run say("workload               silk ms") }
+  if String.view(&engines.taffy) != "" { run say("   taffy ms   ratio    diff") }
+  if String.view(&engines.yoga) != "" { run say("    yoga ms   ratio    diff") }
+  run say("\n")
+  let mut i: usize = 0
+  while i < names.length {
+    let name = String.view(&names[i])
+    let document = run documentNamed(name,docs)
+    if updates {
+      let scenarioStorage = run U.comparisonScenarios(&document)
+      let scenarios = J.members(&scenarioStorage)
+      let mut j: usize = 0
+      while j < scenarios.length {
+        let mut caseName = run String.copy(name)
+        run String.append(&mut caseName,"/")
+        run String.append(&mut caseName,String.view(&scenarios[j].key))
+        let row = run compareCase(String.view(&caseName),&document,&scenarios[j].value,engines,scratch,iterations,true,&mut ratios)
+        run J.set(&mut results,String.view(&caseName),move row)
+        j = j + 1
+      }
+      if J.has(J.get(J.at(J.get(&document,"nodes"),0),"style"),"width") {
+        let mut fluid = run J.copy(&document)
+        J.remove(J.getMut(J.atMut(J.getMut(&mut fluid,"nodes"),0),"style"),"width")
+        let cycle = run U.resize(J.integer(J.get(J.get(&fluid,"viewport"),"width")),J.integer(J.get(J.get(&fluid,"viewport"),"height")),1)
+        let mut caseName = run String.copy(name)
+        run String.append(&mut caseName,"/fluid-resize")
+        let row = run compareCase(String.view(&caseName),&fluid,&cycle,engines,scratch,iterations,true,&mut ratios)
+        run J.set(&mut results,String.view(&caseName),move row)
+      }
+    } else {
+      let row = run compareCase(name,&document,&Value.Null,engines,scratch,iterations,false,&mut ratios)
+      run J.set(&mut results,name,move row)
+    }
+    i = i + 1
+  }
+  let engineNames = ["taffy","yoga"]
+  i = 0
+  while i < engineNames.length {
+    let values = J.items(J.get(&ratios,engineNames[i]))
+    let mut logSum: f64 = 0.0
+    let mut count: usize = 0
+    let mut j: usize = 0
+    while j < values.length {
+      let value = J.num(&values[j])
+      if value > 0.0 && f64.isFinite(value) { logSum = logSum + f64.log(value)
+      count = count + 1 }
+      j = j + 1
+    }
+    let mut out = StdoutWriter.make()
+    if count > 0 { run Format.format("geomean silk/{}: {:.2}x\n",&.(engineNames[i],f64.exp(logSum / usize.toF64(count)))) |> Effect.provideMut<Writer>(&mut out) }
+    if !updates {
+      let rows = J.members(&results)
+      let mut skipped: usize = 0
+      j = 0
+      while j < rows.length {
+        let engine = J.get(&rows[j].value,engineNames[i])
+        if J.has(engine,"skipped") { skipped = skipped + 1 }
+        j = j + 1
+      }
+      if skipped > 0 { run Format.format("{}: {} workloads compared; {} grids skipped (not included in ratios or geometry)\n",&.(engineNames[i],values.length,skipped)) |> Effect.provideMut<Writer>(&mut out) }
+    }
+    i = i + 1
+  }
+  if !updates {
+    let rows = J.members(&results)
+    i = 0
+    while i < rows.length {
+      let mut j: usize = 0
+      while j < engineNames.length {
+        let engine = J.get(&rows[i].value,engineNames[j])
+        if J.has(engine,"first_mismatch") {
+          let mut out = StdoutWriter.make()
+          run Format.format("{}: {} boxes differ from {}; first ",&.(String.view(&rows[i].key),J.integer(J.get(engine,"mismatched_nodes")),engineNames[j])) |> Effect.provideMut<Writer>(&mut out)
+          let mismatch = run J.encode(J.get(engine,"first_mismatch"))
+          run Writer.writeAll(Bytes.asSlice(&mismatch)) |> Effect.provideMut<Writer>(&mut out)
+          run say("\n")
+        }
+        j = j + 1
+      }
+      i = i + 1
+    }
+  }
+  if json != "" { let output = run path(json)
+  run writeJson(&output,&results) }
+}
+pub effect fn benchCompare(updates: bool, iterations: i32, only: String, json: String, docs: String, silk: String, taffy: String, yoga: String, generate: String) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  if String.view(&generate) != "" {
+    let directory = run path(String.view(&generate))
+    run FileSystem.createDirectoriesRecursively(&directory)
+    let mut i: usize = 0
+    while i < W.NAMES.length {
+      let document = run W.workload(W.NAMES[i])
+      let mut name = run String.copy(W.NAMES[i])
+      run String.append(&mut name,".json")
+      let output = run Path.join(&directory,String.view(&name))
+      run writeJson(&output,&document)
+      run say(pathText(&output))
+      run say("\n")
+      i = i + 1
+    }
+    return ()
+  }
+  let engines = run engines(move silk,move taffy,move yoga)
+  let cache = run layoutPath(".cache")
+  run FileSystem.createDirectoriesRecursively(&cache)
+  let scratch = run FileSystem.temporaryDirectory(&cache,"bench-")
+  let scratchPath = run Path.fromBytes(Path.rawBytes(&scratch.path))
+  let count = if iterations == 0 { if updates { 40 } else { 15 } } else { iterations }
+  run comparisons(&engines,&scratchPath,updates,count,String.view(&only),String.view(&json),String.view(&docs))
+    |> Effect.ensuring(FileSystem.releaseIgnored(move scratch))
+}
+
+effect fn compiler() -> String ! TaskError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator {
+  if let Option<Bytes>.Some { value } = move run HostInput.variableNamed("SILK") {
+    return run String.copy(unsafe String.fromUtf8Unchecked(Bytes.asSlice(&value)))
+  }
+  if let Option<Bytes>.Some { value } = move run HostInput.variableNamed("SILK_COMPILER") {
+    return run String.copy(unsafe String.fromUtf8Unchecked(Bytes.asSlice(&value)))
+  }
+  return run String.copy("silk")
+}
+effect fn profdata() -> Path
+  ! TaskError | FileError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator | &mut FileSystem {
+  if let Option<Bytes>.Some { value } = move run HostInput.variableNamed("SILK_CLANG") {
+    let clang = run path(unsafe String.fromUtf8Unchecked(Bytes.asSlice(&value)))
+    if let Option<Path>.Some { value: directory } = move run Path.parent(&clang) {
+      let beside = run Path.join(&directory,"llvm-profdata")
+      if run FileSystem.exists(&beside) { return move beside }
+    }
+  }
+  return run locate("llvm-profdata")
+}
+effect fn profileBuild(compiler: string, name: string, value: string) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let env = [Variable { name: name, value: value }]
+  let done = run checked(run runProcess(compiler,&["build","--package","css-layout-test-harness","--release"],b"",0,&env,Option<&Path>.none()))
+  let mut out = StdoutWriter.make()
+  let mut err = StderrWriter.make()
+  run Writer.writeAll(Bytes.asSlice(&done.output)) |> Effect.provideMut<Writer>(&mut out)
+  run Writer.writeAll(Bytes.asSlice(&done.errors)) |> Effect.provideMut<Writer>(&mut err)
+}
+effect fn trainDocument(cli: string, document: &Value, profile: string) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let data = run J.encode(document)
+  let env = [Variable { name: "LLVM_PROFILE_FILE", value: profile }]
+  let _done = run runProcess(cli,&[],Bytes.asSlice(&data),0,&env,Option<&Path>.none())
+}
+effect fn copyExecutable(source: &Path, destination: &Path) -> ()
+  ! TaskError | OutOfMemoryError ? &mut Allocator {
+  match move run Effect.result(copyNative(source,destination)) {
+    Result<(), NativeFileError>.Success { .. } => {}
+    Result<(), NativeFileError>.Failure { error } => { drop error
+    run Task.abort("cannot copy instrumented benchmark binary") }
+  }
+}
+effect fn copyNative(source: &Path, destination: &Path) -> () ! NativeFileError {
+  run NativeFile.copy(Path.rawBytes(source),Path.rawBytes(destination),true,CopyMethod.Bytes)
+  let status = run NativeFile.status(Path.rawBytes(source),true)
+  run NativeFile.changeMode(Path.rawBytes(destination),status.mode,true)
+}
+effect fn profile(scratch: &Path, docs: string) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let raw = run Path.join(scratch,"raw")
+  run FileSystem.createDirectoriesRecursively(&raw)
+  let compiler = run compiler()
+  run profileBuild(String.view(&compiler),"SILK_PROFILE_GENERATE",pathText(&raw))
+  let binary = run binaryPath()
+  let instrumented = run Path.join(scratch,"css-layout-test-harness")
+  run copyExecutable(&binary,&instrumented)
+  let profilePath = run Path.join(&raw,"%p.profraw")
+  let trainingNames = ["deep-random-1k","flex-grow-1k","flex-wrap-10k","block-stack-10k","nested-chain-200","measured-wrap-1k","app-cards-500"]
+  let mut i: usize = 0
+  while i < trainingNames.length {
+    let document = run W.workload(trainingNames[i])
+    let benchmark = run request(&document,&Value.Null,10,false)
+    run trainDocument(pathText(&instrumented),&benchmark,pathText(&profilePath))
+    let scenarioStorage = run U.comparisonScenarios(&document)
+    let scenarios = J.members(&scenarioStorage)
+    let mut j: usize = 0
+    while j < scenarios.length {
+      let update = run request(&document,&scenarios[j].value,20,true)
+      run trainDocument(pathText(&instrumented),&update,pathText(&profilePath))
+      j = j + 1
+    }
+    i = i + 1
+  }
+  if docs != "" {
+    let nameStorage = run namedDocuments(docs,"")
+    let names = List<String>.asSlice(&nameStorage)
+    let directory = run path(docs)
+    i = 0
+    while i < names.length {
+      let mut name = run String.copy(String.view(&names[i]))
+      run String.append(&mut name,".json")
+      let source = run Path.join(&directory,String.view(&name))
+      let bytes = run FileSystem.readFile(&source)
+      if Bytes.asSlice(&bytes).length < 400000 {
+        let document = run J.parse(Bytes.asSlice(&bytes))
+        let request = run request(&document,&Value.Null,10,false)
+        run trainDocument(pathText(&instrumented),&request,pathText(&profilePath))
+      }
+      i = i + 1
+    }
+  }
+  let fixtures = run layoutPath("tests/fixtures/spec")
+  let entryStorage = run FileSystem.listDirectory(&fixtures)
+  let entries = List<DirectoryEntry>.asSlice(&entryStorage)
+  let env: [Variable<'_>; 1] = [Variable<'_> { value: pathText(&profilePath), name: "LLVM_PROFILE_FILE" }]
+  let mut fixture: usize = 0
+  i = 0
+  while i < entries.length {
+    if String.endsWith(pathText(&entries[i].path),".json") {
+      if fixture % 3 == 0 {
+        let input = run FileSystem.readFile(&entries[i].path)
+        let _done = run runProcess(pathText(&instrumented),&[],Bytes.asSlice(&input),0,&env,Option<&Path>.none())
+      }
+      fixture = fixture + 1
+    }
+    i = i + 1
+  }
+  let profileStorage = run FileSystem.listDirectory(&raw)
+  let profiles = List<DirectoryEntry>.asSlice(&profileStorage)
+  let merged = run Path.join(scratch,"css-layout-test-harness.profdata")
+  let mut arguments = List<string>.make()
+  run List<string>.append(&mut arguments,"merge")
+  run List<string>.append(&mut arguments,"-o")
+  run List<string>.append(&mut arguments,pathText(&merged))
+  i = 0
+  while i < profiles.length {
+    if String.endsWith(pathText(&profiles[i].path),".profraw") { run List<string>.append(&mut arguments,pathText(&profiles[i].path)) }
+    i = i + 1
+  }
+  if List<string>.length(&arguments) == 3 { run Task.abort("training wrote no profiles: does this Silk support SILK_PROFILE_GENERATE?") }
+  let merger = run profdata()
+  run Task.exec(pathText(&merger),List<string>.asSlice(&arguments))
+  run profileBuild(String.view(&compiler),"SILK_PROFILE_USE",pathText(&merged))
+  run say(pathText(&binary))
+  run say("\n")
+}
+pub effect fn pgoBuild(docs: String) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let cache = run layoutPath(".cache")
+  run FileSystem.createDirectoriesRecursively(&cache)
+  let scratch = run FileSystem.temporaryDirectory(&cache,"silk-layout-pgo-")
+  let scratchPath = run Path.fromBytes(Path.rawBytes(&scratch.path))
+  run profile(&scratchPath,String.view(&docs)) |> Effect.ensuring(FileSystem.releaseIgnored(move scratch))
+}

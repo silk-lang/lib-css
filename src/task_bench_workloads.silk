@@ -1,0 +1,372 @@
+import task_json { J }
+import silk.cli.task { Task, TaskError }
+import silk.json.value { Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.string { String }
+import silk.num.i64
+import silk.num.u32
+import silk.num.usize
+import silk.num.f64
+
+pub const NAMES: [string; 15] = ["deep-random-1k", "deep-random-10k", "deep-random-100k", "block-stack-10k", "flex-grow-1k", "flex-wrap-10k", "nested-chain-200", "measured-wrap-1k", "app-cards-500", "grid-fixed", "grid-fr", "grid-intrinsic", "grid-nested", "grid-auto-placement", "grid-areas-shell"]
+
+pub effect fn literal(value: string) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator { return run J.parse(String.utf8Bytes(value)) }
+pub effect fn decimal(value: i64) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut result = String.make()
+  let mut digits: [u8; 20] = [0; 20]
+  let mut at: usize = 20
+  let mut n = value
+  if n < 0 { run String.append(&mut result, "-")
+  n = -n }
+  while true {
+    at = at - 1
+    digits[at] = i64.toU8(n % 10 + 48)
+    n = n / 10
+    if n == 0 { break }
+  }
+  while at < 20 {
+    let character = [digits[at]]
+    run String.append(&mut result, unsafe String.fromUtf8Unchecked(&character))
+    at = at + 1
+  }
+  return move result
+}
+pub effect fn label(prefix: string, value: i64) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut name = run String.copy(prefix)
+  let suffix = run decimal(value)
+  run String.append(&mut name, String.view(&suffix))
+  return Value.String { text: move name }
+}
+pub effect fn style(kind: string, extra: string) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut result = run literal(if kind == "flex" { "{\"display\":\"flex\",\"boxSizing\":\"border-box\",\"flexDirection\":\"row\",\"flexWrap\":\"nowrap\",\"flexShrink\":1}" } else { "{\"display\":\"block\",\"boxSizing\":\"border-box\"}" })
+  let additions = run literal(extra)
+  run J.merge(&mut result, &additions)
+  return move result
+}
+pub effect fn add(nodes: &mut Value, parent: i64, style: Value, measure: Value) -> i64 ! OutOfMemoryError ? &mut Allocator {
+  let id = usize.toI64(J.length(&nodes))
+  let mut node = J.object()
+  run J.set(&mut node, "parent", if parent < 0 { Value.Null } else { J.int(parent) })
+  run J.set(&mut node, "style", move style)
+  if !J.isNull(&measure) { run J.set(&mut node, "measure", move measure) }
+  run J.push(&mut nodes, move node)
+  return id
+}
+pub effect fn measured(minimum: i64, maximum: i64, height: i64, wrap: bool) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut value = J.object()
+  run J.set(&mut value, "minWidth", J.int(minimum))
+  run J.set(&mut value, "maxWidth", J.int(maximum))
+  run J.set(&mut value, "height", J.int(height))
+  if wrap { run J.set(&mut value, "wrap", J.boolean(true)) }
+  return move value
+}
+pub effect fn document(nodes: Value, width: i64, height: i64) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut viewport = J.object()
+  run J.set(&mut viewport, "width", J.int(width))
+  run J.set(&mut viewport, "height", J.int(height))
+  let mut result = J.object()
+  run J.set(&mut result, "viewport", move viewport)
+  run J.set(&mut result, "nodes", move nodes)
+  return move result
+}
+
+// Python's integer-seeded MT19937 stream, retained so the frozen random workloads stay comparable.
+struct Random { state: [u32; 624], index: usize }
+fn random(seed: u32) -> Random {
+  let mut rng = Random { state: [0; 624], index: 624 }
+  rng.state[0] = 19650218
+  let mut i: usize = 1
+  while i < 624 {
+    let previous = rng.state[i - 1]
+    rng.state[i] = u32.wrappingAdd(u32.wrappingMultiply(1812433253, u32.bitXor(previous, u32.shiftRight(previous, 30))), usize.toU32(i))
+    i = i + 1
+  }
+  i = 1
+  let mut k: usize = 0
+  while k < 624 {
+    let previous = rng.state[i - 1]
+    rng.state[i] = u32.wrappingAdd(u32.bitXor(rng.state[i], u32.wrappingMultiply(u32.bitXor(previous, u32.shiftRight(previous, 30)), 1664525)), seed)
+    i = i + 1
+    if i >= 624 { rng.state[0] = rng.state[623]
+    i = 1 }
+    k = k + 1
+  }
+  k = 0
+  while k < 623 {
+    let previous = rng.state[i - 1]
+    rng.state[i] = u32.wrappingSubtract(u32.bitXor(rng.state[i], u32.wrappingMultiply(u32.bitXor(previous, u32.shiftRight(previous, 30)), 1566083941)), usize.toU32(i))
+    i = i + 1
+    if i >= 624 { rng.state[0] = rng.state[623]
+    i = 1 }
+    k = k + 1
+  }
+  rng.state[0] = 2147483648
+  return move rng
+}
+fn word(rng: &mut Random) -> u32 {
+  if rng.index >= 624 {
+    let mut i: usize = 0
+    while i < 624 {
+      let bits = u32.bitOr(u32.bitAnd(rng.state[i], 2147483648), u32.bitAnd(rng.state[(i + 1) % 624], 2147483647))
+      rng.state[i] = u32.bitXor(u32.bitXor(rng.state[(i + 397) % 624], u32.shiftRight(bits, 1)), if u32.bitAnd(bits, 1) != 0 { 2567483615 } else { 0 })
+      i = i + 1
+    }
+    rng.index = 0
+  }
+  let mut y = rng.state[rng.index]
+  rng.index = rng.index + 1
+  y = u32.bitXor(y, u32.shiftRight(y, 11))
+  y = u32.bitXor(y, u32.bitAnd(u32.shiftLeft(y, 7), 2636928640))
+  y = u32.bitXor(y, u32.bitAnd(u32.shiftLeft(y, 15), 4022730752))
+  return u32.bitXor(y, u32.shiftRight(y, 18))
+}
+fn fraction(rng: &mut Random) -> f64 {
+  let a = u32.shiftRight(word(&mut rng), 5)
+  let b = u32.shiftRight(word(&mut rng), 6)
+  return (u32.toF64(a) * 67108864.0 + u32.toF64(b)) / 9007199254740992.0
+}
+effect fn dimension(rng: &mut Random) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let roll = fraction(&mut rng)
+  if roll < 0.2 { return run J.text("auto") }
+  if roll < 0.8 { return J.float(f64.round(fraction(&mut rng) * 50000.0) / 100.0) }
+  let mut result = J.object()
+  run J.set(&mut result, "percent", J.float(f64.round(fraction(&mut rng) * 10000.0) / 10000.0))
+  return move result
+}
+effect fn randomTree(count: i64, seed: u32) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut rng = random(seed)
+  let mut nodes = J.array()
+  let mut i: i64 = 0
+  while i < count {
+    let mut nodeStyle = run style("flex", "{}")
+    run J.set(&mut nodeStyle, "width", run dimension(&mut rng))
+    run J.set(&mut nodeStyle, "height", run dimension(&mut rng))
+    let _id = run add(&mut nodes, if i == 0 { -1 } else { (i - 1) / 10 }, move nodeStyle, Value.Null)
+    i = i + 1
+  }
+  return run document(move nodes, 1000, 800)
+}
+
+effect fn simple(name: string) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut nodes = J.array()
+  let count: i64 = if name == "block-stack-10k" || name == "flex-wrap-10k" { 10000 } else { 1000 }
+  let rootStyle = if name == "block-stack-10k" { run style("block", "{\"width\":600}") }
+    else if name == "flex-wrap-10k" { run style("flex", "{\"width\":500,\"flexWrap\":\"wrap\",\"rowGap\":2,\"columnGap\":3}") }
+    else if name == "measured-wrap-1k" { run style("flex", "{\"width\":1000,\"flexWrap\":\"wrap\"}") }
+    else { run style("flex", "{\"width\":1000}") }
+  let _root = run add(&mut nodes, -1, move rootStyle, Value.Null)
+  let mut i: i64 = 0
+  while i < count {
+    let mut nodeStyle = run style(if name == "block-stack-10k" { "block" } else { "flex" }, "{}")
+    let mut measure = Value.Null
+    if name == "block-stack-10k" {
+      run J.set(&mut nodeStyle, "height", J.int(10 + i % 7))
+      run J.set(&mut nodeStyle, "padding", J.int(1))
+    } else if name == "flex-grow-1k" {
+      run J.set(&mut nodeStyle, "flexGrow", J.int(1 + i % 3))
+      run J.set(&mut nodeStyle, "flexBasis", J.int(0))
+      run J.set(&mut nodeStyle, "height", J.int(20))
+      run J.set(&mut nodeStyle, "minWidth", J.int(0))
+    } else if name == "flex-wrap-10k" {
+      run J.set(&mut nodeStyle, "width", J.int(20 + i % 17))
+      run J.set(&mut nodeStyle, "height", J.int(10 + i % 5))
+      run J.set(&mut nodeStyle, "flexShrink", J.int(0))
+    } else { measure = run measured(20 + i % 11, 60 + i % 37, 20, false) }
+    let _id = run add(&mut nodes, 0, move nodeStyle, move measure)
+    i = i + 1
+  }
+  return run document(move nodes, 1000, 800)
+}
+effect fn nested() -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut nodes = J.array()
+  let _root = run add(&mut nodes, -1, run style("block", "{\"width\":800}"), Value.Null)
+  let mut i: i64 = 1
+  while i < 200 {
+    let nodeStyle = if i % 2 != 0 { run style("block", "{\"padding\":1}") } else { run style("flex", "{\"flexDirection\":\"column\",\"padding\":1}") }
+    let _id = run add(&mut nodes, i - 1, move nodeStyle, Value.Null)
+    i = i + 1
+  }
+  let _last = run add(&mut nodes, 199, run style("block", "{\"height\":10}"), Value.Null)
+  return run document(move nodes, 1000, 800)
+}
+effect fn cards() -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut nodes = J.array()
+  let _root = run add(&mut nodes, -1, run style("block", "{\"width\":1200,\"padding\":8}"), Value.Null)
+  let mut row: i64 = 0
+  let mut card: i64 = 0
+  while card < 500 {
+    if card % 4 == 0 { row = run add(&mut nodes, 0, run style("flex", "{\"columnGap\":8,\"marginBottom\":8,\"alignItems\":\"stretch\"}"), Value.Null) }
+    let body = run add(&mut nodes, row, run style("flex", "{\"flexDirection\":\"column\",\"flexGrow\":1,\"flexBasis\":0,\"minWidth\":0,\"padding\":6,\"border\":1,\"rowGap\":4}"), Value.Null)
+    let header = run add(&mut nodes, body, run style("flex", "{\"alignItems\":\"center\",\"columnGap\":6}"), Value.Null)
+    let _icon = run add(&mut nodes, header, run style("flex", "{\"width\":32,\"height\":32,\"flexShrink\":0}"), Value.Null)
+    let _title = run add(&mut nodes, header, run style("flex", "{\"flexGrow\":1}"), run measured(40, 160 + card % 50, 16, false))
+    let _text = run add(&mut nodes, body, run style("flex", "{}"), run measured(60, 900 + card % 200, 48, false))
+    let footer = run add(&mut nodes, body, run style("flex", "{\"justifyContent\":\"flex-end\",\"columnGap\":4}"), Value.Null)
+    let mut button: i64 = 0
+    while button < 3 { let _button = run add(&mut nodes, footer, run style("flex", "{\"width\":48,\"height\":24,\"flexShrink\":0}"), Value.Null)
+    button = button + 1 }
+    card = card + 1
+  }
+  return run document(move nodes, 1200, 800)
+}
+
+effect fn gridColumns(name: string) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let width: i64 = if name == "grid-fixed" { 1334 } else if name == "grid-fr" { 1254 } else { 1800 }
+  let mut root = run literal("{\"display\":\"grid\",\"boxSizing\":\"border-box\",\"gridAutoFlow\":\"row\",\"columnGap\":6,\"rowGap\":4,\"justifyItems\":\"stretch\",\"alignItems\":\"start\"}")
+  run J.set(&mut root, "width", J.int(width))
+  let columns = if name == "grid-fixed" { run literal("[64,96,128,160,192,64,96,128,160,192]") }
+    else if name == "grid-fr" { run literal("[{\"minmax\":[0,{\"fr\":1}]},{\"fr\":2},{\"fr\":3},{\"fr\":4},{\"fr\":5},{\"minmax\":[0,{\"fr\":1}]},{\"fr\":2},{\"fr\":3},{\"fr\":4},{\"fr\":5}]") }
+    else { run literal("[\"min-content\",\"max-content\",{\"fitContent\":120},{\"minmax\":[40,\"max-content\"]},\"auto\",\"min-content\",\"max-content\",{\"fitContent\":120},{\"minmax\":[40,\"max-content\"]},\"auto\"]") }
+  run J.set(&mut root, "gridTemplateColumns", move columns)
+  if name == "grid-fixed" {
+    let mut rows = J.array()
+    let mut i: i64 = 0
+    while i < 1000 { run J.push(&mut rows, J.int(160))
+    i = i + 1 }
+    run J.set(&mut root, "gridTemplateRows", move rows)
+    run J.set(&mut root, "gridAutoRows", J.int(160))
+    run J.set(&mut root, "alignItems", run J.text("stretch"))
+  } else { run J.set(&mut root, "gridAutoRows", run literal(if name == "grid-fr" { "[\"auto\"]" } else { "\"auto\"" })) }
+  let mut nodes = J.array()
+  let _root = run add(&mut nodes, -1, move root, Value.Null)
+  let mut i: i64 = 0
+  while i < 10000 {
+    let row = i / 10
+    let column = i % 10
+    let mut leaf = run style("block", "{}")
+    let mut end = J.object()
+    run J.set(&mut end, "span", J.int(if name == "grid-intrinsic" && i % 17 == 0 && column < 9 { 2 } else { 1 }))
+    run J.set(&mut leaf, "gridColumnEnd", move end)
+    run J.set(&mut leaf, "gridColumnStart", J.int(column + 1))
+    run J.set(&mut leaf, "gridRowStart", J.int(row + 1))
+    run J.set(&mut leaf, "gridRowEnd", J.int(row + 2))
+    if name != "grid-intrinsic" { run J.set(&mut leaf, "minWidth", J.int(0)) }
+    if name == "grid-fixed" {
+      let alignment = ["start", "end", "center", "stretch"]
+      run J.set(&mut leaf, "alignSelf", run J.text(alignment[i64.toUsize(i % 4)]))
+    } else if name == "grid-fr" {
+      let mut start = J.object()
+      run J.set(&mut start, "line", J.int(column + 1))
+      run J.set(&mut leaf, "gridColumnStart", move start)
+      run J.set(&mut leaf, "gridColumnEnd", J.int(column + 2))
+      run J.set(&mut leaf, "gridRowEnd", run literal("{\"span\":1}"))
+    }
+    let minimum = if name == "grid-intrinsic" { 16 + i % 17 } else { 16 }
+    let maximum = if name == "grid-fixed" { 420 + i % 181 } else if name == "grid-fr" { 720 + i % 241 } else { 120 + i % 181 }
+    let _leaf = run add(&mut nodes, 0, move leaf, run measured(minimum, maximum, 12, true))
+    i = i + 1
+  }
+  return run document(move nodes, width, 800)
+}
+
+effect fn gridNested() -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut root = run literal("{\"display\":\"grid\",\"boxSizing\":\"border-box\",\"width\":1272,\"gridAutoRows\":\"auto\",\"gridAutoFlow\":\"row\",\"columnGap\":8,\"rowGap\":8,\"justifyItems\":\"stretch\",\"alignItems\":\"stretch\"}")
+  let mut columns = J.array()
+  let mut i: i64 = 0
+  while i < 10 { run J.push(&mut columns, run literal("{\"minmax\":[0,{\"fr\":1}]}"))
+  i = i + 1 }
+  run J.set(&mut root, "gridTemplateColumns", move columns)
+  let mut nodes = J.array()
+  let _root = run add(&mut nodes, -1, move root, Value.Null)
+  i = 0
+  while i < 1000 {
+    let mut cardStyle = run literal("{\"display\":\"grid\",\"boxSizing\":\"border-box\",\"gridTemplateColumns\":[\"min-content\",{\"fitContent\":48},{\"minmax\":[0,{\"fr\":1}]}],\"gridAutoRows\":\"auto\",\"gridAutoFlow\":\"row\",\"columnGap\":4,\"justifyItems\":\"stretch\",\"alignItems\":\"start\"}")
+    run J.set(&mut cardStyle, "gridColumnStart", J.int(i % 10 + 1))
+    run J.set(&mut cardStyle, "gridRowStart", J.int(i / 10 + 1))
+    let card = run add(&mut nodes, 0, move cardStyle, Value.Null)
+    let mut column: i64 = 1
+    while column <= 2 {
+      let mut leaf = run style("block", "{\"gridRowStart\":1}")
+      run J.set(&mut leaf, "gridColumnStart", J.int(column))
+      let _leaf = run add(&mut nodes, card, move leaf, run measured(8, if column == 1 { 80 + i % 21 } else { 48 }, 8, true))
+      column = column + 1
+    }
+    let nested = run add(&mut nodes, card, run literal("{\"display\":\"grid\",\"boxSizing\":\"border-box\",\"minWidth\":0,\"gridColumnStart\":3,\"gridRowStart\":1,\"gridTemplateColumns\":[\"auto\",{\"minmax\":[0,{\"fr\":1}]}],\"gridAutoRows\":\"auto\",\"gridAutoFlow\":\"row\",\"justifyItems\":\"stretch\",\"alignItems\":\"start\"}"), Value.Null)
+    column = 1
+    while column <= 2 {
+      let mut leaf = run style("block", "{\"gridRowStart\":1,\"minWidth\":0}")
+      run J.set(&mut leaf, "gridColumnStart", J.int(column))
+      let _leaf = run add(&mut nodes, nested, move leaf, run measured(8, if column == 1 { 32 } else { 64 + i % 17 }, 12, true))
+      column = column + 1
+    }
+    i = i + 1
+  }
+  return run document(move nodes, 1272, 800)
+}
+effect fn gridAuto() -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut nodes = J.array()
+  let _root = run add(&mut nodes, -1, run style("block", "{\"width\":516}"), Value.Null)
+  let mut flow: i64 = 0
+  while flow < 2 {
+    let mut root = run literal("{\"display\":\"grid\",\"boxSizing\":\"border-box\",\"width\":516,\"gridTemplateColumns\":[48,48,48,48,48,48,48,48,48,48],\"gridTemplateRows\":[24],\"gridAutoRows\":[24,32,40],\"columnGap\":4,\"rowGap\":2,\"justifyContent\":\"start\",\"alignContent\":\"start\",\"justifyItems\":\"start\",\"alignItems\":\"start\"}")
+    run J.set(&mut root, "gridAutoFlow", run J.text(if flow == 0 { "row" } else { "row dense" }))
+    let grid = run add(&mut nodes, 0, move root, Value.Null)
+    let mut i: i64 = 0
+    while i < 5000 {
+      let mut leaf = run style("block", "{\"width\":24,\"height\":12,\"gridColumnStart\":\"auto\",\"gridRowStart\":\"auto\"}")
+      let mut end = J.object()
+      let spans: [i64; 5] = [3,3,3,2,1]
+      run J.set(&mut end, "span", J.int(spans[i64.toUsize(i % 5)]))
+      run J.set(&mut leaf, "gridColumnEnd", move end)
+      let mut rowEnd = J.object()
+      run J.set(&mut rowEnd, "span", J.int(if i % 7 == 0 { 2 } else { 1 }))
+      run J.set(&mut leaf, "gridRowEnd", move rowEnd)
+      let _leaf = run add(&mut nodes, grid, move leaf, Value.Null)
+      i = i + 1
+    }
+    flow = flow + 1
+  }
+  return run document(move nodes, 516, 800)
+}
+effect fn area(kind: string, name: string, extra: string) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut result = run style(kind, extra)
+  run J.set(&mut result, "gridColumnStart", run J.text(name))
+  run J.set(&mut result, "gridColumnEnd", run J.text(name))
+  run J.set(&mut result, "gridRowStart", run J.text(name))
+  run J.set(&mut result, "gridRowEnd", run J.text(name))
+  return move result
+}
+effect fn gridShell() -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut nodes = J.array()
+  let _root = run add(&mut nodes, -1, run literal("{\"display\":\"grid\",\"boxSizing\":\"border-box\",\"width\":1200,\"padding\":12,\"gridTemplateAreas\":[[\"header\",\"header\"],[\"nav\",\"main\"],[\"footer\",\"footer\"]],\"gridTemplateColumns\":[200,{\"minmax\":[0,{\"fr\":1}]}],\"gridTemplateRows\":[64,\"auto\",32],\"gridAutoFlow\":\"row\",\"columnGap\":12,\"rowGap\":12,\"justifyItems\":\"stretch\",\"alignItems\":\"stretch\"}"), Value.Null)
+  let header = run add(&mut nodes, 0, run area("flex", "header", "{\"columnGap\":12,\"alignItems\":\"center\"}"), Value.Null)
+  let _logo = run add(&mut nodes, header, run style("block", "{\"width\":120,\"height\":32,\"flexShrink\":0}"), Value.Null)
+  let _title = run add(&mut nodes, header, run style("block", "{\"flexGrow\":1,\"minWidth\":0}"), run measured(40,420,20,true))
+  let _button = run add(&mut nodes, header, run style("block", "{\"width\":64,\"height\":24,\"flexShrink\":0}"), Value.Null)
+  let nav = run add(&mut nodes, 0, run area("flex", "nav", "{\"flexDirection\":\"column\",\"rowGap\":4,\"alignItems\":\"stretch\",\"justifyContent\":\"flex-start\",\"alignSelf\":\"start\"}"), Value.Null)
+  let mut i: i64 = 0
+  while i < 24 { let _item = run add(&mut nodes, nav, run style("block", "{\"padding\":4,\"flexShrink\":0}"), run measured(24,120 + i % 9 * 12,16,true))
+  i = i + 1 }
+  let main = run add(&mut nodes, 0, run area("block", "main", "{\"minWidth\":0}"), Value.Null)
+  let mut row: i64 = main
+  i = 0
+  while i < 500 {
+    if i % 4 == 0 { row = run add(&mut nodes, main, run style("flex", "{\"columnGap\":8,\"marginBottom\":8,\"alignItems\":\"stretch\"}"), Value.Null) }
+    let body = run add(&mut nodes, row, run style("block", "{\"flexGrow\":1,\"flexBasis\":0,\"minWidth\":0,\"padding\":8,\"border\":1}"), Value.Null)
+    let title = run add(&mut nodes, body, run style("flex", "{\"columnGap\":6,\"alignItems\":\"center\",\"marginBottom\":6}"), Value.Null)
+    let _icon = run add(&mut nodes, title, run style("block", "{\"width\":24,\"height\":24,\"flexShrink\":0}"), Value.Null)
+    let _title = run add(&mut nodes, title, run style("block", "{\"flexGrow\":1,\"minWidth\":0}"), run measured(24,100 + i % 41,16,true))
+    let _text = run add(&mut nodes, body, run style("block", "{\"minWidth\":0,\"marginBottom\":6}"), run measured(32,360 + i % 181,12,true))
+    let actions = run add(&mut nodes, body, run style("flex", "{\"columnGap\":4,\"justifyContent\":\"flex-end\"}"), Value.Null)
+    let mut action: i64 = 0
+    while action < 2 { let _button = run add(&mut nodes, actions, run style("block", "{\"width\":48,\"height\":24,\"flexShrink\":0}"), Value.Null)
+    action = action + 1 }
+    i = i + 1
+  }
+  let footer = run add(&mut nodes, 0, run area("flex", "footer", "{\"justifyContent\":\"flex-end\",\"alignItems\":\"center\"}"), Value.Null)
+  let _footer = run add(&mut nodes, footer, run style("block", "{\"width\":180,\"height\":16}"), Value.Null)
+  return run document(move nodes, 1200, 800)
+}
+pub effect fn workload(name: string) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if name == "deep-random-1k" { return run randomTree(1000, 1) }
+  if name == "deep-random-10k" { return run randomTree(10000, 2) }
+  if name == "deep-random-100k" { return run randomTree(100000, 3) }
+  if name == "block-stack-10k" || name == "flex-grow-1k" || name == "flex-wrap-10k" || name == "measured-wrap-1k" { return run simple(name) }
+  if name == "nested-chain-200" { return run nested() }
+  if name == "app-cards-500" { return run cards() }
+  if name == "grid-fixed" || name == "grid-fr" || name == "grid-intrinsic" { return run gridColumns(name) }
+  if name == "grid-nested" { return run gridNested() }
+  if name == "grid-auto-placement" { return run gridAuto() }
+  if name == "grid-areas-shell" { return run gridShell() }
+  run Task.abort("unknown benchmark workload")
+}

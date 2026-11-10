@@ -1,0 +1,274 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter }
+import silk.json.value { Json, Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileError, FileSystem, Path }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.format { Format }
+import silk.text.string { String }
+import silk.num.i64
+import silk.num.i32
+import silk.num.usize
+import task_json { J }
+import task_update_common { U }
+import task_sources_common { sort }
+
+pub struct FixtureUpdatesOptions { pub cli: String }
+struct Scenario { name: String, cycle: Value }
+
+effect fn add(list: &mut List<Scenario>, name: string, cycle: Value) -> () ! OutOfMemoryError ? &mut Allocator {
+  run List<Scenario>.append(&mut list, Scenario { name: run String.copy(name), cycle: move cycle })
+}
+effect fn variant(list: &mut List<Scenario>, name: string, target: usize, original: &Value, changed: Value) -> () ! OutOfMemoryError ? &mut Allocator {
+  let step = run U.setStep(target, "style", move changed)
+  run add(&mut list, name, run U.singleton(run J.copy(&step)))
+  let mut back = run String.copy(name)
+  run String.append(&mut back, "-back")
+  run add(&mut list, String.view(&back), run U.pair(move step, run U.setStep(target, "style", run J.copy(original))))
+}
+fn grid(value: &Value) -> bool {
+  let display = J.str(J.get(J.get(value, "style"), "display"))
+  return display == "grid" || display == "block grid" || display == "inline-grid" || display == "inline grid"
+}
+fn scroll(value: &Value) -> bool { let text = J.str(value)
+return text == "scroll" || text == "auto" || text == "hidden" }
+fn subgrid(value: &Value) -> bool { return J.str(value) == "subgrid" || J.has(value, "subgrid") }
+
+effect fn scenarios(document: &Value) -> List<Scenario> ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let viewport = J.get(document, "viewport")
+  let width: f64 = if J.has(viewport, "width") { J.num(J.get(viewport, "width")) } else { 800.0 }
+  let height: f64 = if J.has(viewport, "height") { J.num(J.get(viewport, "height")) } else { 600.0 }
+  let mut result = List<Scenario>.make()
+  let mut resize = J.array()
+  run J.push(&mut resize, run U.viewportStep(width - 37.0, height))
+  run J.push(&mut resize, run U.viewportStep(width + 23.0, height - 19.0))
+  run J.push(&mut resize, run U.viewportStep(width, height))
+  run add(&mut result, "resize", move resize)
+  let nodes = J.items(J.get(document, "nodes"))
+  let mut elements = List<usize>.make()
+  let mut scrollers = List<usize>.make()
+  let mut texts = List<usize>.make()
+  let mut grids = List<usize>.make()
+  let mut i: usize = 0
+  while i < nodes.length {
+    let node = &nodes[i]
+    let style = J.get(node, "style")
+    if !J.isNull(J.get(node, "parent")) && J.has(node, "style") { run elements.append(i) }
+    if J.has(node, "style") && (scroll(J.get(style, "overflowX")) || scroll(J.get(style, "overflowY")) || scroll(J.get(style, "overflow"))) { run scrollers.append(i) }
+    let text = J.get(node, "text")
+    match &text.* { Value.String { .. } => run texts.append(i)
+    _ => {} }
+    if grid(node) { run grids.append(i) }
+    i = i + 1
+  }
+  if elements.length() != 0 {
+    let node = elements.asSlice()[elements.length() / 2]
+    let style = J.get(&nodes[node], "style")
+    run add(&mut result, "restyle", run U.singleton(run U.setStep(node, "style", run J.copy(style))))
+    let hidden = run J.overlay(style, "{\"display\":\"none\"}")
+    run add(&mut result, "hide", run U.pair(run U.setStep(node, "style", move hidden), run U.setStep(node, "style", run J.copy(style))))
+    let targets = [node, i64.toUsize(J.integer(J.get(&nodes[node], "parent")))]
+    let names = ["restyle-facts", "restyle-facts-parent"]
+    i = 0
+    while i < 2 {
+      let original = J.get(&nodes[targets[i]], "style")
+      if !J.isNull(original) { run variant(&mut result, names[i], targets[i], original, run J.overlay(original, "{\"position\":\"relative\",\"insetTop\":3,\"marginLeft\":-4,\"width\":57}")) }
+      i = i + 1
+    }
+  }
+  if scrollers.length() != 0 {
+    let node = scrollers.asSlice()[scrollers.length() / 2]
+    let offset = J.get(&nodes[node], "scrollOffset")
+    let mut changed = J.object()
+    run J.set(&mut changed, "x", J.float(J.num(J.get(offset, "x")) + 7.0))
+    run J.set(&mut changed, "y", J.float(J.num(J.get(offset, "y")) + 5.0))
+    run add(&mut result, "scroll", run U.pair(run U.viewportStep(width - 37.0, height), run U.setStep(node, "scrollOffset", move changed)))
+  }
+  if texts.length() != 0 {
+    let node = texts.asSlice()[texts.length() / 2]
+    let text = J.str(J.get(&nodes[node], "text"))
+    let mut appended = run String.copy(text)
+    run String.append(&mut appended, " more words")
+    run add(&mut result, "retext", run U.singleton(run U.setStep(node, "text", run J.text(String.view(&appended)))))
+    let mut prefixed = run String.copy("x")
+    run String.append(&mut prefixed, text)
+    run add(&mut result, "retext-word", run U.pair(run U.viewportStep(width - 37.0, height), run U.setStep(node, "text", run J.text(String.view(&prefixed)))))
+  }
+  if grids.length() != 0 {
+    let owner = grids.asSlice()[0]
+    let original = J.get(&nodes[owner], "style")
+    let mut flow = run J.copy(original)
+    run J.set(&mut flow, "gridAutoFlow", run J.text(if J.str(J.get(original, "gridAutoFlow")) == "column dense" { "row" } else { "column dense" }))
+    run variant(&mut result, "grid-template", owner, original, run J.overlay(original, "{\"gridTemplateColumns\":[35,{\"minmax\":[0,{\"fr\":1}]}],\"gridTemplateRows\":[17,\"auto\"]}"))
+    run variant(&mut result, "grid-areas", owner, original, run J.overlay(original, "{\"gridTemplateAreas\":[[\"a\",\"a\"],[\"b\",\"c\"]]}"))
+    run variant(&mut result, "grid-flow", owner, original, move flow)
+    run variant(&mut result, "grid-implicit", owner, original, run J.overlay(original, "{\"gridAutoColumns\":[11,23],\"gridAutoRows\":[7,19]}"))
+    run variant(&mut result, "grid-gaps", owner, original, run J.overlay(original, "{\"columnGap\":7,\"rowGap\":5}"))
+    let mut childFound = false
+    let mut inflowFound = false
+    i = 0
+    while i < nodes.length {
+      if !J.isNull(J.get(&nodes[i], "parent")) && J.integer(J.get(&nodes[i], "parent")) == usize.toI64(owner) && J.has(&nodes[i], "style") {
+        let childStyle = J.get(&nodes[i], "style")
+        if !childFound { run variant(&mut result, "grid-placement", i, childStyle, run J.overlay(childStyle, "{\"gridColumnStart\":2,\"gridColumnEnd\":{\"span\":1},\"gridRowStart\":1,\"gridRowEnd\":{\"span\":1}}"))
+        childFound = true }
+        let position = J.str(J.get(childStyle, "position"))
+        if !inflowFound && position != "absolute" && position != "fixed" {
+          let mut ordered = run J.copy(childStyle)
+          run J.set(&mut ordered, "order", J.int(J.integer(J.get(childStyle, "order")) + 3))
+          run variant(&mut result, "grid-order", i, childStyle, move ordered)
+          inflowFound = true
+        }
+      }
+      i = i + 1
+    }
+  }
+  i = 0
+  while i < grids.length() {
+    let child = grids.asSlice()[i]
+    let childStyle = J.get(&nodes[child], "style")
+    let parent = J.get(&nodes[child], "parent")
+    if (subgrid(J.get(childStyle, "gridTemplateColumns")) || subgrid(J.get(childStyle, "gridTemplateRows"))) && !J.isNull(parent) {
+      let owner = i64.toUsize(J.integer(parent))
+      if grid(&nodes[owner]) {
+        let original = J.get(&nodes[owner], "style")
+        let mut number: [u8; 20] = [0; 20]
+        let size = Format.writeI64Display(usize.toI64(child), &mut number, 0)
+        let mut prefix = run String.copy("subgrid-")
+        run String.append(&mut prefix, unsafe String.fromUtf8Unchecked(Slice.view<u8>(&number, 0, size)))
+        run String.append(&mut prefix, "-")
+        let axes = ["gridTemplateColumns", "gridTemplateRows"]
+        let mut a: usize = 0
+        while a < axes.length {
+          let mut before = run J.copy(original)
+          run J.set(&mut before, axes[a], run U.json("[30,70]"))
+          let mut after = run J.copy(original)
+          run J.set(&mut after, axes[a], run U.json("[60,40]"))
+          let mut name = run String.copy(String.view(&prefix))
+          run String.append(&mut name, axes[a])
+          run String.append(&mut name, "-redistribution")
+          run add(&mut result, String.view(&name), run U.pair(run U.setStep(owner, "style", move before), run U.setStep(owner, "style", move after)))
+          a = a + 1
+        }
+        let named = run J.overlay(original, "{\"gridTemplateColumns\":[{\"names\":[\"before\"]},30,{\"names\":[\"after\"]},70]}")
+        let renamed = run J.overlay(original, "{\"gridTemplateColumns\":[{\"names\":[\"after\"]},30,{\"names\":[\"before\"]},70]}")
+        let mut name = run String.copy(String.view(&prefix))
+        run String.append(&mut name, "ancestor-names")
+        run add(&mut result, String.view(&name), run U.pair(run U.setStep(owner, "style", move named), run U.setStep(owner, "style", move renamed)))
+        let gaps = ["columnGap", "rowGap"]
+        a = 0
+        while a < gaps.length {
+          let mut zero = run J.copy(childStyle)
+          run J.set(&mut zero, gaps[a], J.int(0))
+          let mut ownerStyle = run J.copy(original)
+          run J.set(&mut ownerStyle, gaps[a], J.int(13))
+          let mut normal = run J.copy(childStyle)
+          run J.set(&mut normal, gaps[a], run J.text("normal"))
+          let mut step = run U.setStep(owner, "style", move ownerStyle)
+          let childStep = run U.setStep(child, "style", move normal)
+          run J.push(J.getMut(&mut step, "set"), run J.copy(J.at(J.get(&childStep, "set"), 0)))
+          let mut gapName = run String.copy(String.view(&prefix))
+          run String.append(&mut gapName, gaps[a])
+          run String.append(&mut gapName, "-inheritance")
+          run add(&mut result, String.view(&gapName), run U.pair(run U.setStep(child, "style", move zero), move step))
+          a = a + 1
+        }
+      }
+    }
+    i = i + 1
+  }
+  return move result
+}
+
+pub effect fn fixtureUpdates(options: &FixtureUpdatesOptions) -> ()
+  ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let root = run Task.root()
+  let directory = run Path.join(&root, "modules/layout/tests/fixtures")
+  let groups = run FileSystem.listDirectory(&directory)
+  let mut paths = List<String>.make()
+  let mut i: usize = 0
+  while i < groups.length() {
+    let group = &groups.asSlice()[i]
+    if group.kind.code == FileSystem.directory().code {
+      let entries = run FileSystem.listDirectory(&group.path)
+      let mut j: usize = 0
+      while j < entries.length() {
+        let entry = &entries.asSlice()[j]
+        let path = unsafe String.fromUtf8Unchecked(Path.rawBytes(&entry.path))
+        if String.endsWith(path, ".json") { run paths.append(run String.copy(path)) }
+        j = j + 1
+      }
+    }
+    i = i + 1
+  }
+  run sort(&mut paths)
+  let mut checked: usize = 0
+  let mut failures = List<String>.make()
+  i = 0
+  while i < paths.length() {
+    let pathText = String.view(&paths.asSlice()[i])
+    let path = run Path.make(pathText)
+    let bytes = run FileSystem.readFile(&path)
+    let fixture = run J.parse(Bytes.asSlice(&bytes))
+    let document = J.get(&fixture, "input")
+    let valid = match &document.* { Value.Object { .. } => !J.has(document, "fragmentation") && J.has(document, "nodes")
+    _ => false }
+    if valid {
+      let cases = run scenarios(document)
+      let mut c: usize = 0
+      while c < cases.length() {
+        let scenario = &cases.asSlice()[c]
+        let name = String.view(&scenario.name)
+        let final = run U.final(document, &scenario.cycle)
+        let fresh = run U.invoke(String.view(&options.cli), &final, 120)
+        let mut failed = false
+        let mut freshFailure = false
+        if fresh.code != 0 {
+          if String.startsWith(name, "grid-") || String.startsWith(name, "subgrid-") { checked = checked + 1
+          failed = true
+          freshFailure = true }
+        } else {
+          let updates = run U.updated(document, &scenario.cycle, J.length(&scenario.cycle))
+          let kept = run U.invoke(String.view(&options.cli), &updates, 120)
+          checked = checked + 1
+          if kept.code != 0 { failed = true }
+          else { let a = run J.parse(Bytes.asSlice(&kept.output))
+          let b = run J.parse(Bytes.asSlice(&fresh.output))
+          failed = !Json.equal(&a, &b) }
+        }
+        if failed {
+          let raw = String.utf8Bytes(pathText)
+          let mut start: usize = 0
+          let mut p: usize = 0
+          while p < raw.length { if raw[p] == 47 { start = p + 1 }
+          p = p + 1 }
+          let mut line = run String.copy(unsafe String.fromUtf8Unchecked(Slice.view<u8>(raw, start, raw.length - start - 5)))
+          run String.append(&mut line, " ")
+          run String.append(&mut line, name)
+          if freshFailure {
+            run String.append(&mut line, ": fresh layout failed, exit ")
+            let mut buffer: [u8; 20] = [0; 20]
+            let size = Format.writeI64Display(i32.toI64(fresh.code), &mut buffer, 0)
+            run String.append(&mut line, unsafe String.fromUtf8Unchecked(Slice.view<u8>(&buffer, 0, size)))
+          }
+          run failures.append(move line)
+        }
+        c = c + 1
+      }
+    }
+    i = i + 1
+  }
+  let mut out = StdoutWriter.make()
+  i = 0
+  while i < failures.length() { run Format.format("differs from a fresh layout: {}\n", &.(String.view(&failures.asSlice()[i]))) |> Effect.provideMut<Writer>(&mut out)
+  i = i + 1 }
+  run Format.format("{} update scenarios, {} failures\n", &.(checked, failures.length())) |> Effect.provideMut<Writer>(&mut out)
+  if failures.length() != 0 { run Task.abort("fixture update checks failed") }
+}

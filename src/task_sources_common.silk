@@ -1,0 +1,349 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.crypto.sha2 { Sha256 }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter }
+import silk.json.value { Json, Value, JsonEntry, JsonNumber }
+import silk.json.scanner { JsonError }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.system.child_process { ChildProcess, ProcessError }
+import silk.system.filesystem { FileSystem, FileError, Path, AtomicWriteError }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.text.string { String, InvalidUtf8 }
+import silk.num.usize
+import silk.num.u8
+import silk.num.u64
+
+pub effect fn text(bytes: &[u8]) -> string ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return match String.fromUtf8(bytes) {
+    Result<string, InvalidUtf8>.Success { value } => value
+    Result<string, InvalidUtf8>.Failure { .. } => run Task.abort("source is not valid UTF-8")
+  }
+}
+pub effect fn path(name: string) -> Path ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  if String.startsWith(name, "/") { return run Path.make(name) }
+  let root = run Task.root()
+  return run Path.resolve(&root, name)
+}
+pub effect fn read(name: string) -> Bytes ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let target = run path(name)
+  return run FileSystem.readFile(&target)
+}
+pub effect fn exists(name: string) -> bool ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let target = run path(name)
+  return run FileSystem.exists(&target)
+}
+pub effect fn save(name: string, bytes: &[u8]) -> () ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let target = run path(name)
+  if run FileSystem.exists(&target) {
+    let old = run FileSystem.readFile(&target)
+    if equal(Bytes.asSlice(&old), bytes) { return () }
+  }
+  if let Option<Path>.Some { value } = move run Path.parent(&target) {
+    run FileSystem.createDirectoriesRecursively(&value)
+  }
+  match move run Effect.result(FileSystem.writeFileAtomic(&target, bytes, FileSystem.replaceExisting(), FileSystem.buffered())) {
+    Result<(), AtomicWriteError>.Success { .. } => {}
+    Result<(), AtomicWriteError>.Failure { .. } => run Task.abort("atomic source publication failed")
+  }
+}
+pub fn equal(a: &[u8], b: &[u8]) -> bool {
+  if a.length != b.length { return false }
+  let mut i: usize = 0
+  while i < a.length { if a[i] != b[i] { return false }
+     i = i + 1 }
+  return true
+}
+pub effect fn join(a: string, b: string) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut result = run String.copy(a)
+  run String.append(&mut result, b)
+  return move result
+}
+pub effect fn decimal(value: usize) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut digits: [u8; 32] = [0; 32]
+  let mut at: usize = 32
+  let mut n = value
+  while true {
+    at = at - 1
+    digits[at] = usize.toU8(n % 10) + 48
+    n = n / 10
+    if n == 0 { break }
+  }
+  let mut result = String.make()
+  while at < 32 { let one = [digits[at]]
+     run String.append(&mut result, unsafe String.fromUtf8Unchecked(&one))
+     at = at + 1 }
+  return move result
+}
+pub fn hexDigit(value: u8) -> u8 { return if value < 10 { value + 48 } else { value + 87 } }
+pub effect fn digest(bytes: &[u8]) -> String ! OutOfMemoryError ? &mut Allocator {
+  let hash = Sha256.hash(bytes)
+  let mut result: [u8; 64] = [0; 64]
+  let mut i: usize = 0
+  while i < 32 { result[i * 2] = hexDigit(hash[i] / 16)
+     result[i * 2 + 1] = hexDigit(hash[i] % 16)
+     i = i + 1 }
+  return run String.copy(unsafe String.fromUtf8Unchecked(&result))
+}
+pub fn hexadecimal(value: string, length: usize) -> bool {
+  let bytes = String.utf8Bytes(value)
+  if bytes.length != length { return false }
+  let mut i: usize = 0
+  while i < bytes.length {
+    let b = bytes[i]
+    if !((b >= 48 && b <= 57) || (b >= 97 && b <= 102)) { return false }
+    i = i + 1
+  }
+  return true
+}
+pub effect fn parse(bytes: &[u8]) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return run Effect.catch<JsonError>(Json.parse(bytes), effect fn(error: JsonError) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator { drop error
+     return run Task.abort("invalid source JSON") })
+}
+pub effect fn field<'a>(value: &'a Value, key: string) -> &'a Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return match Json.field(value, key) {
+    Option<&'a Value>.Some { value: found } => found
+    Option<&'a Value>.None => run Task.abort(key)
+  }
+}
+pub effect fn stringValue(value: &Value) -> string ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return match Json.asString(Option<&Value>.some(value)) {
+    Option<string>.Some { value: found } => found
+    Option<string>.None => run Task.abort("expected JSON string")
+  }
+}
+pub effect fn stringField<'a>(value: &'a Value, key: string) -> string<'a> ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return run stringValue(run field(value, key))
+}
+pub effect fn number(value: &Value) -> usize ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return match Json.asU64(Option<&Value>.some(value)) {
+    Option<u64>.Some { value: found } => u64.toUsize(found)
+    Option<u64>.None => run Task.abort("expected nonnegative JSON integer")
+  }
+}
+pub effect fn entries(value: &Value) -> &[JsonEntry] ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return match &value.* {
+    Value.Object { entries: found } => List<JsonEntry>.asSlice(&found)
+    _ => run Task.abort("expected JSON object")
+  }
+}
+pub effect fn items(value: &Value) -> &[Value] ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return match &value.* {
+    Value.Array { values } => List<Value>.asSlice(&values)
+    _ => run Task.abort("expected JSON array")
+  }
+}
+pub fn object() -> Value { return Value.Object { entries: List<JsonEntry>.make() } }
+pub effect fn set(value: &mut Value, key: string, item: Value) -> () ! OutOfMemoryError ? &mut Allocator {
+  match &mut value.* {
+    Value.Object { entries } => {
+      let mut i: usize = 0
+      while i < List<JsonEntry>.length(&entries) {
+        if List<JsonEntry>.asSlice(&entries)[i].key.view() == key {
+          let slots = List<JsonEntry>.asMutSlice(&mut entries)
+          slots[i].value = move item
+          return ()
+        }
+        i = i + 1
+      }
+      run List<JsonEntry>.append(&mut entries, JsonEntry { key: run String.copy(key), value: move item })
+    }
+    _ => { drop item
+       Intrinsic.trap("set requires an object") }
+  }
+}
+pub effect fn str(value: string) -> Value ! OutOfMemoryError ? &mut Allocator { return Value.String { text: run String.copy(value) } }
+pub fn num(value: usize) -> Value { return Value.Number { value: JsonNumber.Unsigned { value: usize.toU64(value) } } }
+pub fn less(a: string, b: string) -> bool {
+  let x = String.utf8Bytes(a)
+  let y = String.utf8Bytes(b)
+  let mut i: usize = 0
+  while i < x.length && i < y.length { if x[i] != y[i] { return x[i] < y[i] }
+     i = i + 1 }
+  return x.length < y.length
+}
+pub effect fn sortedKeys(value: &Value) -> List<String> ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let values = run entries(value)
+  let mut result = List<String>.make()
+  let mut i: usize = 0
+  while i < values.length { run List<String>.append(&mut result, run String.copy(values[i].key.view()))
+     i = i + 1 }
+  run sort(&mut result)
+  return move result
+}
+pub effect fn sort(values: &mut List<String>) -> () ! OutOfMemoryError ? &mut Allocator {
+  // Stable insertion into an index order is unnecessary for the small source catalogs.
+  let mut i: usize = 1
+  while i < List<String>.length(&values) {
+    let mut j = i
+    while j > 0 && less(List<String>.asSlice(&values)[j].view(), List<String>.asSlice(&values)[j - 1].view()) {
+      let slots = List<String>.asMutSlice(&mut values)
+      let right = Intrinsic.replace(slots[j], String.make())
+      let left = Intrinsic.replace(slots[j - 1], move right)
+      slots[j] = move left
+      j = j - 1
+    }
+    i = i + 1
+  }
+}
+pub fn contains(values: &List<String>, name: string) -> bool {
+  let items = List<String>.asSlice(values)
+  let mut i: usize = 0
+  while i < items.length { if items[i].view() == name { return true }
+     i = i + 1 }
+  return false
+}
+pub effect fn quote(output: &mut String, value: string) -> () ! OutOfMemoryError ? &mut Allocator {
+  run String.append(&mut output, "\"")
+  let bytes = String.utf8Bytes(value)
+  let mut start: usize = 0
+  let mut i: usize = 0
+  while i < bytes.length {
+    let byte = bytes[i]
+    if byte < 32 || byte == 34 || byte == 92 {
+      run String.append(&mut output, String.slice(value, start, i - start))
+      if byte == 34 { run String.append(&mut output, "\\\"") }
+      else if byte == 92 { run String.append(&mut output, "\\\\") }
+      else if byte == 10 { run String.append(&mut output, "\\n") }
+      else if byte == 13 { run String.append(&mut output, "\\r") }
+      else if byte == 9 { run String.append(&mut output, "\\t") }
+      else if byte == 8 { run String.append(&mut output, "\\b") }
+      else if byte == 12 { run String.append(&mut output, "\\f") }
+      else { let escaped: [u8; 6] = [92, 117, 48, 48, hexDigit(byte / 16), hexDigit(byte % 16)]
+         run String.append(&mut output, unsafe String.fromUtf8Unchecked(&escaped)) }
+      start = i + 1
+    }
+    i = i + 1
+  }
+  run String.append(&mut output, String.slice(value, start, bytes.length - start))
+  run String.append(&mut output, "\"")
+}
+effect fn indent(output: &mut String, depth: usize) -> () ! OutOfMemoryError ? &mut Allocator {
+  let mut i: usize = 0
+  while i < depth { run String.append(&mut output, "  ")
+     i = i + 1 }
+}
+pub effect fn pretty(output: &mut String, value: &Value, depth: usize) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  match &value.* {
+    Value.Null => run String.append(&mut output, "null")
+    Value.Bool { value: flag } => run String.append(&mut output, if flag { "true" } else { "false" })
+    Value.Number { .. } => { let rendered = run decimal(run number(value))
+       run String.append(&mut output, rendered.view()) }
+    Value.String { text: content } => run quote(&mut output, content.view())
+    Value.Array { values } => {
+      run String.append(&mut output, "[")
+      let items = List<Value>.asSlice(&values)
+      let mut i: usize = 0
+      while i < items.length {
+        run String.append(&mut output, if i == 0 { "\n" } else { ",\n" })
+        run indent(&mut output, depth + 1)
+        run pretty(&mut output, &items[i], depth + 1)
+        i = i + 1
+      }
+      if items.length > 0 { run String.append(&mut output, "\n")
+         run indent(&mut output, depth) }
+      run String.append(&mut output, "]")
+    }
+    Value.Object { entries: members } => {
+      run String.append(&mut output, "{")
+      let items = List<JsonEntry>.asSlice(&members)
+      let mut i: usize = 0
+      while i < items.length {
+        run String.append(&mut output, if i == 0 { "\n" } else { ",\n" })
+        run indent(&mut output, depth + 1)
+        run quote(&mut output, items[i].key.view())
+        run String.append(&mut output, ": ")
+        run pretty(&mut output, &items[i].value, depth + 1)
+        i = i + 1
+      }
+      if items.length > 0 { run String.append(&mut output, "\n")
+         run indent(&mut output, depth) }
+      run String.append(&mut output, "}")
+    }
+  }
+}
+pub effect fn saveJson(name: string, value: &Value) -> () ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let mut output = String.make()
+  run pretty(&mut output, value, 0)
+  run String.append(&mut output, "\n")
+  run save(name, String.utf8Bytes(output.view()))
+}
+pub struct Download { pub resolved: String, pub body: Bytes }
+pub effect fn download(url: string, agent: string, strict: bool) -> Download ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  // The final newline separates curl's effective URL from arbitrary document bytes.
+  let timeout = if agent == "silk-svg-encoding-data/1" { "60" } else { "90" }
+  let output = run Task.capture("curl", &["--fail", "--silent", "--show-error", "--location", "--max-time", timeout, "--user-agent", agent, "--write-out", "\n%{url_effective}", "--url", url])
+  let bytes = Bytes.asSlice(&output)
+  let mut at = bytes.length
+  while at > 0 && bytes[at - 1] != 10 { at = at - 1 }
+  if at == 0 { run Task.abort("curl did not report a resolved URL") }
+  let resolved = run text(Slice.view<u8>(bytes, at, bytes.length - at))
+  if strict && (!String.startsWith(resolved, "https://") || at == 1) { run Task.abort("insecure redirect or empty specification") }
+  return Download { resolved: run String.copy(resolved), body: run Bytes.copy(Slice.view<u8>(bytes, 0, at - 1)) }
+}
+
+pub fn has(value: &Value, key: string) -> bool {
+  return match Json.field(value, key) {
+    Option<&Value>.Some { .. } => true
+    Option<&Value>.None => false
+  }
+}
+
+pub effect fn message(parts: &[string]) -> () ! WriterError {
+  let mut writer = StdoutWriter.make()
+  let mut i: usize = 0
+  while i < parts.length {
+    run Writer.writeAll(String.utf8Bytes(parts[i])) |> Effect.provideMut<Writer>(&mut writer)
+    i = i + 1
+  }
+  run Writer.writeAll(b"\n") |> Effect.provideMut<Writer>(&mut writer)
+}
+
+effect fn escapeUnit(output: &mut String, value: usize) -> () ! OutOfMemoryError ? &mut Allocator {
+  let escaped: [u8; 6] = [92, 117, hexDigit(usize.toU8(value / 4096)), hexDigit(usize.toU8(value / 256 % 16)), hexDigit(usize.toU8(value / 16 % 16)), hexDigit(usize.toU8(value % 16))]
+  run String.append(&mut output, unsafe String.fromUtf8Unchecked(&escaped))
+}
+
+pub effect fn saveSpecJson(name: string, value: &Value) -> () ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
+  let mut output = String.make()
+  run pretty(&mut output, value, 0)
+  run String.append(&mut output, "\n")
+  let bytes = String.utf8Bytes(output.view())
+  let mut ascii = true
+  let mut i: usize = 0
+  while i < bytes.length {
+    if bytes[i] >= 128 { ascii = false }
+    i = i + 1
+  }
+  if ascii { return run save(name, bytes) }
+  // Specification locks use JSON's ASCII spelling; encoding locks retain UTF-8 license text.
+  let mut escaped = run String.makeWithCapacity(bytes.length * 2)
+  i = 0
+  let mut start: usize = 0
+  while i < bytes.length {
+    if bytes[i] < 128 { i = i + 1 } else {
+      run String.append(&mut escaped, String.slice(output.view(), start, i - start))
+      let length: usize = if bytes[i] < 224 { 2 } else if bytes[i] < 240 { 3 } else { 4 }
+      let mask: u8 = if length == 2 { 32 } else if length == 3 { 16 } else { 8 }
+      let mut cp = u8.toUsize(bytes[i] % mask)
+      let mut j: usize = 1
+      while j < length {
+        cp = cp * 64 + u8.toUsize(bytes[i + j] % 64)
+        j = j + 1
+      }
+      if cp < 65536 { run escapeUnit(&mut escaped, cp) } else {
+        run escapeUnit(&mut escaped, 0xD800 + (cp - 65536) / 1024)
+        run escapeUnit(&mut escaped, 0xDC00 + (cp - 65536) % 1024)
+      }
+      i = i + length
+      start = i
+    }
+  }
+  run String.append(&mut escaped, String.slice(output.view(), start, bytes.length - start))
+  run save(name, String.utf8Bytes(escaped.view()))
+}

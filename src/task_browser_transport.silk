@@ -1,0 +1,662 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.io.writer { WriterError }
+import silk.json.value { Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.mem.pointer { Pointer }
+import silk.system.child_process { ChildProcess }
+import silk.system.filesystem { FileError, FileSystem, Path }
+import silk.system.host_input { HostInput, HostInputError }
+import silk.system.monotonic_clock { MonotonicClock }
+import silk.system.monotonic_clock_native { OsMonotonicClock }
+import silk.system.system_clock { SystemClock }
+import silk.system.subprocess { ExitStatus, SpawnOptions, Stdio, Subprocess, SubprocessError }
+import silk.text.string { InvalidUtf8, String }
+import silk.num.f64
+import silk.num.i32
+import silk.num.i64
+import silk.num.isize
+import silk.num.usize
+import task_json { J }
+
+type CdpError = TaskError | OutOfMemoryError | WriterError
+type OpenError = TaskError | OutOfMemoryError | WriterError | FileError | HostInputError
+
+// CDP pipe slots are independent of stdin/stdout. Calls are synchronous: only
+// one request is outstanding, while unsolicited protocol events are discarded.
+pub struct Chrome {
+  pub browser: Value,
+  process: Subprocess,
+  profile: Path,
+  script: Bytes,
+  session: Value,
+  nextId: i64,
+  input: i32,
+  output: i32,
+  errors: i32,
+  buffer: Bytes,
+  consumed: usize,
+  stderr: Bytes,
+  exited: bool,
+}
+
+extern "C" struct PollFd { fd: i32, events: i16, revents: i16 }
+@foreign(noCapture: .("buffer"))
+unsafe extern "C" fn read(fd: i32, buffer: ?[*]mut u8, count: usize) -> isize
+@foreign(noCapture: .("buffer"))
+unsafe extern "C" fn send(fd: i32, buffer: ?[*]const u8, count: usize, flags: i32) -> isize
+@foreign(noCapture: .("path"))
+unsafe extern "C" fn access(path: ?[*]const u8, mode: i32) -> i32
+static if Intrinsic.targetOperatingSystem() == "darwin" {
+  @foreign(noCapture: .("fds"))
+  unsafe extern "C" fn poll(fds: ?[*]mut PollFd, count: u32, timeout: i32) -> i32
+  unsafe extern "C" fn __error() -> *mut i32
+  @foreign(noCapture: .("value"))
+  unsafe extern "C" fn setsockopt(fd: i32, level: i32, option: i32, value: *const i32, length: u32) -> i32
+  fn errno() -> i32 { return unsafe Pointer.read<i32>(unsafe __error()) }
+  const AGAIN: i32 = 35
+  const SEND_FLAGS: i32 = 0
+} else {
+  @foreign(noCapture: .("fds"))
+  unsafe extern "C" fn poll(fds: ?[*]mut PollFd, count: usize, timeout: i32) -> i32
+  unsafe extern "C" fn __errno_location() -> *mut i32
+  fn errno() -> i32 { return unsafe Pointer.read<i32>(unsafe __errno_location()) }
+  const AGAIN: i32 = 11
+  const SEND_FLAGS: i32 = 16384
+}
+
+effect fn milliseconds() -> i64 {
+  let mut clock = OsMonotonicClock.make()
+  let instant = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
+  return SystemClock.seconds(&instant) * 1000 + SystemClock.nanoseconds(&instant) / 1000000
+}
+
+effect fn text(bytes: &[u8]) -> string ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return match String.fromUtf8(bytes) {
+    Result<string, InvalidUtf8>.Success { value } => value
+    Result<string, InvalidUtf8>.Failure { .. } => run Task.abort("Chrome adapter received invalid UTF-8")
+  }
+}
+
+effect fn executable(path: &Path) -> bool ! OutOfMemoryError ? &mut Allocator {
+  let mut terminated = run Bytes.copy(Path.rawBytes(path))
+  run terminated.append(b"\0")
+  return unsafe access(Pointer.fromSlice<u8>(terminated.asSlice()), 1) == 0
+}
+
+effect fn discover(supplied: string) -> Path ! OpenError ? &mut HostInput | &mut Allocator {
+  let mut chosen = run Bytes.copy(String.utf8Bytes(supplied))
+  if chosen.length() == 0 {
+    match move run HostInput.variableNamed("CHROME_PATH") {
+      Option<Bytes>.Some { value } => { chosen = move value }
+      Option<Bytes>.None => {}
+    }
+  }
+  if chosen.length() != 0 {
+    let path = if chosen.asSlice()[0] == 47 { run Path.fromBytes(chosen.asSlice()) } else {
+      let invocation = run Task.invocationDirectory()
+      run Path.resolveBytes(&invocation, chosen.asSlice())
+    }
+    if !run executable(&path) { run Task.abort("Chrome override is not executable") }
+    return move path
+  }
+  static if Intrinsic.targetOperatingSystem() == "darwin" {
+    let candidates = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium"]
+    let mut index: usize = 0
+    while index < candidates.length {
+      let path = run Path.make(candidates[index])
+      if run executable(&path) { return move path }
+      index = index + 1
+    }
+  } else {
+    let candidates = ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
+    let mut index: usize = 0
+    while index < candidates.length {
+      let path = run Path.make(candidates[index])
+      if run executable(&path) { return move path }
+      index = index + 1
+    }
+  }
+  run Task.abort("Chrome not found; supply --chrome PATH or CHROME_PATH. No browser is downloaded automatically.")
+}
+
+pub effect fn open(chrome: string, version: string) -> Chrome ! OpenError
+  ? &mut HostInput | &mut Allocator | &mut FileSystem {
+  let root = run Task.root()
+  let program = run discover(chrome)
+  let expected = if version != "" { run Bytes.copy(String.utf8Bytes(version)) } else {
+    match move run HostInput.variableNamed("CHROME_VERSION") {
+      Option<Bytes>.Some { value } => move value
+      Option<Bytes>.None => Bytes.make()
+    }
+  }
+  let expectedText = run text(expected.asSlice())
+  let runtimePath = run Path.join(&root, "modules/layout/browser/observe-dom.js")
+  let runtime = run FileSystem.readFile(&runtimePath)
+  let mut temp = Bytes.make()
+  let tempNames = ["TMPDIR", "TMP", "TEMP"]
+  let mut tempIndex: usize = 0
+  while temp.length() == 0 && tempIndex < tempNames.length {
+    match move run HostInput.variableNamed(tempNames[tempIndex]) {
+      Option<Bytes>.Some { value } => { temp = move value }
+      Option<Bytes>.None => {}
+    }
+    tempIndex = tempIndex + 1
+  }
+  if temp.length() == 0 { temp = run Bytes.copy(b"/tmp") }
+  let tempRoot = if temp.asSlice()[0] == 47 {
+    let filesystemRoot = run Path.root()
+    run Path.resolveBytes(&filesystemRoot, Slice.view<u8>(temp.asSlice(), 1, temp.length() - 1))
+  } else { run Path.resolveBytes(&root, temp.asSlice()) }
+  let profile = run FileSystem.createTemporaryDirectory(&tempRoot, b"silk-layout-chrome-")
+  let started = run Effect.result(launch(&program, &profile, move runtime))
+  let mut browser = match move started {
+    Result<Chrome, OpenError>.Success { value } => move value
+    Result<Chrome, OpenError>.Failure { error } => {
+      let _cleanup = run Effect.result(FileSystem.removeDirectoryRecursively(&profile))
+      fail move error
+    }
+  }
+  let initialized = run Effect.result(initialize(&mut browser, &program, expectedText))
+  match move initialized {
+    Result<(), CdpError>.Success { .. } => { return move browser }
+    Result<(), CdpError>.Failure { error } => {
+      let _cleanup = run Effect.result(close(move browser))
+      fail move error
+    }
+  }
+}
+
+effect fn launch(program: &Path, profile: &Path, runtime: Bytes) -> Chrome ! OpenError ? &mut Allocator {
+  let profileCopy = run Path.fromBytes(Path.rawBytes(profile))
+  let mut request = run ChildProcess.request(program)
+  run Subprocess.inheritEnvironment(&mut request)
+  run ChildProcess.addArgument(&mut request, "--headless=new")
+  run ChildProcess.addArgument(&mut request, "--remote-debugging-pipe")
+  let mut profileArgument = run Bytes.copy(b"--user-data-dir=")
+  run profileArgument.append(Path.rawBytes(profile))
+  run ChildProcess.addArgumentBytes(&mut request, profileArgument.asSlice())
+  let arguments = ["--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-extensions", "--force-device-scale-factor=1", "about:blank"]
+  let mut argument: usize = 0
+  while argument < arguments.length {
+    run ChildProcess.addArgument(&mut request, arguments[argument])
+    argument = argument + 1
+  }
+  let mut options = SpawnOptions.make()
+  run options.setStdio(2, Stdio.pipe())
+  run options.setStdio(3, Stdio.pipe())
+  run options.setStdio(4, Stdio.pipe())
+  let stderr = run Bytes.makeWithCapacity(8000)
+  let mut child = match move run Effect.result(Subprocess.spawn(&request, &options)) {
+    Result<Subprocess, SubprocessError | OutOfMemoryError>.Success { value } => move value
+    Result<Subprocess, SubprocessError | OutOfMemoryError>.Failure { error } => match move error {
+      OutOfMemoryError exhausted => { fail move exhausted }
+      SubprocessError refused => { drop refused
+      run Task.abort("Could not launch Chrome") }
+    }
+  }
+  let input = pipe(child.takePipe(3))
+  let output = pipe(child.takePipe(4))
+  let errors = pipe(child.takePipe(2))
+  return Chrome { browser: J.object(), process: move child, profile: move profileCopy, script: move runtime,
+    session: Value.Null, nextId: 0, input: input, output: output, errors: errors,
+    buffer: Bytes.make(), consumed: 0, stderr: move stderr, exited: false }
+}
+
+fn pipe(value: Option<i32>) -> i32 {
+  return match move value {
+    Option<i32>.Some { value: fd } => fd
+    Option<i32>.None => -1
+  }
+}
+
+effect fn initialize(chrome: &mut Chrome, program: &Path, expected: string) -> () ! CdpError ? &mut Allocator {
+  if chrome.input < 0 || chrome.output < 0 || chrome.errors < 0 { run Task.abort("Chrome CDP pipes were not created") }
+  static if Intrinsic.targetOperatingSystem() == "darwin" {
+    let enabled: i32 = 1
+    if unsafe setsockopt(chrome.input, 65535, 4130, Pointer.fromRef<i32>(&enabled), 4) != 0 {
+      run Task.abort("Could not suppress SIGPIPE on Chrome CDP socket")
+    }
+  }
+  chrome.browser = run command(&mut chrome, "Browser.getVersion", J.object(), false)
+  run J.set(&mut chrome.browser, "executable", run J.text(run text(Path.rawBytes(program))))
+  run J.set(&mut chrome.browser, "deviceScaleFactor", J.int(1))
+  run J.set(&mut chrome.browser, "locale", run J.text("en-US"))
+  let product = J.str(J.get(&chrome.browser, "product"))
+  if expected != "" && expected != product {
+    let mut message = run Bytes.copy(b"Chrome version mismatch: expected ")
+    run message.append(String.utf8Bytes(expected))
+    run message.append(b", got ")
+    run message.append(String.utf8Bytes(product))
+    run Task.abort(run text(message.asSlice()))
+  }
+  let mut replay = J.array()
+  run J.push(&mut replay, run J.text("--chrome-version"))
+  run J.push(&mut replay, run J.text(product))
+  run J.set(&mut chrome.browser, "replayVersionArgument", move replay)
+  let mut params = J.object()
+  run J.set(&mut params, "url", run J.text("about:blank"))
+  let target = run command(&mut chrome, "Target.createTarget", move params, false)
+  params = J.object()
+  run J.set(&mut params, "targetId", run J.copy(J.get(&target, "targetId")))
+  run J.set(&mut params, "flatten", J.boolean(true))
+  let attached = run command(&mut chrome, "Target.attachToTarget", move params, false)
+  chrome.session = run J.copy(J.get(&attached, "sessionId"))
+  if J.str(&chrome.session) == "" { run Task.abort("Chrome returned no target session") }
+  params = J.object()
+  run J.set(&mut params, "locale", run J.text("en-US"))
+  let _locale = run command(&mut chrome, "Emulation.setLocaleOverride", move params, true)
+  params = J.object()
+  run J.set(&mut params, "timezoneId", run J.text("UTC"))
+  let _timezone = run command(&mut chrome, "Emulation.setTimezoneOverride", move params, true)
+}
+
+// Keep the latest stderr bytes without allocating or letting a busy stderr pipe
+// prevent command deadlines from being checked.
+effect fn drainErrors(chrome: &mut Chrome) -> () ! OutOfMemoryError ? &mut Allocator {
+  if chrome.errors < 0 { return () }
+  let mut chunk: [u8; 4096] = [0; 4096]
+  let count = unsafe read(chrome.errors, Pointer.fromMutSlice<u8>(&mut chunk), 4096)
+  if count == 0 { Subprocess.closeDescriptor(chrome.errors)
+  chrome.errors = -1
+  return () }
+  if count < 0 { return () }
+  let size = isize.toUsize(count)
+  let length = chrome.stderr.length()
+  if length + size > 8000 {
+    let removed = length + size - 8000
+    let retained = length - removed
+    let bytes = chrome.stderr.asMutSlice()
+    let mut index: usize = 0
+    while index < retained { bytes[index] = bytes[index + removed]
+    index = index + 1 }
+    chrome.stderr.truncate(retained)
+  }
+  run chrome.stderr.append(Slice.view<u8>(&chunk, 0, size))
+}
+
+effect fn failure(chrome: &Chrome, prefix: string, detail: string) -> never ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut message = run Bytes.copy(String.utf8Bytes(prefix))
+  run message.append(String.utf8Bytes(detail))
+  run message.append(b"; ")
+  // stderr is diagnostic bytes, not protocol data; a truncated UTF-8 sequence
+  // must not hide the actual transport failure.
+  match String.fromUtf8(chrome.stderr.asSlice()) {
+    Result<string, InvalidUtf8>.Success { value } => { run message.append(String.utf8Bytes(value)) }
+    Result<string, InvalidUtf8>.Failure { .. } => {
+      let bytes = chrome.stderr.asSlice()
+      let mut index: usize = 0
+      while index < bytes.length {
+        let printable: u8 = if bytes[index] < 128 { bytes[index] } else { 63 }
+        run message.append(&[printable])
+        index = index + 1
+      }
+    }
+  }
+  run Task.abort(run text(message.asSlice()))
+}
+
+effect fn ended(chrome: &mut Chrome) -> Option<ExitStatus> ! TaskError | OutOfMemoryError ? &mut Allocator {
+  if chrome.exited { return Option<ExitStatus>.none() }
+  let status = match move run Effect.result(Subprocess.tryWait(chrome.process.pid())) {
+    Result<Option<ExitStatus>, SubprocessError>.Success { value } => move value
+    Result<Option<ExitStatus>, SubprocessError>.Failure { error } => { drop error
+    run Task.abort("Could not collect Chrome exit status") }
+  }
+  if let Option<ExitStatus>.Some { value } = status {
+    chrome.exited = true
+    return Option<ExitStatus>.some(value)
+  }
+  return Option<ExitStatus>.none()
+}
+
+effect fn waitReady(chrome: &mut Chrome, writing: bool, deadline: i64, method: string) -> () ! CdpError ? &mut Allocator {
+  while true {
+    run drainErrors(&mut chrome)
+    if let Option<ExitStatus>.Some { value } = run ended(&mut chrome) {
+      let code = if value.signaled { value.signal } else { value.code }
+      let encoded = run J.encode(&J.int(i32.toI64(code)))
+      run failure(&chrome, "Chrome exited ", run text(encoded.asSlice()))
+    }
+    if chrome.exited { run failure(&chrome, "Chrome already exited: ", method) }
+    let remaining = deadline - run milliseconds()
+    if remaining <= 0 { run failure(&chrome, "CDP timeout: ", method) }
+    let timeout = i64.toI32(if remaining < 50 { remaining } else { 50 })
+    let mut watched = [PollFd { fd: if writing { chrome.input } else { chrome.output }, events: if writing { 4 } else { 1 }, revents: 0 },
+      PollFd { fd: chrome.errors, events: 1, revents: 0 }]
+    let ready = unsafe poll(Pointer.fromMutSlice<PollFd>(&mut watched), 2, timeout)
+    if ready < 0 {
+      if errno() == 4 { continue }
+      run failure(&chrome, "CDP poll failed: ", method)
+    }
+    if watched[0].revents != 0 { return () }
+  }
+}
+
+effect fn command(chrome: &mut Chrome, method: string, params: Value, session: bool) -> Value ! CdpError ? &mut Allocator {
+  if chrome.exited { run failure(&chrome, "Chrome already exited: ", method) }
+  chrome.nextId = chrome.nextId + 1
+  let id = chrome.nextId
+  let mut request = J.object()
+  run J.set(&mut request, "id", J.int(id))
+  run J.set(&mut request, "method", run J.text(method))
+  run J.set(&mut request, "params", move params)
+  if session { run J.set(&mut request, "sessionId", run J.copy(&chrome.session)) }
+  let mut bytes = run J.encode(&request)
+  run bytes.append(b"\0")
+  let deadline = (run milliseconds()) + 15000
+  let mut written: usize = 0
+  while written < bytes.length() {
+    run waitReady(&mut chrome, true, deadline, method)
+    let remaining = Slice.view<u8>(bytes.asSlice(), written, bytes.length() - written)
+    let count = unsafe send(chrome.input, Pointer.fromSlice<u8>(remaining), remaining.length, SEND_FLAGS)
+    if count < 0 {
+      let code = errno()
+      if code == 4 || code == AGAIN { continue }
+      run failure(&chrome, "CDP write failed: ", method)
+    }
+    if count == 0 { run failure(&chrome, "CDP pipe closed while writing: ", method) }
+    written = written + isize.toUsize(count)
+  }
+  let mut scanned = chrome.consumed
+  while true {
+    while scanned < chrome.buffer.length() {
+      if chrome.buffer.asSlice()[scanned] != 0 { scanned = scanned + 1
+      continue }
+      let start = chrome.consumed
+      chrome.consumed = scanned + 1
+      scanned = scanned + 1
+      if start + 1 == scanned { continue }
+      let frame = Slice.view<u8>(chrome.buffer.asSlice(), start, scanned - start - 1)
+      let mut response = match move run Effect.result(J.parse(frame)) {
+        Result<Value, TaskError | OutOfMemoryError>.Success { value } => move value
+        Result<Value, TaskError | OutOfMemoryError>.Failure { error } => match move error {
+          OutOfMemoryError exhausted => { fail move exhausted }
+          TaskError invalid => { drop invalid
+          run failure(&chrome, "Invalid CDP message: ", method) }
+        }
+      }
+      if J.num(J.get(&response, "id")) != i64.toF64(id) { continue }
+      if J.has(&response, "error") {
+        let error = run J.encode(J.get(&response, "error"))
+        run failure(&chrome, "CDP error: ", run text(error.asSlice()))
+      }
+      if !J.has(&response, "result") { run failure(&chrome, "CDP response has no result: ", method) }
+      return Intrinsic.replace(J.getMut(&mut response, "result").*, Value.Null)
+    }
+    if chrome.consumed != 0 {
+      let remaining = chrome.buffer.length() - chrome.consumed
+      let storage = chrome.buffer.asMutSlice()
+      let mut index: usize = 0
+      while index < remaining { storage[index] = storage[index + chrome.consumed]
+      index = index + 1 }
+      chrome.buffer.truncate(remaining)
+      chrome.consumed = 0
+      scanned = remaining
+    }
+    run waitReady(&mut chrome, false, deadline, method)
+    let mut chunk: [u8; 16384] = [0; 16384]
+    let count = unsafe read(chrome.output, Pointer.fromMutSlice<u8>(&mut chunk), 16384)
+    if count < 0 {
+      let code = errno()
+      if code == 4 || code == AGAIN { continue }
+      run failure(&chrome, "CDP read failed: ", method)
+    }
+    if count == 0 { run drainErrors(&mut chrome)
+    run failure(&chrome, "Chrome CDP pipe closed: ", method) }
+    run chrome.buffer.append(Slice.view<u8>(&chunk, 0, isize.toUsize(count)))
+  }
+}
+
+effect fn signal(chrome: &Chrome, number: i32) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  match move run Effect.result(Subprocess.kill(chrome.process.pid(), number)) {
+    Result<(), SubprocessError>.Success { .. } => {}
+    Result<(), SubprocessError>.Failure { error } => {
+      if error.code != 3 { run Task.abort("Could not signal Chrome") }
+    }
+  }
+}
+
+effect fn stop(chrome: &mut Chrome) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let _status = run ended(&mut chrome)
+  if chrome.exited { return () }
+  run signal(&chrome, 15)
+  let deadline = (run milliseconds()) + 2000
+  let mut forced = false
+  while !chrome.exited {
+    run drainErrors(&mut chrome)
+    let _status = run ended(&mut chrome)
+    if chrome.exited { break }
+    if !forced && (run milliseconds()) >= deadline { run signal(&chrome, 9)
+    forced = true }
+    let mut watched = [PollFd { fd: chrome.errors, events: 1, revents: 0 }]
+    let ready = unsafe poll(Pointer.fromMutSlice<PollFd>(&mut watched), 1, 20)
+    if ready < 0 && errno() != 4 { run Task.abort("Could not wait for Chrome shutdown") }
+  }
+}
+
+pub effect fn close(chrome: Chrome) -> () ! TaskError | OutOfMemoryError | FileError ? &mut Allocator | &mut FileSystem {
+  let mut owned = move chrome
+  let stopped = run Effect.result(stop(&mut owned))
+  Subprocess.closeDescriptor(owned.input)
+  Subprocess.closeDescriptor(owned.output)
+  Subprocess.closeDescriptor(owned.errors)
+  let removed = run Effect.result(FileSystem.removeDirectoryRecursively(&owned.profile))
+  match move stopped {
+    Result<(), TaskError | OutOfMemoryError>.Failure { error } => { fail move error }
+    Result<(), TaskError | OutOfMemoryError>.Success { .. } => {}
+  }
+  match move removed {
+    Result<(), FileError | OutOfMemoryError>.Failure { error } => { fail move error }
+    Result<(), FileError | OutOfMemoryError>.Success { .. } => {}
+  }
+}
+
+pub effect fn observe(chrome: &mut Chrome, input: &Value, fontAssets: &Value, columns: &Value) -> Value ! CdpError ? &mut Allocator {
+  if J.has(columns, "unsupported") { run Task.abort(J.str(J.get(columns, "unsupported"))) }
+  let viewport = J.get(input, "viewport")
+  let mut params = J.object()
+  run J.set(&mut params, "width", run J.copy(J.get(viewport, "width")))
+  run J.set(&mut params, "height", run J.copy(J.get(viewport, "height")))
+  run J.set(&mut params, "deviceScaleFactor", J.int(1))
+  run J.set(&mut params, "mobile", J.boolean(false))
+  let _metrics = run command(&mut chrome, "Emulation.setDeviceMetricsOverride", move params, true)
+  let mut expression = run Bytes.copy(b"(")
+  run expression.append(chrome.script.asSlice())
+  run expression.append(b")(")
+  let encodedInput = run J.encode(input)
+  run expression.append(encodedInput.asSlice())
+  run expression.append(b",")
+  let encodedFonts = run J.encode(fontAssets)
+  run expression.append(encodedFonts.asSlice())
+  run expression.append(b",")
+  let encodedColumns = run J.encode(columns)
+  run expression.append(encodedColumns.asSlice())
+  run expression.append(b")")
+  params = J.object()
+  run J.set(&mut params, "expression", run J.text(run text(expression.asSlice())))
+  run J.set(&mut params, "returnByValue", J.boolean(true))
+  run J.set(&mut params, "awaitPromise", J.boolean(true))
+  let mut result = run command(&mut chrome, "Runtime.evaluate", move params, true)
+  if J.has(&result, "exceptionDetails") {
+    let details = J.get(&result, "exceptionDetails")
+    let exception = J.get(details, "exception")
+    let description = if J.has(exception, "description") { J.str(J.get(exception, "description")) } else { J.str(J.get(details, "text")) }
+    run failure(&chrome, "DOM adapter failed: ", description)
+  }
+  if !J.has(J.get(J.get(&result, "result"), "value"), "sources") { run Task.abort("Chrome did not return source geometry") }
+  let mut observation = Intrinsic.replace(J.getMut(J.getMut(&mut result, "result"), "value").*, Value.Null)
+  if J.str(J.get(&observation, "documentMode")) != "CSS1Compat" { run Task.abort("Chrome oracle requires standards mode") }
+  run J.set(&mut chrome.browser, "documentMode", run J.text("CSS1Compat"))
+  run resolveScrollbarGeometry(&mut chrome, &mut observation)
+  return move observation
+}
+
+fn scrollable(value: string) -> bool { return value == "auto" || value == "scroll" || value == "hidden" }
+fn minimum(a: f64, b: f64) -> f64 { return if a < b { a } else { b } }
+fn nonnegative(value: f64) -> f64 { return if value <= 0.0 { 0.0 } else { value } }
+fn number(value: &Value, key: string) -> f64 { return J.num(J.get(value, key)) }
+fn flag(value: &Value, key: string) -> bool { return J.isTrue(J.get(value, key)) }
+
+fn fits(start: f64, end: f64, size: f64, atStart: bool, mirrored: bool) -> bool {
+  if start == 0.0 && end == 0.0 { return true }
+  if mirrored { return start == size && end == size }
+  return start == (if atStart { size } else { 0.0 }) && end == (if atStart { 0.0 } else { size })
+}
+
+effect fn unsupported(observation: &mut Value, evidence: &Value, feature: string, reason: string) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut entry = J.object()
+  run J.set(&mut entry, "node", run J.copy(J.get(evidence, "node")))
+  run J.set(&mut entry, "feature", run J.text(feature))
+  run J.set(&mut entry, "reason", run J.text(reason))
+  run J.set(&mut entry, "evidence", run J.copy(evidence))
+  run J.push(J.getMut(&mut observation, "unsupported"), move entry)
+}
+
+// Detach the arrays so their mutable references do not alias the observation.
+// Restore them and release remote objects on failures as well as success.
+effect fn resolveScrollbarGeometry(chrome: &mut Chrome, observation: &mut Value) -> () ! CdpError ? &mut Allocator {
+  let mut evidence = Intrinsic.replace(J.getMut(&mut observation, "scrollbarEvidence").*, J.array())
+  let mut sources = Intrinsic.replace(J.getMut(&mut observation, "sources").*, J.array())
+  let mut retained = false
+  let resolved = run Effect.result(resolveScrollbars(&mut chrome, &mut observation, &mut evidence, &mut sources, &mut retained))
+  let evidenceSlot = J.getMut(&mut observation, "scrollbarEvidence")
+  evidenceSlot.* = move evidence
+  let sourceSlot = J.getMut(&mut observation, "sources")
+  sourceSlot.* = move sources
+  let released = run Effect.result(releaseObjects(&mut chrome, retained))
+  match move resolved {
+    Result<(), CdpError>.Failure { error } => { fail move error }
+    Result<(), CdpError>.Success { .. } => {}
+  }
+  match move released {
+    Result<(), CdpError>.Failure { error } => { fail move error }
+    Result<(), CdpError>.Success { .. } => {}
+  }
+}
+
+effect fn releaseObjects(chrome: &mut Chrome, retained: bool) -> () ! CdpError ? &mut Allocator {
+  if !retained { return () }
+  let mut params = J.object()
+  run J.set(&mut params, "objectGroup", run J.text("silk-scrollbar-oracle"))
+  let _released = run command(&mut chrome, "Runtime.releaseObjectGroup", move params, true)
+}
+
+effect fn resolveScrollbars(chrome: &mut Chrome, observation: &mut Value, evidences: &mut Value,
+  sources: &mut Value, retained: &mut bool) -> () ! CdpError ? &mut Allocator {
+  let mut index: usize = 0
+  while index < J.length(&evidences) {
+    let evidence = J.atMut(&mut evidences, index)
+    let node = f64.toUsize(number(&evidence, "node"))
+    let box = J.atMut(&mut sources, node)
+    let horizontalInline = J.str(J.get(&evidence, "writingMode")) == "horizontal-tb"
+    let thin = J.str(J.get(&evidence, "scrollbarWidth")) == "thin"
+    let none = J.str(J.get(&evidence, "scrollbarWidth")) == "none"
+    let stable = String.contains(J.str(J.get(&evidence, "scrollbarGutter")), "stable")
+    let both = String.contains(J.str(J.get(&evidence, "scrollbarGutter")), "both-edges")
+    let xScroll = J.str(J.get(&evidence, "overflowX")) == "scroll"
+    let xAuto = J.str(J.get(&evidence, "overflowX")) == "auto"
+    let yScroll = J.str(J.get(&evidence, "overflowY")) == "scroll"
+    let yAuto = J.str(J.get(&evidence, "overflowY")) == "auto"
+    let xScrollable = scrollable(J.str(J.get(&evidence, "overflowX")))
+    let yScrollable = scrollable(J.str(J.get(&evidence, "overflowY")))
+    let metrics = J.get(&evidence, "metrics")
+    let hasMetrics = !J.isNull(metrics)
+    let overlay = flag(metrics, "overlay")
+    let metricVertical = number(metrics, "vertical")
+    let metricHorizontal = number(metrics, "horizontal")
+    let verticalOnLeft = flag(metrics, "verticalOnLeft")
+    let horizontalOnTop = flag(metrics, "horizontalOnTop")
+    let classic = hasMetrics && !overlay && !none && (xScroll || xAuto || yScroll || yAuto || stable && (xScrollable || yScrollable))
+    let mut left: f64 = 0.0
+    let mut right: f64 = 0.0
+    let mut top: f64 = 0.0
+    let mut bottom: f64 = 0.0
+    if classic {
+      let mut expression = run Bytes.copy(b"document.querySelector('[data-node=\"")
+      let encodedNode = run J.encode(J.get(&evidence, "node"))
+      run expression.append(encodedNode.asSlice())
+      run expression.append(b"\"]')")
+      let mut params = J.object()
+      run J.set(&mut params, "expression", run J.text(run text(expression.asSlice())))
+      run J.set(&mut params, "objectGroup", run J.text("silk-scrollbar-oracle"))
+      let remote = run command(&mut chrome, "Runtime.evaluate", move params, true)
+      retained.* = true
+      let objectId = J.get(J.get(&remote, "result"), "objectId")
+      if J.str(objectId) == "" { run Task.abort("Scrollbar node is no longer available") }
+      params = J.object()
+      run J.set(&mut params, "objectId", run J.copy(objectId))
+      let mut measured = run command(&mut chrome, "DOM.getBoxModel", move params, true)
+      if !J.has(&measured, "model") { run Task.abort("Chrome returned no scrollbar box model") }
+      let model = Intrinsic.replace(J.getMut(&mut measured, "model").*, Value.Null)
+      let content = J.get(&model, "content")
+      if J.length(content) < 8 { run Task.abort("Chrome returned an invalid content quad") }
+      let x0 = J.num(J.at(content, 0))
+      let y0 = J.num(J.at(content, 1))
+      let x1 = J.num(J.at(content, 2))
+      let y2 = J.num(J.at(content, 5))
+      let border = J.get(&evidence, "border")
+      let padding = J.get(&evidence, "padding")
+      // Only the physical content quad retains fractional layout coordinates.
+      left = x0 - number(&evidence, "x") - number(border, "left") - number(padding, "left")
+      top = y0 - number(&evidence, "y") - number(border, "top") - number(padding, "top")
+      right = number(&evidence, "x") + number(&evidence, "width") - number(border, "right") - number(padding, "right") - x1
+      bottom = number(&evidence, "y") + number(&evidence, "height") - number(border, "bottom") - number(padding, "bottom") - y2
+      run J.set(&mut box, "contentWidth", J.float(nonnegative(x1 - x0)))
+      run J.set(&mut box, "contentHeight", J.float(nonnegative(y2 - y0)))
+      run J.set(&mut evidence, "boxModel", move model)
+      let mut gutters = J.object()
+      run J.set(&mut gutters, "top", J.float(top))
+      run J.set(&mut gutters, "right", J.float(right))
+      run J.set(&mut gutters, "bottom", J.float(bottom))
+      run J.set(&mut gutters, "left", J.float(left))
+      run J.set(&mut evidence, "gutters", move gutters)
+      let allottedWidth = number(&evidence, "allottedWidth")
+      let allottedHeight = number(&evidence, "allottedHeight")
+      if both && (if horizontalInline { allottedWidth < 2.0 * metricVertical } else { allottedHeight < 2.0 * metricHorizontal }) {
+        run unsupported(&mut observation, &evidence, "tiny-mirrored-scrollbar-geometry",
+          "Chrome tiny mirrored content quads and client offsets can disagree with actual child origins. They cannot represent the synthetic equally clamped pair reliably.")
+      }
+      let verticalSize = minimum(metricVertical, allottedWidth / (if both && horizontalInline { 2.0 } else { 1.0 }))
+      let horizontalSize = minimum(metricHorizontal, allottedHeight / (if both && !horizontalInline { 2.0 } else { 1.0 }))
+      if !fits(left, right, verticalSize, verticalOnLeft, both && horizontalInline)
+        || !fits(top, bottom, horizontalSize, horizontalOnTop, both && !horizontalInline) {
+        run unsupported(&mut observation, &evidence, "native-scrollbar-host-policy",
+          "Observed Chrome gutter thickness, side, or tiny mirrored geometry does not represent the synthetic host clamping/side policy.")
+      }
+    } else if thin {
+      let border = J.get(&evidence, "border")
+      if f64.abs(number(&evidence, "width") - number(border, "left") - number(border, "right") - number(&evidence, "clientWidth")) > 0.5
+        || f64.abs(number(&evidence, "height") - number(border, "top") - number(border, "bottom") - number(&evidence, "clientHeight")) > 0.5 {
+        run unsupported(&mut observation, &evidence, "native-thin-scrollbar-policy",
+          "Native thin scrollbars reserve space on this Chrome platform; the requested zero-overlay policy is not representable.")
+      }
+    }
+    run J.set(&mut box, "scrollbarGutterTop", J.float(top))
+    run J.set(&mut box, "scrollbarGutterRight", J.float(right))
+    run J.set(&mut box, "scrollbarGutterBottom", J.float(bottom))
+    run J.set(&mut box, "scrollbarGutterLeft", J.float(left))
+    let range = J.get(&evidence, "scrollRange")
+    let allowsScrollbar = !none && !flag(&evidence, "replaced")
+    let horizontal = allowsScrollbar && (xScroll || xAuto && (number(range, "maxX") != number(range, "minX") || (top + bottom > 0.0 && (!stable || horizontalInline))))
+    let vertical = allowsScrollbar && (yScroll || yAuto && (number(range, "maxY") != number(range, "minY") || (left + right > 0.0 && (!stable || !horizontalInline))))
+    run J.set(&mut box, "horizontalScrollbar", J.boolean(horizontal))
+    run J.set(&mut box, "verticalScrollbar", J.boolean(vertical))
+    let horizontalUsed = horizontal || allowsScrollbar && stable && !horizontalInline && xScrollable
+    let verticalUsed = vertical || allowsScrollbar && stable && horizontalInline && yScrollable
+    if hasMetrics && (horizontalUsed || verticalUsed) && thin
+      && (!overlay || horizontalUsed && metricHorizontal != 0.0 || verticalUsed && metricVertical != 0.0) {
+      run unsupported(&mut observation, &evidence, "thin-scrollbar-host-policy",
+        "Chrome scrollbar-width:thin overrides ::-webkit-scrollbar dimensions. The exercised custom classic/nonzero thin host policy cannot be injected faithfully.")
+    } else if overlay && (horizontalUsed && metricHorizontal != 0.0 || verticalUsed && metricVertical != 0.0) {
+      run unsupported(&mut observation, &evidence, "overlay-scrollbar-host-policy",
+        "The adapter cannot inject or measure the exercised nonzero native overlay scrollbar thickness.")
+    }
+    index = index + 1
+  }
+}

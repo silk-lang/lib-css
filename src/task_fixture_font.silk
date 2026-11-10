@@ -1,0 +1,351 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.crypto.sha2 { Sha256 }
+import silk.io.writer { WriterError }
+import silk.json.scanner { JsonError }
+import silk.json.value { Json, JsonNumber, Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.format { Format }
+import silk.text.string { String, InvalidUtf8 }
+import silk.num.usize
+import silk.num.u8
+import task_json { J }
+import task_font_decimal { Decimal, parse, zero, equal, compareMagnitude, units, fraction }
+import task_font_ttf { build }
+
+const FIELDS: [string; 12] = ["fontSize", "ascent", "descent", "lineGap", "xHeight", "capHeight", "subscriptOffset", "superscriptOffset", "baselines.alphabetic", "baselines.ideographic", "baselines.central", "baselines.mathematical"]
+const BASELINES: [string; 4] = ["alphabetic", "ideographic", "central", "mathematical"]
+const SORTED: [usize; 12] = [1,8,10,9,11,5,2,0,3,6,7,4]
+struct Unsupported { reason: String }
+effect fn unsupported(reason: string) -> never ! Unsupported | OutOfMemoryError ? &mut Allocator {
+  fail Unsupported { reason: run String.copy(reason) }
+}
+effect fn metricError(name: string, reason: string) -> never ! Unsupported | OutOfMemoryError ? &mut Allocator {
+  let mut message = run String.copy(name)
+  run String.append(&mut message, reason)
+  fail Unsupported { reason: move message }
+}
+effect fn number(value: &Value, name: string) -> Decimal ! Unsupported | OutOfMemoryError ? &mut Allocator {
+  let mut text: [u8; 32] = [0; 32]
+  let spelling = match &value.* {
+    Value.Number { value: numeric } => match &numeric {
+      JsonNumber.Decimal { text: decimal } => String.utf8Bytes(String.view(&decimal))
+      JsonNumber.Integer { value: integer } => {
+        let n = Format.writeI64Display(integer, &mut text, 0)
+        Slice.view<u8>(&text, 0, n)
+      }
+      JsonNumber.Unsigned { value: integer } => {
+        let n = Format.writeU64Display(integer, &mut text, 0)
+        Slice.view<u8>(&text, 0, n)
+      }
+      JsonNumber.Float { value: native } => {
+        let n = Format.writeF64Debug(native, &mut text, 0)
+        Slice.view<u8>(&text, 0, n)
+      }
+    }
+    _ => { run metricError(name, " must be a finite number") }
+  }
+  let native = match Json.asF64(Option<&Value>.some(value)) {
+    Option<f64>.Some { value: finite } => finite
+    Option<f64>.None => { run metricError(name, " must be finite in the native f64 model") }
+  }
+  let mut result = run parse(spelling, native)
+  if native == 0.0 && !zero(&result) { run metricError(name, " underflows the native f64 model") }
+  if zero(&result) { result.native = 0.0 }
+  return move result
+}
+struct Profile { values: List<Decimal>, design: [i32; 7], assetless: bool }
+effect fn profile(record: &Value) -> Profile ! Unsupported | OutOfMemoryError ? &mut Allocator {
+  if J.members(record).length != 9 { run unsupported("font record must contain exactly the native font metric fields") }
+  let mut i: usize = 0
+  while i < 8 {
+    if !J.has(record, FIELDS[i]) { run unsupported("font record must contain exactly the native font metric fields") }
+    i = i + 1
+  }
+  if !J.has(record, "baselines") { run unsupported("font record must contain exactly the native font metric fields") }
+  let baseline = J.get(record, "baselines")
+  if J.members(baseline).length != 4 { run unsupported("baselines must contain alphabetic, ideographic, central, mathematical") }
+  i = 0
+  while i < 4 {
+    if !J.has(baseline, BASELINES[i]) { run unsupported("baselines must contain alphabetic, ideographic, central, mathematical") }
+    i = i + 1
+  }
+  let mut numbers = List<Decimal>.make()
+  i = 0
+  while i < 12 {
+    let source = if i < 8 { J.get(record, FIELDS[i]) } else { J.get(baseline, BASELINES[i - 8]) }
+    run List<Decimal>.append(&mut numbers, run number(source, FIELDS[i]))
+    i = i + 1
+  }
+  let values = List<Decimal>.asSlice(&numbers)
+  let nonnegative: [usize; 5] = [0,1,2,4,5]
+  i = 0
+  while i < 5 {
+    let index = nonnegative[i]
+    if values[index].negative { run metricError(FIELDS[index], " must be nonnegative") }
+    i = i + 1
+  }
+  let mut design: [i32; 7] = [0; 7]
+  let assetless = zero(&values[0])
+  if assetless {
+    i = 1
+    while i < 12 {
+      if !zero(&values[i]) { run unsupported("zero fontSize requires every metric and baseline to be zero") }
+      i = i + 1
+    }
+  } else {
+    if !equal(&values[8], &values[1]) { run unsupported("alphabetic baseline must equal ascent for a real horizontal font") }
+    if zero(&values[1]) || zero(&values[4]) || zero(&values[5]) { run unsupported("nonzero fontSize requires positive ascent, xHeight, and capHeight") }
+    if compareMagnitude(&values[4], &values[1]) > 0 || compareMagnitude(&values[5], &values[1]) > 0 {
+      run unsupported("xHeight and capHeight must not exceed ascent in the fixture font profile")
+    }
+    if values[3].negative { run unsupported("negative lineGap is not supported by the browser fixture font profile") }
+    i = 1
+    while i < 8 {
+      let scaled = run units(&values[i], &values[0])
+      if scaled == -1 { run metricError(FIELDS[i], " is not exactly representable at 15360 units per em") }
+      if scaled == 32769 { run metricError(FIELDS[i], " exceeds the signed 16-bit OpenType metric range") }
+      design[i - 1] = if values[i].negative { -scaled } else { scaled }
+      i = i + 1
+    }
+  }
+  return Profile { values: move numbers, design: design, assetless: assetless }
+}
+fn ascii(bytes: Bytes) -> String {
+  return match move String.fromBytes(move bytes) {
+    Result<String, InvalidUtf8>.Success { value } => move value
+    Result<String, InvalidUtf8>.Failure { error } => {
+      drop error
+      Intrinsic.trap("fixture font writer produced non-ASCII text")
+    }
+  }
+}
+effect fn hex(bytes: &[u8]) -> String ! OutOfMemoryError ? &mut Allocator {
+  let alphabet = b"0123456789abcdef"
+  let mut result = run Bytes.makeWithCapacity(bytes.length * 2)
+  let mut i: usize = 0
+  while i < bytes.length {
+    run Bytes.append(&mut result, &[alphabet[u8.toUsize(bytes[i] / 16)], alphabet[u8.toUsize(bytes[i] % 16)]])
+    i = i + 1
+  }
+  return ascii(move result)
+}
+effect fn dataUrl(data: &[u8]) -> String ! OutOfMemoryError ? &mut Allocator {
+  let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  let mut result = run Bytes.makeWithCapacity(21 + (data.length + 2) / 3 * 4)
+  run Bytes.append(&mut result, b"data:font/ttf;base64,")
+  let mut i: usize = 0
+  while i < data.length {
+    let a = data[i]
+    let b = if i + 1 < data.length { data[i + 1] } else { 0 }
+    let c = if i + 2 < data.length { data[i + 2] } else { 0 }
+    run Bytes.append(&mut result, &[
+      alphabet[u8.toUsize(a / 4)], alphabet[u8.toUsize(a % 4 * 16 + b / 16)],
+      if i + 1 < data.length { alphabet[u8.toUsize(b % 16 * 4 + c / 64)] } else { 61 },
+      if i + 2 < data.length { alphabet[u8.toUsize(c % 64)] } else { 61 },
+    ])
+    i = i + 3
+  }
+  return ascii(move result)
+}
+effect fn asset(key: usize, record: &Value) -> Value ! Unsupported | OutOfMemoryError ? &mut Allocator {
+  let p = run profile(record)
+  let values = List<Decimal>.asSlice(&p.values)
+  let mut canonical = run Bytes.copy(b"{\"generator\":\"silk-original-ascii-1\",\"metrics\":{")
+  let mut i: usize = 0
+  while i < 12 {
+    if i != 0 { run Bytes.append(&mut canonical, b",") }
+    run Bytes.append(&mut canonical, b"\"")
+    run Bytes.append(&mut canonical, String.utf8Bytes(FIELDS[SORTED[i]]))
+    run Bytes.append(&mut canonical, b"\":\"")
+    run fraction(&mut canonical, &values[SORTED[i]])
+    run Bytes.append(&mut canonical, b"\"")
+    i = i + 1
+  }
+  run Bytes.append(&mut canonical, b"},\"unitsPerEm\":15360}")
+  let digest = Sha256.hash(Bytes.asSlice(&canonical))
+  let profileHash = run hex(&digest)
+  let mut family = run String.copy("SilkFixture_")
+  run String.append(&mut family, String.slice(String.view(&profileHash), 0, 24))
+  let mut result = J.object()
+  run J.set(&mut result, "key", J.int(usize.toI64(key)))
+  run J.set(&mut result, "fontSize", J.float(values[0].native))
+  if p.assetless { run J.set(&mut result, "sha256", Value.String { text: move profileHash }) }
+  else {
+    let font = run build(&p.design, String.view(&family))
+    let url = run dataUrl(Bytes.asSlice(&font))
+    let fontDigest = Sha256.hash(Bytes.asSlice(&font))
+    let hash = run hex(&fontDigest)
+    run J.set(&mut result, "dataUrl", Value.String { text: move url })
+    run J.set(&mut result, "sha256", Value.String { text: move hash })
+  }
+  run J.set(&mut result, "family", Value.String { text: move family })
+  return move result
+}
+
+// A parsed caller must retain decimal spellings (Json.parseExact), rather than
+// round input through binary64. generateBytes does so before any validation.
+// Only the horizontal alphabetic baseline is implemented; other baselines are
+// exact provenance inputs, not a claim of nonalphabetic alignment support.
+pub effect fn generate(request: &Value) -> Bytes ! TaskError | OutOfMemoryError | WriterError ? &mut Allocator {
+  if J.members(request).length != 1 || !J.has(request, "fonts") {
+    run Task.abort("fixture-font: expected one JSON object {\"fonts\": [...]}")
+  }
+  let fonts = J.get(request, "fonts")
+  match &fonts.* { Value.Array { .. } => {}
+  _ => { run Task.abort("fixture-font: expected one JSON object {\"fonts\": [...]}") } }
+  let mut output = J.object()
+  let mut assets = J.array()
+  let mut rejected = J.array()
+  let records = J.items(fonts)
+  let mut i: usize = 0
+  while i < records.length {
+    match move run Effect.result(asset(i + 1, &records[i])) {
+      Result<Value, Unsupported | OutOfMemoryError>.Success { value } => { run J.push(&mut assets, move value) }
+      Result<Value, Unsupported | OutOfMemoryError>.Failure { error } => match move error {
+        OutOfMemoryError exhausted => { fail move exhausted }
+        Unsupported unsupported => {
+          let mut rejection = J.object()
+          run J.set(&mut rejection, "key", J.int(usize.toI64(i + 1)))
+          run J.set(&mut rejection, "reason", run J.text(String.view(&unsupported.reason)))
+          run J.push(&mut rejected, move rejection)
+        }
+      }
+    }
+    i = i + 1
+  }
+  run J.set(&mut output, "fonts", move assets)
+  run J.set(&mut output, "unsupported", move rejected)
+  return run J.encode(&output)
+}
+
+struct Cursor { index: usize }
+fn whitespace(input: &[u8], cursor: &mut Cursor) {
+  while cursor.index < input.length {
+    let b = input[cursor.index]
+    if b != 32 && b != 9 && b != 10 && b != 13 { return }
+    cursor.index = cursor.index + 1
+  }
+}
+fn hexDigit(value: u8) -> i32 {
+  if value >= 48 && value <= 57 { return u8.toI32(value - 48) }
+  if value >= 65 && value <= 70 { return u8.toI32(value - 65) + 10 }
+  if value >= 97 && value <= 102 { return u8.toI32(value - 97) + 10 }
+  return -1
+}
+fn escapedUnit(input: &[u8], at: usize) -> i32 {
+  if at + 6 > input.length || input[at] != 92 || input[at + 1] != 117 { return -1 }
+  let mut result: i32 = 0
+  let mut i: usize = 2
+  while i < 6 {
+    let digit = hexDigit(input[at + i])
+    if digit < 0 { return -1 }
+    result = result * 16 + digit
+    i = i + 1
+  }
+  return result
+}
+// Python accepts isolated UTF-16 surrogate escapes. Such strings cannot name
+// any allowed ASCII field or supply any numeric metric. Map only those code
+// units to a non-ASCII scalar, preserving schema rejection and leaving every
+// other syntax error for the strict parser. No accepted profile is rewritten.
+effect fn scalarSpelling(input: &[u8]) -> Bytes ! OutOfMemoryError ? &mut Allocator {
+  let mut out = Bytes.make()
+  if input.length == 0 || input[0] != 34 { return move out }
+  let mut i: usize = 1
+  let mut copied: usize = 0
+  while i < input.length {
+    if input[i] != 92 { i = i + 1
+    continue }
+    let unit = escapedUnit(input, i)
+    if unit >= 0xd800 && unit <= 0xdbff {
+      let next = escapedUnit(input, i + 6)
+      if next >= 0xdc00 && next <= 0xdfff { i = i + 12
+      continue }
+    }
+    if unit >= 0xd800 && unit <= 0xdfff {
+      run Bytes.append(&mut out, Slice.view<u8>(input, copied, i - copied))
+      run Bytes.append(&mut out, b"\\ufffd")
+      i = i + 6
+      copied = i
+    } else { i = i + 2 }
+  }
+  if copied != 0 { run Bytes.append(&mut out, Slice.view<u8>(input, copied, input.length - copied)) }
+  return move out
+}
+effect fn exactScalar(input: &[u8]) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let normalized = run scalarSpelling(input)
+  let spelling = if Bytes.length(&normalized) == 0 { input } else { Bytes.asSlice(&normalized) }
+  return match move run Effect.result(Json.parseExact(spelling)) {
+    Result<Value, JsonError | OutOfMemoryError>.Success { value } => move value
+    Result<Value, JsonError | OutOfMemoryError>.Failure { error } => match move error {
+      OutOfMemoryError exhausted => { fail move exhausted }
+      JsonError invalid => { drop invalid
+      run Task.abort("fixture-font: invalid JSON") }
+    }
+  }
+}
+// Python's JSON object decoder uses last-key-wins. Keep that behavior instead of
+// the tree parser's duplicate-key rejection; scalar validation stays in stdlib.
+effect fn value(input: &[u8], cursor: &mut Cursor) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  whitespace(input, &mut cursor)
+  if cursor.index == input.length { run Task.abort("fixture-font: unexpected end of JSON") }
+  let first = input[cursor.index]
+  if first == 123 || first == 91 {
+    let object = first == 123
+    let end: u8 = if object { 125 } else { 93 }
+    let mut output = if object { J.object() } else { J.array() }
+    cursor.index = cursor.index + 1
+    whitespace(input, &mut cursor)
+    if cursor.index < input.length && input[cursor.index] == end { cursor.index = cursor.index + 1
+    return move output }
+    while true {
+      if object {
+        whitespace(input, &mut cursor)
+        if cursor.index == input.length || input[cursor.index] != 34 { run Task.abort("fixture-font: expected JSON object key") }
+        let key = run value(input, &mut cursor)
+        whitespace(input, &mut cursor)
+        if cursor.index == input.length || input[cursor.index] != 58 { run Task.abort("fixture-font: expected JSON colon") }
+        cursor.index = cursor.index + 1
+        let child = run value(input, &mut cursor)
+        run J.set(&mut output, J.str(&key), move child)
+      } else { run J.push(&mut output, run value(input, &mut cursor)) }
+      whitespace(input, &mut cursor)
+      if cursor.index == input.length { run Task.abort("fixture-font: unexpected end of JSON") }
+      let separator = input[cursor.index]
+      cursor.index = cursor.index + 1
+      if separator == end { return move output }
+      if separator != 44 { run Task.abort("fixture-font: expected JSON comma") }
+    }
+  }
+  let start = cursor.index
+  if first == 34 {
+    cursor.index = cursor.index + 1
+    let mut escaped = false
+    while cursor.index < input.length {
+      let b = input[cursor.index]
+      cursor.index = cursor.index + 1
+      if !escaped && b == 34 { break }
+      if !escaped && b == 92 { escaped = true } else { escaped = false }
+    }
+  } else {
+    while cursor.index < input.length {
+      let b = input[cursor.index]
+      if b == 32 || b == 9 || b == 10 || b == 13 || b == 44 || b == 93 || b == 125 { break }
+      cursor.index = cursor.index + 1
+    }
+  }
+  return run exactScalar(Slice.view<u8>(input, start, cursor.index - start))
+}
+pub effect fn generateBytes(input: &[u8]) -> Bytes ! TaskError | OutOfMemoryError | WriterError ? &mut Allocator {
+  let mut cursor = Cursor { index: 0 }
+  let request = run value(input, &mut cursor)
+  whitespace(input, &mut cursor)
+  if cursor.index != input.length { run Task.abort("fixture-font: trailing JSON content") }
+  return run generate(&request)
+}

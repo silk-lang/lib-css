@@ -1,0 +1,183 @@
+import silk.cli.task { Task, TaskError }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.io.writer { Writer, WriterError }
+import silk.json.scanner { JsonError }
+import silk.json.value { Json, JsonEntry, JsonNumber, Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.string { String }
+import silk.num.f64
+import silk.num.usize
+
+const NULL: Value = Value.Null
+
+pub struct J {}
+impl J {
+  pub effect fn parse(bytes: &[u8]) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+    return match move run Effect.result(Json.parse(bytes)) {
+      Result<Value, JsonError | OutOfMemoryError>.Success { value } => move value
+      Result<Value, JsonError | OutOfMemoryError>.Failure { error } => match move error {
+        OutOfMemoryError exhausted => { fail move exhausted }
+        JsonError invalid => { drop invalid
+        run Task.abort("invalid JSON") }
+      }
+    }
+  }
+  pub effect fn copy(value: &Value) -> Value ! OutOfMemoryError ? &mut Allocator { return run Json.copy(value) }
+  pub fn object() -> Value { return Value.Object { entries: List<JsonEntry>.make() } }
+  pub fn array() -> Value { return Value.Array { values: List<Value>.make() } }
+  pub fn int(value: i64) -> Value { return Value.Number { value: JsonNumber.Integer { value: value } } }
+  pub fn float(value: f64) -> Value {
+    if !f64.isFinite(value) { return Value.Null }
+    return Value.Number { value: JsonNumber.Float { value: value } }
+  }
+  pub fn boolean(value: bool) -> Value { return Value.Bool { value: value } }
+  pub effect fn text(value: string) -> Value ! OutOfMemoryError ? &mut Allocator { return Value.String { text: run String.copy(value) } }
+  pub fn get<'a>(value: &'a Value, key: string) -> &'a Value {
+    return match Json.field(value, key) {
+      Option<&'a Value>.Some { value: found } => found
+      Option<&'a Value>.None => &NULL
+    }
+  }
+  pub fn has(value: &Value, key: string) -> bool {
+    return match Json.field(value, key) { Option<&Value>.Some { .. } => true
+    Option<&Value>.None => false }
+  }
+  pub fn getMut<'a>(value: &'a mut Value, key: string) -> &'a mut Value {
+    match &mut value.* {
+      Value.Object { entries } => {
+        let fields = List<JsonEntry>.asMutSlice(&mut entries)
+        let mut i: usize = 0
+        while i < fields.length {
+          if String.view(&fields[i].key) == key { return &mut fields[i].value }
+          i = i + 1
+        }
+      }
+      _ => {}
+    }
+    return Intrinsic.trap("missing mutable JSON member")
+  }
+  pub effect fn set(value: &mut Value, key: string, replacement: Value) -> () ! OutOfMemoryError ? &mut Allocator {
+    match &mut value.* {
+      Value.Object { entries } => {
+        let fields = List<JsonEntry>.asMutSlice(&mut entries)
+        let mut i: usize = 0
+        while i < fields.length {
+          if String.view(&fields[i].key) == key { fields[i].value = move replacement
+          return () }
+          i = i + 1
+        }
+        run List<JsonEntry>.append(&mut entries, JsonEntry { key: run String.copy(key), value: move replacement })
+      }
+      _ => Intrinsic.trap("JSON object required")
+    }
+  }
+  pub fn remove(value: &mut Value, key: string) -> () {
+    match &mut value.* {
+      Value.Object { entries } => {
+        let fields = List<JsonEntry>.asSlice(&entries)
+        let mut i: usize = 0
+        while i < fields.length {
+          if String.view(&fields[i].key) == key { drop List<JsonEntry>.remove(&mut entries, i)
+          return () }
+          i = i + 1
+        }
+      }
+      _ => {}
+    }
+  }
+  pub fn items<'a>(value: &'a Value) -> &'a [Value] {
+    return match &value.* { Value.Array { values } => List<Value>.asSlice(&values)
+    _ => &[] }
+  }
+  pub fn itemsMut<'a>(value: &'a mut Value) -> &'a mut [Value] {
+    return match &mut value.* { Value.Array { values } => List<Value>.asMutSlice(&mut values)
+    _ => Intrinsic.trap("JSON array required") }
+  }
+  pub fn members<'a>(value: &'a Value) -> &'a [JsonEntry] {
+    return match &value.* { Value.Object { entries } => List<JsonEntry>.asSlice(&entries)
+    _ => &[] }
+  }
+  pub fn at<'a>(value: &'a Value, index: usize) -> &'a Value {
+    let values = J.items(value)
+    if index >= values.length { return &NULL }
+    return &values[index]
+  }
+  pub fn atMut<'a>(value: &'a mut Value, index: usize) -> &'a mut Value { return &mut J.itemsMut(&mut value)[index] }
+  pub fn setAt(value: &mut Value, index: usize, replacement: Value) -> () {
+    let slots = J.itemsMut(&mut value)
+    slots[index] = move replacement
+  }
+  pub effect fn push(value: &mut Value, item: Value) -> () ! OutOfMemoryError ? &mut Allocator {
+    match &mut value.* { Value.Array { values } => run List<Value>.append(&mut values, move item)
+    _ => Intrinsic.trap("JSON array required") }
+  }
+  pub fn length(value: &Value) -> usize {
+    return match &value.* {
+      Value.Array { values } => List<Value>.length(&values)
+      Value.Object { entries } => List<JsonEntry>.length(&entries)
+      Value.String { text } => String.utf8Bytes(String.view(&text)).length
+      _ => 0
+    }
+  }
+  pub fn str<'a>(value: &'a Value) -> string<'a> {
+    return match Json.asString(Option<&'a Value>.some(value)) { Option<string<'a>>.Some { value: text } => text
+    Option<string<'a>>.None => "" }
+  }
+  pub fn num(value: &Value) -> f64 {
+    return match Json.asF64(Option<&Value>.some(value)) { Option<f64>.Some { value: number } => number
+    Option<f64>.None => 0.0 }
+  }
+  pub fn integer(value: &Value) -> i64 {
+    return match Json.asI64(Option<&Value>.some(value)) { Option<i64>.Some { value: number } => number
+    Option<i64>.None => 0 }
+  }
+  pub fn isTrue(value: &Value) -> bool { return match &value.* { Value.Bool { value: flag } => flag
+  _ => false } }
+  pub fn isNull(value: &Value) -> bool { return match &value.* { Value.Null => true
+  _ => false } }
+  pub effect fn merge(value: &mut Value, patch: &Value) -> () ! OutOfMemoryError ? &mut Allocator {
+    let fields = J.members(patch)
+    let mut i: usize = 0
+    while i < fields.length { run J.set(&mut value, String.view(&fields[i].key), run J.copy(&fields[i].value))
+    i = i + 1 }
+  }
+  pub effect fn overlay(value: &Value, patch: string) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+    let mut result = run J.copy(value)
+    let changes = run J.parse(String.utf8Bytes(patch))
+    run J.merge(&mut result, &changes)
+    return move result
+  }
+  pub effect fn encode(value: &Value) -> Bytes ! TaskError | OutOfMemoryError | WriterError ? &mut Allocator {
+    let mut sink = JsonBytes { bytes: Bytes.make(), exhausted: false }
+    let result = run Effect.result(Json.write(value)) |> Effect.provideMut<Writer>(&mut sink)
+    if sink.exhausted { fail OutOfMemoryError {} }
+    match move result {
+      Result<(), JsonError | WriterError>.Success { .. } => {}
+      Result<(), JsonError | WriterError>.Failure { error } => match move error {
+        WriterError failed => { fail move failed }
+        JsonError invalid => { drop invalid
+        run Task.abort("cannot encode JSON") }
+      }
+    }
+    return move sink.bytes
+  }
+}
+
+// Writer's error channel excludes allocation failures. Keep the distinction while
+// collecting its output, then restore OutOfMemoryError in J.encode.
+struct JsonBytes { bytes: Bytes, exhausted: bool }
+impl Writer for JsonBytes {
+  effect fn writeAll(self: &mut Self, value: &[u8]) -> () ! WriterError {
+    let mut allocator = Allocator.systemAllocatorProvider()
+    match move run Effect.result(Bytes.append(&mut self.bytes, value)) |> Effect.provideMut<Allocator>(&mut allocator) {
+      Result<(), OutOfMemoryError>.Success { .. } => {}
+      Result<(), OutOfMemoryError>.Failure { .. } => { self.exhausted = true
+      fail Writer.failure() }
+    }
+  }
+  effect fn flush(self: &mut Self) -> () ! WriterError { return () }
+}

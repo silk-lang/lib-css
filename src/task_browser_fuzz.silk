@@ -1,0 +1,365 @@
+import task_json { J }
+import silk.cli.task { TaskError }
+import silk.json.value { Value }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.string { String }
+import silk.num.f64
+import silk.num.i64
+import silk.num.u32
+import silk.num.usize
+
+pub struct Random { pub state: u32 }
+impl Random {
+  pub fn make(seed: u32) -> Random { return Random { state: seed } }
+  pub fn next(self: &mut Self) -> f64 {
+    self.state = u32.wrappingAdd(self.state, 0x6d2b79f5)
+    let mut value = u32.wrappingMultiply(u32.bitXor(self.state, u32.shiftRight(self.state, 15)), u32.bitOr(self.state, 1))
+    value = u32.bitXor(value, u32.wrappingAdd(value, u32.wrappingMultiply(u32.bitXor(value, u32.shiftRight(value, 7)), u32.bitOr(value, 61))))
+    return u32.toF64(u32.bitXor(value, u32.shiftRight(value, 14))) / 4294967296.0
+  }
+  pub fn integer(self: &mut Self, low: i64, high: i64) -> i64 {
+    return low + f64.toI64(f64.floor(self.next() * i64.toF64(high - low + 1)))
+  }
+}
+
+effect fn choose(random: &mut Random, choices: Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let index = random.integer(0, usize.toI64(J.length(&choices)) - 1)
+  return run J.copy(J.at(&choices, i64.toUsize(index)))
+}
+effect fn pick(random: &mut Random, choices: &[u8]) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  return run choose(&mut random, run J.parse(choices))
+}
+effect fn one(key: string, value: Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = J.object()
+  run J.set(&mut result, key, move value)
+  return move result
+}
+effect fn pair(first: Value, second: Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = J.array()
+  run J.push(&mut result, move first)
+  run J.push(&mut result, move second)
+  return move result
+}
+
+pub effect fn block(random: &mut Random) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut input = run J.parse(b"{\"viewport\":{\"width\":800,\"height\":600},\"nodes\":[]}")
+  let count = random.integer(3, 12)
+  let mut index: i64 = 0
+  while index < count {
+    let parent = if index == 0 { -1 } else { random.integer(0, index - 1) }
+    let mut style = J.object()
+    run J.set(&mut style, "display", run pick(&mut random, b"[\"block\",\"flex\"]"))
+    let width = if index == 0 { J.int(random.integer(120, 500)) } else {
+      let mut choices = J.array()
+      run J.push(&mut choices, run J.text("auto"))
+      run J.push(&mut choices, J.int(random.integer(20, 180)))
+      run J.push(&mut choices, run one("percent", run pick(&mut random, b"[0.25,0.5,0.75]")))
+      run choose(&mut random, move choices)
+    }
+    run J.set(&mut style, "width", move width)
+    let height = if index == 0 { J.int(random.integer(100, 400)) } else {
+      let choices = run pair(run J.text("auto"), J.int(random.integer(10, 100)))
+      run choose(&mut random, move choices)
+    }
+    run J.set(&mut style, "height", move height)
+    run J.set(&mut style, "padding", J.int(random.integer(0, 12)))
+    let mut margin = J.object()
+    run J.set(&mut margin, "top", J.int(random.integer(-5, 15)))
+    run J.set(&mut margin, "right", J.int(random.integer(0, 10)))
+    run J.set(&mut margin, "bottom", J.int(random.integer(-5, 15)))
+    run J.set(&mut margin, "left", J.int(random.integer(0, 10)))
+    run J.set(&mut style, "margin", move margin)
+    if random.next() < 0.5 {
+      run J.set(&mut style, "minWidth", J.int(random.integer(0, 40)))
+      run J.set(&mut style, "maxWidth", J.int(random.integer(60, 240)))
+    }
+    if random.next() < 0.3 {
+      run J.set(&mut style, "minHeight", J.int(random.integer(0, 20)))
+      run J.set(&mut style, "maxHeight", J.int(random.integer(40, 160)))
+    }
+    if random.next() < 0.3 { run J.set(&mut style, "marginLeft", run J.text("auto")) }
+    if random.next() < 0.25 { run J.set(&mut style, "boxSizing", run J.text("border-box")) }
+    if J.str(J.get(&style, "display")) == "flex" {
+      run J.set(&mut style, "flexDirection", run pick(&mut random, b"[\"row\",\"row-reverse\",\"column\",\"column-reverse\"]"))
+      run J.set(&mut style, "flexWrap", run pick(&mut random, b"[\"nowrap\",\"wrap\",\"wrap-reverse\"]"))
+      run J.set(&mut style, "rowGap", J.int(random.integer(0, 12)))
+      run J.set(&mut style, "columnGap", J.int(random.integer(0, 12)))
+      run J.set(&mut style, "alignItems", run pick(&mut random, b"[\"stretch\",\"flex-start\",\"center\",\"flex-end\"]"))
+      run J.set(&mut style, "justifyContent", run pick(&mut random, b"[\"flex-start\",\"center\",\"space-between\"]"))
+      run J.set(&mut style, "alignContent", run pick(&mut random, b"[\"stretch\",\"flex-start\",\"center\"]"))
+    }
+    if parent >= 0 && J.str(J.get(J.get(J.at(J.get(&input, "nodes"), i64.toUsize(parent)), "style"), "display")) == "flex" {
+      run J.set(&mut style, "flexGrow", run pick(&mut random, b"[0,0.2,0.5,1,2]"))
+      run J.set(&mut style, "flexShrink", run pick(&mut random, b"[0,0.25,1,2]"))
+      let mut basis = run J.parse(b"[\"auto\",0]")
+      run J.push(&mut basis, J.int(random.integer(20, 100)))
+      run J.push(&mut basis, run one("percent", J.float(0.25)))
+      run J.set(&mut style, "flexBasis", run choose(&mut random, move basis))
+      run J.set(&mut style, "order", J.int(random.integer(-2, 2)))
+    }
+    let mut node = run one("parent", if parent < 0 { Value.Null } else { J.int(parent) })
+    run J.set(&mut node, "style", move style)
+    run J.push(J.getMut(&mut input, "nodes"), move node)
+    index = index + 1
+  }
+  return move input
+}
+
+effect fn tracks(random: &mut Random, count: i64) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = J.array()
+  let mut index: i64 = 0
+  while index < count {
+    let choices = run pair(J.int(random.integer(24, 64)), run one("fr", J.int(random.integer(1, 3))))
+    run J.push(&mut result, run choose(&mut random, move choices))
+    index = index + 1
+  }
+  return move result
+}
+effect fn implicitTracks(random: &mut Random) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let count = random.integer(2, 3)
+  let mut result = J.array()
+  let mut index: i64 = 0
+  while index < count { run J.push(&mut result, J.int(random.integer(24, 48)))
+  index = index + 1 }
+  return move result
+}
+effect fn placement(random: &mut Random, count: i64, definite: bool) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let span = run one("span", J.int(random.integer(1, 3)))
+  let mut choices = J.array()
+  if !definite {
+    run J.push(&mut choices, run J.parse(b"[\"auto\",\"auto\"]"))
+    run J.push(&mut choices, run pair(run J.text("auto"), run J.copy(&span)))
+    run J.push(&mut choices, run pair(move span, run J.text("auto")))
+  } else {
+    let signStart = run pick(&mut random, b"[-1,1]")
+    let start = f64.toI64(J.num(&signStart)) * random.integer(1, count + 3)
+    let signEnd = run pick(&mut random, b"[-1,1]")
+    let end = f64.toI64(J.num(&signEnd)) * random.integer(1, count + 3)
+    run J.push(&mut choices, run pair(J.int(start), run J.text("auto")))
+    run J.push(&mut choices, run pair(run J.text("auto"), J.int(end)))
+    run J.push(&mut choices, run pair(J.int(start), run J.copy(&span)))
+    run J.push(&mut choices, run pair(move span, J.int(end)))
+    run J.push(&mut choices, run pair(run one("line", J.int(start)), run one("line", J.int(end))))
+  }
+  return run choose(&mut random, move choices)
+}
+effect fn suffix(name: string, ending: string) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut text = run String.copy(name)
+  run String.append(&mut text, ending)
+  return Value.String { text: move text }
+}
+effect fn names(name: string) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = J.array()
+  run J.push(&mut result, run J.text(name))
+  return run one("names", move result)
+}
+effect fn namedTracks(random: &mut Random, count: i64, name: string) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = J.array()
+  run J.push(&mut result, run one("names", run pair(run suffix(name, "-start"), run J.text(name))))
+  let sizes = run tracks(&mut random, count)
+  let mut sizeIndex: usize = 0
+  while sizeIndex < J.length(&sizes) {
+    run J.push(&mut result, run J.copy(J.at(&sizes, sizeIndex)))
+    run J.push(&mut result, run names(name))
+    sizeIndex = sizeIndex + 1
+  }
+  let mut end = J.array()
+  run J.push(&mut end, run suffix(name, "-end"))
+  run J.push(&mut result, run one("names", move end))
+  return move result
+}
+effect fn namedLine(line: i64, name: string) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = run one("line", J.int(line))
+  run J.set(&mut result, "name", run J.text(name))
+  return move result
+}
+effect fn namedSpan(span: i64, name: string) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut result = run one("span", J.int(span))
+  run J.set(&mut result, "name", run J.text(name))
+  return move result
+}
+effect fn namedPlacement(random: &mut Random, name: string) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut choices = J.array()
+  run J.push(&mut choices, run pair(run J.text(name), run J.text("auto")))
+  run J.push(&mut choices, run pair(run namedLine(random.integer(1, 3), name), run one("span", J.int(1))))
+  run J.push(&mut choices, run pair(run namedLine(-random.integer(1, 3), name), run J.text("auto")))
+  run J.push(&mut choices, run pair(J.int(1), run namedSpan(random.integer(1, 3), name)))
+  run J.push(&mut choices, run pair(run namedSpan(random.integer(1, 3), name), J.int(-1)))
+  let mut missing = run one("line", J.int(random.integer(1, 2)))
+  run J.set(&mut missing, "name", run suffix(name, "-missing"))
+  run J.push(&mut choices, run pair(move missing, run J.text("auto")))
+  return run choose(&mut random, move choices)
+}
+effect fn fixed(random: &mut Random) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut choices = J.array()
+  run J.push(&mut choices, J.int(random.integer(32, 56)))
+  run J.push(&mut choices, run one("percent", J.float(0.15)))
+  run J.push(&mut choices, run one("minmax", run pair(J.int(random.integer(24, 40)), run one("fr", J.int(random.integer(1, 2))))))
+  run J.push(&mut choices, run one("minmax", run pair(run J.text("min-content"), J.int(random.integer(40, 56)))))
+  return run choose(&mut random, move choices)
+}
+
+pub effect fn grid(random: &mut Random, index: usize, seed: u32) -> Value ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let rows = random.integer(2, 5)
+  let columns = random.integer(2, 5)
+  let mut style = run J.parse(b"{\"display\":\"grid\",\"boxSizing\":\"border-box\",\"width\":720,\"height\":560}")
+  run J.set(&mut style, "gridTemplateRows", run tracks(&mut random, rows))
+  run J.set(&mut style, "gridTemplateColumns", run tracks(&mut random, columns))
+  run J.set(&mut style, "gridAutoRows", run implicitTracks(&mut random))
+  run J.set(&mut style, "gridAutoColumns", run implicitTracks(&mut random))
+  let flows = ["row", "column", "row dense", "column dense"]
+  run J.set(&mut style, "gridAutoFlow", run J.text(flows[index % 4]))
+  run J.set(&mut style, "rowGap", J.int(random.integer(0, 8)))
+  run J.set(&mut style, "columnGap", J.int(random.integer(0, 8)))
+  let alignmentKeys = ["justifyContent", "alignContent", "justifyItems", "alignItems"]
+  let mut keyIndex: usize = 0
+  while keyIndex < alignmentKeys.length {
+    run J.set(&mut style, alignmentKeys[keyIndex], run J.text("start"))
+    keyIndex = keyIndex + 1
+  }
+  let family = (index / 4) % 6
+  if family == 1 {
+    run J.set(&mut style, "gridTemplateRows", run namedTracks(&mut random, rows, "row-edge"))
+    run J.set(&mut style, "gridTemplateColumns", run namedTracks(&mut random, columns, "column-edge"))
+  } else if family == 2 {
+    run J.set(&mut style, "gridTemplateAreas", run J.parse(b"[[\"header\",\"header\",\"header\"],[\"nav\",\"main\",\"main\"],[\"nav\",\".\",\".\"]]"))
+    run J.set(&mut style, "gridTemplateRows", run pick(&mut random, b"[\"none\",[32],[32,48,24]]"))
+    run J.set(&mut style, "gridTemplateColumns", run pick(&mut random, b"[\"none\",[48],[48,64,32]]"))
+  } else if family >= 3 {
+    let count = if family == 3 { J.int(random.integer(2, 4)) } else { run J.text(if family == 4 { "auto-fill" } else { "auto-fit" }) }
+    let mut pattern = J.array()
+    run J.push(&mut pattern, run names("column-edge"))
+    run J.push(&mut pattern, run fixed(&mut random))
+    run J.push(&mut pattern, run names("column-middle"))
+    if random.integer(0, 1) != 0 { run J.push(&mut pattern, run fixed(&mut random))
+    run J.push(&mut pattern, run names("column-edge")) }
+    run J.set(&mut style, "width", J.int(random.integer(220, 320)))
+    let mut repeat = run one("count", move count)
+    run J.set(&mut repeat, "tracks", move pattern)
+    let mut columnsValue = J.array()
+    run J.push(&mut columnsValue, run names("shell-start"))
+    run J.push(&mut columnsValue, J.int(24))
+    run J.push(&mut columnsValue, run names("repeat-start"))
+    run J.push(&mut columnsValue, run one("repeat", move repeat))
+    if random.integer(0, 1) != 0 { run J.push(&mut columnsValue, run J.parse(b"{\"repeat\":{\"count\":2,\"tracks\":[{\"names\":[\"column-edge\"]},16]}}")) }
+    run J.push(&mut columnsValue, run names("repeat-end"))
+    run J.push(&mut columnsValue, J.int(24))
+    run J.push(&mut columnsValue, run names("shell-end"))
+    run J.set(&mut style, "gridTemplateColumns", move columnsValue)
+  }
+  let mut nodes = J.array()
+  let mut root = run one("parent", Value.Null)
+  run J.set(&mut root, "style", move style)
+  run J.push(&mut nodes, move root)
+  let count = if family >= 4 { random.integer(1, 6) } else { random.integer(8, 20) }
+  let mut child: i64 = 0
+  while child < count {
+    let mut row = run placement(&mut random, rows, child % 6 == 3 || child % 6 == 5)
+    let mut column = run placement(&mut random, columns, child % 6 == 4 || child % 6 == 5)
+    if family == 1 && child % 2 == 0 {
+      row = run namedPlacement(&mut random, "row-edge")
+      column = run namedPlacement(&mut random, "column-edge")
+    } else if family == 2 && child % 2 == 0 {
+      let area = run pick(&mut random, b"[\"header\",\"nav\",\"main\"]")
+      row = run pair(run J.copy(&area), run J.copy(&area))
+      column = run pair(run J.copy(&area), run J.copy(&area))
+      if child % 4 == 0 {
+        J.setAt(&mut row, 0, run suffix(J.str(&area), "-start"))
+        J.setAt(&mut column, 1, run suffix(J.str(&area), "-end"))
+      }
+    } else if family >= 3 && child % 3 == 0 { column = run namedPlacement(&mut random, "column-edge") }
+    let mut childStyle = run J.parse(b"{\"display\":\"block\",\"boxSizing\":\"border-box\"}")
+    run J.set(&mut childStyle, "width", J.int(random.integer(6, 18)))
+    run J.set(&mut childStyle, "height", J.int(random.integer(6, 18)))
+    let orders: [i64; 5] = [-2, 1, -2, 0, 1]
+    run J.set(&mut childStyle, "order", J.int(orders[i64.toUsize(child % 5)]))
+    run J.set(&mut childStyle, "gridRowStart", run J.copy(J.at(&row, 0)))
+    run J.set(&mut childStyle, "gridRowEnd", run J.copy(J.at(&row, 1)))
+    run J.set(&mut childStyle, "gridColumnStart", run J.copy(J.at(&column, 0)))
+    run J.set(&mut childStyle, "gridColumnEnd", run J.copy(J.at(&column, 1)))
+    let mut node = run one("parent", J.int(0))
+    run J.set(&mut node, "style", move childStyle)
+    run J.push(&mut nodes, move node)
+    child = child + 1
+  }
+  if index % 5 != 0 { run alignment(&mut nodes, index, seed) }
+  let mut input = run J.parse(b"{\"viewport\":{\"width\":800,\"height\":600}}")
+  run J.set(&mut input, "nodes", move nodes)
+  return move input
+}
+
+effect fn safety(random: &mut Random, style: &mut Value, property: string) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let value = J.str(J.get(&style, property))
+  if value == "start" || value == "end" || value == "center" || value == "self-start" || value == "self-end" || value == "left" || value == "right" {
+    let mut key = run String.copy(property)
+    run String.append(&mut key, "Safety")
+    run J.set(&mut style, String.view(&key), run pick(&mut random, b"[\"default\",\"safe\",\"unsafe\"]"))
+  }
+}
+effect fn alignment(nodes: &mut Value, index: usize, seed: u32) -> () ! TaskError | OutOfMemoryError ? &mut Allocator {
+  let mut random = Random.make(u32.bitXor(u32.bitXor(seed, 0x616c6967), usize.toU32(index)))
+  let modes = ["horizontal-tb", "vertical-rl", "vertical-lr", "sideways-rl", "sideways-lr"]
+  let mut root = run J.copy(J.at(&nodes, 0))
+  let style = J.getMut(&mut root, "style")
+  run J.set(&mut style, "writingMode", run J.text(modes[(index / 4) % 5]))
+  run J.set(&mut style, "direction", run pick(&mut random, b"[\"ltr\",\"rtl\"]"))
+  run J.set(&mut style, "justifyContent", run pick(&mut random, b"[\"start\",\"end\",\"center\",\"stretch\",\"space-between\",\"space-around\",\"space-evenly\"]"))
+  run J.set(&mut style, "alignContent", run pick(&mut random, b"[\"start\",\"end\",\"center\",\"stretch\",\"space-between\",\"space-around\",\"space-evenly\"]"))
+  run J.set(&mut style, "justifyItems", run pick(&mut random, b"[\"start\",\"end\",\"center\",\"self-start\",\"self-end\",\"stretch\",\"baseline\",\"last baseline\",\"left\",\"right\"]"))
+  run J.set(&mut style, "alignItems", run pick(&mut random, b"[\"start\",\"end\",\"center\",\"self-start\",\"self-end\",\"stretch\",\"baseline\",\"last baseline\"]"))
+  let properties = ["justifyContent", "alignContent", "justifyItems", "alignItems"]
+  let mut propertyIndex: usize = 0
+  while propertyIndex < properties.length {
+    run safety(&mut random, &mut style, properties[propertyIndex])
+    propertyIndex = propertyIndex + 1
+  }
+  if index % 4 == 0 { run J.set(&mut style, "height", J.int(80)) }
+  if index % 4 == 1 { run J.set(&mut style, "width", J.int(80)) }
+  if index % 7 == 1 { run J.set(&mut style, "display", run J.text("inline-grid"))
+  J.remove(&mut style, "width") }
+  if index % 7 == 2 { J.remove(&mut style, "height") }
+  if index % 8 == 1 {
+    run J.set(&mut style, "overflowX", run J.text("auto"))
+    run J.set(&mut style, "overflowY", run J.text("auto"))
+  }
+  let rootMode = run J.copy(J.get(&style, "writingMode"))
+  let rootDirection = run J.copy(J.get(&style, "direction"))
+  if index % 8 == 1 {
+    let mut scroll = run one("x", run pick(&mut random, b"[-80,0,80]"))
+    run J.set(&mut scroll, "y", run pick(&mut random, b"[-80,0,80]"))
+    run J.set(&mut root, "scrollOffset", move scroll)
+  }
+  J.setAt(&mut nodes, 0, move root)
+  let mut at: usize = 1
+  while at < J.length(&nodes) {
+    let mut node = run J.copy(J.at(&nodes, at))
+    let child = J.getMut(&mut node, "style")
+    let mut choices = run pair(run J.copy(&rootMode), run J.copy(&rootMode))
+    let mut modeIndex: usize = 0
+    while modeIndex < modes.length {
+      run J.push(&mut choices, run J.text(modes[modeIndex]))
+      modeIndex = modeIndex + 1
+    }
+    run J.set(&mut child, "writingMode", run choose(&mut random, move choices))
+    let mut directions = J.array()
+    run J.push(&mut directions, run J.copy(&rootDirection))
+    run J.push(&mut directions, run J.text("ltr"))
+    run J.push(&mut directions, run J.text("rtl"))
+    run J.set(&mut child, "direction", run choose(&mut random, move directions))
+    if random.next() < 0.5 { run J.set(&mut child, "justifySelf", run pick(&mut random, b"[\"auto\",\"start\",\"end\",\"center\",\"self-start\",\"self-end\",\"stretch\",\"baseline\",\"last baseline\",\"left\",\"right\"]")) }
+    if random.next() < 0.5 { run J.set(&mut child, "alignSelf", run pick(&mut random, b"[\"auto\",\"start\",\"end\",\"center\",\"self-start\",\"self-end\",\"stretch\",\"baseline\",\"last baseline\"]")) }
+    run safety(&mut random, &mut child, "justifySelf")
+    run safety(&mut random, &mut child, "alignSelf")
+    if random.next() < 0.3 {
+      let property = run pick(&mut random, b"[\"marginLeft\",\"marginRight\",\"marginTop\",\"marginBottom\"]")
+      run J.set(&mut child, J.str(&property), run J.text("auto"))
+    }
+    if random.next() < 0.2 {
+      let property = run pick(&mut random, b"[\"width\",\"height\"]")
+      if random.next() < 0.5 { J.remove(&mut child, J.str(&property)) }
+      else { run J.set(&mut child, J.str(&property), run one("percent", J.float(0.5))) }
+    }
+    J.setAt(&mut nodes, at, move node)
+    at = at + 1
+  }
+}
