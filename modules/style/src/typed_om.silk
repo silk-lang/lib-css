@@ -51,14 +51,14 @@ impl StyleValue {
 
   pub fn associatedProperty(self: &Self) -> Option<&[u8]> {
     return match &self.value {
-      Value.Direct { property, text: _ } => Option<&[u8]>.some(Bytes.asSlice(&property))
+      Value.Direct { property, .. } => Option<&[u8]>.some(Bytes.asSlice(&property))
       _ => Option<&[u8]>.None
     }
   }
 
   pub fn unparsed(self: &Self) -> bool {
     return match &self.value {
-      Value.Unparsed { id: _ } => true
+      Value.Unparsed { .. } => true
       _ => false
     }
   }
@@ -86,7 +86,7 @@ impl StyleValue {
       Value.Transform { value } => run value.serializeComponents(&store.numeric)
       Value.Color { value } => run value.serialize(&store.numeric)
       Value.Image { value } => run value.serialize()
-      Value.Direct { property: _, text } => run Bytes.copy(Bytes.asSlice(&text))
+      Value.Direct { text, .. } => run Bytes.copy(Bytes.asSlice(&text))
     }
   }
 }
@@ -239,9 +239,9 @@ impl StyleValues {
       )
     }
     let numeric = match &buffer.tokens.asSlice()[range.start].kind {
-      Kind.Number { value: _, integer: _ } => one
-      Kind.Percentage { value: _, integer: _ } => one
-      Kind.Dimension { value: _, integer: _, unit: _ } => one
+      Kind.Number { .. } => one
+      Kind.Percentage { .. } => one
+      Kind.Dimension { .. } => one
       Kind.Function { name } => buffer.tokens.asSlice()[range.start].matching == range.end - 1
         && (tokens.insensitive(buffer.text(name), b"calc")
           || tokens.insensitive(buffer.text(name), b"min")

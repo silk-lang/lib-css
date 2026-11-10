@@ -76,9 +76,9 @@ effect fn converted(store: &NumericStore, id: NumericId, unit: &[u8]) -> f64
 impl TransformComponent {
   pub fn kind(self: &Self) -> TransformKind {
     return match &self.data {
-      Data.Numeric { kind, values: _ } => kind
-      Data.Perspective { depth: _, keyword: _ } => TransformKind.Perspective
-      Data.Matrix { value: _ } => TransformKind.Matrix
+      Data.Numeric { kind, .. } => kind
+      Data.Perspective { .. } => TransformKind.Perspective
+      Data.Matrix { .. } => TransformKind.Matrix
     }
   }
 
@@ -430,7 +430,7 @@ impl TransformComponent {
   pub effect fn length(self: &Self) -> Option<NumericId>
     ! CssomError {
     return match &self.data {
-      Data.Perspective { depth, keyword: _ } => depth
+      Data.Perspective { depth, .. } => depth
       _ => {
         fail CssomError.TypeError
       }
@@ -503,7 +503,7 @@ impl TransformComponent {
           value.matrix
         }
       }
-      Data.Perspective { depth, keyword: _ } => match &depth {
+      Data.Perspective { depth, .. } => match &depth {
         Option<NumericId>.None => transforms.identity()
         Option<NumericId>.Some { value } => {
           let distance = run converted(store, value, b"px")

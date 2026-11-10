@@ -338,12 +338,12 @@ effect fn compileValue(
   let plain = input.length() == 1
     && match &input.at(0) {
       Option<TokenView>.Some { value } => match &value.token.kind {
-        Kind.Ident { text: _ } => true
-        Kind.Number { value: _, integer: _ } => true
-        Kind.Percentage { value: _, integer: _ } => true
-        Kind.Dimension { value: _, integer: _, unit: _ } => true
-        Kind.Hash { text: _, identifier: _ } => true
-        Kind.String { text: _ } => true
+        Kind.Ident { .. } => true
+        Kind.Number { .. } => true
+        Kind.Percentage { .. } => true
+        Kind.Dimension { .. } => true
+        Kind.Hash { .. } => true
+        Kind.String { .. } => true
         _ => false
       }
       _ => false
@@ -358,7 +358,7 @@ effect fn compileValue(
       return Option<Declaration>.None
     }
     match &target {
-      Target.Property { property: _ } => {
+      Target.Property { .. } => {
         if declaration_values.mixedTopLevelBlock(&input, &structure, 0, input.length()) {
           return Option<Declaration>.None
         }

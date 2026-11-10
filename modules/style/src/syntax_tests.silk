@@ -79,7 +79,7 @@ test effect fn declarationRecoveryAndImportant() -> ()
   let mut i = ds[1].value.start
   while i < ds[1].value.end {
     if match &buffer.tokens.asSlice()[i].kind {
-      Kind.Ident { text: _ } => true
+      Kind.Ident { .. } => true
       _ => false
     } {
       identCount = identCount + 1

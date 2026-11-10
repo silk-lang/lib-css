@@ -78,7 +78,7 @@ effect fn typed(
       }
       let parsed = run values.parse(&mut store.*, property, &source, Mode.Css)
       return match &parsed {
-        Option<ValueId>.Some { value: _ } => true
+        Option<ValueId>.Some { .. } => true
         _ => false
       }
     }
@@ -89,7 +89,7 @@ effect fn typed(
       }
       let parsed = run values.parse(&mut store.*, property, &source, Mode.Css)
       return match &parsed {
-        Option<ValueId>.Some { value: _ } => true
+        Option<ValueId>.Some { .. } => true
         _ => false
       }
     }
@@ -124,7 +124,7 @@ effect fn declaration(
     let view = input.at(top)
     let opening = match &view {
       Option<TokenView>.Some { value } => match &value.token.kind {
-        Kind.Function { name: _ } => true
+        Kind.Function { .. } => true
         Kind.OpenParen => true
         Kind.OpenSquare => true
         Kind.OpenBrace => true
@@ -254,7 +254,7 @@ effect fn operand(
   let parentheses = match &view {
     Option<TokenView>.Some { value } => match &value.token.kind {
       Kind.OpenParen => true
-      Kind.Function { name: _ } => false
+      Kind.Function { .. } => false
       _ => {
         return invalid()
       }

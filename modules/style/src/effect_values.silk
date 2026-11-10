@@ -377,8 +377,8 @@ pub fn copyable(value: &EffectValue) -> bool {
 
 fn copyableSource(source: &ClipSource) -> bool {
   return match &source.* {
-    ClipSource.Shape { shape, reference: _ } => match &shape {
-      Shape.Path { evenodd: _, path: _ } => false
+    ClipSource.Shape { shape, .. } => match &shape {
+      Shape.Path { .. } => false
       _ => true
     }
     _ => true
@@ -506,7 +506,7 @@ effect fn copySource(source: &ClipSource) -> ClipSource
     ClipSource.Box { reference } => ClipSource.Box { reference: reference }
     ClipSource.Shape { shape, reference } => match &shape {
       // Not copyable (see copyableSource): the path is left to the source.
-      Shape.Path { evenodd: _, path: _ } => ClipSource.Box { reference: reference }
+      Shape.Path { .. } => ClipSource.Box { reference: reference }
       _ => ClipSource.Shape { shape: run copyShape(&shape), reference: reference }
     }
   }
@@ -536,7 +536,7 @@ effect fn copyShape(shape: &Shape) -> Shape
       run copied.appendSlice(commands.asSlice())
       Shape.Commands { evenodd: evenodd, start: start, commands: move copied }
     }
-    Shape.Path { evenodd, path: _ } => Shape.Polygon {
+    Shape.Path { evenodd, .. } => Shape.Polygon {
       evenodd: evenodd,
       round: Option<ExprId>.None,
       points: List<Point>.make(),
@@ -857,9 +857,9 @@ fn validRadial(
   store: &dimensions.Store<'_>,
 ) -> bool {
   return match &size.* {
-    RadialSize.Extent { extent: _ } => true
+    RadialSize.Extent { .. } => true
     RadialSize.Radii { x, y } => match &y {
-      Option<ExprId>.Some { value: _ } => !circle
+      Option<ExprId>.Some { .. } => !circle
       _ => circle && (!gradient || !dimensions.containsPercentage(store, x))
     }
   }
@@ -1033,7 +1033,7 @@ effect fn imageInner(
   }
   if !hasShape {
     circle = match &size {
-      RadialSize.Radii { x: _, y } => match &y {
+      RadialSize.Radii { y, .. } => match &y {
         Option<ExprId>.None => true
         _ => false
       }
@@ -1083,7 +1083,7 @@ pub effect fn parseImage(
   let mut trial = cursor.*
   let result = run imageInner(&mut store.*, input, &mut trial)
   match &result {
-    Option<Image>.Some { value: _ } => {
+    Option<Image>.Some { .. } => {
       cursor.position = trial.position
     }
     _ => {}
@@ -2253,7 +2253,7 @@ pub effect fn parseShape(
   let mut trial = cursor.*
   let result = run shapeInner(&mut store.*, input, &mut trial, presentation)
   match &result {
-    Option<Shape>.Some { value: _ } => {
+    Option<Shape>.Some { .. } => {
       cursor.position = trial.position
     }
     _ => {}
@@ -2516,7 +2516,7 @@ pub effect fn parse(
   let mut trial = cursor.*
   let result = run parseInner(&mut numerics.*, property, input, &mut trial, presentation)
   match &result {
-    Option<EffectValue>.Some { value: _ } => {
+    Option<EffectValue>.Some { .. } => {
       cursor.position = trial.position
     }
     _ => {}
@@ -2984,7 +2984,7 @@ effect fn angleWithZero(
   ? &mut Allocator {
   let angle = run numeric(&mut store.*, input, &mut cursor.*, Dimension.Angle, false, false)
   match &angle {
-    Option<ExprId>.Some { value: _ } => {
+    Option<ExprId>.Some { .. } => {
       return angle
     }
     _ => {}
@@ -2996,7 +2996,7 @@ effect fn angleWithZero(
   }
   match &input.at(trial.position) {
     Option<TokenView>.Some { value: view } => match &view.token.kind {
-      Kind.Number { value, integer: _ } => {
+      Kind.Number { value, .. } => {
         if value == 0.0 || presentation {
           cursor.position = trial.position + 1
           return Option<ExprId>.some(run dimensions.literal(&mut store.*, value, Unit.Deg))

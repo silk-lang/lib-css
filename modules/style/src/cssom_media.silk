@@ -20,7 +20,7 @@ fn opening(kind: &Kind) -> bool {
     Kind.OpenParen => true
     Kind.OpenSquare => true
     Kind.OpenBrace => true
-    Kind.Function { name: _ } => true
+    Kind.Function { .. } => true
     _ => false
   }
 }
@@ -53,7 +53,7 @@ effect fn closeAtEnd(out: &mut Bytes, buffer: &TokenBuffer, start: usize, end: u
         Kind.OpenParen => {
           run Bytes.append(&mut out.*, b")")
         }
-        Kind.Function { name: _ } => {
+        Kind.Function { .. } => {
           run Bytes.append(&mut out.*, b")")
         }
         Kind.OpenSquare => {
@@ -147,14 +147,14 @@ effect fn feature(out: &mut Bytes, buffer: &TokenBuffer, start: usize, end: usiz
           Kind.OpenParen => {
             run Bytes.append(&mut out.*, b"(")
           }
-          Kind.Number { value, integer: _ } => {
+          Kind.Number { value, .. } => {
             run cssom_serialization.appendNumber(&mut out.*, value)
           }
-          Kind.Percentage { value, integer: _ } => {
+          Kind.Percentage { value, .. } => {
             run cssom_serialization.appendNumber(&mut out.*, value)
             run Bytes.append(&mut out.*, b"%")
           }
-          Kind.Dimension { value, integer: _, unit } => {
+          Kind.Dimension { value, unit, .. } => {
             run cssom_serialization.appendNumber(&mut out.*, value)
             run lowerIdentifier(&mut out.*, buffer.text(unit))
           }

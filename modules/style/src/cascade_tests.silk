@@ -141,7 +141,7 @@ test effect fn compileRejectsInvalidDeclarationsBeforeTheyCanWin() -> ()
       Option<Declaration>.Some { value } => {
         accepted = accepted + 1
         match &value.specified {
-          Specified.Pending { range: _, mode: _ } => {
+          Specified.Pending { .. } => {
             pending = pending + 1
           }
           _ => {}

@@ -550,7 +550,7 @@ effect fn next(l: &mut Lexer) -> Kind
 
 fn opening(kind: &Kind) -> u8 {
   return match &kind.* {
-    Kind.Function { name: _ } => 41
+    Kind.Function { .. } => 41
     Kind.OpenParen => 41
     Kind.OpenSquare => 93
     Kind.OpenBrace => 125

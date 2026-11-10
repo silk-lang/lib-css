@@ -145,11 +145,11 @@ test effect fn substitutionNeverRetokenizesAndClosesImplicitBlocks() -> ()
         let first = value.asSlice()[0]
         let second = value.asSlice()[1]
         let number = match &f.buffers.one(first.buffer)[0].tokens.asSlice()[first.token].kind {
-          Kind.Number { value: _, integer: _ } => true
+          Kind.Number { .. } => true
           _ => false
         }
         let ident = match &f.buffers.one(second.buffer)[0].tokens.asSlice()[second.token].kind {
-          Kind.Ident { text: _ } => true
+          Kind.Ident { .. } => true
           _ => false
         }
         number && ident

@@ -334,13 +334,13 @@ effect fn component(
   match &viewed {
     Option<TokenView>.Some { value: view } => {
       match &view.token.kind {
-        Kind.Number { value, integer: _ } => {
+        Kind.Number { value, .. } => {
           cursor.position = cursor.position + 1
           return Option<Component>.some(
             Component { value: value, percentage: false, missing: false },
           )
         }
-        Kind.Percentage { value, integer: _ } => {
+        Kind.Percentage { value, .. } => {
           if angle {
             return Option<Component>.None
           }
@@ -349,7 +349,7 @@ effect fn component(
             Component { value: value * (percentScale / 100.0), percentage: true, missing: false },
           )
         }
-        Kind.Dimension { value, integer: _, unit } => {
+        Kind.Dimension { value, unit, .. } => {
           if !angle {
             return Option<Component>.None
           }
@@ -483,7 +483,7 @@ pub effect fn parse(source: &Input<'_>, cursor: &mut Cursor) -> Option<Color>
   let mut trial = Cursor { position: cursor.position, end: cursor.end }
   let result = run parseInner(source, &mut trial)
   match &result {
-    Option<Color>.Some { value: _ } => {
+    Option<Color>.Some { .. } => {
       cursor.position = trial.position
     }
     _ => {}
@@ -504,7 +504,7 @@ effect fn parseInner(source: &Input<'_>, cursor: &mut Cursor) -> Option<Color>
   match &viewed {
     Option<TokenView>.Some { value: view } => {
       match &view.token.kind {
-        Kind.Hash { text, identifier: _ } => {
+        Kind.Hash { text, .. } => {
           cursor.position = cursor.position + 1
           return hex(view.text(text))
         }

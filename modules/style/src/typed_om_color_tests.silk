@@ -281,7 +281,7 @@ effect fn reification() -> ()
   let system = run CSSColorValue.parse(&mut store, b"CanvasText", &limits)
   run Testing.expect(
     match &system {
-      ParsedColor.Keyword { text: _ } => true
+      ParsedColor.Keyword { .. } => true
       _ => false
     },
     "system colors stay context-dependent",
@@ -349,7 +349,7 @@ effect fn reification() -> ()
   let oklab = run parsed(&mut store, b"oklab(50% 25% -25%)")
   run Testing.expect(
     match &oklab {
-      CSSColorValue.OKLab { value: _ } => true
+      CSSColorValue.OKLab { .. } => true
       _ => false
     },
     "OKLab subclass reification",
@@ -363,7 +363,7 @@ effect fn reification() -> ()
   let oklch = run parsed(&mut store, b"oklch(0.5 50% 180)")
   run Testing.expect(
     match &oklch {
-      CSSColorValue.OKLCH { value: _ } => true
+      CSSColorValue.OKLCH { .. } => true
       _ => false
     },
     "OKLCH subclass reification",

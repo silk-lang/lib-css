@@ -1071,16 +1071,16 @@ effect fn parseComponent(
         return ColorComponent.None
       }
     }
-    Kind.Number { value, integer: _ } => {
+    Kind.Number { value, .. } => {
       return ColorComponent.Numeric { id: run store.unit(value, b"number") }
     }
-    Kind.Percentage { value, integer: _ } => {
+    Kind.Percentage { value, .. } => {
       return ColorComponent.Numeric { id: run store.unit(value, b"percent") }
     }
-    Kind.Dimension { value, integer: _, unit } => {
+    Kind.Dimension { value, unit, .. } => {
       return ColorComponent.Numeric { id: run store.unit(value, buffer.text(unit)) }
     }
-    Kind.Function { name: _ } => {
+    Kind.Function { .. } => {
       let end = if token.matching < cursor.end {
         buffer.tokens.asSlice()[token.matching].source.end
       } else {

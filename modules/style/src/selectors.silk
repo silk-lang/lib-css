@@ -284,9 +284,9 @@ fn localCompound(ast: &SelectorList, index: usize, depth: usize) -> bool {
   while simple != NONE {
     let entry = &ast.simples.asSlice()[simple]
     let local = match &entry.test {
-      Test.Id { text: _ } => true
-      Test.Class { text: _ } => true
-      Test.Attribute { namespace: _, name: _, value: _, op: _, insensitive: _ } => true
+      Test.Id { .. } => true
+      Test.Class { .. } => true
+      Test.Attribute { .. } => true
       Test.State { pseudo } => pseudo == Pseudo.Link || pseudo == Pseudo.Empty
         || pseudo == Pseudo.Never
       Test.Function { kind, list } => (kind == FunctionKind.Is || kind == FunctionKind.Not)
@@ -534,7 +534,7 @@ pub effect fn validateCssom(
   ? &mut Allocator {
   let parsed = run parseWithMode(buffer, range, namespaces, limits, true, nested)
   return match &parsed {
-    Option<SelectorList>.Some { value: _ } => true
+    Option<SelectorList>.Some { .. } => true
     _ => false
   }
 }
@@ -640,7 +640,7 @@ effect fn parseList(
     } else {
       let token = &buffer.tokens.asSlice()[at]
       match &token.kind {
-        Kind.Function { name: _ } => {
+        Kind.Function { .. } => {
           if token.matching > at && token.matching <= range.end {
             at = if token.matching == range.end {
               range.end - 1
@@ -1240,7 +1240,7 @@ effect fn parsePseudoElementFunction(
     }
     while at < range.end {
       match &buffer.tokens.asSlice()[at].kind {
-        Kind.Ident { text: _ } => {}
+        Kind.Ident { .. } => {}
         _ => {
           return rejected()
         }
@@ -1472,8 +1472,8 @@ effect fn parseFunction(
     }
     while at < range.end {
       match &buffer.tokens.asSlice()[at].kind {
-        Kind.Ident { text: _ } => {}
-        Kind.String { text: _ } => {}
+        Kind.Ident { .. } => {}
+        Kind.String { .. } => {}
         _ => {
           return rejected()
         }

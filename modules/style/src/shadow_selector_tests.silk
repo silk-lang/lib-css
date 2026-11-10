@@ -347,7 +347,7 @@ test effect fn shadowArgumentWorkSharesAndExhaustsTheCallerBudget() -> ()
       let first = run selectors.matchElement(&value, &buffer, &tree, 5, &mut context)
       run Testing.expect(
         match &first {
-          Option<Specificity>.Some { value: _ } => true
+          Option<Specificity>.Some { .. } => true
           _ => false
         },
         "host-context traverses in normal context",

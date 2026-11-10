@@ -30,7 +30,7 @@ effect fn accepts(property: Property, source: &[u8], presentation: bool) -> bool
     presentation,
   )
   return match &result {
-    Option<TransformValue>.Some { value: _ } => cursor.done(&input)
+    Option<TransformValue>.Some { .. } => cursor.done(&input)
     _ => false
   }
 }
@@ -273,13 +273,13 @@ test effect fn transformInvalidDeclarationRecoveryAndTypedOrder() -> ()
           false
         } else {
           let translation = match &operations.asSlice()[0] {
-            Operation.Translate { x, y, z: _, threeD: _ } => dimensions.evaluate(&numerics, x, 200.0)
+            Operation.Translate { x, y, .. } => dimensions.evaluate(&numerics, x, 200.0)
               == 50.0
               && dimensions.evaluate(&numerics, y, 0.0) == 2.0
             _ => false
           }
           let scaling = match &operations.asSlice()[1] {
-            Operation.Scale { x, y, z: _, threeD: _ } => dimensions.evaluate(&numerics, x, 1.0) == 3.0
+            Operation.Scale { x, y, .. } => dimensions.evaluate(&numerics, x, 1.0) == 3.0
               && dimensions.evaluate(&numerics, y, 1.0) == 3.0
             _ => false
           }
@@ -383,7 +383,7 @@ test effect fn computedTransformKeepsReferenceBoxDependence() -> ()
           |> Effect.provideMut<Allocator>(&mut allocator)
         run Testing.expect(
           match &translated {
-            Operation.Translate { x, y, z: _, threeD: _ } => dimensions.containsPercentage(&numerics, x)
+            Operation.Translate { x, y, .. } => dimensions.containsPercentage(&numerics, x)
               && dimensions.evaluate(&numerics, x, 200.0) == 74.0
               && dimensions.evaluate(&numerics, x, 400.0) == 124.0
               && dimensions.evaluate(&numerics, y, 0.0) == 40.0
@@ -399,7 +399,7 @@ test effect fn computedTransformKeepsReferenceBoxDependence() -> ()
           |> Effect.provideMut<Allocator>(&mut allocator)
         run Testing.expect(
           match &scaled {
-            Operation.Scale { x, y, z: _, threeD: _ } => !dimensions.containsPercentage(&numerics, x)
+            Operation.Scale { x, y, .. } => !dimensions.containsPercentage(&numerics, x)
               && dimensions.evaluate(&numerics, x, 0.0) == 0.5
               && dimensions.evaluate(&numerics, y, 0.0) == 2.0
             _ => false

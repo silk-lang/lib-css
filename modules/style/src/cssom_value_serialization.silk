@@ -138,7 +138,7 @@ pub effect fn value(
       }
       run appendKeyword(&mut out, value_keywords.name(projected))
     }
-    Value.Numeric { expression, range: _, basis: _ } => {
+    Value.Numeric { expression, .. } => {
       run numeric.appendExpression(&mut out, &store.numerics, expression)
     }
     Value.Color { color } => run numeric.appendColor(&mut out, &color)
@@ -300,7 +300,7 @@ pub effect fn computedValue(
   let mut out = Bytes.make()
   let infinity = f64.fromBits(9218868437227405312)
   match &store.get(id).* {
-    Value.Numeric { expression, range, basis: _ } => {
+    Value.Numeric { expression, range, .. } => {
       let minimum = match range {
         Range.Unrestricted => -infinity
         Range.AtLeastOne => 1.0

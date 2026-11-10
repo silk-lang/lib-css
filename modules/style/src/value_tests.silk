@@ -20,7 +20,7 @@ effect fn accepts(property: Property, bytes: &[u8], mode: Mode) -> bool
   let mut store = Store.make()
   let result = run values.parse(&mut store, property, &source, mode)
   return match &result {
-    Option<ValueId>.Some { value: _ } => true
+    Option<ValueId>.Some { .. } => true
     _ => false
   }
 }

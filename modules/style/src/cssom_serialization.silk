@@ -54,7 +54,7 @@ effect fn name(out: &mut Bytes, text: &[u8], initial: bool, lowercase: bool) -> 
             value = decoded
             true
           }
-          Utf8Step.Invalid { offset: _ } => true
+          Utf8Step.Invalid { .. } => true
           Utf8Step.NeedMore => false
         }
         if complete {
@@ -259,30 +259,30 @@ fn delimiter(kind: &Kind, wanted: u32) -> bool {
 
 fn separating(left: &Kind, right: &Kind) -> bool {
   let ident = match &right.* {
-    Kind.Ident { text: _ } => true
-    Kind.Function { name: _ } => true
-    Kind.Url { text: _ } => true
+    Kind.Ident { .. } => true
+    Kind.Function { .. } => true
+    Kind.Url { .. } => true
     Kind.BadUrl => true
     Kind.Cdc => true
     _ => false
   }
   let numeric = match &right.* {
-    Kind.Number { value: _, integer: _ } => true
-    Kind.Percentage { value: _, integer: _ } => true
-    Kind.Dimension { value: _, integer: _, unit: _ } => true
+    Kind.Number { .. } => true
+    Kind.Percentage { .. } => true
+    Kind.Dimension { .. } => true
     _ => false
   }
   let hyphen = delimiter(right, 45)
   return match &left.* {
-    Kind.Ident { text: _ } => ident || numeric || hyphen
+    Kind.Ident { .. } => ident || numeric || hyphen
       || match &right.* {
         Kind.OpenParen => true
         _ => false
       }
-    Kind.AtKeyword { name: _ } => ident || numeric || hyphen
-    Kind.Hash { text: _, identifier: _ } => ident || numeric || hyphen
-    Kind.Dimension { value: _, integer: _, unit: _ } => ident || numeric || hyphen
-    Kind.Number { value: _, integer: _ } => ident || numeric || delimiter(right, 37)
+    Kind.AtKeyword { .. } => ident || numeric || hyphen
+    Kind.Hash { .. } => ident || numeric || hyphen
+    Kind.Dimension { .. } => ident || numeric || hyphen
+    Kind.Number { .. } => ident || numeric || delimiter(right, 37)
     Kind.Delim { scalar } => if scalar == 35 || scalar == 45 {
       ident || numeric || hyphen
     } else if scalar == 64 {
@@ -535,7 +535,7 @@ fn word(buffer: &TokenBuffer, at: usize) -> &[u8] {
 
 fn isIdent(buffer: &TokenBuffer, at: usize) -> bool {
   return match &buffer.tokens.asSlice()[at].kind {
-    Kind.Ident { text: _ } => true
+    Kind.Ident { .. } => true
     _ => false
   }
 }
@@ -600,7 +600,7 @@ effect fn typeSelector(
   let next = local + 1
   let hasSuffix = next < end
     && match &ts[next].kind {
-      Kind.Hash { text: _, identifier: _ } => true
+      Kind.Hash { .. } => true
       Kind.OpenSquare => true
       Kind.Colon => true
       Kind.Delim { scalar } => scalar == 46

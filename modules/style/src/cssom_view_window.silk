@@ -1474,7 +1474,7 @@ impl WindowRequests {
     }
     if result == WindowRequestResult.Applied {
       match actual {
-        Option<WindowDisplay>.Some { value: _ } => {}
+        Option<WindowDisplay>.Some { .. } => {}
         _ => {
           fail CssomError.InvalidStateError
         }

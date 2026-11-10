@@ -112,7 +112,7 @@ pub effect fn appendClosingBuffer(buffers: &mut Buffers<'_>) -> usize
 
 fn closing(kind: &Kind) -> Option<usize> {
   return match &kind.* {
-    Kind.Function { name: _ } => Option<usize>.some(0)
+    Kind.Function { .. } => Option<usize>.some(0)
     Kind.OpenParen => Option<usize>.some(0)
     Kind.OpenSquare => Option<usize>.some(1)
     Kind.OpenBrace => Option<usize>.some(2)
@@ -453,7 +453,7 @@ impl VariableStore {
             node.buffer = declaration.buffer
             node.origin = value.priority.origin
             match &declaration.specified {
-              Specified.Pending { range, mode: _ } => {
+              Specified.Pending { range, .. } => {
                 node.raw = range
                 node.resolved = false
                 inherit = false

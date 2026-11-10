@@ -118,14 +118,14 @@ effect fn append(out: &mut Bytes, buffer: &TokenBuffer, range: TokenRange) -> ()
         let escaped = run cssom_serialization.identifier(Bytes.asSlice(&name))
         run out.append(Bytes.asSlice(&escaped))
       }
-      Kind.Number { value, integer: _ } => {
+      Kind.Number { value, .. } => {
         run cssom_serialization.appendNumber(&mut out.*, value)
       }
-      Kind.Percentage { value, integer: _ } => {
+      Kind.Percentage { value, .. } => {
         run cssom_serialization.appendNumber(&mut out.*, value)
         run out.append(b"%")
       }
-      Kind.Dimension { value, integer: _, unit } => {
+      Kind.Dimension { value, unit, .. } => {
         run cssom_serialization.appendNumber(&mut out.*, value)
         let unit = run lower(buffer.text(unit))
         run out.append(Bytes.asSlice(&unit))

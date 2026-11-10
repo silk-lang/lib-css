@@ -62,7 +62,7 @@ effect fn invalid(text: &[u8], expected: Dimension, presentation: bool) -> bool
   let parsed = (run parse(&mut store, &source, &mut cursor, expected, presentation))
   return match &parsed {
     Option<ExprId>.None => cursor.position == 0
-    Option<ExprId>.Some { value: _ } => !cursor.done(&source)
+    Option<ExprId>.Some { .. } => !cursor.done(&source)
   }
 }
 

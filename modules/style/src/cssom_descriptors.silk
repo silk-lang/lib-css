@@ -230,7 +230,7 @@ effect fn numericList(
         Option<ExprId>.Some { value } => {
           if nonnegative
             && match &store.get(value).* {
-              Expr.Literal { value: number, unit: _ } => number < 0.0
+              Expr.Literal { value: number, .. } => number < 0.0
               _ => false
             } {
             return List<Bytes>.make()

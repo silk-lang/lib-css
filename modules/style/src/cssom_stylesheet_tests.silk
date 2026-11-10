@@ -249,7 +249,7 @@ test effect fn constructedReplacementTransactionAndImportRemoval() -> ()
   )
   run Testing.expect(
     match &failure {
-      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { error: _ } => true
+      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { .. } => true
       _ => false
     },
     "resource failure is not swallowed",

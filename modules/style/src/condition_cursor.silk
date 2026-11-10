@@ -31,7 +31,7 @@ impl Structure {
 fn opener(kind: &Kind) -> u8 {
   return match &kind.* {
     Kind.OpenParen => 1
-    Kind.Function { name: _ } => 1
+    Kind.Function { .. } => 1
     Kind.OpenSquare => 2
     Kind.OpenBrace => 3
     _ => 0

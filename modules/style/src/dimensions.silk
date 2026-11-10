@@ -287,18 +287,18 @@ pub fn numberLiteral(store: &Store<'_>, id: ExprId) -> Option<f64> {
 
 pub fn negativeLiteral(store: &Store<'_>, id: ExprId) -> bool {
   return match &store.get(id).* {
-    Expr.Literal { value, unit: _ } => value < 0.0
+    Expr.Literal { value, .. } => value < 0.0
     _ => false
   }
 }
 
 pub fn containsPercentage(store: &Store<'_>, id: ExprId) -> bool {
   return match &store.get(id).* {
-    Expr.Literal { value: _, unit } => unit == Unit.Percent
-    Expr.Binary { operation: _, left, right } => containsPercentage(store, left)
+    Expr.Literal { unit, .. } => unit == Unit.Percent
+    Expr.Binary { left, right, .. } => containsPercentage(store, left)
       || containsPercentage(store, right)
     Expr.Calc { value } => containsPercentage(store, value)
-    Expr.PercentContext { value, percentage: _ } => containsPercentage(store, value)
+    Expr.PercentContext { value, .. } => containsPercentage(store, value)
   }
 }
 
@@ -527,9 +527,9 @@ fn same(a: [i32; 6], b: [i32; 6]) -> bool {
 
 fn resultPowers(store: &Store<'_>, id: ExprId) -> [i32; 6] {
   return match &store.get(id).* {
-    Expr.Literal { value: _, unit } => powers(dimension(unit))
+    Expr.Literal { unit, .. } => powers(dimension(unit))
     Expr.Calc { value } => resultPowers(store, value)
-    Expr.PercentContext { value, percentage: _ } => resultPowers(store, value)
+    Expr.PercentContext { value, .. } => resultPowers(store, value)
     Expr.Binary { operation, left, right } => {
       let mut a = resultPowers(store, left)
       let b = resultPowers(store, right)
@@ -721,15 +721,15 @@ effect fn primary(
   match &view {
     Option<TokenView>.Some { value: tokenView } => {
       match &tokenView.token.kind {
-        Kind.Number { value, integer: _ } => {
+        Kind.Number { value, .. } => {
           cursor.position = cursor.position + 1
           return Option<Typed>.some((run typedLiteral(&mut store.*, value, Unit.Number, hint)))
         }
-        Kind.Percentage { value, integer: _ } => {
+        Kind.Percentage { value, .. } => {
           cursor.position = cursor.position + 1
           return Option<Typed>.some((run typedLiteral(&mut store.*, value, Unit.Percent, hint)))
         }
-        Kind.Dimension { value, integer: _, unit: unitText } => {
+        Kind.Dimension { value, unit: unitText, .. } => {
           let parsedUnit = unit(tokenView.text(unitText))
           match &parsedUnit {
             Option<Unit>.Some { value: unitValue } => {
@@ -1120,7 +1120,7 @@ effect fn parseContext(
     Option<Typed>.Some { value } => {
       if compatible(&value, expected) {
         let isMath = match &store.get(value.id).* {
-          Expr.Literal { value: _, unit: _ } => false
+          Expr.Literal { .. } => false
           _ => true
         }
         let mut result = value.id

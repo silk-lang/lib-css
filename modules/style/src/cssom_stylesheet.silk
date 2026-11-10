@@ -734,7 +734,7 @@ impl StyleSheet {
               self.placement(self.arena.asSlice()[value].kind, parent, index),
             )
             match move placement {
-              Result<(), CssomError>.Success { value: _ } => self.link(parent, index, value)
+              Result<(), CssomError>.Success { .. } => self.link(parent, index, value)
               _ => self.arena.truncate(start)
             }
           }
@@ -1107,7 +1107,7 @@ impl StyleSheet {
       }
       let start = at
       let isAt = match &buffer.tokens.asSlice()[at].kind {
-        Kind.AtKeyword { name: _ } => true
+        Kind.AtKeyword { .. } => true
         _ => false
       }
       let custom = match &buffer.tokens.asSlice()[at].kind {
@@ -1161,7 +1161,7 @@ impl StyleSheet {
                 self.placement(self.arena.asSlice()[value].kind, parent, index),
               )
               match move placement {
-                Result<(), CssomError>.Success { value: _ } => {
+                Result<(), CssomError>.Success { .. } => {
                   self.link(parent, index, value)
                   if self.arena.asSlice()[parent].kind != CssRuleKind.Page {
                     initial = false
@@ -1530,7 +1530,7 @@ effect fn keyframeText(buffer: &TokenBuffer, range: TokenRange) -> Bytes
   let mut first = true
   while at < range.end {
     let value = match &buffer.tokens.asSlice()[at].kind {
-      Kind.Percentage { value, integer: _ } => value
+      Kind.Percentage { value, .. } => value
       Kind.Ident { text } => if insensitive(buffer.text(text), b"from") {
         0.0
       } else {
@@ -1606,7 +1606,7 @@ fn oneRule(buffer: &TokenBuffer) -> bool {
     return false
   }
   let isAt = match &buffer.tokens.asSlice()[range.start].kind {
-    Kind.AtKeyword { name: _ } => true
+    Kind.AtKeyword { .. } => true
     _ => false
   }
   let mut at = range.start
@@ -1805,7 +1805,7 @@ fn keyframeSelectors(buffer: &TokenBuffer, range: TokenRange) -> bool {
         }
         need = false
       }
-      Kind.Percentage { value, integer: _ } => {
+      Kind.Percentage { value, .. } => {
         if !need || value < 0.0 || value > 100.0 {
           return false
         }

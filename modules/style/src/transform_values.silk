@@ -211,7 +211,7 @@ effect fn numeric(
   if cursor.position < cursor.end {
     match &next {
       Option<TokenView>.Some { value } => match &value.token.kind {
-        Kind.Number { value: scalar, integer: _ } => {
+        Kind.Number { value: scalar, .. } => {
           if expected == Dimension.Angle && scalar == 0.0 {
             cursor.position = cursor.position + 1
             return Option<ExprId>.some((run dimensions.literal(&mut numerics.*, scalar, Unit.Deg)))
@@ -853,7 +853,7 @@ effect fn individual(
   let mut z = fallback
   let mut threeD = false
   match &second {
-    Option<ExprId>.Some { value: _ } => {
+    Option<ExprId>.Some { .. } => {
       let third = (run dimensions.parse(
         &mut numerics.*,
         input,
@@ -901,7 +901,7 @@ effect fn presentationTransform(
       }
       transforms.transform(buffer.source())
     }
-    Input.Expanded { buffers: _, references: _ } => {
+    Input.Expanded { .. } => {
       return Option<TransformValue>.None
     }
   }

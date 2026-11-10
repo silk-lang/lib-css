@@ -75,7 +75,7 @@ test effect fn numericTypesAndHashFlags() -> ()
   )
   run Testing.expect(
     match &ts[7].kind {
-      Kind.Hash { text: _, identifier } => !identifier
+      Kind.Hash { identifier, .. } => !identifier
       _ => false
     },
     "digit-leading hash is unrestricted",
@@ -370,7 +370,7 @@ test effect fn extremeDecimalsAndLongMantissas() -> ()
   while i <= 8 {
     run Testing.expect(
       match &ts[i].kind {
-        Kind.Number { value, integer: _ } => f64.toBits(value) == 0
+        Kind.Number { value, .. } => f64.toBits(value) == 0
         _ => false
       },
       "underflow and signed zero literals yield unsigned zero; zero times enormous exponent is zero",

@@ -214,14 +214,14 @@ effect fn specified(
     while at < range.end {
       let token = &buffer.tokens.asSlice()[at]
       if match &token.kind {
-        Kind.Ident { text: _ } => true
+        Kind.Ident { .. } => true
         _ => false
       } {
         let part = TokenRange { start: at, end: at + 1 }
         let input = Input.Contiguous { buffer: buffer, range: part }
         let mut cursor = Cursor.make(&input)
         match run colors.parse(&input, &mut cursor) {
-          Option<Color>.Some { value: _ } => {
+          Option<Color>.Some { .. } => {
             if source != target
               || (condition_cursor.skip(&input, cursor.position, input.length()) == input.length()
                 && original(buffer, range).length == token.source.end - token.source.start) {
@@ -582,7 +582,7 @@ impl StyleDeclaration {
         _ => Property.Fill
       }
       let named = match &known {
-        Option<Property>.Some { value: _ } => false
+        Option<Property>.Some { .. } => false
         _ => true
       }
       run out.append(
@@ -763,7 +763,7 @@ impl StyleDeclaration {
       }
     } else if !declaration_values.customName(name) {
       match &properties.lookup(name) {
-        Option<Property>.Some { value: _ } => {}
+        Option<Property>.Some { .. } => {}
         _ => {
           return
         }
