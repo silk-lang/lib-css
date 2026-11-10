@@ -100,7 +100,7 @@ pub fn name(context: Context, input: &[u8]) -> &'static [u8] {
       i = i + 1
     }
   }
-  return match &properties.lookup(input) {
+  return match &properties.typedLookup(input) {
     Option<Property>.Some { value } => properties.name(properties.canonical(value))
     _ => b""
   }
@@ -117,7 +117,7 @@ pub fn longhandCount(context: Context, input: &[u8]) -> usize {
   if insensitive(canonical, b"margin") || insensitive(canonical, b"padding") {
     return 4
   }
-  return match &properties.lookup(canonical) {
+  return match &properties.typedLookup(canonical) {
     Option<Property>.Some { value } => properties.longhandCount(value)
     _ => 1
   }
@@ -142,7 +142,7 @@ pub fn longhandAt(context: Context, input: &[u8], index: usize) -> &'static [u8]
         b""
       }
     }
-    match &properties.lookup(canonical) {
+    match &properties.typedLookup(canonical) {
       Option<Property>.Some { value } => {
         return if index < properties.longhandCount(value) {
           properties.name(properties.longhandAt(value, index))
@@ -414,7 +414,7 @@ effect fn fontValue(descriptor: &[u8], buffer: &TokenBuffer, range: TokenRange) 
     }
     return Option<Bytes>.some(parsed.remove(0))
   }
-  let property = match &properties.lookup(descriptor) {
+  let property = match &properties.typedLookup(descriptor) {
     Option<Property>.Some { value } => value
     _ => {
       return Option<Bytes>.None
@@ -607,7 +607,7 @@ pub effect fn parse(
   } else if insensitive(descriptor, b"content") {
     special = run cssom_content.parse(buffer, range)
   } else {
-    let property = match &properties.lookup(descriptor) {
+    let property = match &properties.typedLookup(descriptor) {
       Option<Property>.Some { value } => properties.canonical(value)
       _ => {
         return move out

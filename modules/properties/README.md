@@ -15,8 +15,8 @@ import these instead of defining their own.
   It covers 282 properties: the SVG and text properties first, then the box properties (position
   and insets, sizes, margin, padding, border, radius, flex, grid, gap, alignment, background,
   shadow, breaks), and last the two that have no standard name, `-silk-selection-color` and
-  `-silk-placeholder-color`. `css-style` re-exports it as `properties` and limits itself to the first 172,
-  the ones it parses today.
+  `-silk-placeholder-color`. `css-style` re-exports it as `properties` and cascades all of it: the
+  first 172 with their own grammars, the box properties by shape.
 
 - **Paint and text** (also in `computed`): `Paint` (background `Fill`, border, radii, `BoxShadow`,
   opacity, object fit) and `Text` (font, colors, decoration and the inherited layout text
@@ -38,6 +38,13 @@ import these instead of defining their own.
 - **Conversion** (`convert`): written to computed against a `Context` (font sizes and viewport),
   and computed back to written. A conversion returns `None` when a value does not fit, which is
   how a client ignores an invalid declaration.
+
+- **Box shorthands** (`shorthands`): `longhand(shorthand, value, target)` gives the value one
+  longhand gets from a shorthand's written value, such as `margin-left` from `margin: 1px 2px`,
+  with initial values for what the shorthand leaves out. It covers the common forms of the box
+  shorthands (`margin`, `padding`, `inset`, the `border` family, `border-radius`, `flex`,
+  `flex-flow`, `gap`, the `place-*` trio, the grid lines, and simple `grid`, `grid-template`
+  and `background` values). css-style's cascade expands box shorthands with it.
 
 - **Typed constructors** (`declare`): one function per property.
 

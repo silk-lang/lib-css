@@ -105,6 +105,17 @@ pub effect fn project(
       }
       return id
     }
+    Value.Longhands { texts } => {
+      let mut i: usize = 0
+      while i < texts.length() && i < properties.longhandCount(sourceProperty) {
+        if properties.longhandAt(sourceProperty, i) == target {
+          let span = texts.asSlice()[i]
+          return run store.add(Value.Raw { text: span })
+        }
+        i = i + 1
+      }
+      return id
+    }
     Value.Text { value } => {
       let mut source = &value
       if value.property == Property.Font && value.items.length() == 1 {

@@ -283,6 +283,24 @@ pub effect fn value(
     Value.Raw { text } => {
       return run Bytes.copy(store.text(text))
     }
+    Value.Longhands { texts } => {
+      let count = texts.length()
+      let mut i: usize = 0
+      if property == sourceProperty && properties.longhandCount(property) == count {
+        let mut parts = run List<Bytes>.makeWithCapacity(count)
+        while i < count {
+          run parts.append(run Bytes.copy(store.text(texts.asSlice()[i])))
+          i = i + 1
+        }
+        return run cssom_shorthand.serialize(property, parts.asSlice())
+      }
+      while i < count && i < properties.longhandCount(sourceProperty) {
+        if properties.longhandAt(sourceProperty, i) == property {
+          return run Bytes.copy(store.text(texts.asSlice()[i]))
+        }
+        i = i + 1
+      }
+    }
   }
   return move out
 }

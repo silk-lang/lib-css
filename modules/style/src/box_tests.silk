@@ -1,0 +1,248 @@
+//! The cascade covers the box properties of the shared catalog: declarations parse by shape,
+//! shorthands expand, later declarations win, and the computed style reads back as written
+//! values.
+import computed { Engine, HostContext, StyleId, ComputedError }
+import cascade { Declaration, Target, Specified, Candidate, Priority, Origin }
+import values { ValueId, Mode }
+import values
+import properties { Property }
+import dimensions { Context }
+import colors { Color, Context as ColorContext }
+import text_values { TextValue }
+import lexer
+import input { Input }
+import tokens { Limits, CssError, Buffers }
+import variables
+import written
+import cssom_declaration { StyleDeclaration }
+import silk.collections.bytes { Bytes }
+import css_properties.convert as convert
+import css_properties.convert { Context as ConvertContext }
+import css_properties.values as shared
+import css_properties.values { Value }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.core.effect { Effect }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+fn sameText(a: &[u8], b: &[u8]) -> bool {
+  if a.length != b.length {
+    return false
+  }
+  let mut i: usize = 0
+  while i < a.length {
+    if a[i] != b[i] {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+effect fn parsed(engine: &mut Engine<'_>, property: Property, source: &[u8]) -> Option<ValueId>
+  ! CssError | OutOfMemoryError
+  ? &mut Allocator {
+  let buffer = run lexer.tokenize(source, &Limits.make())
+  let input = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  return run values.parse(&mut engine.values, property, &input, Mode.Css)
+}
+
+effect fn add(
+  engine: &mut Engine<'_>,
+  catalog: &mut List<Declaration>,
+  candidates: &mut List<Candidate>,
+  property: Property,
+  source: &[u8],
+) -> ()
+  ! CssError | ComputedError | OutOfMemoryError
+  ? &mut Allocator {
+  let value = match &run parsed(&mut engine.*, property, source) {
+    Option<ValueId>.Some { value: found } => found
+    _ => {
+      fail ComputedError { property: property }
+    }
+  }
+  let index = catalog.length()
+  run catalog.append(
+    Declaration {
+      target: Target.Property { property: property },
+      specified: Specified.Parsed { value: value },
+      buffer: 0,
+      important: false,
+    },
+  )
+  run candidates.append(
+    Candidate { declaration: index, priority: Priority.make(Origin.Author, index) },
+  )
+}
+
+effect fn expectComputed(
+  engine: &Engine<'_>,
+  style: StyleId,
+  property: Property,
+  expected: &[u8],
+  message: string<'static>,
+) -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError
+  ? &mut Allocator {
+  match &run written.computedValue(engine, style, property) {
+    Option<Value>.Some { value: found } => {
+      let text = run shared.cssText(&found)
+      run Testing.expect(sameText(text.asSlice(), expected), message)
+    }
+    _ => {
+      run Testing.expect(expected.length == 0, message)
+    }
+  }
+}
+
+effect fn boxCascade() -> ()
+  ! AssertionError<'static> | CssError | ComputedError | OutOfMemoryError
+  ? &mut Allocator {
+  let mut buffers = Buffers.make()
+  let closing = run variables.appendClosingBuffer(&mut buffers)
+  let mut engine = run Engine.make(closing)
+  let family = match &run parsed(&mut engine, Property.FontFamily, b"serif") {
+    Option<ValueId>.Some { value: found } => found
+    _ => {
+      fail ComputedError { property: Property.FontFamily }
+    }
+  }
+  let fonts = [
+    TextValue.make(Property.Font),
+    TextValue.make(Property.Font),
+    TextValue.make(Property.Font),
+    TextValue.make(Property.Font),
+    TextValue.make(Property.Font),
+    TextValue.make(Property.Font),
+  ]
+  let host = HostContext {
+    dimensions: Context.make(200.0, 100.0, 16.0),
+    colors: ColorContext.make(Color.srgb(0.0, 0.0, 0.0, 1.0), [Color.srgb(0.0, 0.0, 0.0, 1.0); 19]),
+    systemFonts: &fonts,
+    fontFamily: family,
+    revision: 0,
+  }
+  let mut declarations = List<Declaration>.make()
+  let mut candidates = List<Candidate>.make()
+  run add(&mut engine, &mut declarations, &mut candidates, Property.Margin, b"1px 2px")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.MarginLeft, b"calc(100% - 8px)")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.Position, b"absolute")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.BorderTopColor, b"blue")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.Border, b"solid 3px red")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.BorderLeftStyle, b"dashed")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.Flex, b"2")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.Gap, b"4px 1em")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.GridArea, b"header / 2")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.Background, b"#00f no-repeat")
+  let style = run engine.build(
+    buffers.view(),
+    declarations.asSlice(),
+    candidates.asSlice(),
+    Option<StyleId>.None,
+    &host,
+    &Limits.make(),
+  )
+  run expectComputed(&engine, style, Property.MarginTop, b"1px", "a shorthand sets its longhands")
+  run expectComputed(&engine, style, Property.MarginRight, b"2px", "the second margin value is the right side")
+  run expectComputed(&engine, style, Property.MarginLeft, b"calc(100% - 8px)", "a later longhand wins over the shorthand")
+  run expectComputed(&engine, style, Property.Position, b"absolute", "a keyword longhand")
+  run expectComputed(&engine, style, Property.BorderTopColor, b"rgb(255, 0, 0)", "a later shorthand wins over the longhand")
+  run expectComputed(&engine, style, Property.BorderBottomWidth, b"3px", "border sets every side's width")
+  run expectComputed(&engine, style, Property.BorderLeftStyle, b"dashed", "a longhand after border wins")
+  run expectComputed(&engine, style, Property.BorderRightStyle, b"solid", "border sets every side's style")
+  run expectComputed(&engine, style, Property.FlexGrow, b"2", "flex: 2 grows")
+  run expectComputed(&engine, style, Property.FlexBasis, b"0%", "flex: 2 has a zero basis")
+  run expectComputed(&engine, style, Property.ColumnGap, b"1em", "gap's second value is the column gap")
+  run expectComputed(&engine, style, Property.GridRowEnd, b"header", "grid-area repeats a line name")
+  run expectComputed(&engine, style, Property.GridColumnStart, b"2", "grid-area's second line")
+  run expectComputed(&engine, style, Property.BackgroundColor, b"rgb(0, 0, 255)", "background sets the color")
+  run expectComputed(&engine, style, Property.BackgroundRepeat, b"no-repeat", "background sets the repeat")
+  run expectComputed(&engine, style, Property.BackgroundImage, b"none", "background resets the image")
+  run expectComputed(&engine, style, Property.PaddingTop, b"0", "an undeclared box property has its initial value")
+  run expectComputed(&engine, style, Property.ZIndex, b"auto", "an undeclared keyword initial")
+  run expectComputed(&engine, style, Property.Margin, b"", "a shorthand has no computed entry")
+
+  // A child inherits none of these, and its own declarations cascade the same way.
+  let mut childDeclarations = List<Declaration>.make()
+  let mut childCandidates = List<Candidate>.make()
+  run add(&mut engine, &mut childDeclarations, &mut childCandidates, Property.MarginTop, b"inherit")
+  run add(&mut engine, &mut childDeclarations, &mut childCandidates, Property.PaddingLeft, b"5%")
+  let child = run engine.build(
+    buffers.view(),
+    childDeclarations.asSlice(),
+    childCandidates.asSlice(),
+    Option<StyleId>.some(style),
+    &host,
+    &Limits.make(),
+  )
+  run expectComputed(&engine, child, Property.MarginTop, b"1px", "inherit takes the parent's value")
+  run expectComputed(&engine, child, Property.MarginRight, b"0", "box properties do not inherit")
+  run expectComputed(&engine, child, Property.PaddingLeft, b"5%", "the child's own declaration")
+  let context = ConvertContext.make()
+  match &run written.computedValue(&engine, style, Property.BorderBottomWidth) {
+    Option<Value>.Some { value: found } => {
+      match &convert.length(&found, &context) {
+        Option<f32>.Some { value: pixels } => {
+          run Testing.expect(pixels == 3.0, "the computed value converts with css-properties")
+        }
+        _ => {
+          run Testing.expect(false, "the computed value converts with css-properties")
+        }
+      }
+    }
+    _ => {
+      run Testing.expect(false, "the border width has a computed value")
+    }
+  }
+
+  let unknownFlow = run parsed(&mut engine, Property.FlexFlow, b"sideways")
+  run Testing.expect(unknownFlow.isNone(), "a shorthand value that does not expand is invalid")
+  let twoStyles = run parsed(&mut engine, Property.BorderTop, b"solid dashed")
+  run Testing.expect(twoStyles.isNone(), "a border side with two styles is invalid")
+  let empty = run parsed(&mut engine, Property.Top, b"  ")
+  run Testing.expect(empty.isNone(), "an empty value is invalid")
+}
+
+effect fn expectValue(
+  style: &StyleDeclaration,
+  name: &[u8],
+  expected: &[u8],
+  message: string<'static>,
+) -> ()
+  ! AssertionError<'static> | OutOfMemoryError
+  ? &mut Allocator {
+  let value = run style.getPropertyValue(name)
+  run Testing.expect(sameText(Bytes.asSlice(&value), expected), message)
+}
+
+effect fn boxDeclarations() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError
+  ? &mut Allocator {
+  let limits = Limits.make()
+  let style = run StyleDeclaration.parse(
+    b"margin: 1px 2px; border: 1px solid red; flex: 1; gap: 4px; flex-flow: sideways; z-index: 3 /* top */",
+    &limits,
+  )
+  run expectValue(&style, b"margin-left", b"2px", "a declaration block expands margin")
+  run expectValue(&style, b"margin", b"1px 2px", "margin reads back in its short form")
+  run expectValue(&style, b"border-top-style", b"solid", "border expands to its sides")
+  run expectValue(&style, b"border", b"1px solid rgb(255, 0, 0)", "border reads back when its sides agree")
+  run expectValue(&style, b"flex-basis", b"0%", "flex: 1 has a zero basis")
+  run expectValue(&style, b"gap", b"4px", "gap reads back as one value")
+  run expectValue(&style, b"flex-direction", b"", "a shorthand that does not expand is dropped")
+  run expectValue(&style, b"z-index", b"3", "a longhand keeps its canonical text")
+}
+
+test effect fn declarationBlocksHoldBoxProperties() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run boxDeclarations() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+test effect fn cascadeCoversBoxProperties() -> ()
+  ! AssertionError<'static> | CssError | ComputedError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run boxCascade() |> Effect.provideMut<Allocator>(&mut allocator)
+}

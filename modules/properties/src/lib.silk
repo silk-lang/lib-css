@@ -6,3 +6,4 @@ import keyword_enums
 import values
 import convert
 import declare
+import shorthands
