@@ -1,0 +1,8 @@
+[package]
+name = "css-properties"
+version = "0.1.0"
+kind = "library"
+exports = ["computed"]
+silk-version = "0.1.0-dev.64+8214c402307b"
+license = "MIT"
+description = "CSS properties and their value types, shared by css-style, css-layout and their clients"

@@ -6,3 +6,6 @@ exports = ["lib"]
 silk-version = "0.1.0-dev.64+8214c402307b"
 license = "MIT"
 description = "CSS block, flex and grid layout with replaceable intrinsic measurement"
+
+[dependencies]
+properties = { path = "../properties", package = "css-properties" }
