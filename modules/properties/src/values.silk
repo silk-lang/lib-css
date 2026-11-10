@@ -1,0 +1,640 @@
+//! CSS values as written: plain data a style patch can carry and an inspector can print.
+//! The shapes follow CSS Typed OM. A keyword is a `CSSKeywordValue`, a number with a unit is a
+//! `CSSUnitValue`, `calc()` and friends are a tree like `CSSMathValue`, and anything Typed OM
+//! leaves untyped travels as CSS text. A percentage is written as in CSS: `50.0` is `50%`.
+import catalog { Property }
+import catalog
+import keywords { Keyword }
+import keywords
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.color.rgba { Rgba }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.io.writer { Writer, WriterError }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.format { Format }
+import silk.num.f32
+import silk.num.f64
+
+/// The unit of a numeric value. `Number` is a plain number and `Percent` a percentage.
+pub enum Unit {
+  Number,
+  Percent,
+  Px,
+  Cm,
+  Mm,
+  Q,
+  In,
+  Pt,
+  Pc,
+  Em,
+  Rem,
+  Ex,
+  Rex,
+  Cap,
+  Rcap,
+  Ch,
+  Rch,
+  Ic,
+  Ric,
+  Lh,
+  Rlh,
+  Vw,
+  Vh,
+  Vi,
+  Vb,
+  Vmin,
+  Vmax,
+  Svw,
+  Svh,
+  Svi,
+  Svb,
+  Svmin,
+  Svmax,
+  Lvw,
+  Lvh,
+  Lvi,
+  Lvb,
+  Lvmin,
+  Lvmax,
+  Dvw,
+  Dvh,
+  Dvi,
+  Dvb,
+  Dvmin,
+  Dvmax,
+  Deg,
+  Grad,
+  Rad,
+  Turn,
+  S,
+  Ms,
+  Hz,
+  Khz,
+  Dpi,
+  Dpcm,
+  Dppx,
+  X,
+}
+
+/// The CSS spelling of a unit: empty for a number, `%` for a percentage.
+pub fn unitName(unit: Unit) -> &'static [u8] {
+  return match unit {
+    Unit.Number => b""
+    Unit.Percent => b"%"
+    Unit.Px => b"px"
+    Unit.Cm => b"cm"
+    Unit.Mm => b"mm"
+    Unit.Q => b"q"
+    Unit.In => b"in"
+    Unit.Pt => b"pt"
+    Unit.Pc => b"pc"
+    Unit.Em => b"em"
+    Unit.Rem => b"rem"
+    Unit.Ex => b"ex"
+    Unit.Rex => b"rex"
+    Unit.Cap => b"cap"
+    Unit.Rcap => b"rcap"
+    Unit.Ch => b"ch"
+    Unit.Rch => b"rch"
+    Unit.Ic => b"ic"
+    Unit.Ric => b"ric"
+    Unit.Lh => b"lh"
+    Unit.Rlh => b"rlh"
+    Unit.Vw => b"vw"
+    Unit.Vh => b"vh"
+    Unit.Vi => b"vi"
+    Unit.Vb => b"vb"
+    Unit.Vmin => b"vmin"
+    Unit.Vmax => b"vmax"
+    Unit.Svw => b"svw"
+    Unit.Svh => b"svh"
+    Unit.Svi => b"svi"
+    Unit.Svb => b"svb"
+    Unit.Svmin => b"svmin"
+    Unit.Svmax => b"svmax"
+    Unit.Lvw => b"lvw"
+    Unit.Lvh => b"lvh"
+    Unit.Lvi => b"lvi"
+    Unit.Lvb => b"lvb"
+    Unit.Lvmin => b"lvmin"
+    Unit.Lvmax => b"lvmax"
+    Unit.Dvw => b"dvw"
+    Unit.Dvh => b"dvh"
+    Unit.Dvi => b"dvi"
+    Unit.Dvb => b"dvb"
+    Unit.Dvmin => b"dvmin"
+    Unit.Dvmax => b"dvmax"
+    Unit.Deg => b"deg"
+    Unit.Grad => b"grad"
+    Unit.Rad => b"rad"
+    Unit.Turn => b"turn"
+    Unit.S => b"s"
+    Unit.Ms => b"ms"
+    Unit.Hz => b"hz"
+    Unit.Khz => b"khz"
+    Unit.Dpi => b"dpi"
+    Unit.Dpcm => b"dpcm"
+    Unit.Dppx => b"dppx"
+    Unit.X => b"x"
+  }
+}
+
+/// The node kinds of a math expression, as in Typed OM's `CSSMathValue`.
+pub enum MathOperator {
+  Sum,
+  Product,
+  Negate,
+  Invert,
+  Min,
+  Max,
+  Clamp,
+}
+
+/// What separates the items of a value with several components.
+pub enum Separator {
+  Space,
+  Comma,
+  Slash,
+}
+
+/// One CSS value as written.
+pub union Value {
+  /// An identifier such as `auto` or `flex-start`.
+  Keyword { pub value: Keyword },
+  /// A number with a unit: `12px`, `50%`, `1.5`.
+  Unit { pub value: f32, pub unit: Unit },
+  /// A color, not premultiplied, channels 0 to 1.
+  Color { pub value: Rgba<f32> },
+  /// A math expression: `calc(10px + 50%)` is a `Sum` of two `Unit` values.
+  Math { pub operator: MathOperator, pub values: List<Value> },
+  /// A functional notation such as `linear-gradient(45deg, red, blue)` or `blur(4px)`.
+  /// The arguments are comma separated.
+  Function { pub name: Keyword, pub values: List<Value> },
+  /// Several components, as in `10px 20px` or `underline overline`.
+  Sequence { pub separator: Separator, pub values: List<Value> },
+  /// CSS text for whatever has no typed form here. The receiver parses it.
+  Text { pub css: Bytes },
+}
+
+/// One declaration of a style patch, as in CSSOM: a property, its value as written, and
+/// the `!important` flag.
+pub struct Declaration {
+  pub property: Property,
+  pub value: Value,
+  pub important: bool,
+}
+
+/// The declaration `property: value`.
+pub fn declare(property: Property, value: Value) -> Declaration {
+  return Declaration { property: property, value: move value, important: false }
+}
+
+pub fn keyword(value: Keyword) -> Value {
+  return Value.Keyword { value: value }
+}
+
+/// `auto`.
+pub fn auto() -> Value {
+  return Value.Keyword { value: Keyword.Auto }
+}
+
+/// `none`.
+pub fn none() -> Value {
+  return Value.Keyword { value: Keyword.None }
+}
+
+/// `normal`.
+pub fn normal() -> Value {
+  return Value.Keyword { value: Keyword.Normal }
+}
+
+pub fn unit(value: f32, unit: Unit) -> Value {
+  return Value.Unit { value: value, unit: unit }
+}
+
+/// A plain number.
+pub fn number(value: f32) -> Value {
+  return Value.Unit { value: value, unit: Unit.Number }
+}
+
+/// A length in CSS pixels.
+pub fn px(value: f32) -> Value {
+  return Value.Unit { value: value, unit: Unit.Px }
+}
+
+/// A percentage as written: `percent(50.0)` is `50%`.
+pub fn percent(value: f32) -> Value {
+  return Value.Unit { value: value, unit: Unit.Percent }
+}
+
+/// An angle in degrees.
+pub fn deg(value: f32) -> Value {
+  return Value.Unit { value: value, unit: Unit.Deg }
+}
+
+pub fn color(value: Rgba<f32>) -> Value {
+  return Value.Color { value: value }
+}
+
+/// A math node over `values`.
+pub fn math(operator: MathOperator, values: List<Value>) -> Value {
+  return Value.Math { operator: operator, values: move values }
+}
+
+/// `calc(<pixels>px + <percent>%)`, with the percentage as written (0 to 100).
+pub effect fn calc(pixels: f32, percent: f32) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut terms = List<Value>.make()
+  run terms.append(Value.Unit { value: pixels, unit: Unit.Px })
+  run terms.append(Value.Unit { value: percent, unit: Unit.Percent })
+  return Value.Math { operator: MathOperator.Sum, values: move terms }
+}
+
+/// `name(values, ...)`.
+pub fn function(name: Keyword, values: List<Value>) -> Value {
+  return Value.Function { name: name, values: move values }
+}
+
+/// Space-separated components.
+pub fn sequence(values: List<Value>) -> Value {
+  return Value.Sequence { separator: Separator.Space, values: move values }
+}
+
+/// Two space-separated components.
+pub effect fn pair(first: Value, second: Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut values = List<Value>.make()
+  run values.append(move first)
+  run values.append(move second)
+  return Value.Sequence { separator: Separator.Space, values: move values }
+}
+
+/// CSS text, copied.
+pub effect fn text(css: &[u8]) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let copy = run Bytes.copy(css)
+  return Value.Text { css: move copy }
+}
+
+effect fn cloneAll(values: &List<Value>) -> List<Value> ! OutOfMemoryError ? &mut Allocator {
+  let mut out = run List<Value>.makeWithCapacity(values.length())
+  let items = values.asSlice()
+  let mut i: usize = 0
+  while i < items.length {
+    let item = run clone(&items[i])
+    run out.append(move item)
+    i = i + 1
+  }
+  return move out
+}
+
+/// A deep copy of `value`.
+pub effect fn clone(value: &Value) -> Value ! OutOfMemoryError ? &mut Allocator {
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      return Value.Keyword { value: inner }
+    }
+    Value.Unit { value: inner, unit } => {
+      return Value.Unit { value: inner, unit: unit }
+    }
+    Value.Color { value: inner } => {
+      return Value.Color { value: inner }
+    }
+    Value.Math { operator, values } => {
+      let copies = run cloneAll(&values)
+      return Value.Math { operator: operator, values: move copies }
+    }
+    Value.Function { name, values } => {
+      let copies = run cloneAll(&values)
+      return Value.Function { name: name, values: move copies }
+    }
+    Value.Sequence { separator, values } => {
+      let copies = run cloneAll(&values)
+      return Value.Sequence { separator: separator, values: move copies }
+    }
+    Value.Text { css } => {
+      let copy = run Bytes.copy(css.asSlice())
+      return Value.Text { css: move copy }
+    }
+  }
+}
+
+/// A deep copy of `declaration`.
+pub effect fn cloneDeclaration(declaration: &Declaration) -> Declaration
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let value = run clone(&declaration.value)
+  return Declaration {
+    property: declaration.property,
+    value: move value,
+    important: declaration.important,
+  }
+}
+
+fn sameAll(left: &List<Value>, right: &List<Value>) -> bool {
+  let a = left.asSlice()
+  let b = right.asSlice()
+  if a.length != b.length {
+    return false
+  }
+  let mut i: usize = 0
+  while i < a.length {
+    if !same(&a[i], &b[i]) {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+fn sameBytes(a: &[u8], b: &[u8]) -> bool {
+  if a.length != b.length {
+    return false
+  }
+  let mut i: usize = 0
+  while i < a.length {
+    if a[i] != b[i] {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+/// Whether two values are written the same way. `1px` and `calc(1px)` are different.
+pub fn same(left: &Value, right: &Value) -> bool {
+  match &left.* {
+    Value.Keyword { value } => {
+      return match &right.* {
+        Value.Keyword { value: other } => value == other
+        _ => false
+      }
+    }
+    Value.Unit { value, unit } => {
+      return match &right.* {
+        Value.Unit { value: other, unit: otherUnit } => value == other && unit == otherUnit
+        _ => false
+      }
+    }
+    Value.Color { value } => {
+      return match &right.* {
+        Value.Color { value: other } => value.r == other.r && value.g == other.g && value.b == other.b
+          && value.a == other.a
+        _ => false
+      }
+    }
+    Value.Math { operator, values } => {
+      return match &right.* {
+        Value.Math { operator: otherOperator, values: others } => operator == otherOperator
+          && sameAll(&values, &others)
+        _ => false
+      }
+    }
+    Value.Function { name, values } => {
+      return match &right.* {
+        Value.Function { name: otherName, values: others } => name == otherName && sameAll(&values, &others)
+        _ => false
+      }
+    }
+    Value.Sequence { separator, values } => {
+      return match &right.* {
+        Value.Sequence { separator: otherSeparator, values: others } => separator == otherSeparator
+          && sameAll(&values, &others)
+        _ => false
+      }
+    }
+    Value.Text { css } => {
+      return match &right.* {
+        Value.Text { css: other } => sameBytes(css.asSlice(), other.asSlice())
+        _ => false
+      }
+    }
+  }
+}
+
+/// Whether two declarations set the same property to the same written value.
+pub fn sameDeclaration(left: &Declaration, right: &Declaration) -> bool {
+  return left.property == right.property && left.important == right.important
+    && same(&left.value, &right.value)
+}
+
+struct NumberWriter {
+  bytes: [u8; 384],
+  length: usize
+}
+
+impl Writer for NumberWriter {
+  effect fn writeAll(self: &mut Self, value: &[u8]) -> ()
+    ! WriterError
+    ? &mut Writer {
+    let mut at: usize = 0
+    while at < value.length {
+      self.bytes[self.length] = value[at]
+      self.length = self.length + 1
+      at = at + 1
+    }
+  }
+
+  effect fn flush(self: &mut Self) -> () ! WriterError ? &mut Writer {}
+}
+
+/// Appends a number the way CSSOM serializes one: no exponent, at most six decimals,
+/// trailing zeros removed.
+pub effect fn writeNumber(out: &mut Bytes, value: f32) -> () ! OutOfMemoryError ? &mut Allocator {
+  let wide = f32.toF64(value)
+  let mut writer = NumberWriter { bytes: [0; 384], length: 0 }
+  let mut options = Format.defaultOptions()
+  options.precision = Option<usize>.Some { value: 6 }
+  let formatted = run Format.displayWith(&wide, move options)
+    |> Effect.provideMut<Writer>(&mut writer)
+    |> Effect.result
+  drop formatted
+  let mut end = writer.length
+  if f64.isFinite(wide) {
+    while end > 0 && writer.bytes[end - 1] == 48 {
+      end = end - 1
+    }
+    if end > 0 && writer.bytes[end - 1] == 46 {
+      end = end - 1
+    }
+    if end == 2 && writer.bytes[0] == 45 && writer.bytes[1] == 48 {
+      run out.append(b"0")
+      return
+    }
+  }
+  run out.append(Slice.view<u8>(&writer.bytes, 0, end))
+}
+
+fn channel(value: f32) -> f32 {
+  let clamped: f32 = if value < 0.0 {
+    0.0
+  } else if value > 1.0 {
+    1.0
+  } else {
+    value
+  }
+  return f32.round(clamped * 255.0)
+}
+
+/// Appends a color as `rgb(r, g, b)`, or `rgba(r, g, b, a)` when it is not opaque.
+pub effect fn writeColor(out: &mut Bytes, value: Rgba<f32>) -> () ! OutOfMemoryError ? &mut Allocator {
+  if value.a >= 1.0 {
+    run out.append(b"rgb(")
+  } else {
+    run out.append(b"rgba(")
+  }
+  run writeNumber(&mut out.*, channel(value.r))
+  run out.append(b", ")
+  run writeNumber(&mut out.*, channel(value.g))
+  run out.append(b", ")
+  run writeNumber(&mut out.*, channel(value.b))
+  if value.a < 1.0 {
+    run out.append(b", ")
+    let alpha: f32 = if value.a < 0.0 {
+      0.0
+    } else {
+      value.a
+    }
+    run writeNumber(&mut out.*, f32.round(alpha * 1000.0) / 1000.0)
+  }
+  run out.append(b")")
+}
+
+effect fn writeJoined(out: &mut Bytes, values: &List<Value>, separator: &[u8], nested: bool) -> ()
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let items = values.asSlice()
+  let mut i: usize = 0
+  while i < items.length {
+    if i > 0 {
+      run out.append(separator)
+    }
+    run writeNested(&mut out.*, &items[i], nested)
+    i = i + 1
+  }
+}
+
+effect fn writeMath(out: &mut Bytes, operator: MathOperator, values: &List<Value>, nested: bool) -> ()
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  match operator {
+    MathOperator.Sum => {
+      run out.append(if nested { b"(" } else { b"calc(" })
+      let items = values.asSlice()
+      let mut i: usize = 0
+      while i < items.length {
+        let mut negated = false
+        match &items[i] {
+          Value.Unit { value, unit } => {
+            if i > 0 && value < 0.0 {
+              negated = true
+              run out.append(b" - ")
+              run writeNumber(&mut out.*, 0.0 - value)
+              run out.append(unitName(unit))
+            }
+          }
+          _ => {}
+        }
+        if !negated {
+          if i > 0 {
+            run out.append(b" + ")
+          }
+          run writeNested(&mut out.*, &items[i], true)
+        }
+        i = i + 1
+      }
+      run out.append(b")")
+    }
+    MathOperator.Product => {
+      run out.append(if nested { b"(" } else { b"calc(" })
+      run writeJoined(&mut out.*, values, b" * ", true)
+      run out.append(b")")
+    }
+    MathOperator.Negate => {
+      run out.append(if nested { b"(-1 * " } else { b"calc(-1 * " })
+      run writeJoined(&mut out.*, values, b" * ", true)
+      run out.append(b")")
+    }
+    MathOperator.Invert => {
+      run out.append(if nested { b"(1 / " } else { b"calc(1 / " })
+      run writeJoined(&mut out.*, values, b" / ", true)
+      run out.append(b")")
+    }
+    MathOperator.Min => {
+      run out.append(b"min(")
+      run writeJoined(&mut out.*, values, b", ", false)
+      run out.append(b")")
+    }
+    MathOperator.Max => {
+      run out.append(b"max(")
+      run writeJoined(&mut out.*, values, b", ", false)
+      run out.append(b")")
+    }
+    MathOperator.Clamp => {
+      run out.append(b"clamp(")
+      run writeJoined(&mut out.*, values, b", ", false)
+      run out.append(b")")
+    }
+  }
+}
+
+effect fn writeNested(out: &mut Bytes, value: &Value, nested: bool) -> ()
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  match &value.* {
+    Value.Keyword { value: inner } => {
+      run out.append(keywords.name(inner))
+    }
+    Value.Unit { value: inner, unit } => {
+      run writeNumber(&mut out.*, inner)
+      run out.append(unitName(unit))
+    }
+    Value.Color { value: inner } => {
+      run writeColor(&mut out.*, inner)
+    }
+    Value.Math { operator, values } => {
+      run writeMath(&mut out.*, operator, &values, nested)
+    }
+    Value.Function { name, values } => {
+      run out.append(keywords.name(name))
+      run out.append(b"(")
+      run writeJoined(&mut out.*, &values, b", ", false)
+      run out.append(b")")
+    }
+    Value.Sequence { separator, values } => {
+      let between = match separator {
+        Separator.Space => b" "
+        Separator.Comma => b", "
+        Separator.Slash => b" / "
+      }
+      run writeJoined(&mut out.*, &values, between, false)
+    }
+    Value.Text { css } => {
+      run out.append(css.asSlice())
+    }
+  }
+}
+
+/// Appends `value` as CSS text, the way CSSOM serializes it.
+pub effect fn write(out: &mut Bytes, value: &Value) -> () ! OutOfMemoryError ? &mut Allocator {
+  run writeNested(&mut out.*, value, false)
+}
+
+/// `value` as CSS text.
+pub effect fn cssText(value: &Value) -> Bytes ! OutOfMemoryError ? &mut Allocator {
+  let mut out = Bytes.make()
+  run writeNested(&mut out, value, false)
+  return move out
+}
+
+/// Appends `declaration` as `property: value` with ` !important` when set.
+pub effect fn writeDeclaration(out: &mut Bytes, declaration: &Declaration) -> ()
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  run out.append(catalog.name(declaration.property))
+  run out.append(b": ")
+  run writeNested(&mut out.*, &declaration.value, false)
+  if declaration.important {
+    run out.append(b" !important")
+  }
+}

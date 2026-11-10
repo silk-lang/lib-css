@@ -1,7 +1,10 @@
 //! Computed CSS values: what layout and paint read after the cascade and unit resolution.
 //! Lengths are pixels and percentages are fractions (0.5 is 50%).
+import silk.color.rgba { Rgba }
 import silk.core.equal { Equal }
 import silk.core.ownership { Copy }
+import silk.geometry.corners { Corners }
+import silk.geometry.insets { Insets }
 
 // Values have already passed CSS parsing and cascade. Percentages are fractions.
 // Keeping a percentage coefficient distinguishes 0% from 0px in indefinite axes.
@@ -163,6 +166,190 @@ pub enum BoxDecorationBreak { Slice, Clone }
 pub enum MarginBreak { Auto, Keep, Discard }
 pub enum BreakBetween { Auto, Avoid, Always, All, AvoidPage, Page, Left, Right, Recto, Verso, AvoidColumn, Column, AvoidRegion, Region }
 pub enum BreakInside { Auto, Avoid, AvoidPage, AvoidColumn, AvoidRegion }
+
+// Paint and text. These are the computed values a painter reads; layout ignores them.
+
+/// How replaced content fits its content box.
+pub enum ObjectFit { Fill, Contain, Cover, None, ScaleDown }
+pub enum BorderStyle { None, Solid, Dashed }
+pub enum FontStyle { Normal, Italic }
+/// The `white-space` shorthand's named values.
+pub enum WhiteSpace { Normal, NoWrap, Pre, PreWrap, PreLine }
+
+/// `text-decoration-line` as flags.
+pub struct DecorationLine { pub underline: bool, pub overline: bool, pub lineThrough: bool }
+impl Copy for DecorationLine {}
+impl DecorationLine {
+  pub fn none() -> DecorationLine {
+    return DecorationLine { underline: false, overline: false, lineThrough: false }
+  }
+  pub fn underlined() -> DecorationLine {
+    return DecorationLine { underline: true, overline: false, lineThrough: false }
+  }
+}
+
+/// One `box-shadow`. Offsets, blur and spread are CSS pixels.
+pub struct BoxShadow {
+  pub offsetX: f32,
+  pub offsetY: f32,
+  pub blur: f32,
+  pub spread: f32,
+  pub color: Rgba<f32>,
+  pub inset: bool,
+}
+impl Copy for BoxShadow {}
+
+/// What fills a box: nothing, one color, or a two-stop linear gradient at `angle` degrees.
+pub union Fill {
+  None,
+  Solid { pub color: Rgba<f32> },
+  Gradient { pub angle: f32, pub from: Rgba<f32>, pub to: Rgba<f32> },
+}
+impl Copy for Fill {}
+
+/// The computed paint properties of a box.
+pub struct Paint {
+  pub objectFit: ObjectFit,
+  /// `object-position`; percentages are fractions of the free space.
+  pub objectX: Dimension,
+  pub objectY: Dimension,
+  /// The border widths as set. A painter and layout treat `border-style: none` as zero.
+  pub border: Insets<f32>,
+  pub background: Fill,
+  pub borderColor: Rgba<f32>,
+  pub borderStyle: BorderStyle,
+  /// Corner radii in CSS pixels.
+  pub radii: Corners<f32>,
+  pub shadow: BoxShadow,
+  pub hasShadow: bool,
+  pub opacity: f32,
+  /// Gaussian backdrop blur in CSS pixels. Zero is none.
+  pub backdropBlur: f32,
+  /// False for `pointer-events: none`.
+  pub pointerEvents: bool,
+}
+impl Copy for Paint {}
+impl Paint {
+  /// The initial values: no background, a black solid border of zero width, opaque.
+  pub fn initial() -> Paint {
+    let black = Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+    return Paint {
+      objectFit: ObjectFit.Fill,
+      objectX: Dimension.pct(0.5),
+      objectY: Dimension.pct(0.5),
+      border: Insets<f32>.zero(),
+      background: Fill.None,
+      borderColor: black,
+      borderStyle: BorderStyle.Solid,
+      radii: Corners<f32>.zero(),
+      shadow: BoxShadow { offsetX: 0.0, offsetY: 0.0, blur: 0.0, spread: 0.0, color: black, inset: false },
+      hasShadow: false,
+      opacity: 1.0,
+      backdropBlur: 0.0,
+      pointerEvents: true,
+    }
+  }
+}
+
+/// The computed inherited text properties.
+pub struct Text {
+  pub writingMode: WritingMode,
+  pub textOrientation: TextOrientation,
+  pub textAlignLast: TextAlign,
+  pub textWrap: TextWrap,
+  pub whiteSpaceCollapse: WhiteSpaceCollapse,
+  pub textJustify: TextJustify,
+  pub textIndent: TextIndent,
+  pub tabSize: TabSize,
+  pub orphans: usize,
+  pub widows: usize,
+  pub visibility: Visibility,
+  /// The font family list, as a handle the host defines.
+  pub family: u32,
+  /// The font size in CSS pixels.
+  pub size: f32,
+  pub weight: f32,
+  pub style: FontStyle,
+  pub lineHeight: LineHeight,
+  pub color: Rgba<f32>,
+  pub align: TextAlign,
+  pub whiteSpace: WhiteSpace,
+  pub direction: Direction,
+  pub decoration: DecorationLine,
+  pub decorationColor: Rgba<f32>,
+  pub hasDecorationColor: bool,
+  pub wavy: bool,
+  pub visible: bool,
+  /// Input colors: the caret (when `hasCaretColor`), the selection background and the
+  /// placeholder text (when `hasPlaceholderColor`).
+  pub caretColor: Rgba<f32>,
+  pub hasCaretColor: bool,
+  pub selectionColor: Rgba<f32>,
+  pub placeholderColor: Rgba<f32>,
+  pub hasPlaceholderColor: bool,
+}
+impl Copy for Text {}
+impl Text {
+  /// The initial values: family 0, 16 px, weight 400, black, `line-height: normal`.
+  pub fn initial() -> Text {
+    return Text {
+      writingMode: WritingMode.HorizontalTb,
+      textOrientation: TextOrientation.Mixed,
+      textAlignLast: TextAlign.Auto,
+      textWrap: TextWrap.Wrap,
+      whiteSpaceCollapse: WhiteSpaceCollapse.Collapse,
+      textJustify: TextJustify.Auto,
+      textIndent: TextIndent { value: Dimension.px(0.0), hanging: false, eachLine: false },
+      tabSize: TabSize.Number { value: 8.0 },
+      orphans: 2,
+      widows: 2,
+      visibility: Visibility.Visible,
+      family: 0,
+      size: 16.0,
+      weight: 400.0,
+      style: FontStyle.Normal,
+      lineHeight: LineHeight.Normal,
+      color: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+      align: TextAlign.Start,
+      whiteSpace: WhiteSpace.Normal,
+      direction: Direction.Ltr,
+      decoration: DecorationLine.none(),
+      decorationColor: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+      hasDecorationColor: false,
+      wavy: false,
+      visible: true,
+      caretColor: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+      hasCaretColor: false,
+      selectionColor: Rgba<f32> { r: 0.706, g: 0.835, b: 0.996, a: 1.0 },
+      placeholderColor: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
+      hasPlaceholderColor: false,
+    }
+  }
+
+  /// The color decorations are drawn in.
+  pub fn lineColor(self: &Self) -> Rgba<f32> {
+    if self.hasDecorationColor {
+      return self.decorationColor
+    }
+    return self.color
+  }
+
+  /// The color the caret is drawn in.
+  pub fn caret(self: &Self) -> Rgba<f32> {
+    if self.hasCaretColor {
+      return self.caretColor
+    }
+    return self.color
+  }
+
+  /// The color of placeholder text.
+  pub fn placeholder(self: &Self) -> Rgba<f32> {
+    if self.hasPlaceholderColor {
+      return self.placeholderColor
+    }
+    return Rgba<f32> { r: self.color.r, g: self.color.g, b: self.color.b, a: self.color.a * 0.5 }
+  }
+}
 
 // Plain keyword enums compare by variant.
 impl Equal for DimensionKind {

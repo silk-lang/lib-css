@@ -1,0 +1,587 @@
+//! Keyword forms of the computed keyword enums. Generated tables: one pair per enum.
+import computed {
+  BoxSizing,
+  Direction,
+  UnicodeBidi,
+  WritingMode,
+  TextOrientation,
+  FlexDirection,
+  FlexWrap,
+  Overflow,
+  ScrollbarWidth,
+  Position,
+  Float,
+  Clear,
+  Visibility,
+  BaselineSource,
+  TextAlign,
+  TextJustify,
+  TextWrap,
+  WhiteSpaceCollapse,
+  BoxDecorationBreak,
+  MarginBreak,
+  BreakBetween,
+  BreakInside,
+  ObjectFit,
+  BorderStyle,
+  FontStyle,
+  WhiteSpace,
+}
+import keywords { Keyword }
+import silk.core.option { Option }
+
+/// The keyword of a computed `BoxSizing`.
+pub fn boxSizingKeyword(value: BoxSizing) -> Keyword {
+  return match value {
+    BoxSizing.ContentBox => Keyword.ContentBox
+    BoxSizing.BorderBox => Keyword.BorderBox
+  }
+}
+
+/// The computed `BoxSizing` a keyword names, if it names one.
+pub fn boxSizingOf(value: Keyword) -> Option<BoxSizing> {
+  return match value {
+    Keyword.ContentBox => Option<BoxSizing>.some(BoxSizing.ContentBox)
+    Keyword.BorderBox => Option<BoxSizing>.some(BoxSizing.BorderBox)
+    _ => Option<BoxSizing>.None
+  }
+}
+
+/// The keyword of a computed `Direction`.
+pub fn directionKeyword(value: Direction) -> Keyword {
+  return match value {
+    Direction.Ltr => Keyword.Ltr
+    Direction.Rtl => Keyword.Rtl
+  }
+}
+
+/// The computed `Direction` a keyword names, if it names one.
+pub fn directionOf(value: Keyword) -> Option<Direction> {
+  return match value {
+    Keyword.Ltr => Option<Direction>.some(Direction.Ltr)
+    Keyword.Rtl => Option<Direction>.some(Direction.Rtl)
+    _ => Option<Direction>.None
+  }
+}
+
+/// The keyword of a computed `UnicodeBidi`.
+pub fn unicodeBidiKeyword(value: UnicodeBidi) -> Keyword {
+  return match value {
+    UnicodeBidi.Normal => Keyword.Normal
+    UnicodeBidi.Embed => Keyword.Embed
+    UnicodeBidi.Isolate => Keyword.Isolate
+    UnicodeBidi.BidiOverride => Keyword.BidiOverride
+    UnicodeBidi.IsolateOverride => Keyword.IsolateOverride
+    UnicodeBidi.Plaintext => Keyword.Plaintext
+  }
+}
+
+/// The computed `UnicodeBidi` a keyword names, if it names one.
+pub fn unicodeBidiOf(value: Keyword) -> Option<UnicodeBidi> {
+  return match value {
+    Keyword.Normal => Option<UnicodeBidi>.some(UnicodeBidi.Normal)
+    Keyword.Embed => Option<UnicodeBidi>.some(UnicodeBidi.Embed)
+    Keyword.Isolate => Option<UnicodeBidi>.some(UnicodeBidi.Isolate)
+    Keyword.BidiOverride => Option<UnicodeBidi>.some(UnicodeBidi.BidiOverride)
+    Keyword.IsolateOverride => Option<UnicodeBidi>.some(UnicodeBidi.IsolateOverride)
+    Keyword.Plaintext => Option<UnicodeBidi>.some(UnicodeBidi.Plaintext)
+    _ => Option<UnicodeBidi>.None
+  }
+}
+
+/// The keyword of a computed `WritingMode`.
+pub fn writingModeKeyword(value: WritingMode) -> Keyword {
+  return match value {
+    WritingMode.HorizontalTb => Keyword.HorizontalTb
+    WritingMode.VerticalRl => Keyword.VerticalRl
+    WritingMode.VerticalLr => Keyword.VerticalLr
+    WritingMode.SidewaysRl => Keyword.SidewaysRl
+    WritingMode.SidewaysLr => Keyword.SidewaysLr
+  }
+}
+
+/// The computed `WritingMode` a keyword names, if it names one.
+pub fn writingModeOf(value: Keyword) -> Option<WritingMode> {
+  return match value {
+    Keyword.HorizontalTb => Option<WritingMode>.some(WritingMode.HorizontalTb)
+    Keyword.VerticalRl => Option<WritingMode>.some(WritingMode.VerticalRl)
+    Keyword.VerticalLr => Option<WritingMode>.some(WritingMode.VerticalLr)
+    Keyword.SidewaysRl => Option<WritingMode>.some(WritingMode.SidewaysRl)
+    Keyword.SidewaysLr => Option<WritingMode>.some(WritingMode.SidewaysLr)
+    _ => Option<WritingMode>.None
+  }
+}
+
+/// The keyword of a computed `TextOrientation`.
+pub fn textOrientationKeyword(value: TextOrientation) -> Keyword {
+  return match value {
+    TextOrientation.Mixed => Keyword.Mixed
+    TextOrientation.Upright => Keyword.Upright
+    TextOrientation.Sideways => Keyword.Sideways
+  }
+}
+
+/// The computed `TextOrientation` a keyword names, if it names one.
+pub fn textOrientationOf(value: Keyword) -> Option<TextOrientation> {
+  return match value {
+    Keyword.Mixed => Option<TextOrientation>.some(TextOrientation.Mixed)
+    Keyword.Upright => Option<TextOrientation>.some(TextOrientation.Upright)
+    Keyword.Sideways => Option<TextOrientation>.some(TextOrientation.Sideways)
+    _ => Option<TextOrientation>.None
+  }
+}
+
+/// The keyword of a computed `FlexDirection`.
+pub fn flexDirectionKeyword(value: FlexDirection) -> Keyword {
+  return match value {
+    FlexDirection.Row => Keyword.Row
+    FlexDirection.RowReverse => Keyword.RowReverse
+    FlexDirection.Column => Keyword.Column
+    FlexDirection.ColumnReverse => Keyword.ColumnReverse
+  }
+}
+
+/// The computed `FlexDirection` a keyword names, if it names one.
+pub fn flexDirectionOf(value: Keyword) -> Option<FlexDirection> {
+  return match value {
+    Keyword.Row => Option<FlexDirection>.some(FlexDirection.Row)
+    Keyword.RowReverse => Option<FlexDirection>.some(FlexDirection.RowReverse)
+    Keyword.Column => Option<FlexDirection>.some(FlexDirection.Column)
+    Keyword.ColumnReverse => Option<FlexDirection>.some(FlexDirection.ColumnReverse)
+    _ => Option<FlexDirection>.None
+  }
+}
+
+/// The keyword of a computed `FlexWrap`.
+pub fn flexWrapKeyword(value: FlexWrap) -> Keyword {
+  return match value {
+    FlexWrap.NoWrap => Keyword.Nowrap
+    FlexWrap.Wrap => Keyword.Wrap
+    FlexWrap.WrapReverse => Keyword.WrapReverse
+  }
+}
+
+/// The computed `FlexWrap` a keyword names, if it names one.
+pub fn flexWrapOf(value: Keyword) -> Option<FlexWrap> {
+  return match value {
+    Keyword.Nowrap => Option<FlexWrap>.some(FlexWrap.NoWrap)
+    Keyword.Wrap => Option<FlexWrap>.some(FlexWrap.Wrap)
+    Keyword.WrapReverse => Option<FlexWrap>.some(FlexWrap.WrapReverse)
+    _ => Option<FlexWrap>.None
+  }
+}
+
+/// The keyword of a computed `Overflow`.
+pub fn overflowKeyword(value: Overflow) -> Keyword {
+  return match value {
+    Overflow.Visible => Keyword.Visible
+    Overflow.Clip => Keyword.Clip
+    Overflow.Hidden => Keyword.Hidden
+    Overflow.Scroll => Keyword.Scroll
+    Overflow.Auto => Keyword.Auto
+  }
+}
+
+/// The computed `Overflow` a keyword names, if it names one.
+pub fn overflowOf(value: Keyword) -> Option<Overflow> {
+  return match value {
+    Keyword.Visible => Option<Overflow>.some(Overflow.Visible)
+    Keyword.Clip => Option<Overflow>.some(Overflow.Clip)
+    Keyword.Hidden => Option<Overflow>.some(Overflow.Hidden)
+    Keyword.Scroll => Option<Overflow>.some(Overflow.Scroll)
+    Keyword.Auto => Option<Overflow>.some(Overflow.Auto)
+    _ => Option<Overflow>.None
+  }
+}
+
+/// The keyword of a computed `ScrollbarWidth`.
+pub fn scrollbarWidthKeyword(value: ScrollbarWidth) -> Keyword {
+  return match value {
+    ScrollbarWidth.Auto => Keyword.Auto
+    ScrollbarWidth.Thin => Keyword.Thin
+    ScrollbarWidth.None => Keyword.None
+  }
+}
+
+/// The computed `ScrollbarWidth` a keyword names, if it names one.
+pub fn scrollbarWidthOf(value: Keyword) -> Option<ScrollbarWidth> {
+  return match value {
+    Keyword.Auto => Option<ScrollbarWidth>.some(ScrollbarWidth.Auto)
+    Keyword.Thin => Option<ScrollbarWidth>.some(ScrollbarWidth.Thin)
+    Keyword.None => Option<ScrollbarWidth>.some(ScrollbarWidth.None)
+    _ => Option<ScrollbarWidth>.None
+  }
+}
+
+/// The keyword of a computed `Position`.
+pub fn positionKeyword(value: Position) -> Keyword {
+  return match value {
+    Position.Static => Keyword.Static
+    Position.Relative => Keyword.Relative
+    Position.Absolute => Keyword.Absolute
+    Position.Fixed => Keyword.Fixed
+    Position.Sticky => Keyword.Sticky
+  }
+}
+
+/// The computed `Position` a keyword names, if it names one.
+pub fn positionOf(value: Keyword) -> Option<Position> {
+  return match value {
+    Keyword.Static => Option<Position>.some(Position.Static)
+    Keyword.Relative => Option<Position>.some(Position.Relative)
+    Keyword.Absolute => Option<Position>.some(Position.Absolute)
+    Keyword.Fixed => Option<Position>.some(Position.Fixed)
+    Keyword.Sticky => Option<Position>.some(Position.Sticky)
+    _ => Option<Position>.None
+  }
+}
+
+/// The keyword of a computed `Float`.
+pub fn floatKeyword(value: Float) -> Keyword {
+  return match value {
+    Float.None => Keyword.None
+    Float.Left => Keyword.Left
+    Float.Right => Keyword.Right
+  }
+}
+
+/// The computed `Float` a keyword names, if it names one.
+pub fn floatOf(value: Keyword) -> Option<Float> {
+  return match value {
+    Keyword.None => Option<Float>.some(Float.None)
+    Keyword.Left => Option<Float>.some(Float.Left)
+    Keyword.Right => Option<Float>.some(Float.Right)
+    _ => Option<Float>.None
+  }
+}
+
+/// The keyword of a computed `Clear`.
+pub fn clearKeyword(value: Clear) -> Keyword {
+  return match value {
+    Clear.None => Keyword.None
+    Clear.Left => Keyword.Left
+    Clear.Right => Keyword.Right
+    Clear.Both => Keyword.Both
+  }
+}
+
+/// The computed `Clear` a keyword names, if it names one.
+pub fn clearOf(value: Keyword) -> Option<Clear> {
+  return match value {
+    Keyword.None => Option<Clear>.some(Clear.None)
+    Keyword.Left => Option<Clear>.some(Clear.Left)
+    Keyword.Right => Option<Clear>.some(Clear.Right)
+    Keyword.Both => Option<Clear>.some(Clear.Both)
+    _ => Option<Clear>.None
+  }
+}
+
+/// The keyword of a computed `Visibility`.
+pub fn visibilityKeyword(value: Visibility) -> Keyword {
+  return match value {
+    Visibility.Visible => Keyword.Visible
+    Visibility.Hidden => Keyword.Hidden
+    Visibility.Collapse => Keyword.Collapse
+  }
+}
+
+/// The computed `Visibility` a keyword names, if it names one.
+pub fn visibilityOf(value: Keyword) -> Option<Visibility> {
+  return match value {
+    Keyword.Visible => Option<Visibility>.some(Visibility.Visible)
+    Keyword.Hidden => Option<Visibility>.some(Visibility.Hidden)
+    Keyword.Collapse => Option<Visibility>.some(Visibility.Collapse)
+    _ => Option<Visibility>.None
+  }
+}
+
+/// The keyword of a computed `BaselineSource`.
+pub fn baselineSourceKeyword(value: BaselineSource) -> Keyword {
+  return match value {
+    BaselineSource.Auto => Keyword.Auto
+    BaselineSource.First => Keyword.First
+    BaselineSource.Last => Keyword.Last
+  }
+}
+
+/// The computed `BaselineSource` a keyword names, if it names one.
+pub fn baselineSourceOf(value: Keyword) -> Option<BaselineSource> {
+  return match value {
+    Keyword.Auto => Option<BaselineSource>.some(BaselineSource.Auto)
+    Keyword.First => Option<BaselineSource>.some(BaselineSource.First)
+    Keyword.Last => Option<BaselineSource>.some(BaselineSource.Last)
+    _ => Option<BaselineSource>.None
+  }
+}
+
+/// The keyword of a computed `TextAlign`.
+pub fn textAlignKeyword(value: TextAlign) -> Keyword {
+  return match value {
+    TextAlign.Auto => Keyword.Auto
+    TextAlign.Start => Keyword.Start
+    TextAlign.End => Keyword.End
+    TextAlign.Left => Keyword.Left
+    TextAlign.Right => Keyword.Right
+    TextAlign.Center => Keyword.Center
+    TextAlign.Justify => Keyword.Justify
+  }
+}
+
+/// The computed `TextAlign` a keyword names, if it names one.
+pub fn textAlignOf(value: Keyword) -> Option<TextAlign> {
+  return match value {
+    Keyword.Auto => Option<TextAlign>.some(TextAlign.Auto)
+    Keyword.Start => Option<TextAlign>.some(TextAlign.Start)
+    Keyword.End => Option<TextAlign>.some(TextAlign.End)
+    Keyword.Left => Option<TextAlign>.some(TextAlign.Left)
+    Keyword.Right => Option<TextAlign>.some(TextAlign.Right)
+    Keyword.Center => Option<TextAlign>.some(TextAlign.Center)
+    Keyword.Justify => Option<TextAlign>.some(TextAlign.Justify)
+    _ => Option<TextAlign>.None
+  }
+}
+
+/// The keyword of a computed `TextJustify`.
+pub fn textJustifyKeyword(value: TextJustify) -> Keyword {
+  return match value {
+    TextJustify.Auto => Keyword.Auto
+    TextJustify.None => Keyword.None
+    TextJustify.InterWord => Keyword.InterWord
+    TextJustify.InterCharacter => Keyword.InterCharacter
+  }
+}
+
+/// The computed `TextJustify` a keyword names, if it names one.
+pub fn textJustifyOf(value: Keyword) -> Option<TextJustify> {
+  return match value {
+    Keyword.Auto => Option<TextJustify>.some(TextJustify.Auto)
+    Keyword.None => Option<TextJustify>.some(TextJustify.None)
+    Keyword.InterWord => Option<TextJustify>.some(TextJustify.InterWord)
+    Keyword.InterCharacter => Option<TextJustify>.some(TextJustify.InterCharacter)
+    _ => Option<TextJustify>.None
+  }
+}
+
+/// The keyword of a computed `TextWrap`.
+pub fn textWrapKeyword(value: TextWrap) -> Keyword {
+  return match value {
+    TextWrap.Wrap => Keyword.Wrap
+    TextWrap.NoWrap => Keyword.Nowrap
+  }
+}
+
+/// The computed `TextWrap` a keyword names, if it names one.
+pub fn textWrapOf(value: Keyword) -> Option<TextWrap> {
+  return match value {
+    Keyword.Wrap => Option<TextWrap>.some(TextWrap.Wrap)
+    Keyword.Nowrap => Option<TextWrap>.some(TextWrap.NoWrap)
+    _ => Option<TextWrap>.None
+  }
+}
+
+/// The keyword of a computed `WhiteSpaceCollapse`.
+pub fn whiteSpaceCollapseKeyword(value: WhiteSpaceCollapse) -> Keyword {
+  return match value {
+    WhiteSpaceCollapse.Collapse => Keyword.Collapse
+    WhiteSpaceCollapse.Discard => Keyword.Discard
+    WhiteSpaceCollapse.Preserve => Keyword.Preserve
+    WhiteSpaceCollapse.PreserveBreaks => Keyword.PreserveBreaks
+    WhiteSpaceCollapse.PreserveSpaces => Keyword.PreserveSpaces
+    WhiteSpaceCollapse.BreakSpaces => Keyword.BreakSpaces
+  }
+}
+
+/// The computed `WhiteSpaceCollapse` a keyword names, if it names one.
+pub fn whiteSpaceCollapseOf(value: Keyword) -> Option<WhiteSpaceCollapse> {
+  return match value {
+    Keyword.Collapse => Option<WhiteSpaceCollapse>.some(WhiteSpaceCollapse.Collapse)
+    Keyword.Discard => Option<WhiteSpaceCollapse>.some(WhiteSpaceCollapse.Discard)
+    Keyword.Preserve => Option<WhiteSpaceCollapse>.some(WhiteSpaceCollapse.Preserve)
+    Keyword.PreserveBreaks => Option<WhiteSpaceCollapse>.some(WhiteSpaceCollapse.PreserveBreaks)
+    Keyword.PreserveSpaces => Option<WhiteSpaceCollapse>.some(WhiteSpaceCollapse.PreserveSpaces)
+    Keyword.BreakSpaces => Option<WhiteSpaceCollapse>.some(WhiteSpaceCollapse.BreakSpaces)
+    _ => Option<WhiteSpaceCollapse>.None
+  }
+}
+
+/// The keyword of a computed `BoxDecorationBreak`.
+pub fn boxDecorationBreakKeyword(value: BoxDecorationBreak) -> Keyword {
+  return match value {
+    BoxDecorationBreak.Slice => Keyword.Slice
+    BoxDecorationBreak.Clone => Keyword.Clone
+  }
+}
+
+/// The computed `BoxDecorationBreak` a keyword names, if it names one.
+pub fn boxDecorationBreakOf(value: Keyword) -> Option<BoxDecorationBreak> {
+  return match value {
+    Keyword.Slice => Option<BoxDecorationBreak>.some(BoxDecorationBreak.Slice)
+    Keyword.Clone => Option<BoxDecorationBreak>.some(BoxDecorationBreak.Clone)
+    _ => Option<BoxDecorationBreak>.None
+  }
+}
+
+/// The keyword of a computed `MarginBreak`.
+pub fn marginBreakKeyword(value: MarginBreak) -> Keyword {
+  return match value {
+    MarginBreak.Auto => Keyword.Auto
+    MarginBreak.Keep => Keyword.Keep
+    MarginBreak.Discard => Keyword.Discard
+  }
+}
+
+/// The computed `MarginBreak` a keyword names, if it names one.
+pub fn marginBreakOf(value: Keyword) -> Option<MarginBreak> {
+  return match value {
+    Keyword.Auto => Option<MarginBreak>.some(MarginBreak.Auto)
+    Keyword.Keep => Option<MarginBreak>.some(MarginBreak.Keep)
+    Keyword.Discard => Option<MarginBreak>.some(MarginBreak.Discard)
+    _ => Option<MarginBreak>.None
+  }
+}
+
+/// The keyword of a computed `BreakBetween`.
+pub fn breakBetweenKeyword(value: BreakBetween) -> Keyword {
+  return match value {
+    BreakBetween.Auto => Keyword.Auto
+    BreakBetween.Avoid => Keyword.Avoid
+    BreakBetween.Always => Keyword.Always
+    BreakBetween.All => Keyword.All
+    BreakBetween.AvoidPage => Keyword.AvoidPage
+    BreakBetween.Page => Keyword.Page
+    BreakBetween.Left => Keyword.Left
+    BreakBetween.Right => Keyword.Right
+    BreakBetween.Recto => Keyword.Recto
+    BreakBetween.Verso => Keyword.Verso
+    BreakBetween.AvoidColumn => Keyword.AvoidColumn
+    BreakBetween.Column => Keyword.Column
+    BreakBetween.AvoidRegion => Keyword.AvoidRegion
+    BreakBetween.Region => Keyword.Region
+  }
+}
+
+/// The computed `BreakBetween` a keyword names, if it names one.
+pub fn breakBetweenOf(value: Keyword) -> Option<BreakBetween> {
+  return match value {
+    Keyword.Auto => Option<BreakBetween>.some(BreakBetween.Auto)
+    Keyword.Avoid => Option<BreakBetween>.some(BreakBetween.Avoid)
+    Keyword.Always => Option<BreakBetween>.some(BreakBetween.Always)
+    Keyword.All => Option<BreakBetween>.some(BreakBetween.All)
+    Keyword.AvoidPage => Option<BreakBetween>.some(BreakBetween.AvoidPage)
+    Keyword.Page => Option<BreakBetween>.some(BreakBetween.Page)
+    Keyword.Left => Option<BreakBetween>.some(BreakBetween.Left)
+    Keyword.Right => Option<BreakBetween>.some(BreakBetween.Right)
+    Keyword.Recto => Option<BreakBetween>.some(BreakBetween.Recto)
+    Keyword.Verso => Option<BreakBetween>.some(BreakBetween.Verso)
+    Keyword.AvoidColumn => Option<BreakBetween>.some(BreakBetween.AvoidColumn)
+    Keyword.Column => Option<BreakBetween>.some(BreakBetween.Column)
+    Keyword.AvoidRegion => Option<BreakBetween>.some(BreakBetween.AvoidRegion)
+    Keyword.Region => Option<BreakBetween>.some(BreakBetween.Region)
+    _ => Option<BreakBetween>.None
+  }
+}
+
+/// The keyword of a computed `BreakInside`.
+pub fn breakInsideKeyword(value: BreakInside) -> Keyword {
+  return match value {
+    BreakInside.Auto => Keyword.Auto
+    BreakInside.Avoid => Keyword.Avoid
+    BreakInside.AvoidPage => Keyword.AvoidPage
+    BreakInside.AvoidColumn => Keyword.AvoidColumn
+    BreakInside.AvoidRegion => Keyword.AvoidRegion
+  }
+}
+
+/// The computed `BreakInside` a keyword names, if it names one.
+pub fn breakInsideOf(value: Keyword) -> Option<BreakInside> {
+  return match value {
+    Keyword.Auto => Option<BreakInside>.some(BreakInside.Auto)
+    Keyword.Avoid => Option<BreakInside>.some(BreakInside.Avoid)
+    Keyword.AvoidPage => Option<BreakInside>.some(BreakInside.AvoidPage)
+    Keyword.AvoidColumn => Option<BreakInside>.some(BreakInside.AvoidColumn)
+    Keyword.AvoidRegion => Option<BreakInside>.some(BreakInside.AvoidRegion)
+    _ => Option<BreakInside>.None
+  }
+}
+
+/// The keyword of a computed `ObjectFit`.
+pub fn objectFitKeyword(value: ObjectFit) -> Keyword {
+  return match value {
+    ObjectFit.Fill => Keyword.Fill
+    ObjectFit.Contain => Keyword.Contain
+    ObjectFit.Cover => Keyword.Cover
+    ObjectFit.None => Keyword.None
+    ObjectFit.ScaleDown => Keyword.ScaleDown
+  }
+}
+
+/// The computed `ObjectFit` a keyword names, if it names one.
+pub fn objectFitOf(value: Keyword) -> Option<ObjectFit> {
+  return match value {
+    Keyword.Fill => Option<ObjectFit>.some(ObjectFit.Fill)
+    Keyword.Contain => Option<ObjectFit>.some(ObjectFit.Contain)
+    Keyword.Cover => Option<ObjectFit>.some(ObjectFit.Cover)
+    Keyword.None => Option<ObjectFit>.some(ObjectFit.None)
+    Keyword.ScaleDown => Option<ObjectFit>.some(ObjectFit.ScaleDown)
+    _ => Option<ObjectFit>.None
+  }
+}
+
+/// The keyword of a computed `BorderStyle`.
+pub fn borderStyleKeyword(value: BorderStyle) -> Keyword {
+  return match value {
+    BorderStyle.None => Keyword.None
+    BorderStyle.Solid => Keyword.Solid
+    BorderStyle.Dashed => Keyword.Dashed
+  }
+}
+
+/// The computed `BorderStyle` a keyword names, if it names one.
+pub fn borderStyleOf(value: Keyword) -> Option<BorderStyle> {
+  return match value {
+    Keyword.None => Option<BorderStyle>.some(BorderStyle.None)
+    Keyword.Solid => Option<BorderStyle>.some(BorderStyle.Solid)
+    Keyword.Dashed => Option<BorderStyle>.some(BorderStyle.Dashed)
+    _ => Option<BorderStyle>.None
+  }
+}
+
+/// The keyword of a computed `FontStyle`.
+pub fn fontStyleKeyword(value: FontStyle) -> Keyword {
+  return match value {
+    FontStyle.Normal => Keyword.Normal
+    FontStyle.Italic => Keyword.Italic
+  }
+}
+
+/// The computed `FontStyle` a keyword names, if it names one.
+pub fn fontStyleOf(value: Keyword) -> Option<FontStyle> {
+  return match value {
+    Keyword.Normal => Option<FontStyle>.some(FontStyle.Normal)
+    Keyword.Italic => Option<FontStyle>.some(FontStyle.Italic)
+    _ => Option<FontStyle>.None
+  }
+}
+
+/// The keyword of a computed `WhiteSpace`.
+pub fn whiteSpaceKeyword(value: WhiteSpace) -> Keyword {
+  return match value {
+    WhiteSpace.Normal => Keyword.Normal
+    WhiteSpace.NoWrap => Keyword.Nowrap
+    WhiteSpace.Pre => Keyword.Pre
+    WhiteSpace.PreWrap => Keyword.PreWrap
+    WhiteSpace.PreLine => Keyword.PreLine
+  }
+}
+
+/// The computed `WhiteSpace` a keyword names, if it names one.
+pub fn whiteSpaceOf(value: Keyword) -> Option<WhiteSpace> {
+  return match value {
+    Keyword.Normal => Option<WhiteSpace>.some(WhiteSpace.Normal)
+    Keyword.Nowrap => Option<WhiteSpace>.some(WhiteSpace.NoWrap)
+    Keyword.Pre => Option<WhiteSpace>.some(WhiteSpace.Pre)
+    Keyword.PreWrap => Option<WhiteSpace>.some(WhiteSpace.PreWrap)
+    Keyword.PreLine => Option<WhiteSpace>.some(WhiteSpace.PreLine)
+    _ => Option<WhiteSpace>.None
+  }
+}

@@ -1,0 +1,185 @@
+//! Written values serialize as CSS text and convert to computed values and back.
+import catalog { Property }
+import computed {
+  Dimension,
+  DimensionKind,
+  Display,
+  DisplayOutside,
+  DisplayInside,
+  Align,
+  OverflowAlignment,
+  Position,
+  LineHeight,
+  Fill,
+  ScrollbarGutter,
+}
+import convert { Context }
+import convert
+import declare
+import keywords { Keyword }
+import keywords
+import values { Value, Declaration, Unit, MathOperator }
+import values
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.color.rgba { Rgba }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+fn sameText(a: &[u8], b: &[u8]) -> bool {
+  if a.length != b.length {
+    return false
+  }
+  let mut i: usize = 0
+  while i < a.length {
+    if a[i] != b[i] {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+effect fn expectText(declaration: &Declaration, expected: &[u8], message: string<'static>) -> ()
+  ! AssertionError<'static> | OutOfMemoryError
+  ? &mut Allocator {
+  let mut out = Bytes.make()
+  run values.writeDeclaration(&mut out, declaration)
+  run Testing.expect(sameText(out.asSlice(), expected), message)
+}
+
+effect fn serialization() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  run expectText(&declare.width(values.px(120.0)), b"width: 120px", "a pixel length")
+  run expectText(&declare.width(values.percent(33.5)), b"width: 33.5%", "a percentage keeps its written number")
+  run expectText(&declare.height(values.auto()), b"height: auto", "a keyword")
+  run expectText(&declare.flexGrow(1.0), b"flex-grow: 1", "a number drops trailing zeros")
+  run expectText(&declare.position(Position.Absolute), b"position: absolute", "an enum keyword")
+  run expectText(&declare.display(Keyword.InlineFlex), b"display: inline-flex", "a display keyword")
+  run expectText(&declare.alignItems(Align.LastBaseline), b"align-items: last baseline", "last baseline")
+  let opaque = Rgba<f32> { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }
+  run expectText(&declare.color(opaque), b"color: rgb(255, 128, 0)", "an opaque color")
+  let faded = Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 0.25 }
+  run expectText(&declare.backgroundColor(faded), b"background-color: rgba(0, 0, 0, 0.25)", "a translucent color")
+  run expectText(&declare.selectionColor(opaque), b"-silk-selection-color: rgb(255, 128, 0)", "a prefixed property")
+  let sum = run values.calc(10.0, 50.0)
+  run expectText(&declare.width(move sum), b"width: calc(10px + 50%)", "a calc sum")
+  let difference = run values.calc(100.0, -25.0)
+  run expectText(&declare.width(move difference), b"width: calc(100px - 25%)", "a negative term subtracts")
+  let gradient = run declare.backgroundGradient(45.0, opaque, faded)
+  run expectText(
+    &gradient,
+    b"background-image: linear-gradient(45deg, rgb(255, 128, 0), rgba(0, 0, 0, 0.25))",
+    "a gradient function",
+  )
+  let safe = run declare.justifyContentWith(Align.Center, OverflowAlignment.Safe)
+  run expectText(&safe, b"justify-content: safe center", "a safe alignment")
+  let mut important = declare.opacity(0.5)
+  important.important = true
+  run expectText(&important, b"opacity: 0.5 !important", "the important flag")
+  let raw = run values.text(b"repeat(2, 1fr)")
+  run expectText(&values.declare(Property.GridTemplateColumns, move raw), b"grid-template-columns: repeat(2, 1fr)", "CSS text passes through")
+}
+
+test effect fn valuesSerializeAsCssText() -> () ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run serialization() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+fn isDimension(found: Option<Dimension>, expected: Dimension) -> bool {
+  return match found {
+    Option.Some { value } => &value == &expected
+    Option.None => false
+  }
+}
+
+effect fn conversion() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let mut context = Context.make()
+  context.fontSize = 20.0
+  context.viewportWidth = 800.0
+  context.viewportHeight = 600.0
+  run Testing.expect(isDimension(convert.dimension(&values.px(12.0), &context), Dimension.px(12.0)), "px stays px")
+  run Testing.expect(isDimension(convert.dimension(&values.percent(50.0), &context), Dimension.pct(0.5)), "a percentage becomes a fraction")
+  run Testing.expect(isDimension(convert.dimension(&values.unit(2.0, Unit.Em), &context), Dimension.px(40.0)), "em uses the font size")
+  run Testing.expect(isDimension(convert.dimension(&values.unit(10.0, Unit.Vw), &context), Dimension.px(80.0)), "vw uses the viewport")
+  run Testing.expect(isDimension(convert.dimension(&values.unit(1.0, Unit.In), &context), Dimension.px(96.0)), "an inch is 96px")
+  run Testing.expect(isDimension(convert.dimension(&values.auto(), &context), Dimension.auto()), "auto")
+  run Testing.expect(isDimension(convert.dimension(&values.keyword(Keyword.MinContent), &context), Dimension.keyword(DimensionKind.MinContent)), "min-content")
+  run Testing.expect(convert.dimension(&values.number(3.0), &context).isNone(), "a bare number is not a length")
+  run Testing.expect(isDimension(convert.dimension(&values.number(0.0), &context), Dimension.px(0.0)), "zero needs no unit")
+  run Testing.expect(convert.dimension(&values.keyword(Keyword.Flex), &context).isNone(), "an unrelated keyword is not a size")
+  let sum = run values.calc(10.0, 50.0)
+  run Testing.expect(isDimension(convert.dimension(&sum, &context), Dimension.calc(10.0, 0.5)), "calc keeps both parts")
+  let mut factors = List<Value>.make()
+  run factors.append(values.number(2.0))
+  run factors.append(values.unit(1.5, Unit.Em))
+  let product = values.math(MathOperator.Product, move factors)
+  run Testing.expect(isDimension(convert.dimension(&product, &context), Dimension.px(60.0)), "calc multiplies by a number")
+  let back = run convert.fromDimension(Dimension.calc(10.0, 0.5))
+  run Testing.expect(values.same(&back, &sum), "a computed calc is written back with 0 to 100 percentages")
+  let half = run convert.fromDimension(Dimension.pct(0.5))
+  run Testing.expect(values.same(&half, &values.percent(50.0)), "a computed fraction is written back as a percentage")
+
+  let flex = match convert.display(&values.keyword(Keyword.InlineFlex)) {
+    Option.Some { value } => value.outsideIs(DisplayOutside.Inline) && value.insideIs(DisplayInside.Flex)
+    Option.None => false
+  }
+  run Testing.expect(flex, "inline-flex is inline outside and flex inside")
+  run Testing.expect(
+    convert.displayKeyword(Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.FlowRoot }) == Keyword.InlineBlock,
+    "inline flow-root is written inline-block",
+  )
+  let safe = run declare.alignSelfWith(Align.End, OverflowAlignment.Safe)
+  let aligned = match convert.alignment(&safe.value) {
+    Option.Some { value } => value.align == Align.End && value.safety == OverflowAlignment.Safe
+    Option.None => false
+  }
+  run Testing.expect(aligned, "safe end converts to its alignment and safety")
+  let gutter = run declare.scrollbarGutter(ScrollbarGutter.StableBothEdges)
+  let both = match convert.scrollbarGutter(&gutter.value) {
+    Option.Some { value } => value == ScrollbarGutter.StableBothEdges
+    Option.None => false
+  }
+  run Testing.expect(both, "stable both-edges round-trips")
+  let multiple = match convert.lineHeight(&values.number(1.5), &context) {
+    Option.Some { value } => &value == &LineHeight.Number { value: 1.5 }
+    Option.None => false
+  }
+  run Testing.expect(multiple, "a unitless line-height stays a multiple")
+  let red = Rgba<f32> { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }
+  let blue = Rgba<f32> { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }
+  let gradient = run declare.backgroundGradient(90.0, red, blue)
+  let filled = match convert.fill(&gradient.value) {
+    Option.Some { value } => match value {
+      Fill.Gradient { angle, from, to } => angle == 90.0 && from.r == 1.0 && to.b == 1.0
+      _ => false
+    }
+    Option.None => false
+  }
+  run Testing.expect(filled, "a linear-gradient function converts to a gradient fill")
+  let blurred = run declare.backdropBlur(4.0)
+  let radius = match convert.blur(&blurred.value, &context) {
+    Option.Some { value } => value == 4.0
+    Option.None => false
+  }
+  run Testing.expect(radius, "blur(4px) converts to its radius")
+  let copy = run values.cloneDeclaration(&gradient)
+  run Testing.expect(values.sameDeclaration(&copy, &gradient), "a clone is written the same")
+  run Testing.expect(!values.same(&values.px(1.0), &values.percent(1.0)), "units distinguish values")
+}
+
+test effect fn writtenValuesConvertToComputed() -> () ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run conversion() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+test effect fn everyKeywordFindsItselfByName() -> () ! AssertionError<'static> {
+  run Testing.expect(keywords.name(Keyword.FlexStart).length == 10, "flex-start is spelled in kebab case")
+  let found = match keywords.lookup(b"Space-Between") {
+    Option.Some { value } => value == Keyword.SpaceBetween
+    Option.None => false
+  }
+  run Testing.expect(found, "keywords match ASCII case-insensitively")
+  run Testing.expect(keywords.lookup(b"not-a-keyword").isNone(), "unknown words find nothing")
+}
