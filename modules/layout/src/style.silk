@@ -38,6 +38,11 @@ pub import properties.computed {
   BreakBetween,
   BreakInside,
 }
+import silk.core.equal { Equal }
+import silk.core.reflect { Reflect }
+
+fn sameField<V: Equal>(left: &V, right: &V) -> bool { return left == right }
+
 pub struct Style {
   pub display: Display,
   // Tree-managed handle, never a transferable template value. setStyle preserves
@@ -73,6 +78,15 @@ pub struct Style {
   pub position: Position, pub float: Float, pub clear: Clear,
   pub visibility: Visibility,
   pub aspectRatio: f32, pub aspectRatioAuto: bool, pub replaced: bool,
+}
+// Every field takes part, by reflection, so a field added later cannot be left out.
+impl Equal for Style {
+  fn equals(left: &Style, right: &Style) -> bool {
+    static for field in Reflect.fields<Style>() {
+      if !sameField(Reflect.borrowField(left, field), Reflect.borrowField(right, field)) { return false }
+    }
+    return true
+  }
 }
 impl Style {
   // Upright changes used bidi direction, never the computed inherited value.
