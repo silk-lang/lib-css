@@ -576,7 +576,7 @@ impl StyleDeclaration {
     while descriptors.length() != 0 {
       let last = descriptors.length() - 1
       let descriptor = descriptors.remove(last)
-      let known = properties.lookup(descriptor.name)
+      let known = properties.typedLookup(descriptor.name)
       let property = match &known {
         Option<Property>.Some { value } => properties.canonical(value)
         _ => Property.Fill

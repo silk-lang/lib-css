@@ -167,6 +167,110 @@ fn listPart(value: &[u8], start: usize, end: usize) -> &[u8] {
   return Slice.view<u8>(value, first, last - first)
 }
 
+effect fn slashWord(out: &mut Bytes, value: &[u8]) -> () ! OutOfMemoryError ? &mut Allocator {
+  if out.length() != 0 {
+    run Bytes.append(&mut out.*, b" / ")
+  }
+  run Bytes.append(&mut out.*, value)
+}
+
+// The box shorthands, from the canonical texts of their longhands. A shorthand that cannot
+// spell its longhands serializes to the empty string, as CSSOM asks.
+effect fn box(property: Property, values: &[Bytes], same: bool) -> Bytes
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut out = Bytes.make()
+  let count = values.length
+  if property == Property.Inset || property == Property.Margin || property == Property.Padding
+    || property == Property.BorderWidth
+    || property == Property.BorderStyle
+    || property == Property.BorderColor
+    || property == Property.BorderRadius {
+    // Top, right, bottom, left, leaving out a side that repeats its opposite.
+    let leftSame = tokens.equal(text(values, 3), text(values, 1))
+    let bottomSame = tokens.equal(text(values, 2), text(values, 0))
+    run word(&mut out, text(values, 0))
+    if !same {
+      run word(&mut out, text(values, 1))
+      if !bottomSame || !leftSame {
+        run word(&mut out, text(values, 2))
+      }
+      if !leftSame {
+        run word(&mut out, text(values, 3))
+      }
+    }
+    return move out
+  }
+  if property == Property.Gap || property == Property.PlaceContent
+    || property == Property.PlaceItems
+    || property == Property.PlaceSelf {
+    run word(&mut out, text(values, 0))
+    if !same {
+      run word(&mut out, text(values, 1))
+    }
+    return move out
+  }
+  if property == Property.Border {
+    // One width, style and color only when the four sides agree.
+    let mut group: usize = 0
+    while group < 3 {
+      let mut side: usize = 1
+      while side < 4 {
+        if !tokens.equal(text(values, group * 4), text(values, group * 4 + side)) {
+          return Bytes.make()
+        }
+        side = side + 1
+      }
+      run word(&mut out, text(values, group * 4))
+      group = group + 1
+    }
+    return move out
+  }
+  if property == Property.GridRow || property == Property.GridColumn
+    || property == Property.GridArea {
+    let mut at: usize = 0
+    while at < count {
+      run slashWord(&mut out, text(values, at))
+      at = at + 1
+    }
+    return move out
+  }
+  if property == Property.GridTemplate || property == Property.Grid {
+    if !is(values, 2, b"none") {
+      return Bytes.make()
+    }
+    if property == Property.Grid
+      && (!is(values, 3, b"auto") || !is(values, 4, b"auto") || !is(values, 5, b"row")) {
+      return Bytes.make()
+    }
+    if is(values, 0, b"none") && is(values, 1, b"none") {
+      return run Bytes.copy(b"none")
+    }
+    run slashWord(&mut out, text(values, 0))
+    run slashWord(&mut out, text(values, 1))
+    return move out
+  }
+  if property == Property.Background {
+    // image position / size repeat attachment origin clip color
+    run word(&mut out, text(values, 0))
+    run word(&mut out, text(values, 1))
+    run Bytes.append(&mut out, b" /")
+    let mut at: usize = 2
+    while at < count {
+      run word(&mut out, text(values, at))
+      at = at + 1
+    }
+    return move out
+  }
+  // flex, flex-flow and the border sides list their longhands in order.
+  let mut at: usize = 0
+  while at < count {
+    run word(&mut out, text(values, at))
+    at = at + 1
+  }
+  return move out
+}
+
 pub effect fn serialize(property: Property, values: &[Bytes]) -> Bytes
   ! OutOfMemoryError
   ? &mut Allocator {
@@ -209,6 +313,9 @@ pub effect fn serialize(property: Property, values: &[Bytes]) -> Bytes
     } else {
       move out
     }
+  }
+  if properties.boxProperty(property) {
+    return run box(property, values, same)
   }
   if property == Property.Overflow {
     run word(&mut out, text(values, 0))

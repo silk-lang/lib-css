@@ -1,0 +1,94 @@
+//! Box shorthands expand to their longhands on written values.
+import catalog { Property }
+import keywords { Keyword }
+import shorthands
+import values { Value }
+import values
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+fn sameText(a: &[u8], b: &[u8]) -> bool {
+  if a.length != b.length {
+    return false
+  }
+  let mut i: usize = 0
+  while i < a.length {
+    if a[i] != b[i] {
+      return false
+    }
+    i = i + 1
+  }
+  return true
+}
+
+effect fn expectLonghand(
+  shorthand: Property,
+  value: &Value,
+  target: Property,
+  expected: &[u8],
+  message: string<'static>,
+) -> ()
+  ! AssertionError<'static> | OutOfMemoryError
+  ? &mut Allocator {
+  let found = run shorthands.longhand(shorthand, value, target)
+  match &found {
+    Option<Value>.Some { value: longhand } => {
+      let text = run values.cssText(&longhand)
+      run Testing.expect(sameText(text.asSlice(), expected), message)
+    }
+    _ => {
+      run Testing.expect(expected.length == 0, message)
+    }
+  }
+}
+
+effect fn expansion() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let one = values.px(4.0)
+  run expectLonghand(Property.Margin, &one, Property.MarginLeft, b"4px", "one value sets every side")
+  let mut three = List<Value>.make()
+  run three.append(values.px(1.0))
+  run three.append(values.auto())
+  run three.append(values.percent(3.0))
+  let margin = values.sequence(move three)
+  run expectLonghand(Property.Margin, &margin, Property.MarginTop, b"1px", "three values: top")
+  run expectLonghand(Property.Margin, &margin, Property.MarginLeft, b"auto", "three values: left repeats right")
+  run expectLonghand(Property.Margin, &margin, Property.MarginBottom, b"3%", "three values: bottom")
+  run expectLonghand(Property.Margin, &margin, Property.PaddingTop, b"", "not a longhand of the shorthand")
+
+  let grow = values.number(2.0)
+  run expectLonghand(Property.Flex, &grow, Property.FlexGrow, b"2", "flex: 2 grows")
+  run expectLonghand(Property.Flex, &grow, Property.FlexShrink, b"1", "flex: 2 shrinks by 1")
+  run expectLonghand(Property.Flex, &grow, Property.FlexBasis, b"0%", "flex: 2 has a zero basis")
+  let none = values.none()
+  run expectLonghand(Property.Flex, &none, Property.FlexGrow, b"0", "flex: none does not grow")
+  run expectLonghand(Property.Flex, &none, Property.FlexBasis, b"auto", "flex: none keeps an auto basis")
+
+  let line = run values.pair(values.keyword(Keyword.Solid), values.px(2.0))
+  run expectLonghand(Property.Border, &line, Property.BorderLeftWidth, b"2px", "border width in any order")
+  run expectLonghand(Property.Border, &line, Property.BorderTopStyle, b"solid", "border style")
+  run expectLonghand(Property.Border, &line, Property.BorderRightColor, b"currentcolor", "an omitted border color is initial")
+  let twice = run values.pair(values.keyword(Keyword.Solid), values.keyword(Keyword.Dashed))
+  run expectLonghand(Property.BorderTop, &twice, Property.BorderTopStyle, b"", "two styles do not expand")
+
+  let wrap = values.keyword(Keyword.Wrap)
+  run expectLonghand(Property.FlexFlow, &wrap, Property.FlexDirection, b"row", "flex-flow: wrap keeps the row direction")
+  run expectLonghand(Property.FlexFlow, &wrap, Property.FlexWrap, b"wrap", "flex-flow: wrap")
+
+  let area = run values.text(b"header / 2")
+  run expectLonghand(Property.GridArea, &area, Property.GridColumnStart, b"2", "grid-area splits text at slashes")
+  run expectLonghand(Property.GridArea, &area, Property.GridRowEnd, b"header", "an omitted line repeats an identifier")
+  run expectLonghand(Property.GridArea, &area, Property.GridColumnEnd, b"auto", "an omitted line after a number is auto")
+
+  let fill = run values.pair(values.keyword(Keyword.NoRepeat), values.keyword(Keyword.ContentBox))
+  run expectLonghand(Property.Background, &fill, Property.BackgroundRepeat, b"no-repeat", "background repeat")
+  run expectLonghand(Property.Background, &fill, Property.BackgroundClip, b"content-box", "one box is also the clip")
+  run expectLonghand(Property.Background, &fill, Property.BackgroundColor, b"transparent", "an omitted background color is initial")
+}
+
+test effect fn boxShorthandsExpand() -> () ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run expansion() |> Effect.provideMut<Allocator>(&mut allocator)
+}

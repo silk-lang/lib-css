@@ -1,0 +1,660 @@
+//! Shorthand expansion for the box properties, on written values.
+//!
+//! `longhand` answers what one longhand gets from a value written for its shorthand, such as
+//! `margin-left` from `margin: 1px 2px`. A longhand the value leaves out gets its initial
+//! value. The grammars are the common forms, not the whole of each spec: `background` takes
+//! one layer without a size, and `grid` and `grid-template` take `none` or `rows / columns`.
+//! A value outside those forms has no expansion, and the caller drops the declaration.
+import catalog { Property }
+import catalog
+import keywords { Keyword }
+import values { Value, Unit, Separator }
+import values
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+
+/// Whether `property` is a shorthand this module expands.
+pub fn expands(property: Property) -> bool {
+  return property == Property.Inset || property == Property.Margin
+    || property == Property.Padding
+    || property == Property.BorderWidth
+    || property == Property.BorderStyle
+    || property == Property.BorderColor
+    || property == Property.BorderTop
+    || property == Property.BorderRight
+    || property == Property.BorderBottom
+    || property == Property.BorderLeft
+    || property == Property.Border
+    || property == Property.BorderRadius
+    || property == Property.Flex
+    || property == Property.FlexFlow
+    || property == Property.PlaceContent
+    || property == Property.PlaceItems
+    || property == Property.PlaceSelf
+    || property == Property.Gap
+    || property == Property.GridRow
+    || property == Property.GridColumn
+    || property == Property.GridArea
+    || property == Property.GridTemplate
+    || property == Property.Grid
+    || property == Property.Background
+}
+
+/// The value `target` gets from `value` written for `shorthand`. None when `target` is not
+/// a longhand of `shorthand` or the value is not in a form this module expands.
+pub effect fn longhand(shorthand: Property, value: &Value, target: Property) -> Option<Value>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let count = catalog.longhandCount(shorthand)
+  let mut index: usize = 0
+  while index < count && !(catalog.longhandAt(shorthand, index) == target) {
+    index = index + 1
+  }
+  if index == count || !expands(shorthand) {
+    return Option<Value>.None
+  }
+  if shorthand == Property.BorderRadius {
+    return run radius(value, index)
+  }
+  if shorthand == Property.Gap || shorthand == Property.PlaceContent
+    || shorthand == Property.PlaceItems
+    || shorthand == Property.PlaceSelf {
+    return run both(value, index)
+  }
+  if shorthand == Property.GridRow || shorthand == Property.GridColumn {
+    return run lines(value, index, 2)
+  }
+  if shorthand == Property.GridArea {
+    return run lines(value, index, 4)
+  }
+  if shorthand == Property.FlexFlow {
+    return run flexFlow(value, index)
+  }
+  if shorthand == Property.Flex {
+    return run flex(value, index)
+  }
+  if shorthand == Property.Border {
+    return run border(value, index / 4)
+  }
+  if shorthand == Property.BorderTop || shorthand == Property.BorderRight
+    || shorthand == Property.BorderBottom
+    || shorthand == Property.BorderLeft {
+    return run border(value, index)
+  }
+  if shorthand == Property.GridTemplate || shorthand == Property.Grid {
+    return run grid(value, index)
+  }
+  if shorthand == Property.Background {
+    return run background(value, index)
+  }
+  return run sides(value, index)
+}
+
+fn isText(value: &Value) -> bool {
+  return match &value.* {
+    Value.Text { .. } => true
+    _ => false
+  }
+}
+
+// Whether `value` is CSS text that is one identifier, such as a grid line name.
+fn isIdentifier(value: &Value) -> bool {
+  match &value.* {
+    Value.Text { css } => {
+      let bytes = css.asSlice()
+      if bytes.length == 0 || (bytes[0] >= 48 && bytes[0] <= 57) {
+        return false
+      }
+      let mut i: usize = 0
+      while i < bytes.length {
+        let byte = bytes[i]
+        let letter = (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || byte >= 128
+        if !letter && !(byte >= 48 && byte <= 57) && byte != 45 && byte != 95 {
+          return false
+        }
+        i = i + 1
+      }
+      return true
+    }
+    _ => {}
+  }
+  return false
+}
+
+fn keywordOf(value: &Value) -> Option<Keyword> {
+  return match &value.* {
+    Value.Keyword { value: keyword } => Option<Keyword>.some(keyword)
+    _ => Option<Keyword>.None
+  }
+}
+
+fn isKeyword(value: &Value, expected: Keyword) -> bool {
+  return match &value.* {
+    Value.Keyword { value: keyword } => keyword == expected
+    _ => false
+  }
+}
+
+// How many space-separated components `value` has. A comma or slash list counts as one.
+fn spaced(value: &Value) -> usize {
+  match &value.* {
+    Value.Sequence { separator, values: items } => {
+      if separator == Separator.Space {
+        return items.length()
+      }
+    }
+    _ => {}
+  }
+  return 1
+}
+
+effect fn spacedAt(value: &Value, index: usize) -> Value ! OutOfMemoryError ? &mut Allocator {
+  match &value.* {
+    Value.Sequence { separator, values: items } => {
+      if separator == Separator.Space {
+        return run values.clone(&items.asSlice()[index])
+      }
+    }
+    _ => {}
+  }
+  return run values.clone(value)
+}
+
+// Which of 1 to 4 components a side (top, right, bottom, left) takes.
+fn sideOf(count: usize, side: usize) -> usize {
+  if count == 1 {
+    return 0
+  }
+  if count == 2 {
+    return side % 2
+  }
+  if count == 3 && side == 3 {
+    return 1
+  }
+  return side
+}
+
+effect fn sides(value: &Value, side: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  let count = spaced(value)
+  if count > 4 || isText(value) {
+    return Option<Value>.None
+  }
+  let part = run spacedAt(value, sideOf(count, side))
+  if spaced(&part) != 1 || isText(&part) {
+    return Option<Value>.None
+  }
+  return Option<Value>.some(move part)
+}
+
+// `border-radius`: one to four radii, then optionally a slash and the vertical radii.
+effect fn radius(value: &Value, corner: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  match &value.* {
+    Value.Sequence { separator, values: items } => {
+      if separator == Separator.Slash {
+        if items.length() != 2 {
+          return Option<Value>.None
+        }
+        let horizontal = run sides(&items.asSlice()[0], corner)
+        let vertical = run sides(&items.asSlice()[1], corner)
+        return match move horizontal {
+          Option<Value>.Some { value: first } => match move vertical {
+            Option<Value>.Some { value: second } => Option<Value>.some(
+              run values.pair(move first, move second),
+            )
+            _ => Option<Value>.None
+          }
+          _ => Option<Value>.None
+        }
+      }
+    }
+    _ => {}
+  }
+  return run sides(value, corner)
+}
+
+// Two components, the second defaulting to the first: `gap`, `place-items`.
+effect fn both(value: &Value, index: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  let count = spaced(value)
+  if count > 2 || isText(value) {
+    return Option<Value>.None
+  }
+  if count == 2 {
+    let first = run spacedAt(value, 0)
+    if isKeyword(&first, Keyword.Safe) || isKeyword(&first, Keyword.Unsafe) {
+      return Option<Value>.some(run values.clone(value))
+    }
+  }
+  let part = run spacedAt(value, if count == 2 {
+    index
+  } else {
+    0
+  })
+  if isText(&part) {
+    return Option<Value>.None
+  }
+  return Option<Value>.some(move part)
+}
+
+fn trimmed(css: &[u8], start: usize, end: usize) -> &[u8] {
+  let mut from = start
+  let mut to = end
+  while from < to && (css[from] == 32 || css[from] == 9 || css[from] == 10 || css[from] == 13) {
+    from = from + 1
+  }
+  while to > from
+    && (css[to - 1] == 32 || css[to - 1] == 9 || css[to - 1] == 10 || css[to - 1] == 13) {
+    to = to - 1
+  }
+  return Slice.view<u8>(css, from, to - from)
+}
+
+// The slash-separated parts of `value`. CSS text is split at its top-level slashes; text
+// with a string or a comment in it has no parts.
+effect fn slashed(value: &Value) -> Option<List<Value>> ! OutOfMemoryError ? &mut Allocator {
+  let mut out = List<Value>.make()
+  match &value.* {
+    Value.Sequence { separator, values: items } => {
+      if separator == Separator.Slash {
+        let mut i: usize = 0
+        while i < items.length() {
+          run out.append(run values.clone(&items.asSlice()[i]))
+          i = i + 1
+        }
+        return Option<List<Value>>.some(move out)
+      }
+    }
+    Value.Text { css } => {
+      let bytes = css.asSlice()
+      let mut depth: usize = 0
+      let mut start: usize = 0
+      let mut i: usize = 0
+      while i < bytes.length {
+        let byte = bytes[i]
+        if byte == 34 || byte == 39 || byte == 92 {
+          return Option<List<Value>>.None
+        }
+        if byte == 40 || byte == 91 {
+          depth = depth + 1
+        } else if (byte == 41 || byte == 93) && depth > 0 {
+          depth = depth - 1
+        } else if byte == 47 && depth == 0 {
+          if i + 1 < bytes.length && bytes[i + 1] == 42 {
+            return Option<List<Value>>.None
+          }
+          let part = trimmed(bytes, start, i)
+          if part.length == 0 {
+            return Option<List<Value>>.None
+          }
+          run out.append(run values.text(part))
+          start = i + 1
+        }
+        i = i + 1
+      }
+      let part = trimmed(bytes, start, bytes.length)
+      if part.length == 0 {
+        return Option<List<Value>>.None
+      }
+      run out.append(run values.text(part))
+      return Option<List<Value>>.some(move out)
+    }
+    _ => {}
+  }
+  run out.append(run values.clone(value))
+  return Option<List<Value>>.some(move out)
+}
+
+// Grid lines: `grid-row` and `grid-column` (2) and `grid-area` (4, as row-start /
+// column-start / row-end / column-end). An omitted line repeats a custom identifier and is
+// `auto` otherwise.
+effect fn lines(value: &Value, index: usize, count: usize) -> Option<Value>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let parts = match move run slashed(value) {
+    Option<List<Value>>.Some { value: found } => move found
+    _ => {
+      return Option<Value>.None
+    }
+  }
+  if parts.length() > count {
+    return Option<Value>.None
+  }
+  let mut at = index
+  if at >= parts.length() {
+    // grid-area: column-end follows column-start; the others follow row-start.
+    at = if count == 4 && index == 3 && parts.length() >= 2 {
+      1
+    } else {
+      0
+    }
+    if !isIdentifier(&parts.asSlice()[at]) {
+      return Option<Value>.some(values.auto())
+    }
+  }
+  return Option<Value>.some(run values.clone(&parts.asSlice()[at]))
+}
+
+effect fn flexFlow(value: &Value, index: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  let count = spaced(value)
+  if count > 2 || isText(value) {
+    return Option<Value>.None
+  }
+  let mut direction = Option<Keyword>.None
+  let mut wrap = Option<Keyword>.None
+  let mut i: usize = 0
+  while i < count {
+    let part = run spacedAt(value, i)
+    let keyword = match &keywordOf(&part) {
+      Option<Keyword>.Some { value: found } => found
+      _ => {
+        return Option<Value>.None
+      }
+    }
+    if keyword == Keyword.Row || keyword == Keyword.RowReverse || keyword == Keyword.Column
+      || keyword == Keyword.ColumnReverse {
+      if direction.isSome() {
+        return Option<Value>.None
+      }
+      direction = Option<Keyword>.some(keyword)
+    } else if keyword == Keyword.Nowrap || keyword == Keyword.Wrap
+      || keyword == Keyword.WrapReverse {
+      if wrap.isSome() {
+        return Option<Value>.None
+      }
+      wrap = Option<Keyword>.some(keyword)
+    } else {
+      return Option<Value>.None
+    }
+    i = i + 1
+  }
+  if index == 0 {
+    return Option<Value>.some(values.keyword(direction.unwrapOr(Keyword.Row)))
+  }
+  return Option<Value>.some(values.keyword(wrap.unwrapOr(Keyword.Nowrap)))
+}
+
+// `flex`: `none`, or a grow factor, a shrink factor and a basis in the usual order. As in
+// browsers, an omitted factor is 1 and an omitted basis is 0%.
+effect fn flex(value: &Value, index: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  if isKeyword(value, Keyword.None) {
+    if index == 2 {
+      return Option<Value>.some(values.auto())
+    }
+    return Option<Value>.some(values.number(0.0))
+  }
+  let count = spaced(value)
+  if count > 3 || isText(value) {
+    return Option<Value>.None
+  }
+  let mut grow: f32 = 1.0
+  let mut shrink: f32 = 1.0
+  let mut basis = Option<Value>.None
+  let mut numbers: usize = 0
+  let mut i: usize = 0
+  while i < count {
+    let part = run spacedAt(value, i)
+    let mut factor = Option<f32>.None
+    match &part {
+      Value.Unit { value: amount, unit } => {
+        if unit == Unit.Number {
+          factor = Option<f32>.some(amount)
+        }
+      }
+      Value.Text { .. } => {
+        return Option<Value>.None
+      }
+      Value.Sequence { .. } => {
+        return Option<Value>.None
+      }
+      _ => {}
+    }
+    match &factor {
+      Option<f32>.Some { value: amount } => {
+        if amount < 0.0 {
+          return Option<Value>.None
+        }
+        if numbers == 0 {
+          grow = amount
+        } else if numbers == 1 {
+          shrink = amount
+        } else if amount == 0.0 && !basis.isSome() {
+          basis = Option<Value>.some(values.px(0.0))
+        } else {
+          return Option<Value>.None
+        }
+        numbers = numbers + 1
+      }
+      _ => {
+        if basis.isSome() {
+          return Option<Value>.None
+        }
+        basis = Option<Value>.some(move part)
+      }
+    }
+    i = i + 1
+  }
+  if index == 0 {
+    return Option<Value>.some(values.number(grow))
+  }
+  if index == 1 {
+    return Option<Value>.some(values.number(shrink))
+  }
+  return match move basis {
+    Option<Value>.Some { value: found } => Option<Value>.some(move found)
+    _ => Option<Value>.some(values.percent(0.0))
+  }
+}
+
+fn lineStyle(keyword: Keyword) -> bool {
+  return keyword == Keyword.None || keyword == Keyword.Hidden || keyword == Keyword.Dotted
+    || keyword == Keyword.Dashed
+    || keyword == Keyword.Solid
+    || keyword == Keyword.Double
+    || keyword == Keyword.Groove
+    || keyword == Keyword.Ridge
+    || keyword == Keyword.Inset
+    || keyword == Keyword.Outset
+}
+
+// `border` and its four sides: a width (0), a style (1) and a color (2) in any order.
+effect fn border(value: &Value, component: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  let count = spaced(value)
+  if count > 3 || isText(value) {
+    return Option<Value>.None
+  }
+  let mut seen: [bool; 3] = [false; 3]
+  let mut found = Option<Value>.None
+  let mut i: usize = 0
+  while i < count {
+    let part = run spacedAt(value, i)
+    let kind: usize = match &part {
+      Value.Unit { .. } => 0
+      Value.Math { .. } => 0
+      Value.Color { .. } => 2
+      Value.Function { .. } => 2
+      Value.Keyword { value: keyword } => {
+        if keyword == Keyword.Thin || keyword == Keyword.Medium || keyword == Keyword.Thick {
+          0
+        } else if lineStyle(keyword) {
+          1
+        } else {
+          2
+        }
+      }
+      _ => {
+        return Option<Value>.None
+      }
+    }
+    if seen[kind] {
+      return Option<Value>.None
+    }
+    seen[kind] = true
+    if kind == component {
+      found = Option<Value>.some(move part)
+    }
+    i = i + 1
+  }
+  return match move found {
+    Option<Value>.Some { value: given } => Option<Value>.some(move given)
+    _ => {
+      if component == 0 {
+        return Option<Value>.some(values.keyword(Keyword.Medium))
+      }
+      if component == 1 {
+        return Option<Value>.some(values.none())
+      }
+      return Option<Value>.some(values.keyword(Keyword.Currentcolor))
+    }
+  }
+}
+
+fn mentions(css: &[u8], word: &[u8]) -> bool {
+  if word.length == 0 || css.length < word.length {
+    return false
+  }
+  let mut i: usize = 0
+  while i + word.length <= css.length {
+    let mut k: usize = 0
+    while k < word.length && css[i + k] == word[k] {
+      k = k + 1
+    }
+    if k == word.length {
+      return true
+    }
+    i = i + 1
+  }
+  return false
+}
+
+// `grid-template` (rows, columns, areas) and `grid` (those, then auto-rows, auto-columns,
+// auto-flow): `none` or `rows / columns`. The forms with area strings or `auto-flow` are
+// not expanded.
+effect fn grid(value: &Value, index: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  if index == 3 || index == 4 {
+    return Option<Value>.some(values.auto())
+  }
+  if index == 5 {
+    return Option<Value>.some(values.keyword(Keyword.Row))
+  }
+  if isKeyword(value, Keyword.None) {
+    return Option<Value>.some(values.none())
+  }
+  let parts = match move run slashed(value) {
+    Option<List<Value>>.Some { value: found } => move found
+    _ => {
+      return Option<Value>.None
+    }
+  }
+  if parts.length() != 2 {
+    return Option<Value>.None
+  }
+  let mut i: usize = 0
+  while i < 2 {
+    match &parts.asSlice()[i] {
+      Value.Text { css } => {
+        if mentions(css.asSlice(), b"auto-flow") {
+          return Option<Value>.None
+        }
+      }
+      _ => {}
+    }
+    i = i + 1
+  }
+  if index == 2 {
+    return Option<Value>.some(values.none())
+  }
+  return Option<Value>.some(run values.clone(&parts.asSlice()[index]))
+}
+
+// `background`: one layer of a color, an image, a position, repeat keywords, an attachment
+// and one or two boxes, in any order. A layer list and the `position / size` form are not
+// expanded. Longhands in catalog order: image, position, size, repeat, attachment, origin,
+// clip, color.
+effect fn background(value: &Value, index: usize) -> Option<Value>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let count = spaced(value)
+  if isText(value) {
+    return Option<Value>.None
+  }
+  let mut counts: [usize; 8] = [0; 8]
+  let limits: [usize; 8] = [1, 4, 0, 2, 1, 2, 0, 1]
+  let mut found = List<Value>.make()
+  let mut i: usize = 0
+  while i < count {
+    let part = run spacedAt(value, i)
+    let kind: usize = match &part {
+      Value.Color { .. } => 7
+      Value.Function { .. } => 0
+      Value.Unit { .. } => 1
+      Value.Math { .. } => 1
+      Value.Keyword { value: keyword } => {
+        if keyword == Keyword.None {
+          0
+        } else if keyword == Keyword.Left || keyword == Keyword.Right || keyword == Keyword.Top
+          || keyword == Keyword.Bottom
+          || keyword == Keyword.Center {
+          1
+        } else if keyword == Keyword.Repeat || keyword == Keyword.NoRepeat
+          || keyword == Keyword.Round {
+          3
+        } else if keyword == Keyword.Scroll || keyword == Keyword.Fixed {
+          4
+        } else if keyword == Keyword.BorderBox || keyword == Keyword.PaddingBox
+          || keyword == Keyword.ContentBox {
+          5
+        } else {
+          7
+        }
+      }
+      _ => {
+        return Option<Value>.None
+      }
+    }
+    counts[kind] = counts[kind] + 1
+    if counts[kind] > limits[kind] {
+      return Option<Value>.None
+    }
+    if kind == 5 {
+      // The first box is the origin and the last one the clip.
+      if index == 5 && counts[5] == 1 {
+        run found.append(move part)
+      } else if index == 6 {
+        found.clear()
+        run found.append(move part)
+      }
+    } else if kind == index {
+      run found.append(move part)
+    }
+    i = i + 1
+  }
+  if found.length() == 1 {
+    return Option<Value>.some(found.remove(0))
+  }
+  if found.length() > 1 {
+    return Option<Value>.some(values.sequence(move found))
+  }
+  if index == 0 {
+    return Option<Value>.some(values.none())
+  }
+  if index == 1 {
+    return Option<Value>.some(run values.pair(values.percent(0.0), values.percent(0.0)))
+  }
+  if index == 2 {
+    return Option<Value>.some(values.auto())
+  }
+  if index == 3 {
+    return Option<Value>.some(values.keyword(Keyword.Repeat))
+  }
+  if index == 4 {
+    return Option<Value>.some(values.keyword(Keyword.Scroll))
+  }
+  if index == 5 {
+    return Option<Value>.some(values.keyword(Keyword.PaddingBox))
+  }
+  if index == 6 {
+    return Option<Value>.some(values.keyword(Keyword.BorderBox))
+  }
+  return Option<Value>.some(values.keyword(Keyword.Transparent))
+}

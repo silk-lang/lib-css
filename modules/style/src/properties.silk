@@ -14,36 +14,40 @@ pub import css_properties.catalog {
   longhandAt
 }
 
-/// How many catalog properties css-style supports: the catalog's first `COUNT`, which are the
-/// SVG and text properties. The box properties after them are not parsed here yet, so a
-/// declaration naming one is dropped as an unknown property.
-pub const COUNT: usize = 172
+/// How many properties css-style supports: the whole catalog. The SVG and text properties,
+/// the first `TYPED`, have their own grammars; the box properties after them are read by
+/// shape (see `box_values`).
+pub const COUNT: usize = 282
+
+/// How many properties, from the start of the catalog, have a grammar of their own.
+pub const TYPED: usize = 172
 
 /// The supported properties in catalog order.
-pub fn all() -> [Property; 172] {
-  let every = catalog.all()
-  let mut supported = [Property.Fill; 172]
-  let mut i: usize = 0
-  while i < COUNT {
-    supported[i] = every[i]
-    i = i + 1
-  }
-  return supported
+pub fn all() -> [Property; 282] {
+  return catalog.all()
+}
+
+/// Whether `property` is one of the box properties, whose values are read by shape.
+pub fn boxProperty(property: Property) -> bool {
+  return index(property) >= TYPED
 }
 
 pub fn lookup(name: &[u8]) -> Option<Property> {
+  return catalog.lookup(name)
+}
+
+/// `lookup` among the properties with a grammar of their own. The descriptor contexts
+/// (`@page`, `@font-face`) use it: their `margin` and `padding` descriptors are not the box
+/// properties of the same names.
+pub fn typedLookup(name: &[u8]) -> Option<Property> {
   if let Option<Property>.Some { value } = catalog.lookup(name) {
-    if index(value) < COUNT {
+    if index(value) < TYPED {
       return Option<Property>.some(value)
     }
   }
   return Option<Property>.None
 }
 
-/// `all` resets the supported longhands, which the catalog lists first.
 pub fn longhandCount(property: Property) -> usize {
-  if property == Property.All {
-    return 155
-  }
   return catalog.longhandCount(property)
 }

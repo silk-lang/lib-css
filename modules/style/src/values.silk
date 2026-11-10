@@ -1,5 +1,6 @@
 //! Validated specified values, typed arenas, and context-dependent computation.
 import properties { Property }
+import properties
 import value_keywords { Keyword }
 import value_keywords
 import value_cursor { Cursor }
@@ -26,6 +27,11 @@ import silk.core.ownership { Copy }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.option { Option }
 import cssom_animation
+import written
+import css_properties.values as shared
+import css_properties.shorthands as shorthands
+import tokens { CssError }
+import silk.core.effect { Effect }
 import silk.num.f64
 
 pub enum Mode {
@@ -135,8 +141,11 @@ pub union Value {
   ImageOrientation { pub angle: ExprId, pub flip: bool },
   /// Validated, canonical animation longhands; shorthand expansion is stored once.
   Animation { pub longhands: [Span; 8] },
-  /// Canonical source text of an animation longhand.
+  /// Canonical text of a longhand without a typed form here: an animation longhand, or a
+  /// box property read by shape.
   Raw { pub text: Span },
+  /// A box shorthand: the canonical text of each longhand, in the catalog's longhand order.
+  Longhands { pub texts: List<Span> },
 }
 
 /// Arena lengths of a [`Store`] at one point (see [`Store.mark`]).
@@ -171,6 +180,7 @@ fn simple(item: &Value) -> bool {
     Value.VectorEffect { .. } => true
     Value.ImageOrientation { .. } => true
     Value.Raw { .. } => true
+    Value.Longhands { .. } => true
     Value.Animation { .. } => true
     Value.Text { .. } => true
     Value.Effect { value } => effect_values.copyable(&value)
@@ -208,6 +218,15 @@ effect fn copySimple(item: &Value) -> Value
     }
     Value.ImageOrientation { angle, flip } => Value.ImageOrientation { angle: angle, flip: flip }
     Value.Raw { text } => Value.Raw { text: text }
+    Value.Longhands { texts } => {
+      let mut copied = run List<Span>.makeWithCapacity(texts.length())
+      let mut i: usize = 0
+      while i < texts.length() {
+        run copied.append(texts.asSlice()[i])
+        i = i + 1
+      }
+      Value.Longhands { texts: move copied }
+    }
     Value.Animation { longhands } => Value.Animation { longhands: longhands }
     Value.Text { value } => Value.Text { value: run copyText(&value) }
     Value.Effect { value } => Value.Effect { value: run effect_values.copy(&value) }
@@ -1517,6 +1536,86 @@ fn transformProperty(property: Property) -> bool {
   }
 }
 
+/// A box longhand's initial value: the catalog's text, kept as it is without reading it.
+pub effect fn boxInitial(store: &mut Store<'_>, property: Property) -> ValueId
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let text = run store.storeText(properties.initial(property))
+  return run store.add(Value.Raw { text: text })
+}
+
+effect fn shaped(css: &[u8]) -> Option<shared.Value>
+  ! CssError | OutOfMemoryError
+  ? &mut Allocator {
+  return Option<shared.Value>.some(run written.value(css))
+}
+
+// A value over the tokenizer's limits has no shape.
+effect fn unshaped(error: CssError) -> Option<shared.Value> {
+  drop error
+  return Option<shared.Value>.None
+}
+
+// A box property's value, read by shape and kept as canonical text: one text for a
+// longhand, one per longhand for a shorthand. The value is not checked against the
+// property's grammar; a shorthand in a form `shorthands` does not expand is invalid.
+effect fn boxValue(
+  store: &mut Store<'_>,
+  property: Property,
+  source: &Input<'_>,
+  cursor: &mut Cursor,
+) -> Option<Value>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut css = Bytes.make()
+  let mut i = cursor.position
+  while i < source.length() {
+    match &source.at(i) {
+      Option<TokenView>.Some { value: view } => {
+        let text = view.buffer.source()
+        let span = view.token.source
+        if span.start <= span.end && span.end <= text.length {
+          run Bytes.append(&mut css, Slice.view<u8>(text, span.start, span.end - span.start))
+        }
+      }
+      _ => {}
+    }
+    i = i + 1
+  }
+  let shape = match move run Effect.catch<CssError>(shaped(css.asSlice()), unshaped) {
+    Option<shared.Value>.Some { value: found } => move found
+    _ => {
+      return Option<Value>.None
+    }
+  }
+  let whole = run shared.cssText(&shape)
+  if whole.length() == 0 {
+    return Option<Value>.None
+  }
+  let count = properties.longhandCount(property)
+  if count == 1 {
+    cursor.position = source.length()
+    return Option<Value>.some(Value.Raw { text: run store.storeText(whole.asSlice()) })
+  }
+  let mut texts = run List<Span>.makeWithCapacity(count)
+  let mut l: usize = 0
+  while l < count {
+    let target = properties.longhandAt(property, l)
+    match &run shorthands.longhand(property, &shape, target) {
+      Option<shared.Value>.Some { value: longhand } => {
+        let canonical = run shared.cssText(&longhand)
+        run texts.append(run store.storeText(canonical.asSlice()))
+      }
+      _ => {
+        return Option<Value>.None
+      }
+    }
+    l = l + 1
+  }
+  cursor.position = source.length()
+  return Option<Value>.some(Value.Longhands { texts: move texts })
+}
+
 effect fn parseValue(
   store: &mut Store<'_>,
   property: Property,
@@ -1532,6 +1631,9 @@ effect fn parseValue(
       return Option<Value>.some(Value.Wide { keyword: value })
     }
     _ => {}
+  }
+  if properties.boxProperty(property) {
+    return run boxValue(&mut store.*, property, source, &mut cursor.*)
   }
   let keyword = value_keywords.parse(property, source, &mut cursor.*)
   match &keyword {

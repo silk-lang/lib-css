@@ -14,6 +14,8 @@ import css_properties.values { Value, Declaration, Unit, MathOperator, Separator
 import colors
 import colors { Color, Identity }
 import cssom_declaration { StyleDeclaration }
+import cssom_value_serialization
+import computed { Engine, StyleId, ComputedValue }
 import input { Input }
 import lexer
 import syntax
@@ -108,6 +110,32 @@ pub effect fn fromStyle(style: &StyleDeclaration) -> List<Declaration>
     i = i + 1
   }
   return move out
+}
+
+/// The computed value of `property` in a style the cascade built, as a written value ready
+/// for `css_properties.convert`. None when the style has no value for the property, as for
+/// a shorthand.
+pub effect fn computedValue(engine: &Engine<'_>, style: StyleId, property: Property) -> Option<
+  Value
+>
+  ! CssError | OutOfMemoryError
+  ? &mut Allocator {
+  let entry = match &engine.get(style, property) {
+    Option<ComputedValue>.Some { value: found } => found
+    _ => {
+      return Option<Value>.None
+    }
+  }
+  let css = run cssom_value_serialization.computedValue(
+    &engine.values,
+    entry.value,
+    entry.sourceProperty,
+    property,
+  )
+  if css.length() == 0 {
+    return Option<Value>.None
+  }
+  return Option<Value>.some(run value(css.asSlice()))
 }
 
 /// The value in the tokens `start..end`: its shape, or the source text when it has none.

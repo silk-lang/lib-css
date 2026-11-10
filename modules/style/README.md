@@ -27,6 +27,13 @@ WebGPU, or a particular UI tree.
   ones with a grammar here: `written.value(b"calc(100% - 8px)")`,
   `written.declarations(b"width: 10px; color: red")`, and `written.fromStyle` for a CSSOM
   declaration block. It reads values by shape and keeps anything without one as CSS text.
+- **Box properties in the cascade:** the cascade covers the whole shared catalog. The box
+  properties (margin, padding, border, flex, grid, background and the rest) have no grammar
+  here yet: a declaration is read by shape, kept as canonical CSS text, and not checked against
+  the property's grammar. Box shorthands expand to their longhands through css-properties'
+  `shorthands`, and a shorthand value in a form it does not expand is dropped as invalid.
+  `written.computedValue(engine, style, property)` reads any computed value back as a written
+  `Value`, ready for css-properties' `convert`.
 
 Every stage has explicit limits on input size, storage, nesting and matching work, so hostile
 stylesheets fail with a `CssError` instead of running away.
