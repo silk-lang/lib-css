@@ -1,10 +1,9 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.usize
-import silk.core.effect { Effect }
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
 import style { Style, Display, Dimension, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
-import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, resolves, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto }
 import flex { layoutFlex, emptyFlexSize, FlexScratch }
 import grid { layoutGrid }
@@ -15,7 +14,7 @@ import positioned { positionScroll, positionTree, positionVisits, reachableLimit
 import bfc { BfcState }
 import silk.core.option { Option }
 import layout_pass { LayoutPass, PassState, CacheKind, FullBoxGeometry, REUSE_INDEPENDENT, REUSE_IN_FLOW }
-import layout_cache { LayoutCache, Snapshot, BoxFacts, BoxWrites, CachedProbe, FinalRange, AGES_NONE, AGES_OLDER }
+import layout_cache { LayoutCache, BoxFacts, CachedProbe, FinalRange, AGES_NONE, AGES_OLDER }
 import incremental as Incremental
 import replaced { layoutReplaced, preferredRatio, borderRatio }
 import box_tree as Boxes

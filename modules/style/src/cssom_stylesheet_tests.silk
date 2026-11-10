@@ -117,7 +117,7 @@ test effect fn stylesheetRetainsDetachedRuleIdentityAndLiveLists() -> ()
   let limits = Limits.make()
   let mut sheet = StyleSheet.make(7, false)
   let live = run sheet.cssRules()
-  let first = run sheet.insertRule(b"@media screen { a { color: red } }", 0, &limits)
+  drop run sheet.insertRule(b"@media screen { a { color: red } }", 0, &limits)
     |> Effect.provideMut<Allocator>(&mut allocator)
   let parent = item(live, &sheet, 0)
   let children = sheet.rulesFor(parent)
@@ -148,10 +148,10 @@ test effect fn stylesheetRetainsDetachedRuleIdentityAndLiveLists() -> ()
     },
     "detached descendants retain parent rule and declaration ownership but lose parent sheet",
   )
-  let second = run sheet.insertRule(b"b {}", 0, &limits)
+  drop run sheet.insertRule(b"b {}", 0, &limits)
     |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(item(live, &sheet, 0) != parent, "deleted rule identities are never reused")
-  let detached = run sheet.insertGroupingRule(parent, b"c {}", 1, &limits)
+  drop run sheet.insertGroupingRule(parent, b"c {}", 1, &limits)
     |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(
     children.length(&sheet) == 2,
@@ -165,7 +165,7 @@ test effect fn stylesheetHierarchyNamespaceAndGroupingErrors() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   let limits = Limits.make()
   let mut sheet = StyleSheet.make(9, false)
-  let first = run sheet.insertRule(b"a {}", 0, &limits)
+  drop run sheet.insertRule(b"a {}", 0, &limits)
     |> Effect.provideMut<Allocator>(&mut allocator)
   let imported = run Effect.result(
     sheet.insertRule(b"@import 'x';", 1, &limits) |> Effect.provideMut<Allocator>(&mut allocator),
@@ -190,7 +190,7 @@ test effect fn stylesheetHierarchyNamespaceAndGroupingErrors() -> ()
     insertionError(&namespaceBefore, CssomError.InvalidStateError),
     "namespace insertion into sheet containing style rules is invalid state",
   )
-  let group = run sheet.insertRule(b"@media screen {}", 1, &limits)
+  drop run sheet.insertRule(b"@media screen {}", 1, &limits)
     |> Effect.provideMut<Allocator>(&mut allocator)
   let list = run sheet.cssRules()
   let parent = item(list, &sheet, 1)
@@ -249,7 +249,7 @@ test effect fn constructedReplacementTransactionAndImportRemoval() -> ()
   )
   run Testing.expect(
     match &failure {
-      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { error } => true
+      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { error: _ } => true
       _ => false
     },
     "resource failure is not swallowed",
@@ -304,7 +304,7 @@ test effect fn nestedRulesAndDeprecatedApis() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   let limits = Limits.make()
   let mut sheet = StyleSheet.make(0, false)
-  let inserted = run sheet.insertRule(
+  drop run sheet.insertRule(
     b"a { color: red; & > b { color: blue } color: green; }",
     0,
     &limits,
@@ -403,7 +403,7 @@ test effect fn ruleKindsAndConditionalImportSerialization() -> ()
   let roots = run sheet.cssRules()
   run Testing.expect(roots.length(&sheet) == 3, "import, layer and page kinds are retained")
   let imported = item(roots, &sheet, 0)
-  let text = run sheet.cssText(imported) |> Effect.provideMut<Allocator>(&mut allocator)
+  drop run sheet.cssText(imported) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(
     match sheet.rule(imported) {
       Option<&cssom_stylesheet.CssRule>.Some { value } => value.hasLayer

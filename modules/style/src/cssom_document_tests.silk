@@ -65,7 +65,7 @@ effect fn collections() -> ()
     match &wrongDocument {
       Result<(), CssomError | OutOfMemoryError>.Failure { error } => match &error {
         CssomError problem => problem == CssomError.NotAllowedError
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }
@@ -80,7 +80,7 @@ effect fn collections() -> ()
     match &invalidReplacement {
       Result<(), CssomError | OutOfMemoryError>.Failure { error } => match &error {
         CssomError problem => problem == CssomError.NotAllowedError
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }

@@ -5,10 +5,9 @@ import properties { Property }
 import selectors { Specificity }
 import values { Wide, Store }
 import silk.core.option { Option }
-import tokens { Limits, TokenBuffer, CssError, BufferView }
+import tokens { Limits, CssError, BufferView }
 import lexer
 import syntax
-import silk.collections.list { List }
 import silk.core.effect { Effect }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.testing.testing { Testing, AssertionError }
@@ -142,7 +141,7 @@ test effect fn compileRejectsInvalidDeclarationsBeforeTheyCanWin() -> ()
       Option<Declaration>.Some { value } => {
         accepted = accepted + 1
         match &value.specified {
-          Specified.Pending { range, mode } => {
+          Specified.Pending { range: _, mode: _ } => {
             pending = pending + 1
           }
           _ => {}

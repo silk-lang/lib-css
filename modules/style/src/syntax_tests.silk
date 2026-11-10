@@ -2,7 +2,7 @@
 import lexer
 import syntax { RuleKind, Rule, Declaration }
 import syntax
-import tokens { Kind, Limits, CssError, CssErrorKind, TokenRange, equal }
+import tokens { Kind, Limits, CssError, CssErrorKind, equal }
 import silk.collections.list { List }
 import silk.core.effect { Effect }
 import silk.core.result { Result }
@@ -79,7 +79,7 @@ test effect fn declarationRecoveryAndImportant() -> ()
   let mut i = ds[1].value.start
   while i < ds[1].value.end {
     if match &buffer.tokens.asSlice()[i].kind {
-      Kind.Ident { text } => true
+      Kind.Ident { text: _ } => true
       _ => false
     } {
       identCount = identCount + 1
@@ -143,7 +143,7 @@ test effect fn parserResourceBoundaries() -> ()
     match &rules {
       Result<List<Rule>, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.RuleLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }
@@ -162,7 +162,7 @@ test effect fn parserResourceBoundaries() -> ()
     match &declarations {
       Result<List<Declaration>, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.DeclarationLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }

@@ -464,10 +464,10 @@ effect fn component(
             return Option<f64>.None
           }
         }
-        Kind.Function { name: functionName } => {
+        Kind.Function { name: _ } => {
           math = true
         }
-        Kind.Dimension { value: numeric, integer: integerToken, unit } => {}
+        Kind.Dimension { value: _, integer: _, unit: _ } => {}
         _ => {
           return Option<f64>.None
         }
@@ -787,7 +787,7 @@ pub effect fn evaluate(
     match &next {
       Option<TokenView>.Some { value } => {
         match &value.token.kind {
-          Kind.Function { name: functionName } => {
+          Kind.Function { name: _ } => {
             depth = depth + 1
           }
           Kind.OpenParen => {

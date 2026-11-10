@@ -141,7 +141,7 @@ impl PreparedSheet {
 
 fn opener(kind: &Kind) -> bool {
   return match &kind.* {
-    Kind.Function { name } => true
+    Kind.Function { name: _ } => true
     Kind.OpenParen => true
     Kind.OpenSquare => true
     Kind.OpenBrace => true

@@ -62,7 +62,7 @@ effect fn acceptsIn(property: Property, text: &[u8], presentation: bool, expecte
   let mut numerics = Store.make()
   let result = run parseIn(&mut numerics, property, text, presentation)
   let accepted = match &result {
-    Option<EffectValue>.Some { value } => true
+    Option<EffectValue>.Some { value: _ } => true
     _ => false
   }
   run Testing.expect(accepted == expected, "effect grammar acceptance")
@@ -302,7 +302,7 @@ effect fn computeCases() -> ()
   run Testing.expect(
     match &computed {
       EffectValue.Filters { items } => match &items.asSlice()[0] {
-        Filter.Function { kind, amount } => dimensions.evaluate(&numerics, amount, 0.0) == 32.0
+        Filter.Function { kind: _, amount } => dimensions.evaluate(&numerics, amount, 0.0) == 32.0
         _ => false
       }
       _ => false
@@ -312,7 +312,7 @@ effect fn computeCases() -> ()
   run Testing.expect(
     match &computed {
       EffectValue.Filters { items } => match &items.asSlice()[1] {
-        Filter.DropShadow { x, y, blur, color } => {
+        Filter.DropShadow { x, y: _, blur: _, color } => {
           let rgba = colors.toSrgb(color)
           dimensions.evaluate(&numerics, x, 0.0) == 16.0 && rgba.r == 0.25 && rgba.g == 0.5
             && rgba.b == 0.75
@@ -326,7 +326,7 @@ effect fn computeCases() -> ()
   run Testing.expect(
     match &computed {
       EffectValue.Filters { items } => match &items.asSlice()[2] {
-        Filter.Function { kind, amount } => dimensions.evaluate(&numerics, amount, 1.0) == 1.0
+        Filter.Function { kind: _, amount } => dimensions.evaluate(&numerics, amount, 1.0) == 1.0
         _ => false
       }
       _ => false
@@ -347,8 +347,8 @@ effect fn computeCases() -> ()
   let computedImage = run effect_values.compute(&image, &mut numerics, &context, &colorContext)
   run Testing.expect(
     match &computedImage {
-      EffectValue.Masks { layers, resetBorder } => match &layers.asSlice()[0].image {
-        Image.Linear { repeating, direction, stops } => match &stops.asSlice()[0] {
+      EffectValue.Masks { layers, resetBorder: _ } => match &layers.asSlice()[0].image {
+        Image.Linear { repeating: _, direction: _, stops } => match &stops.asSlice()[0] {
           GradientStop.ColorStop { color, position } => match &position {
             Option<dimensions.ExprId>.Some { value } => dimensions.evaluate(&numerics, value, 200.0)
               == 50.0
@@ -469,7 +469,7 @@ effect fn expandedCase() -> ()
     cursor.done(&source)
       && match &parsed {
         Option<EffectValue>.Some { value } => match &value {
-          EffectValue.Masks { layers, resetBorder } => match &layers.asSlice()[0].image {
+          EffectValue.Masks { layers, resetBorder: _ } => match &layers.asSlice()[0].image {
             Image.Url { url } => equal(url.asSlice(), b"mask.svg")
             _ => false
           }
@@ -506,8 +506,8 @@ effect fn rangeCase() -> ()
   let computed = run effect_values.compute(&specified, &mut numerics, &context, &colorContext)
   run Testing.expect(
     match &computed {
-      EffectValue.Masks { layers, resetBorder } => match &layers.asSlice()[0].size {
-        Size.Explicit { x, y } => match &x {
+      EffectValue.Masks { layers, resetBorder: _ } => match &layers.asSlice()[0].size {
+        Size.Explicit { x, y: _ } => match &x {
           Option<dimensions.ExprId>.Some { value } => dimensions.evaluate(&numerics, value, 100.0)
             == 0.0
             && dimensions.evaluate(&numerics, value, 300.0) == 10.0

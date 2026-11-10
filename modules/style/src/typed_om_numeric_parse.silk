@@ -24,7 +24,7 @@ pub effect fn parse(store: &mut NumericStore, text: &[u8], limits: &Limits) -> N
   let result = match move parsed {
     Result<NumericId, CssomError | OutOfMemoryError>.Success { value } => value
     Result<NumericId, CssomError | OutOfMemoryError>.Failure { error } => match move error {
-      CssomError failure => {
+      CssomError _ => {
         fail CssomError.SyntaxError
       }
       OutOfMemoryError failure => {
@@ -90,13 +90,13 @@ effect fn primary(
   }
   cursor.position = cursor.position + 1
   match &view.token.kind {
-    Kind.Number { value, integer } => {
+    Kind.Number { value, integer: _ } => {
       return run literal(&mut store.*, value, b"number")
     }
-    Kind.Percentage { value, integer } => {
+    Kind.Percentage { value, integer: _ } => {
       return run literal(&mut store.*, value, b"percent")
     }
-    Kind.Dimension { value, integer, unit } => {
+    Kind.Dimension { value, integer: _, unit } => {
       let text = view.text(unit)
       match &lookup(text) {
         Option<UnitInfo>.Some { value: info } => {

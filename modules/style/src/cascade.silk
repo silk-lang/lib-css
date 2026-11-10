@@ -1,12 +1,12 @@
 //! Cascade4 declaration compilation and origin-aware winner selection.
-import tokens { TokenBuffer, TokenRange, Span, Limits, CssError, BufferView, Kind }
+import tokens { TokenRange, Span, Limits, CssError, BufferView, Kind }
 import tokens
 import syntax
 import selectors { Specificity }
 import selectors
 import properties { Property }
 import properties
-import values { Store, ValueId, Wide, Mode, Value }
+import values { Store, ValueId, Wide, Mode }
 import values
 import input { Input, TokenView }
 import condition_cursor
@@ -338,12 +338,12 @@ effect fn compileValue(
   let plain = input.length() == 1
     && match &input.at(0) {
       Option<TokenView>.Some { value } => match &value.token.kind {
-        Kind.Ident { text } => true
-        Kind.Number { value: n, integer } => true
-        Kind.Percentage { value: n, integer } => true
-        Kind.Dimension { value: n, integer, unit } => true
-        Kind.Hash { text, identifier } => true
-        Kind.String { text } => true
+        Kind.Ident { text: _ } => true
+        Kind.Number { value: _, integer: _ } => true
+        Kind.Percentage { value: _, integer: _ } => true
+        Kind.Dimension { value: _, integer: _, unit: _ } => true
+        Kind.Hash { text: _, identifier: _ } => true
+        Kind.String { text: _ } => true
         _ => false
       }
       _ => false
@@ -358,7 +358,7 @@ effect fn compileValue(
       return Option<Declaration>.None
     }
     match &target {
-      Target.Property { property } => {
+      Target.Property { property: _ } => {
         if declaration_values.mixedTopLevelBlock(&input, &structure, 0, input.length()) {
           return Option<Declaration>.None
         }

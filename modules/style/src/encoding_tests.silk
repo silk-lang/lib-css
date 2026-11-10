@@ -257,7 +257,7 @@ test effect fn decodedOutputBoundIsExactAndReplacementAware() -> ()
     match &result {
       Result<DecodedStylesheet, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.StorageLimit && problem.offset == 0
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }

@@ -16,7 +16,7 @@ import colors { Color, Identity, SystemColor, Context as ColorContext }
 import colors
 import text_values { TextValue, Atom }
 import value_keywords { Keyword }
-import tokens { TokenBuffer, PreparedSheet, Limits, CssError, BufferView }
+import tokens { PreparedSheet, Limits, CssError, BufferView }
 import input { Input, TokenRef }
 import lexer
 import silk.collections.list { List }
@@ -1439,7 +1439,7 @@ effect fn resolve(
       _ => run computeIn(&mut engine.*, &style.*, projected, property, parent, host, palette)
     }
     let compound = match &engine.values.get(specified).* {
-      Value.Effect { value } => true
+      Value.Effect { value: _ } => true
       _ => false
     }
     if compound {
@@ -1553,9 +1553,6 @@ effect fn defaultValue(
 ) -> ComputedValue
   ! CssError | ComputedError | OutOfMemoryError
   ? &mut Allocator {
-  let buffers = inputs.buffers
-  let declarations = inputs.declarations
-  let candidates = inputs.candidates
   let parent = inputs.parent
   let host = inputs.host
   let palette = inputs.palette
@@ -1664,7 +1661,7 @@ effect fn computeValue(
         return id
       }
     }
-    Value.IccColor { color, icc } => {
+    Value.IccColor { color, icc: _ } => {
       if stableColor(color, property) {
         return id
       }
@@ -1672,10 +1669,10 @@ effect fn computeValue(
     Value.Paint { paint } => {
       let stable = match &paint {
         Paint.Color { color } => stableColor(color, property)
-        Paint.IccColor { color, icc } => stableColor(color, property)
-        Paint.Server { url, fallback } => match &fallback {
+        Paint.IccColor { color, icc: _ } => stableColor(color, property)
+        Paint.Server { url: _, fallback } => match &fallback {
           Fallback.Color { color } => stableColor(color, property)
-          Fallback.IccColor { color, icc } => stableColor(color, property)
+          Fallback.IccColor { color, icc: _ } => stableColor(color, property)
           _ => true
         }
         _ => true
@@ -1738,7 +1735,7 @@ effect fn computeValue(
 
   // Opacity percentages are numbers, not reference-box-dependent percentages.
   match &store.get(computed).* {
-    Value.Numeric { expression, range, basis } => {
+    Value.Numeric { expression: _, range, basis: _ } => {
       if range == Range.UnitInterval {
         let number = numberOr(values.usedNumber(&store.*, computed, 1.0), 1.0)
         let scalar = run dimensions.literal(&mut store.numerics, number, Unit.Number)
@@ -1756,7 +1753,7 @@ fn stableColor(color: Color, property: Property) -> bool {
   return match &color.identity {
     Identity.Absolute => true
     Identity.CurrentColor => property != Property.Color
-    Identity.System { color: systemRole } => false
+    Identity.System { color: _ } => false
   }
 }
 

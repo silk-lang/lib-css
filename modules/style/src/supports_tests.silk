@@ -4,7 +4,7 @@ import supports { Evaluation }
 import declaration_values
 import values { Store }
 import input { Input, TokenRef }
-import tokens { Limits, TokenBuffer, CssError, CssErrorKind, Buffers, BufferView }
+import tokens { Limits, CssError, CssErrorKind, Buffers, BufferView }
 import lexer
 import silk.collections.list { List }
 import silk.core.effect { Effect }
@@ -284,7 +284,7 @@ test effect fn conditionLimitsApplyAfterTokenization() -> ()
     match &tokenResult {
       Result<bool, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.TokenLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }
@@ -301,7 +301,7 @@ test effect fn conditionLimitsApplyAfterTokenization() -> ()
     match &depthResult {
       Result<bool, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.NestingLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }
@@ -330,7 +330,7 @@ test effect fn importSupportsPreservesBoundedFailures() -> ()
     match &tokenResult {
       Result<Evaluation, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.TokenLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }
@@ -348,7 +348,7 @@ test effect fn importSupportsPreservesBoundedFailures() -> ()
     match &depthResult {
       Result<Evaluation, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.NestingLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }
@@ -366,7 +366,7 @@ test effect fn importSupportsPreservesBoundedFailures() -> ()
     match &storageResult {
       Result<Evaluation, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.StorageLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }

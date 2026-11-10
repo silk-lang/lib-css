@@ -153,33 +153,33 @@ impl Copy for StoreMark {}
 // Values that point at no path or ICC colour, so a copy needs no other arena.
 fn simple(item: &Value) -> bool {
   return match &item.* {
-    Value.Wide { keyword } => true
-    Value.Keyword { keyword } => true
-    Value.Numeric { expression, range, basis } => true
-    Value.Color { color } => true
+    Value.Wide { keyword: _ } => true
+    Value.Keyword { keyword: _ } => true
+    Value.Numeric { expression: _, range: _, basis: _ } => true
+    Value.Color { color: _ } => true
     Value.Paint { paint } => match &paint {
-      Paint.IccColor { color, icc } => false
-      Paint.Server { url, fallback } => match &fallback {
-        Fallback.IccColor { color, icc } => false
+      Paint.IccColor { color: _, icc: _ } => false
+      Paint.Server { url: _, fallback } => match &fallback {
+        Fallback.IccColor { color: _, icc: _ } => false
         _ => true
       }
       _ => true
     }
-    Value.Resource { url } => true
-    Value.Profile { name } => true
-    Value.PaintOrder { order } => true
-    Value.VectorEffect { flags, reference } => true
-    Value.ImageOrientation { angle, flip } => true
-    Value.Raw { text } => true
-    Value.Animation { longhands } => true
-    Value.Text { value } => true
+    Value.Resource { url: _ } => true
+    Value.Profile { name: _ } => true
+    Value.PaintOrder { order: _ } => true
+    Value.VectorEffect { flags: _, reference: _ } => true
+    Value.ImageOrientation { angle: _, flip: _ } => true
+    Value.Raw { text: _ } => true
+    Value.Animation { longhands: _ } => true
+    Value.Text { value: _ } => true
     Value.Effect { value } => effect_values.copyable(&value)
-    Value.Dashes { expressions } => true
-    Value.Cursor { images, fallback } => true
-    Value.BlendModes { modes } => true
+    Value.Dashes { expressions: _ } => true
+    Value.Cursor { images: _, fallback: _ } => true
+    Value.BlendModes { modes: _ } => true
     Value.Transform { value } => match &value {
-      TransformValue.List { operations } => false
-      TransformValue.Individual { operation } => false
+      TransformValue.List { operations: _ } => false
+      TransformValue.Individual { operation: _ } => false
       _ => true
     }
     _ => false
@@ -957,7 +957,7 @@ fn number(source: &Input<'_>, cursor: &mut Cursor) -> Option<f64> {
     match &token {
       Option<TokenView>.Some { value } => {
         match &value.token.kind {
-          Kind.Number { value: n, integer } => {
+          Kind.Number { value: n, integer: _ } => {
             if f64.isFinite(n) {
               cursor.position = cursor.position + 1
               return Option<f64>.some(n)
@@ -1725,7 +1725,7 @@ effect fn parseValue(
           }
           if range == Range.AtLeastOne {
             match &store.numerics.get(expression).* {
-              Expr.Literal { value: n, unit } => {
+              Expr.Literal { value: n, unit: _ } => {
                 if n < 1.0 {
                   return Option<Value>.None
                 }
@@ -1893,7 +1893,7 @@ pub effect fn compute(store: &mut Store<'_>, id: ValueId, context: &ComputeConte
 // Used-value range restrictions apply after math and percentage resolution, not while parsing calc().
 pub fn usedNumber(store: &Store<'_>, id: ValueId, percentageBasis: f64) -> Option<f64> {
   return match &store.get(id).* {
-    Value.Numeric { expression, range, basis } => {
+    Value.Numeric { expression, range, basis: _ } => {
       let limit = f64.fromBits(9218868437227405311)
 
       // f64.max(-limit, f64.min(limit, value)) with ordered compares first; NaN still

@@ -1,4 +1,4 @@
-import typed_om_transform { TransformComponent, TransformValue, TransformKind }
+import typed_om_transform { TransformComponent, TransformValue }
 import typed_om_numeric { NumericStore, NumericId, Numberish, NumericOperator }
 import cssom_geometry { DOMMatrix, DOMPoint }
 import cssom_error { CssomError }
@@ -219,7 +219,7 @@ test effect fn typedTransformListsReificationAndProvenance() -> ()
 effect fn invalidTranslation(store: &mut NumericStore, number: NumericId) -> bool
   ! CssomError | OutOfMemoryError
   ? &mut Allocator {
-  let invalid = run TransformComponent.translate(
+  drop run TransformComponent.translate(
     &mut store.*,
     number,
     number,
@@ -231,7 +231,7 @@ effect fn invalidTranslation(store: &mut NumericStore, number: NumericId) -> boo
 effect fn unresolved(value: &TransformComponent, store: &NumericStore) -> bool
   ! CssomError | OutOfMemoryError
   ? &mut Allocator {
-  let invalid = run value.toMatrix(store)
+  drop run value.toMatrix(store)
   return false
 }
 
@@ -246,7 +246,7 @@ effect fn gap(list: &mut TransformValue, value: TransformComponent) -> bool
 effect fn emptyList() -> bool
   ! CssomError | OutOfMemoryError
   ? &mut Allocator {
-  let invalid = run TransformValue.make(&[])
+  drop run TransformValue.make(&[])
   return false
 }
 

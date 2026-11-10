@@ -107,7 +107,7 @@ effect fn staticMatch(source: &[u8], expected: bool) -> ()
       let result = run selectors.matchElement(&value, &buffer, &tree, 0, &mut context)
       run Testing.expect(
         match &result {
-          Option<Specificity>.Some { value: specificity } => expected
+          Option<Specificity>.Some { value: _ } => expected
           _ => !expected
         },
         "pseudo-elements never match ordinary elements",

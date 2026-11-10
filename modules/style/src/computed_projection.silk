@@ -7,7 +7,6 @@ import values
 import properties { Property }
 import properties
 import text_values { TextValue, Atom, Keyword, Item }
-import text_values
 import tokens { Span }
 import silk.collections.bytes { Bytes }
 import silk.core.option { Option }

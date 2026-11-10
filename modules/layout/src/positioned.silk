@@ -1,5 +1,4 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
-import silk.core.effect { Effect }
 import silk.num.u64
 import silk.num.u32
 import silk.num.usize

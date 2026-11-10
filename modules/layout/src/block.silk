@@ -1,5 +1,4 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
-import silk.core.effect { Effect }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.core.option { Option }
@@ -15,7 +14,7 @@ import layout_pass { LayoutPass, PassCheckpoint, REUSE_INDEPENDENT }
 import layout_cache { BASE_CHANGED, BASE_BLOCK_SIZE, BASE_UNKNOWN }
 import text { TextMeasure, TextError }
 import fragmentation { FlowCursor, FragmentationError, BoundaryProbe }
-import breaks { BreakBoundary, ForcedBreaks, BreakRelaxation, allowsBoundary }
+import breaks { BreakBoundary, ForcedBreaks, allowsBoundary }
 import fragment_box as FragmentBox
 
 // CSS 2.2 §§8.3.1, 9.5 and 10.3.3. Keep positive and negative extrema

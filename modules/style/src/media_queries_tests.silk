@@ -3,7 +3,7 @@ import media_queries
 import media_features { Environment }
 import input { Input, TokenRef }
 import lexer
-import tokens { Limits, CssError, CssErrorKind, TokenBuffer, TokenRange, Buffers }
+import tokens { Limits, CssError, CssErrorKind, TokenRange, Buffers }
 import silk.collections.list { List }
 import silk.core.effect { Effect }
 import silk.core.result { Result }
@@ -200,7 +200,7 @@ test effect fn mediaChecksLimitsBeforeMatchingBranches() -> ()
     match &result {
       Result<bool, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.NestingLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }
@@ -218,7 +218,7 @@ test effect fn mediaChecksLimitsBeforeMatchingBranches() -> ()
     match &tokenResult {
       Result<bool, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.TokenLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }

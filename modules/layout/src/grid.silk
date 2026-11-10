@@ -19,7 +19,7 @@ import style { Style, Dimension, DimensionKind, Direction, Align, Position, Writ
 import context { Input, ResolvedBox, UNBOUNDED, childrenInput, resolve }
 import box_tree { BoxTree }
 import layout_pass { LayoutPass }
-import engine { layoutNode, layoutNodeInPlace, percentFree, probeNode, shapedBox, widthIgnoresHeight, baselineValue, ITEM_SUBGRID, ITEM_SELF_BASELINE }
+import engine { layoutNodeInPlace, percentFree, probeNode, shapedBox, widthIgnoresHeight, baselineValue, ITEM_SUBGRID, ITEM_SELF_BASELINE }
 import text { TextMeasure, TextError }
 import tree { NO_NODE }
 import fragmentation { FragmentationError, FlowCursor, BoundaryProbe, ResumeCheckpoint }
@@ -30,7 +30,7 @@ import axes { Axes }
 import grid_placement { GridItem, collectItems }
 import grid_style { GridTrack, GridBreadthKind }
 import grid_scratch { GridAxisScratch, ContributionMemo, ContributionMemos, TrackArea }
-import layout_cache { LayoutCache, REUSE_INDEPENDENT }
+import layout_cache { REUSE_INDEPENDENT }
 import grid_lines { LineNames }
 import grid_template { expandedTracks, expandedLines }
 import grid_preparation { needsPreparation, prepareTemplate, preferredSizes }
@@ -1706,7 +1706,6 @@ pub effect fn shellContext(
 ) -> usize ! OutOfMemoryError ? &mut Allocator {
   if !Subgrid.eligible(nodes, child) { return 0 }
   let mut lease = run output.cache.gridMemos.take(parentBox, nodes.boxes.length())
-  let leaseFresh = lease.fresh
   let scratch = &mut lease.value.getMut()[0]
   let parent = nodes.style(parentBox)
   let template = &nodes.grids[parent.grid]

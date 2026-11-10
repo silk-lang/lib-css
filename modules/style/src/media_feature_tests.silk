@@ -12,7 +12,7 @@ import media_features {
   evaluate
 }
 import input { Input, TokenRef }
-import tokens { TokenBuffer, Limits, CssError, Buffers }
+import tokens { Limits, CssError, Buffers }
 import lexer { tokenize }
 import silk.collections.list { List }
 import silk.mem.allocator { Allocator, OutOfMemoryError }

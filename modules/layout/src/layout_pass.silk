@@ -1,11 +1,10 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
-import silk.core.effect { Effect }
 import silk.collections.list { List }
 import silk.core.option { Option }
 import silk.core.ownership { Copy }
 import silk.num.usize
 import context { Input, ResolvedBox, overflowForAxis, scrollbarGutter }
-import geometry { Layout, Point, Rect, OptionalSize, AvailableSpace, AvailableKind, ScrollbarMetrics, ResolvedEdges, Size, max, sameEdges }
+import geometry { Layout, Point, Rect, OptionalSize, ScrollbarMetrics, ResolvedEdges, Size, max, sameEdges }
 import style { Overflow, ScrollbarWidth }
 import tree { Node, NO_NODE, LayoutStats }
 import bfc { FloatBox }

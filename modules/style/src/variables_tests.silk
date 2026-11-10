@@ -3,8 +3,8 @@ import cascade { Declaration, Candidate, Priority, Origin }
 import cascade
 import variables { VariableStore, ScopeId }
 import variables
-import input { Input, TokenRef }
-import tokens { TokenBuffer, TokenRange, Limits, CssError, CssErrorKind, Kind, Buffers }
+import input { TokenRef }
+import tokens { Limits, CssError, CssErrorKind, Kind, Buffers }
 import tokens
 import values { Store }
 import lexer
@@ -145,11 +145,11 @@ test effect fn substitutionNeverRetokenizesAndClosesImplicitBlocks() -> ()
         let first = value.asSlice()[0]
         let second = value.asSlice()[1]
         let number = match &f.buffers.one(first.buffer)[0].tokens.asSlice()[first.token].kind {
-          Kind.Number { value: amount, integer } => true
+          Kind.Number { value: _, integer: _ } => true
           _ => false
         }
         let ident = match &f.buffers.one(second.buffer)[0].tokens.asSlice()[second.token].kind {
-          Kind.Ident { text } => true
+          Kind.Ident { text: _ } => true
           _ => false
         }
         number && ident
@@ -380,7 +380,7 @@ test effect fn variableResourceExhaustionIsTypedNotInvalidValue() -> ()
     match &depth {
       Result<ScopeId, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.NestingLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }
@@ -413,7 +413,7 @@ test effect fn variableResourceExhaustionIsTypedNotInvalidValue() -> ()
         error
       } => match &error {
         CssError problem => problem.kind == CssErrorKind.MatchLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }

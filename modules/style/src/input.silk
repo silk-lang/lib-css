@@ -37,7 +37,7 @@ impl<'a> Input<'a> {
         }
         return range.end - range.start
       }
-      Input<'a>.Expanded { buffers, references } => references.length
+      Input<'a>.Expanded { buffers: _, references } => references.length
     }
   }
 

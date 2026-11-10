@@ -341,7 +341,7 @@ fn keyword(input: &Input<'_>, cursor: &mut Cursor) -> Option<Keyword> {
   }
   let result = keywordName(name)
   match &result {
-    Option<Keyword>.Some { value } => {
+    Option<Keyword>.Some { value: _ } => {
       cursor.position = cursor.position + 1
     }
     _ => {}
@@ -481,7 +481,7 @@ effect fn families(out: &mut TextValue, input: &Input<'_>, cursor: &mut Cursor) 
 
 fn literalValue(store: &dimensions.Store<'_>, id: ExprId) -> Option<f64> {
   return match &store.get(id).* {
-    Expr.Literal { value, unit } => Option<f64>.some(value)
+    Expr.Literal { value, unit: _ } => Option<f64>.some(value)
     _ => Option<f64>.None
   }
 }
@@ -1445,8 +1445,8 @@ effect fn single(
       }
     }
     let angle = match &view.token.kind {
-      Kind.Number { value, integer } => value
-      Kind.Dimension { value, integer, unit } => {
+      Kind.Number { value, integer: _ } => value
+      Kind.Dimension { value, integer: _, unit } => {
         if property == Property.GlyphOrientationVertical && !insensitive(view.text(unit), b"deg") {
           return false
         }
@@ -3082,13 +3082,13 @@ pub effect fn compute(
     let item = &source.items.asSlice()[i]
     let mut skip = source.property == Property.Font && item.property == Property.FontSize
     match &item.atom {
-      Atom.Setting { tag, value: id } => {
+      Atom.Setting { tag, value: _ } => {
         let mut later = i + 1
         while later < source.items.length() {
           let next = &source.items.asSlice()[later]
           if next.property == item.property {
             match &next.atom {
-              Atom.Setting { tag: nextTag, value: nextValue } => {
+              Atom.Setting { tag: nextTag, value: _ } => {
                 if tag == nextTag {
                   skip = true
                 }
@@ -3105,12 +3105,12 @@ pub effect fn compute(
       let atom = run computeAtom(item, &mut numerics.*, &metrics, colorContext)
       run add(&mut out, item.property, atom)
       match &atom {
-        Atom.Setting { tag, value: id } => {
+        Atom.Setting { tag, value: _ } => {
           let mut position = out.items.length() - 1
           while position > 0 {
             let prior = out.items.asSlice()[position - 1]
             let greater = match &prior.atom {
-              Atom.Setting { tag: previous, value: previousValue } => prior.property
+              Atom.Setting { tag: previous, value: _ } => prior.property
                 == item.property
                 && previous > tag
               _ => false

@@ -76,9 +76,9 @@ effect fn converted(store: &NumericStore, id: NumericId, unit: &[u8]) -> f64
 impl TransformComponent {
   pub fn kind(self: &Self) -> TransformKind {
     return match &self.data {
-      Data.Numeric { kind, values } => kind
-      Data.Perspective { depth, keyword } => TransformKind.Perspective
-      Data.Matrix { value } => TransformKind.Matrix
+      Data.Numeric { kind, values: _ } => kind
+      Data.Perspective { depth: _, keyword: _ } => TransformKind.Perspective
+      Data.Matrix { value: _ } => TransformKind.Matrix
     }
   }
 
@@ -300,7 +300,7 @@ impl TransformComponent {
 
   pub effect fn setNumeric(self: &mut Self, store: &NumericStore, index: usize, id: NumericId) -> ()
     ! CssomError {
-    let previous = run self.numeric(index)
+    drop run self.numeric(index)
     match &self.data {
       Data.Numeric { kind, values } => {
         if kind == TransformKind.Translate {
@@ -389,19 +389,19 @@ impl TransformComponent {
 
   pub effect fn setX(self: &mut Self, store: &NumericStore, value: NumericId) -> ()
     ! CssomError {
-    let previous = run self.x()
+    drop run self.x()
     run self.setNumeric(store, 0, value)
   }
 
   pub effect fn setY(self: &mut Self, store: &NumericStore, value: NumericId) -> ()
     ! CssomError {
-    let previous = run self.y()
+    drop run self.y()
     run self.setNumeric(store, 1, value)
   }
 
   pub effect fn setZ(self: &mut Self, store: &NumericStore, value: NumericId) -> ()
     ! CssomError {
-    let previous = run self.z()
+    drop run self.z()
     run self.setNumeric(store, 2, value)
   }
 
@@ -412,13 +412,13 @@ impl TransformComponent {
 
   pub effect fn setAx(self: &mut Self, store: &NumericStore, value: NumericId) -> ()
     ! CssomError {
-    let previous = run self.ax()
+    drop run self.ax()
     run self.setNumeric(store, 0, value)
   }
 
   pub effect fn setAy(self: &mut Self, store: &NumericStore, value: NumericId) -> ()
     ! CssomError {
-    let previous = run self.ay()
+    drop run self.ay()
     let index: usize = if self.kind() == TransformKind.Skew {
       1
     } else {
@@ -430,7 +430,7 @@ impl TransformComponent {
   pub effect fn length(self: &Self) -> Option<NumericId>
     ! CssomError {
     return match &self.data {
-      Data.Perspective { depth, keyword } => depth
+      Data.Perspective { depth, keyword: _ } => depth
       _ => {
         fail CssomError.TypeError
       }
@@ -503,7 +503,7 @@ impl TransformComponent {
           value.matrix
         }
       }
-      Data.Perspective { depth, keyword } => match &depth {
+      Data.Perspective { depth, keyword: _ } => match &depth {
         Option<NumericId>.None => transforms.identity()
         Option<NumericId>.Some { value } => {
           let distance = run converted(store, value, b"px")

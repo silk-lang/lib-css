@@ -330,7 +330,7 @@ fn badUrl(l: &mut Lexer) -> () {
       return
     }
     if escape(&l.*, 0) {
-      let ignored = escaped(&mut l.*)
+      drop escaped(&mut l.*)
     } else {
       l.at = l.at + 1
     }
@@ -550,7 +550,7 @@ effect fn next(l: &mut Lexer) -> Kind
 
 fn opening(kind: &Kind) -> u8 {
   return match &kind.* {
-    Kind.Function { name } => 41
+    Kind.Function { name: _ } => 41
     Kind.OpenParen => 41
     Kind.OpenSquare => 93
     Kind.OpenBrace => 125

@@ -18,7 +18,7 @@ import effect_values { MaskMode }
 import computed_queries { MaskItem, BorderItem }
 import lexer
 import input { Input }
-import tokens { TokenBuffer, Limits, CssError, Buffers }
+import tokens { Limits, CssError, Buffers }
 import tokens
 import variables
 import silk.collections.list { List }
@@ -846,11 +846,11 @@ fn iccEntry(engine: &Engine<'_>, style: StyleId, property: Property) -> Option<I
     }
   }
   return match &engine.values.get(entry.value).* {
-    Value.IccColor { color, icc } => Option<IccId>.some(icc)
+    Value.IccColor { color: _, icc } => Option<IccId>.some(icc)
     Value.Paint { paint } => match &paint {
-      Paint.IccColor { color, icc } => Option<IccId>.some(icc)
-      Paint.Server { url, fallback } => match &fallback {
-        Fallback.IccColor { color, icc } => Option<IccId>.some(icc)
+      Paint.IccColor { color: _, icc } => Option<IccId>.some(icc)
+      Paint.Server { url: _, fallback } => match &fallback {
+        Fallback.IccColor { color: _, icc } => Option<IccId>.some(icc)
         _ => Option<IccId>.None
       }
       _ => Option<IccId>.None
@@ -995,7 +995,7 @@ effect fn iccComputedRetention() -> bool
   }
   let red = match &engine.values.get(fill.value).* {
     Value.Paint { paint } => match &paint {
-      Paint.IccColor { color, icc } => color.channels[0] == 1.0 && color.channels[1] == 0.0
+      Paint.IccColor { color, icc: _ } => color.channels[0] == 1.0 && color.channels[1] == 0.0
         && color.channels[2] == 0.0
       _ => false
     }
@@ -1008,7 +1008,7 @@ effect fn iccComputedRetention() -> bool
     }
   }
   let system = match &engine.values.get(lighting.value).* {
-    Value.IccColor { color, icc } => match &color.identity {
+    Value.IccColor { color, icc: _ } => match &color.identity {
       Identity.Absolute => color.channels[0] == 0.25 && color.channels[2] == 0.75
       _ => false
     }

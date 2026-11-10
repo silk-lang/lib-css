@@ -5,7 +5,7 @@ import silk.num.usize
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import silk.core.effect { Effect }
 import silk.testing.testing { AssertionError, Testing }
-import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, Point, AvailableKind, Layout, abs, max }
+import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, Point, AvailableKind, abs, max }
 import style { Style, Display, DisplayOutside, DisplayInside, Dimension, DimensionKind, BoxSizing, FlexDirection, FlexWrap, Direction, WritingMode, Align, OverflowAlignment, Visibility, Overflow, Edges }
 import tree { Tree, LayoutTree, InvalidNode }
 import context { Input }

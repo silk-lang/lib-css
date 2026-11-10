@@ -214,14 +214,14 @@ effect fn specified(
     while at < range.end {
       let token = &buffer.tokens.asSlice()[at]
       if match &token.kind {
-        Kind.Ident { text } => true
+        Kind.Ident { text: _ } => true
         _ => false
       } {
         let part = TokenRange { start: at, end: at + 1 }
         let input = Input.Contiguous { buffer: buffer, range: part }
         let mut cursor = Cursor.make(&input)
         match run colors.parse(&input, &mut cursor) {
-          Option<Color>.Some { value } => {
+          Option<Color>.Some { value: _ } => {
             if source != target
               || (condition_cursor.skip(&input, cursor.position, input.length()) == input.length()
                 && original(buffer, range).length == token.source.end - token.source.start) {
@@ -582,7 +582,7 @@ impl StyleDeclaration {
         _ => Property.Fill
       }
       let named = match &known {
-        Option<Property>.Some { value } => false
+        Option<Property>.Some { value: _ } => false
         _ => true
       }
       run out.append(
@@ -664,7 +664,7 @@ impl StyleDeclaration {
         }
 
         // Moving to the end satisfies CSSOM's logical/physical ordering constraints.
-        let removed = self.entries.remove(prior)
+        drop self.entries.remove(prior)
       }
       run self.entries.append(move next)
       changed = true
@@ -763,14 +763,14 @@ impl StyleDeclaration {
       }
     } else if !declaration_values.customName(name) {
       match &properties.lookup(name) {
-        Option<Property>.Some { value: found } => {}
+        Option<Property>.Some { value: _ } => {}
         _ => {
           return
         }
       }
     }
     if value.length == 0 {
-      let removed = run self.removeProperty(name)
+      drop run self.removeProperty(name)
       return
     }
     if priority.length != 0 && !tokens.insensitive(priority, b"important") {
@@ -825,7 +825,7 @@ impl StyleDeclaration {
       while at < cssom_descriptors.longhandCount(self.context, name) {
         let found = self.find(cssom_descriptors.longhandAt(self.context, name, at))
         if found < self.entries.length() {
-          let removed = self.entries.remove(found)
+          drop self.entries.remove(found)
         }
         at = at + 1
       }
@@ -843,7 +843,7 @@ impl StyleDeclaration {
             at = at - 1
             let entry = &self.entries.asSlice()[at]
             if !entry.custom && covers(property, entry.property) {
-              let removed = self.entries.remove(at)
+              drop self.entries.remove(at)
             }
           }
           if self.entries.length() != previous {
@@ -858,7 +858,7 @@ impl StyleDeclaration {
     }
     let at = self.find(name)
     if at < self.entries.length() {
-      let removed = self.entries.remove(at)
+      drop self.entries.remove(at)
     }
     if self.entries.length() != previous {
       self.changed()

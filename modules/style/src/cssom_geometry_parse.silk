@@ -131,11 +131,11 @@ pub effect fn reify(
     Expr.Calc { value } => {
       let inner = run reify(&mut store.*, source, value, limits)
       match &store.unitValue(inner) {
-        Option<UnitValue>.Some { value: literal } => run store.mathSum(&[inner])
+        Option<UnitValue>.Some { value: _ } => run store.mathSum(&[inner])
         _ => inner
       }
     }
-    Expr.PercentContext { value, percentage } => run reify(&mut store.*, source, value, limits)
+    Expr.PercentContext { value, percentage: _ } => run reify(&mut store.*, source, value, limits)
     Expr.Binary { operation, left, right } => {
       let a = run reify(&mut store.*, source, left, limits)
       let b = run reify(&mut store.*, source, right, limits)

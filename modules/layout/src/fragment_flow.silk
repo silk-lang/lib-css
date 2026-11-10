@@ -1,7 +1,7 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.option { Option }
 import silk.collections.list { List }
-import geometry { Measure, OptionalSize, Rect }
+import geometry { Measure, OptionalSize }
 import text { TextMeasure, TextError }
 import tree { Tree, LayoutTree, NO_NODE }
 import box_tree as Boxes
@@ -11,7 +11,7 @@ import grid_scratch { GridMemos }
 import context { Input }
 import fragmentation { Fragmentainers, Fragmentainer, FragmentAncestor, FragmentationError }
 import breaks { BreakRelaxation, nextRelaxation }
-import engine { layoutNode, layoutNodeInPlace }
+import engine { layoutNodeInPlace }
 import positioned { positionFragmentedTree }
 import fragment_fit { WidowCheck, collectWidows, validateWidows }
 

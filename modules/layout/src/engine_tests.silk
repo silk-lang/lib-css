@@ -7,7 +7,7 @@ import silk.core.option { Option }
 import text { TextMeasure, TextError, TextContext, TextTokenKind, TextCursor, TextBreak, TextBreakKind, TextLevel, TextAnalysis, TextShapeRequest, TextRun }
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
-import style { Style, Dimension, DimensionKind, Edges, Float, Display, DisplayOutside, DisplayInside, Position, BoxSizing, TextAlign, TextWrap, Direction, WhiteSpaceCollapse, TabSize, BoxDecorationBreak, FlexDirection, FlexWrap }
+import style { Style, Dimension, Edges, Float, Display, DisplayOutside, DisplayInside, Position, BoxSizing, TextAlign, TextWrap, Direction, WhiteSpaceCollapse, TabSize, BoxDecorationBreak, FlexDirection, FlexWrap }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableKind, max, min, abs }
 import tree { Tree, LayoutTree, InvalidNode, InvalidBox, BoxId, NO_NODE }
 import engine { compute }

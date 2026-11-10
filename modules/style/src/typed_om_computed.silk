@@ -63,7 +63,7 @@ impl ComputedStyleMap {
     match &binding.style {
       Option<StyleId>.Some { value } => {
         match &engine.scope(value) {
-          Option<ScopeId>.Some { value: scope } => {
+          Option<ScopeId>.Some { value: _ } => {
             return Option<StyleId>.some(value)
           }
           _ => {}
@@ -160,7 +160,7 @@ impl ComputedStyleMap {
     ? &mut Allocator {
     let name = run propertyName(property)
     return match &run self.text(binding, engine, buffers, Bytes.asSlice(&name)) {
-      Option<Bytes>.Some { value } => true
+      Option<Bytes>.Some { value: _ } => true
       _ => false
     }
   }

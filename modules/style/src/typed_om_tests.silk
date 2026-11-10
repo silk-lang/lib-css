@@ -30,7 +30,7 @@ effect fn unparsedIdentity() -> ()
   let invalid = run store.setVariable(reference, b"gap") |> Effect.result
   run Testing.expect(
     match &invalid {
-      Result<(), CssomError | OutOfMemoryError>.Failure { error } => true
+      Result<(), CssomError | OutOfMemoryError>.Failure { error: _ } => true
       _ => false
     },
     "invalid variable setters fail",
@@ -51,7 +51,7 @@ effect fn unparsedIdentity() -> ()
   let cycle = run store.serialize(value) |> Effect.result
   run Testing.expect(
     match &cycle {
-      Result<Bytes, CssomError | OutOfMemoryError>.Failure { error } => true
+      Result<Bytes, CssomError | OutOfMemoryError>.Failure { error: _ } => true
       _ => false
     },
     "cyclic indexed values fail without overflowing the native call stack",
@@ -60,7 +60,7 @@ effect fn unparsedIdentity() -> ()
   let empty = run keyword.setValue(b"") |> Effect.result
   run Testing.expect(
     match &empty {
-      Result<(), CssomError | OutOfMemoryError>.Failure { error } => equal(keyword.value(), b"auto")
+      Result<(), CssomError | OutOfMemoryError>.Failure { error: _ } => equal(keyword.value(), b"auto")
       _ => false
     },
     "empty keyword mutation fails atomically",
@@ -92,7 +92,7 @@ effect fn liveMaps() -> ()
     |> Effect.result
   run Testing.expect(
     match &rejected {
-      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { error } => true
+      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { error: _ } => true
       _ => false
     },
     "typed unitless zero is not a length even though CSS text accepts zero",
@@ -107,7 +107,7 @@ effect fn liveMaps() -> ()
     |> Effect.result
   run Testing.expect(
     match &wrongProperty {
-      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { error } => true
+      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { error: _ } => true
       _ => false
     },
     "direct values remain bound to their associated property",
@@ -123,7 +123,7 @@ effect fn liveMaps() -> ()
     |> Effect.result
   run Testing.expect(
     match &appendVariable {
-      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { error } => true
+      Result<(), CssomError | CssError | OutOfMemoryError>.Failure { error: _ } => true
       _ => false
     },
     "unresolved list boundaries prohibit appending to variable-backed values",

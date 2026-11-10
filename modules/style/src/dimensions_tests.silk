@@ -13,7 +13,7 @@ import dimensions {
   nonnegative
 }
 import input { Input, TokenRef }
-import tokens { TokenBuffer, Limits, CssError, Buffers }
+import tokens { Limits, CssError, Buffers }
 import lexer { tokenize }
 import value_cursor { Cursor }
 import silk.core.option { Option }
@@ -62,7 +62,7 @@ effect fn invalid(text: &[u8], expected: Dimension, presentation: bool) -> bool
   let parsed = (run parse(&mut store, &source, &mut cursor, expected, presentation))
   return match &parsed {
     Option<ExprId>.None => cursor.position == 0
-    Option<ExprId>.Some { value } => !cursor.done(&source)
+    Option<ExprId>.Some { value: _ } => !cursor.done(&source)
   }
 }
 

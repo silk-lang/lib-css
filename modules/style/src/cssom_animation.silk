@@ -148,7 +148,7 @@ fn skip(source: &Input<'_>, at: usize, end: usize) -> usize {
 
 fn next(source: &Input<'_>, at: usize, end: usize) -> usize {
   if !match &kind(source, at) {
-    Kind.Function { name } => true
+    Kind.Function { name: _ } => true
     _ => false
   } {
     return at + 1
@@ -157,7 +157,7 @@ fn next(source: &Input<'_>, at: usize, end: usize) -> usize {
   let mut depth: usize = 1
   while position < end {
     match &kind(source, position) {
-      Kind.Function { name } => {
+      Kind.Function { name: _ } => {
         depth = depth + 1
       }
       Kind.OpenParen => {
@@ -198,7 +198,7 @@ fn easing(source: &Input<'_>, start: usize, end: usize) -> bool {
         return false
       }
       match &kind(source, at) {
-        Kind.Number { value, integer } => {
+        Kind.Number { value, integer: _ } => {
           if (count == 0 || count == 2) && (value < 0.0 || value > 1.0) {
             return false
           }
@@ -281,14 +281,14 @@ fn easing(source: &Input<'_>, start: usize, end: usize) -> bool {
           _ => false
         } {
         match &kind(source, at) {
-          Kind.Number { value, integer } => {
+          Kind.Number { value: _, integer: _ } => {
             if number {
               return false
             }
             number = true
             afterNumber = percentages != 0
           }
-          Kind.Percentage { value, integer } => {
+          Kind.Percentage { value: _, integer: _ } => {
             if afterNumber {
               return false
             }

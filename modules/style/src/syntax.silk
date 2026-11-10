@@ -36,7 +36,7 @@ fn whitespace(buffer: &TokenBuffer, index: usize) -> bool {
 
 fn opener(kind: &Kind) -> bool {
   return match &kind.* {
-    Kind.Function { name } => true
+    Kind.Function { name: _ } => true
     Kind.OpenParen => true
     Kind.OpenSquare => true
     Kind.OpenBrace => true
@@ -239,7 +239,7 @@ pub effect fn parseDeclarations(buffer: &TokenBuffer, range: TokenRange, limits:
       continue
     }
     if match &buffer.tokens.asSlice()[at].kind {
-      Kind.AtKeyword { name } => true
+      Kind.AtKeyword { name: _ } => true
       _ => false
     } {
       at = skipAtRule(buffer, at, end)

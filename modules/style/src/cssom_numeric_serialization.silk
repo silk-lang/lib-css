@@ -470,7 +470,7 @@ effect fn normalize(
   return match &store.get(id).* {
     Expr.Literal { value, unit } => run push(&mut nodes.*, canonical(value, unit))
     Expr.Calc { value } => run normalize(&mut nodes.*, store, value, percentage)
-    Expr.PercentContext { value, percentage: contextual } => run normalize(
+    Expr.PercentContext { value, percentage: _ } => run normalize(
       &mut nodes.*,
       store,
       value,
@@ -633,10 +633,10 @@ pub effect fn appendExpression(out: &mut Bytes, store: &Store<'_>, id: ExprId) -
       }
       return
     }
-    Expr.PercentContext { value, percentage } => {
+    Expr.PercentContext { value, percentage: _ } => {
       // A contextual wrapper alone does not turn a literal into a math function.
       match &store.get(value).* {
-        Expr.Literal { value: amount, unit } => {
+        Expr.Literal { value: _, unit: _ } => {
           run appendExpression(&mut out.*, store, value)
           return
         }

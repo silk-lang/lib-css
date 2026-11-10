@@ -4,7 +4,6 @@ import tokens { Limits, CssError, equal }
 import silk.core.effect { Effect }
 import silk.core.option { Option }
 import silk.core.result { Result }
-import silk.collections.bytes { Bytes }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.testing.testing { Testing, AssertionError }
 import silk.num.f64
@@ -209,14 +208,14 @@ effect fn invalidState(error: CssomError) -> bool {
 effect fn parseSucceeds(text: &[u8]) -> bool
   ! CssomError | CssError | OutOfMemoryError
   ? &mut Allocator {
-  let matrix = run DOMMatrix.parse(text, &Limits.make())
+  drop run DOMMatrix.parse(text, &Limits.make())
   return false
 }
 
 effect fn serializeSucceeds(matrix: &DOMMatrix) -> bool
   ! CssomError | OutOfMemoryError
   ? &mut Allocator {
-  let text = run matrix.serialize()
+  drop run matrix.serialize()
   return false
 }
 

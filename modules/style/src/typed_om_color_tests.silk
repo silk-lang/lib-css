@@ -14,7 +14,7 @@ import typed_om_color {
   ColorComponent
 }
 import typed_om_numeric { NumericStore, UnitValue }
-import colors { Color, Space, Identity }
+import colors { Color, Space }
 import colors
 import tokens { Limits, CssError }
 import tokens
@@ -281,7 +281,7 @@ effect fn reification() -> ()
   let system = run CSSColorValue.parse(&mut store, b"CanvasText", &limits)
   run Testing.expect(
     match &system {
-      ParsedColor.Keyword { text: name } => true
+      ParsedColor.Keyword { text: _ } => true
       _ => false
     },
     "system colors stay context-dependent",
@@ -349,7 +349,7 @@ effect fn reification() -> ()
   let oklab = run parsed(&mut store, b"oklab(50% 25% -25%)")
   run Testing.expect(
     match &oklab {
-      CSSColorValue.OKLab { value } => true
+      CSSColorValue.OKLab { value: _ } => true
       _ => false
     },
     "OKLab subclass reification",
@@ -363,7 +363,7 @@ effect fn reification() -> ()
   let oklch = run parsed(&mut store, b"oklch(0.5 50% 180)")
   run Testing.expect(
     match &oklch {
-      CSSColorValue.OKLCH { value } => true
+      CSSColorValue.OKLCH { value: _ } => true
       _ => false
     },
     "OKLCH subclass reification",
@@ -384,7 +384,7 @@ effect fn reification() -> ()
     "generic color reification retains the space keyword and number/percentage distinction",
   )
   let mut destination = NumericStore.make()
-  let padding = run destination.unit(12.0, b"px")
+  drop run destination.unit(12.0, b"px")
   let copied = run math.cloneFrom(&mut destination, &store)
   let cloned = run copied.serialize(&destination)
   run Testing.expect(

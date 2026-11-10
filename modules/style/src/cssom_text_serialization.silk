@@ -215,7 +215,7 @@ fn space(value: InterpolationSpace) -> &'static [u8] {
 
 fn literal(store: &values.Store<'_>, id: ExprId, expected: f64) -> bool {
   return match &store.numerics.get(id).* {
-    Expr.Literal { value, unit } => value == expected
+    Expr.Literal { value, unit: _ } => value == expected
     _ => false
   }
 }
@@ -332,8 +332,8 @@ fn omitPaletteWeight(
     return match &first.weight {
       Option<ExprId>.Some { value: firstId } => match &second.weight {
         Option<ExprId>.Some { value: secondId } => match &store.numerics.get(firstId).* {
-          Expr.Literal { value: firstAmount, unit } => match &store.numerics.get(secondId).* {
-            Expr.Literal { value: secondAmount, unit: secondUnit } => firstAmount + secondAmount
+          Expr.Literal { value: firstAmount, unit: _ } => match &store.numerics.get(secondId).* {
+            Expr.Literal { value: secondAmount, unit: _ } => firstAmount + secondAmount
               == 100.0
             _ => false
           }
@@ -414,7 +414,7 @@ effect fn palette(
               // Computation normalizes stop weights and retains their missing
               // alpha separately; restore the total rather than lose that alpha.
               match &store.numerics.get(value).* {
-                Expr.Literal { value: amount, unit } => {
+                Expr.Literal { value: amount, unit: _ } => {
                   run serialization.appendNumber(&mut out.*, amount * node.alphaMultiplier)
                   run Bytes.append(&mut out.*, b"%")
                 }
@@ -508,12 +508,12 @@ effect fn atom(
 // Only unordered grammar groups are ranked. List members retain their source order.
 fn rank(property: Property, item: &Atom) -> usize {
   return match &item.* {
-    Atom.Numeric { value } => if property == Property.FontStyle {
+    Atom.Numeric { value: _ } => if property == Property.FontStyle {
       2
     } else {
       0
     }
-    Atom.Alternate { kind, name } => match kind {
+    Atom.Alternate { kind, name: _ } => match kind {
       AlternateKind.Stylistic => 0
       AlternateKind.Styleset => 3
       AlternateKind.CharacterVariant => 4

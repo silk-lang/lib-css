@@ -1,5 +1,5 @@
 //! Normative value validation, distinct from CSS syntax recovery.
-import values { Store, Mode, Value, ValueId, Wide }
+import values { Store, Mode, Value, ValueId }
 import values
 import properties { Property }
 import properties
@@ -20,7 +20,7 @@ effect fn accepts(property: Property, bytes: &[u8], mode: Mode) -> bool
   let mut store = Store.make()
   let result = run values.parse(&mut store, property, &source, mode)
   return match &result {
-    Option<ValueId>.Some { value } => true
+    Option<ValueId>.Some { value: _ } => true
     _ => false
   }
 }

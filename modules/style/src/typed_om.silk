@@ -10,7 +10,6 @@ import properties
 import tokens { TokenBuffer, TokenRange, Kind, Limits, CssError }
 import tokens
 import lexer
-import cssom_serialization
 import silk.collections.bytes { Bytes }
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
@@ -52,14 +51,14 @@ impl StyleValue {
 
   pub fn associatedProperty(self: &Self) -> Option<&[u8]> {
     return match &self.value {
-      Value.Direct { property, text } => Option<&[u8]>.some(Bytes.asSlice(&property))
+      Value.Direct { property, text: _ } => Option<&[u8]>.some(Bytes.asSlice(&property))
       _ => Option<&[u8]>.None
     }
   }
 
   pub fn unparsed(self: &Self) -> bool {
     return match &self.value {
-      Value.Unparsed { id } => true
+      Value.Unparsed { id: _ } => true
       _ => false
     }
   }
@@ -87,7 +86,7 @@ impl StyleValue {
       Value.Transform { value } => run value.serializeComponents(&store.numeric)
       Value.Color { value } => run value.serialize(&store.numeric)
       Value.Image { value } => run value.serialize()
-      Value.Direct { property, text } => run Bytes.copy(Bytes.asSlice(&text))
+      Value.Direct { property: _, text } => run Bytes.copy(Bytes.asSlice(&text))
     }
   }
 }
@@ -240,9 +239,9 @@ impl StyleValues {
       )
     }
     let numeric = match &buffer.tokens.asSlice()[range.start].kind {
-      Kind.Number { value, integer } => one
-      Kind.Percentage { value, integer } => one
-      Kind.Dimension { value, integer, unit } => one
+      Kind.Number { value: _, integer: _ } => one
+      Kind.Percentage { value: _, integer: _ } => one
+      Kind.Dimension { value: _, integer: _, unit: _ } => one
       Kind.Function { name } => buffer.tokens.asSlice()[range.start].matching == range.end - 1
         && (tokens.insensitive(buffer.text(name), b"calc")
           || tokens.insensitive(buffer.text(name), b"min")

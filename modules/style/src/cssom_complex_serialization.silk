@@ -410,7 +410,7 @@ effect fn appendImageImpl(
             header = true
           }
         }
-        RadialSize.Radii { x, y } => {
+        RadialSize.Radii { x: _, y: _ } => {
           run radialSize(computed, &mut out.*, store, extent)
           header = true
         }
@@ -562,7 +562,7 @@ effect fn border(
         outset = true
       }
       match &value.width[i] {
-        BorderMeasure.Numeric { value: id } => {
+        BorderMeasure.Numeric { value: _ } => {
           width = true
         }
         BorderMeasure.Auto => {}
@@ -1393,17 +1393,17 @@ fn resolvedOperation(store: &values.Store<'_>, value: &Operation, reference: Rec
       }
       transforms.fromColumnMajor(&coefficients)
     }
-    Operation.Translate { x, y, z, threeD } => transforms.translation(
+    Operation.Translate { x, y, z, threeD: _ } => transforms.translation(
       resolvedNumber(store, x, reference.width()),
       resolvedNumber(store, y, reference.height()),
       resolvedNumber(store, z, 1.0),
     )
-    Operation.Scale { x, y, z, threeD } => transforms.scale(
+    Operation.Scale { x, y, z, threeD: _ } => transforms.scale(
       resolvedNumber(store, x, 1.0),
       resolvedNumber(store, y, 1.0),
       resolvedNumber(store, z, 1.0),
     )
-    Operation.Rotate { x, y, z, angle, threeD } => transforms.rotation(
+    Operation.Rotate { x, y, z, angle, threeD: _ } => transforms.rotation(
       resolvedNumber(store, x, 1.0),
       resolvedNumber(store, y, 1.0),
       resolvedNumber(store, z, 1.0),
@@ -1528,7 +1528,7 @@ pub effect fn resolvedOrigin(
     return Option<Bytes>.None
   }
   let at = match &value.* {
-    TransformValue.Origin { position, z } => position
+    TransformValue.Origin { position, z: _ } => position
     TransformValue.PerspectiveOrigin { position } => position
     _ => {
       return Option<Bytes>.None
@@ -1545,7 +1545,7 @@ pub effect fn resolvedOrigin(
   run syntax.appendNumber(&mut out, y)
   run out.append(b"px")
   match &value.* {
-    TransformValue.Origin { position, z } => {
+    TransformValue.Origin { position: _, z } => {
       let depth = resolvedNumber(store, z, 1.0)
       if depth != 0.0 {
         run out.append(b" ")

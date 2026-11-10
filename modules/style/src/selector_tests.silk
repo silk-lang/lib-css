@@ -387,7 +387,7 @@ test effect fn matchingWorkIsSharedAndTyped() -> ()
       let first = run selectors.matchElement(&value, &buffer, &tree, 2, &mut context)
       run Testing.expect(
         match &first {
-          Option<Specificity>.Some { value: s } => context.remainingSteps == 0
+          Option<Specificity>.Some { value: _ } => context.remainingSteps == 0
           _ => false
         },
         "successful matching consumes the shared work budget",
@@ -441,7 +441,7 @@ effect fn namespaceCheck(source: &[u8], node: usize, yes: bool) -> ()
       let result = run selectors.matchElement(&value, &buffer, &tree, node, &mut context)
       run Testing.expect(
         match &result {
-          Option<Specificity>.Some { value: s } => yes
+          Option<Specificity>.Some { value: _ } => yes
           _ => !yes
         },
         "namespace-aware real parser match",
@@ -490,7 +490,7 @@ test effect fn selectorDepthErrorsSurviveForgivingLists() -> ()
     match &result {
       Result<Option<SelectorList>, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == CssErrorKind.NestingLimit
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }

@@ -49,7 +49,7 @@ effect fn effectCase(property: Property, text: &[u8], projected: Property, expec
         )
         run Testing.expect(
           match &reparsed {
-            Option<EffectValue>.Some { value: roundtripped } => true
+            Option<EffectValue>.Some { value: _ } => true
             _ => false
           },
           "serialized effect reparses",
@@ -86,7 +86,7 @@ effect fn transformCase(property: Property, text: &[u8], expected: &[u8]) -> ()
       )
       run Testing.expect(
         match &reparsed {
-          Option<TransformValue>.Some { value: roundtripped } => true
+          Option<TransformValue>.Some { value: _ } => true
           _ => false
         },
         "serialized transform reparses",

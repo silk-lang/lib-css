@@ -1,10 +1,9 @@
 //! Normative fixtures: CSSOM §2.1/§5.2/§6.7.2 and CSS Syntax §9/§9.1.
 import cssom_serialization as serialization
 import lexer
-import tokens { TokenBuffer, TokenRange, Kind, Span, Buffers, Limits, CssError, equal }
+import tokens { TokenBuffer, Kind, Span, Buffers, Limits, CssError, equal }
 import selectors { NamespaceBinding }
 import input { Input, TokenRef }
-import silk.collections.bytes { Bytes }
 import silk.core.effect { Effect }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.testing.testing { Testing, AssertionError }

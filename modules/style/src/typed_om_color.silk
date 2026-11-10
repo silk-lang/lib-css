@@ -217,7 +217,7 @@ impl CSSColor {
     if index >= self.values.length() {
       return false
     }
-    let removed = self.values.remove(index)
+    drop self.values.remove(index)
     return true
   }
 }
@@ -1071,16 +1071,16 @@ effect fn parseComponent(
         return ColorComponent.None
       }
     }
-    Kind.Number { value, integer } => {
+    Kind.Number { value, integer: _ } => {
       return ColorComponent.Numeric { id: run store.unit(value, b"number") }
     }
-    Kind.Percentage { value, integer } => {
+    Kind.Percentage { value, integer: _ } => {
       return ColorComponent.Numeric { id: run store.unit(value, b"percent") }
     }
-    Kind.Dimension { value, integer, unit } => {
+    Kind.Dimension { value, integer: _, unit } => {
       return ColorComponent.Numeric { id: run store.unit(value, buffer.text(unit)) }
     }
-    Kind.Function { name } => {
+    Kind.Function { name: _ } => {
       let end = if token.matching < cursor.end {
         buffer.tokens.asSlice()[token.matching].source.end
       } else {
@@ -1158,7 +1158,7 @@ impl CSSColorValue {
     while i < 3 {
       parts.channels[i] = run parseComponent(&mut store.*, &buffer, &mut cursor, limits)
       if i < 2 {
-        let comma = cursor.comma(&source)
+        drop cursor.comma(&source)
       }
       i = i + 1
     }

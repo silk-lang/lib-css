@@ -23,7 +23,7 @@ effect fn accepts(property: Property, source: &[u8], expected: bool) -> ()
   let mut numerics = Store.make()
   let parsed = run text_values.parse(&mut numerics, property, &input, &mut cursor, false)
   let valid = match &parsed {
-    Option<TextValue>.Some { value } => cursor.done(&input)
+    Option<TextValue>.Some { value: _ } => cursor.done(&input)
     _ => false
   }
   run Testing.expect(valid == expected, "font/text grammar acceptance")

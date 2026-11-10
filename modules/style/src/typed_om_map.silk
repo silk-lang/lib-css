@@ -155,7 +155,7 @@ impl<'a> StylePropertyMap<'a> {
         run style.setTypedProperty(property, text, limits)
       }
       Target.Inline { style } => {
-        let changed = run style.setTypedProperty(property, text, limits)
+        drop run style.setTypedProperty(property, text, limits)
       }
     }
   }
@@ -214,10 +214,10 @@ impl<'a> StylePropertyMap<'a> {
     let name = run propertyName(property)
     match &mut self.target {
       Target.Declaration { style } => {
-        let removed = run style.removeProperty(Bytes.asSlice(&name))
+        drop run style.removeProperty(Bytes.asSlice(&name))
       }
       Target.Inline { style } => {
-        let removed = run style.removeProperty(Bytes.asSlice(&name))
+        drop run style.removeProperty(Bytes.asSlice(&name))
       }
     }
   }

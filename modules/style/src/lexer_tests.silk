@@ -75,7 +75,7 @@ test effect fn numericTypesAndHashFlags() -> ()
   )
   run Testing.expect(
     match &ts[7].kind {
-      Kind.Hash { text, identifier } => !identifier
+      Kind.Hash { text: _, identifier } => !identifier
       _ => false
     },
     "digit-leading hash is unrestricted",
@@ -184,7 +184,7 @@ effect fn limited(data: &[u8], limits: &Limits, expected: CssErrorKind) -> ()
     match &result {
       Result<TokenBuffer, CssError | OutOfMemoryError>.Failure { error } => match &error {
         CssError problem => problem.kind == expected
-        OutOfMemoryError problem => {
+        OutOfMemoryError _ => {
           fail OutOfMemoryError {}
         }
       }
@@ -370,7 +370,7 @@ test effect fn extremeDecimalsAndLongMantissas() -> ()
   while i <= 8 {
     run Testing.expect(
       match &ts[i].kind {
-        Kind.Number { value, integer } => f64.toBits(value) == 0
+        Kind.Number { value, integer: _ } => f64.toBits(value) == 0
         _ => false
       },
       "underflow and signed zero literals yield unsigned zero; zero times enormous exponent is zero",

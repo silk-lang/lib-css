@@ -67,7 +67,7 @@ effect fn inParens(
     Option<TokenView>.Some { value } => {
       match &value.token.kind {
         Kind.OpenParen => {}
-        Kind.Function { name } => {
+        Kind.Function { name: _ } => {
           function = true
         }
         _ => {
@@ -199,7 +199,7 @@ pub effect fn parseQuery(
   match &typeView {
     Option<TokenView>.Some { value } => {
       match &value.token.kind {
-        Kind.Ident { text } => {}
+        Kind.Ident { text: _ } => {}
         _ => {
           return invalid(position)
         }
@@ -269,7 +269,7 @@ pub effect fn matches(input: &Input<'_>, environment: &Environment, limits: &Lim
           Kind.Comma => {
             comma = true
           }
-          Kind.Function { name } => {
+          Kind.Function { name: _ } => {
             block = true
           }
           Kind.OpenParen => {

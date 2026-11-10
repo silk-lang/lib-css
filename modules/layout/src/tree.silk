@@ -1,5 +1,4 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
-import silk.core.effect { Effect }
 import silk.text.format { Debug, Format, Formatter }
 import silk.io.writer { Writer, WriterError }
 import silk.collections.list { List }
