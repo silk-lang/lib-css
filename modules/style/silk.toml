@@ -23,4 +23,5 @@ exports = [
 ]
 
 [dependencies]
+css_properties = { path = "../properties", package = "css-properties" }
 svg_geometry = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "816162323e5a08dc4fc7967801ad075b5a305911", path = "modules/geometry", package = "graphics-geometry" }

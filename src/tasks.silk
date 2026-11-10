@@ -122,6 +122,7 @@ impl TaskSet for Tasks {
           run Task.silk(&["check", "--workspace"])
           run Task.silk(&["test", "--manifest-path", "modules/layout/silk.toml", "--root", "src/tests.silk"])
           run Task.silk(&["test", "--manifest-path", "modules/style/silk.toml", "--root", "src/tests.silk"])
+          run Task.silk(&["test", "--manifest-path", "modules/properties/silk.toml", "--root", "src/tests.silk"])
           run Task.silk(&["build", "--package", "css-layout-test-harness"])
         }
         Tasks.FetchSpecs { update, offline, only, lock, cache } => run Specs.root(update, offline, &only, String.view(&lock), String.view(&cache))
@@ -137,6 +138,7 @@ impl TaskSet for Tasks {
         run Task.silk(&["check", "--workspace"])
         run Task.silk(&["test", "--manifest-path", "modules/layout/silk.toml", "--root", "src/tests.silk"])
         run Task.silk(&["test", "--manifest-path", "modules/style/silk.toml", "--root", "src/tests.silk"])
+        run Task.silk(&["test", "--manifest-path", "modules/properties/silk.toml", "--root", "src/tests.silk"])
         run Task.silk(&["build", "--package", "css-layout-test-harness"])
       }
       Tasks.Check => run check()

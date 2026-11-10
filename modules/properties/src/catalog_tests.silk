@@ -1,0 +1,71 @@
+//! The catalog's tables agree with each other for every property.
+import catalog { Property }
+import catalog
+import silk.core.option { Option }
+import silk.testing.testing { Testing, AssertionError }
+
+test effect fn everyPropertyHasOneIndexAndFindsItselfByName() -> ()
+  ! AssertionError<'static> {
+  let every = catalog.all()
+  run Testing.expect(every.length == catalog.COUNT, "all() lists COUNT properties")
+  let mut i: usize = 0
+  while i < every.length {
+    let property = every[i]
+    run Testing.expect(catalog.index(property) == i, "index follows the order of all()")
+    let found = match catalog.lookup(catalog.name(property)) {
+      Option<Property>.Some { value } => value == property
+      Option<Property>.None => false
+    }
+    run Testing.expect(found, "a name looks up its own property")
+    i = i + 1
+  }
+  let upper = match catalog.lookup(b"Margin-TOP") {
+    Option<Property>.Some { value } => value == Property.MarginTop
+    Option<Property>.None => false
+  }
+  run Testing.expect(upper, "names match ASCII case-insensitively")
+  run Testing.expect(catalog.lookup(b"margin-middle").isNone(), "unknown names find nothing")
+}
+
+test effect fn shorthandsExpandToLonghands() -> ()
+  ! AssertionError<'static> {
+  let every = catalog.all()
+  let mut longhands: usize = 0
+  let mut i: usize = 0
+  while i < every.length {
+    let property = every[i]
+    let count = catalog.longhandCount(property)
+    if count == 1 {
+      if catalog.canonical(property) == property {
+        longhands = longhands + 1
+      }
+      run Testing.expect(catalog.name(catalog.longhandAt(property, 0)).length != 0, "a longhand expands to a property")
+    } else {
+      let mut at: usize = 0
+      while at < count {
+        let longhand = catalog.longhandAt(property, at)
+        run Testing.expect(catalog.longhandCount(longhand) == 1, "a shorthand lists only longhands")
+        run Testing.expect(longhand != property, "a shorthand does not list itself")
+        at = at + 1
+      }
+    }
+    i = i + 1
+  }
+  run Testing.expect(catalog.longhandCount(Property.Margin) == 4, "margin has four sides")
+  run Testing.expect(catalog.longhandAt(Property.Margin, 3) == Property.MarginLeft, "in top, right, bottom, left order")
+  run Testing.expect(catalog.longhandCount(Property.Border) == 12, "border sets width, style and color per side")
+  run Testing.expect(catalog.longhandAt(Property.Gap, 0) == Property.RowGap, "gap starts with the row gap")
+  // `all` leaves out direction and unicode-bidi.
+  run Testing.expect(catalog.longhandCount(Property.All) == longhands - 2, "all covers every other longhand")
+}
+
+test effect fn boxPropertiesCarryTheirSpecDefaults() -> ()
+  ! AssertionError<'static> {
+  run Testing.expect(catalog.initial(Property.Position) == b"static", "position")
+  run Testing.expect(catalog.initial(Property.MaxWidth) == b"none", "max-width")
+  run Testing.expect(catalog.initial(Property.FlexShrink) == b"1", "flex-shrink")
+  run Testing.expect(catalog.initial(Property.BackgroundColor) == b"transparent", "background-color")
+  run Testing.expect(!catalog.inherited(Property.MarginTop), "margins do not inherit")
+  run Testing.expect(catalog.inherited(Property.CaretColor), "caret-color inherits")
+  run Testing.expect(catalog.inherited(Property.Orphans), "orphans inherits")
+}
