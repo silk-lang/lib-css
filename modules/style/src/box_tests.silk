@@ -14,6 +14,8 @@ import input { Input }
 import tokens { Limits, CssError, Buffers }
 import variables
 import written
+import cssom_declaration { StyleDeclaration }
+import silk.collections.bytes { Bytes }
 import css_properties.convert as convert
 import css_properties.convert { Context as ConvertContext }
 import css_properties.values as shared
@@ -201,6 +203,42 @@ effect fn boxCascade() -> ()
   run Testing.expect(twoStyles.isNone(), "a border side with two styles is invalid")
   let empty = run parsed(&mut engine, Property.Top, b"  ")
   run Testing.expect(empty.isNone(), "an empty value is invalid")
+}
+
+effect fn expectValue(
+  style: &StyleDeclaration,
+  name: &[u8],
+  expected: &[u8],
+  message: string<'static>,
+) -> ()
+  ! AssertionError<'static> | OutOfMemoryError
+  ? &mut Allocator {
+  let value = run style.getPropertyValue(name)
+  run Testing.expect(sameText(Bytes.asSlice(&value), expected), message)
+}
+
+effect fn boxDeclarations() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError
+  ? &mut Allocator {
+  let limits = Limits.make()
+  let style = run StyleDeclaration.parse(
+    b"margin: 1px 2px; border: 1px solid red; flex: 1; gap: 4px; flex-flow: sideways; z-index: 3 /* top */",
+    &limits,
+  )
+  run expectValue(&style, b"margin-left", b"2px", "a declaration block expands margin")
+  run expectValue(&style, b"margin", b"1px 2px", "margin reads back in its short form")
+  run expectValue(&style, b"border-top-style", b"solid", "border expands to its sides")
+  run expectValue(&style, b"border", b"1px solid rgb(255, 0, 0)", "border reads back when its sides agree")
+  run expectValue(&style, b"flex-basis", b"0%", "flex: 1 has a zero basis")
+  run expectValue(&style, b"gap", b"4px", "gap reads back as one value")
+  run expectValue(&style, b"flex-direction", b"", "a shorthand that does not expand is dropped")
+  run expectValue(&style, b"z-index", b"3", "a longhand keeps its canonical text")
+}
+
+test effect fn declarationBlocksHoldBoxProperties() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run boxDeclarations() |> Effect.provideMut<Allocator>(&mut allocator)
 }
 
 test effect fn cascadeCoversBoxProperties() -> ()
