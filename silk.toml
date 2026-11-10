@@ -7,5 +7,5 @@ main = "tasks.silk"
 silk-version = "0.1.0-dev.64+8214c402307b"
 
 [workspace]
-members = ["modules/layout", "modules/style", "layout-test-harness"]
+members = ["modules/layout", "modules/properties", "modules/style", "layout-test-harness"]
 silk-version = "0.1.0-dev.64+8214c402307b"

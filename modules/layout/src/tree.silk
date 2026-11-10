@@ -562,6 +562,8 @@ impl Tree {
     value.grid = self.styles.asSlice()[styleIndex].grid
     // Natural measurement implies a replaced element regardless of the new style.
     if self.nodes.asSlice()[id.index].measurement == Measurement.Natural { value.replaced = true }
+    // An unchanged style leaves the node clean, so callers need no change detection of their own.
+    if &self.styles.asSlice()[styleIndex] == &value { return }
     let generates = !sameGeneration(&self.styles.asSlice()[styleIndex], &value)
     let parent = self.nodes.asSlice()[id.index].parent
     let mut flexParent = false

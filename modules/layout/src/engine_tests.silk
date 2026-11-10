@@ -628,6 +628,34 @@ test effect fn keptSizesSurviveUntilTheirSourcesChange() ! OutOfMemoryError | Te
   run Testing.expect(output.boxes.get(output.firstBySource.get(third.index)).location.x == 120.0 && output.stats.cacheHits == 0, "a change after invalidate rebuilds the boxes")
 }
 
+test effect fn settingAnUnchangedStyleKeepsTheNodeClean() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut style = Style.make()
+  style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  style.width = Dimension.px(300.0)
+  let mut tree = run Tree.make(move style) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let mut wide = Style.make()
+  wide.width = Dimension.px(100.0)
+  let first = run tree.append(root, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let second = run tree.append(root, move wide) |> Effect.provideMut<Allocator>(&mut allocator)
+  run tree.setMeasurement(first, 0)
+  let mut output = LayoutTree.make()
+  let mut content = Content { minimum: 20.0, maximum: 60.0, height: 18.0 }
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.stats.fullLayouts > 0, "the first compute lays the tree out")
+  let mut same = Style.make()
+  same.width = Dimension.px(100.0)
+  run tree.setStyle(second, move same)
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.stats.passes == 0 && output.stats.sizeProbes == 0 && output.stats.fullLayouts == 0, "setting an equal style does not dirty the node")
+  let mut wider = Style.make()
+  wider.width = Dimension.px(120.0)
+  run tree.setStyle(second, move wider)
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.stats.fullLayouts > 0 && output.boxes.get(output.firstBySource.get(second.index)).size.width == 120.0, "a changed style still lays the node out again")
+}
+
 test effect fn cleanSubtreesAreCopiedNotLaidOut() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()

@@ -7,6 +7,7 @@ This repository starts from that commit's CSS snapshot; earlier implementation h
 | --- | --- | --- |
 | `css-layout` | [modules/layout](modules/layout) | Block, inline, flex and grid layout |
 | `css-style` | [modules/style](modules/style) | Parsing, selectors, cascade, CSSOM and Typed OM |
+| `css-properties` | [modules/properties](modules/properties) | Value types shared by the other packages |
 
 Library packages live under `modules/`; package names, exports and fixtures are preserved. `css-style` uses Silk's Git dependency support to fetch `graphics-geometry` from [lib-graphics](https://github.com/silk-lang/lib-graphics); no sibling checkout is required. `css-layout` has no package dependencies. Keep the graphics revision in the manifest aligned with `lib-fonts` and other consumers: Silk rejects duplicate physical copies of a named package.
 
