@@ -103,7 +103,7 @@ impl Fragment {
 // `kept` marks a range kept in place from the previous compute.
 // `siblings` marks a kept range holding a run of siblings (see keepRun), none of
 // which adds to its parent's overflow: propagation skips all of it.
-pub struct SettledRange { pub start: usize, pub end: usize, pub overflow: Rect, pub kept: bool, pub siblings: bool }
+pub struct SettledRange { pub start: usize, pub end: usize, pub overflow: Rect, pub kept: bool, pub siblings: bool, pub last: usize, pub adds: bool }
 impl Copy for SettledRange {}
 
 // A move of the previous output (see FragmentArena.shiftPrevious): indices
@@ -974,7 +974,7 @@ impl FragmentArena {
   // that followed the parent's last child as they stood: `lastStart` is the
   // first fragment of the last of them. False, with nothing kept, when they
   // no longer follow it.
-  pub effect fn keepRun(self: &mut Self, start: usize, end: usize, lastStart: usize, parent: usize) -> bool ! OutOfMemoryError ? &mut Allocator {
+  pub effect fn keepRun(self: &mut Self, start: usize, end: usize, lastStart: usize, parent: usize, adds: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
     let last = self.values.asSlice()[parent].lastChild
     let standing = self.values.asSlice()[start].parent == parent && self.values.asSlice()[start].previousSibling == last
       && (last == NO_NODE || self.values.asSlice()[last].nextSibling == start)
@@ -992,7 +992,7 @@ impl FragmentArena {
     let open = self.openSiblings.length()
     if open > 0 && self.openSiblings.get(open - 1) == last { self.openSiblings.truncate(open - 1) }
     if values[lastStart].nextSibling != NO_NODE { run self.openSiblings.append(lastStart) }
-    run self.settled.append(SettledRange { start: start, end: end, overflow: overflow, kept: true, siblings: true })
+    run self.settled.append(SettledRange { start: start, end: end, overflow: overflow, kept: true, siblings: true, last: lastStart, adds: adds })
     return true
   }
   // Keeps the previous range [start, end) in place as the next fragments,
@@ -1026,7 +1026,7 @@ impl FragmentArena {
       values[start].parent = parent
       run self.linkParent(start)
     }
-    run self.settled.append(SettledRange { start: start, end: end, overflow: overflow, kept: true, siblings: false })
+    run self.settled.append(SettledRange { start: start, end: end, overflow: overflow, kept: true, siblings: false, last: NO_NODE, adds: false })
   }
   // Ends the next-sibling links keepRange left open on fragments that stayed
   // their parent's last child.
@@ -1080,7 +1080,7 @@ impl FragmentArena {
     }
     let overflow = self.previous(start).scrollableOverflow
     let end = self.count
-    run self.settled.append(SettledRange { start: base, end: end, overflow: overflow, kept: false, siblings: false })
+    run self.settled.append(SettledRange { start: base, end: end, overflow: overflow, kept: false, siblings: false, last: NO_NODE, adds: false })
     return true
   }
 
@@ -1176,7 +1176,7 @@ impl FragmentArena {
       self.textCount = self.texts.length()
       chunk = stop
     }
-    run self.settled.append(SettledRange { start: base, end: base + (end - start), overflow: sourceValues[start].scrollableOverflow, kept: false, siblings: false })
+    run self.settled.append(SettledRange { start: base, end: base + (end - start), overflow: sourceValues[start].scrollableOverflow, kept: false, siblings: false, last: NO_NODE, adds: false })
     return true
   }
   // Links an appended range's first fragment after its parent's last child.
