@@ -609,7 +609,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
     while id < self.inlinePrepared.length() {
       match self.inlinePrepared.asMutSlice()[id].pop() {
         Option<PreparedInline<'source>>.Some { value } => {
-          run self.cache.keepText(id, KeptText { analysis: move value.analysis, offered: move value.offered, visual: move value.visual, barriers: move value.barriers, memo: move value.memo, origins: move value.normalized.origins, stale: false })
+          run self.cache.keepText(id, KeptText { core: move value.core, stale: false })
         }
         Option<PreparedInline<'source>>.None => {}
       }

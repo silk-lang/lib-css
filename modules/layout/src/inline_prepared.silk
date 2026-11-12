@@ -2,7 +2,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.ownership { Copy }
 import silk.collections.list { List }
 import silk.core.option { Option }
-import inline_text { NormalizedText }
+import silk.mem.box { Box }
 import inline_visual { Plan }
 import text { TextToken, TextAnalysis, TextBreak, TextCursor }
 import inline_items { Item, Scope, FontBox }
@@ -67,36 +67,45 @@ impl TextCandidate {
 
 // An entire normalized paragraph belongs to one compute pass. Fragment cursors
 // address these tokens, never a suffix whose bidi or source coordinates differ.
+// `hasTokens` is false for one whose core a previous compute kept: its tokens
+// are still to be rebuilt.
 pub struct PreparedInline<'source> {
+  pub tokens: List<TextToken<'source>>,
+  pub core: Box<PreparedCore>,
+  pub hasTokens: bool,
+}
+
+// What a paragraph's preparation keeps between computes of a LayoutTree:
+// everything but the normalized tokens, which borrow source text and are
+// rebuilt. It is boxed so that handing a paragraph from probe to probe and
+// from compute to compute moves a pointer.
+pub struct PreparedCore {
   pub ready: bool,
-  pub normalized: NormalizedText<'source>,
   pub analysis: TextAnalysis,
   pub offered: List<TextBreak>,
   pub visual: Plan,
   pub barriers: List<bool>,
   pub memo: TextMemo,
+  // The tokens' origins; between computes their storage alone, which the
+  // next normalization fills.
+  pub origins: List<usize>,
 }
-impl<'p> PreparedInline<'p> {
-  pub fn make<'source>() -> PreparedInline<'source> {
-    return PreparedInline {
+impl PreparedCore {
+  pub fn make() -> PreparedCore {
+    return PreparedCore {
       ready: false,
-      normalized: NormalizedText { tokens: List<TextToken<'source>>.make(), origins: List<usize>.make() },
       analysis: TextAnalysis.uniform(0, 0, 0, false),
-      offered: List<TextBreak>.make(), visual: Plan.make(), barriers: List<bool>.make(), memo: TextMemo.make(),
+      offered: List<TextBreak>.make(), visual: Plan.make(), barriers: List<bool>.make(), memo: TextMemo.make(), origins: List<usize>.make(),
     }
   }
 }
 
-// What a paragraph's preparation keeps between computes of a LayoutTree:
-// everything but the normalized tokens, which borrow source text and are
-// rebuilt. Compute drops it with the box's other kept results when a change
-// can reach the box's content.
+// A paragraph's core between computes. Compute drops it with the box's other
+// kept results when a change can reach the box's content.
 pub struct KeptText {
-  pub analysis: TextAnalysis, pub offered: List<TextBreak>, pub visual: Plan, pub barriers: List<bool>, pub memo: TextMemo,
-  // The token origins' storage alone: the next normalization fills it.
-  pub origins: List<usize>,
-  // Set when a change reached the box's content: nothing here holds any
-  // more, but the paragraph's next preparation fills these lists again
+  pub core: Box<PreparedCore>,
+  // Set when a change reached the box's content: nothing in the core holds
+  // any more, but the paragraph's next preparation fills its lists again
   // instead of allocating its own.
   pub stale: bool,
 }

@@ -16,11 +16,12 @@ import bfc { BfcState, FloatBox, Band }
 import layout_pass { LayoutPass, FullBoxGeometry }
 import text { TextMeasure, TextError, TextToken, TextTokenKind, TextContext, TextCursor, TextRange, TextBreak, TextBreakKind, TextAnalysis, TextShapeRequest, TextRun }
 import inline_text as TextFlow
+import inline_text { NormalizedText }
 import inline_bidi as Bidi
 import inline_items { FontBox, Scope, ItemKind, Item }
 import inline_visual as Visual
 import inline_visual { Line }
-import inline_prepared { PreparedInline, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText }
+import inline_prepared { PreparedInline, PreparedCore, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText }
 import fragmentation { FlowCursor, FragmentationError, BoundaryProbe }
 import breaks { BreakBoundary, BreakRelaxation, ForcedBreaks, allowsLineBreak }
 import fragment_box as FragmentBox
@@ -1706,6 +1707,27 @@ effect fn analyzeAnchors<M: TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, 
   }
 }
 
+// The box's paragraph as this pass last prepared it, else the core an earlier
+// compute kept, else an empty one.
+effect fn takePrepared<'pass, 'source>(output: &mut LayoutPass<'pass, 'source>, id: usize) -> PreparedInline<'source> ! OutOfMemoryError ? &mut Allocator {
+  match move output.inlinePrepared.asMutSlice()[id].pop() {
+    Option<PreparedInline<'source>>.Some { value } => { return move value }
+    Option<PreparedInline<'source>>.None => {}
+  }
+  match output.cache.takeText(id) {
+    Option<KeptText>.Some { value } => {
+      let mut kept = move value
+      // A stale one lends its lists alone.
+      if kept.stale {
+        let held = kept.core.getMut()
+        held[0].ready = false
+      }
+      return PreparedInline { tokens: List<TextToken<'source>>.make(), core: move kept.core, hasTokens: false }
+    }
+    Option<KeptText>.None => {}
+  }
+  return PreparedInline { tokens: List<TextToken<'source>>.make(), core: run Box.make(PreparedCore.make()), hasTokens: false }
+}
 effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, unicodeBidi: UnicodeBidi, externalAnalysis: bool, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let axes = Axes.make(style.writingMode)
@@ -1715,37 +1737,24 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   // the paragraph's content, not on the space offered, so every probe and
   // fragment of this box in one compute shares a single preparation.
   run output.ensureInlinePrepared()
-  let mut saved = PreparedInline.make<'source>()
+  let mut saved = run takePrepared(&mut output, id)
   // A paragraph prepared by an earlier compute keeps all but its tokens.
-  let mut haveTokens = true
-  match move output.inlinePrepared.asMutSlice()[id].pop() {
-    Option<PreparedInline<'source>>.Some { value } => { saved = move value }
-    Option<PreparedInline<'source>>.None => {
-      match output.cache.takeText(id) {
-        Option<KeptText>.Some { value } => {
-          // A stale one lends its lists alone.
-          saved.ready = !value.stale
-          saved.analysis = move value.analysis
-          saved.offered = move value.offered
-          saved.visual = move value.visual
-          saved.barriers = move value.barriers
-          saved.memo = move value.memo
-          saved.normalized.origins = move value.origins
-          haveTokens = false
-        }
-        Option<KeptText>.None => {}
-      }
-    }
-  }
-  let mut reuse = saved.ready && saved.barriers.length() == raw.length
+  let haveTokens = saved.hasTokens
+  let mut boxed = move saved.core
+  let held = boxed.getMut()
+  let core = &mut held[0]
+  let mut normalized = NormalizedText { tokens: move saved.tokens, origins: Intrinsic.replace(core.origins, List<usize>.make()) }
+  let barriers = &mut core.barriers
+  let memo = &mut core.memo
+  let offered = &mut core.offered
+  let analysis = &mut core.analysis
+  let visualPlan = &mut core.visual
+  let mut reuse = core.ready && barriers.length() == raw.length
   let mut barrierIndex: usize = 0
   while reuse && barrierIndex < raw.length {
-    reuse = saved.barriers.get(barrierIndex) == shapingBarrier(nodes, &raw[barrierIndex], scopes)
+    reuse = barriers.get(barrierIndex) == shapingBarrier(nodes, &raw[barrierIndex], scopes)
     barrierIndex = barrierIndex + 1
   }
-  let mut barriers = move saved.barriers
-  let mut normalized = move saved.normalized
-  let mut memo = move saved.memo
   if !reuse { memo.forget() }
   if !reuse || !haveTokens {
     let mut rawTokens = Intrinsic.replace(output.rawTokens, List<TextToken<'source>>.make())
@@ -1756,8 +1765,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   }
   // Kept analysis covers exactly the tokens it was made for.
   if reuse && !haveTokens {
-    let mut covered = saved.analysis.paragraph.end
-    if saved.analysis.paragraphs.length() != 0 { covered = saved.analysis.paragraphs.get(saved.analysis.paragraphs.length() - 1).end }
+    let mut covered = analysis.paragraph.end
+    if analysis.paragraphs.length() != 0 { covered = analysis.paragraphs.get(analysis.paragraphs.length() - 1).end }
     if covered.unit != normalized.tokens.length() || covered.offset != 0 {
       reuse = false
       memo.forget()
@@ -1795,16 +1804,14 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   }
   run memo.prepare(original.asSlice(), scopes)
   let context = TextContext { tokens: normalized.tokens.asSlice(), writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: unicodeBidi, textJustify: style.textJustify }
-  let mut offered = move saved.offered
   if !reuse { offered.clear() }
   let points = &mut text.points
   let terminal = TextCursor { unit: context.tokens.length, offset: 0 }
   let mut baseLevel: u8 = 0
   if rtl { baseLevel = 1 }
-  let mut analysis = move saved.analysis
-  if !reuse { analysis = TextAnalysis.uniform(context.tokens.length, baseLevel, baseLevel, false) }
+  if !reuse { analysis.* = TextAnalysis.uniform(context.tokens.length, baseLevel, baseLevel, false) }
   if !reuse && context.tokens.length != 0 && externalAnalysis {
-    analysis = run TextMeasure.analyze(&mut measurer, context, &mut offered)
+    analysis.* = run TextMeasure.analyze(&mut measurer, context, &mut offered)
   } else if !reuse && !externalAnalysis {
     // A normal, box-only paragraph consists entirely of neutral atomics.
     // Direction-sensitive decorations do not require an external text service.
@@ -1817,7 +1824,6 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       index = index + 1
     }
   }
-  let mut visualPlan = move saved.visual
   if !reuse {
     run Bidi.normalizeAnalysis(context, &mut analysis)
     run analyzeAnchors(nodes, &mut measurer, context, original.asSlice(), externalAnalysis, &mut visualPlan.anchorLevels)
@@ -1833,8 +1839,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     index = index + 1
   }
   if !reuse {
-    let levels = move visualPlan.anchorLevels
-    visualPlan = run Visual.makePlan(nodes, scopes, original.asSlice(), context, &analysis)
+    let levels = Intrinsic.replace(visualPlan.anchorLevels, List<u8>.make())
+    visualPlan.* = run Visual.makePlan(nodes, scopes, original.asSlice(), context, &analysis)
     visualPlan.anchorLevels = move levels
   }
   let mut previous = TextCursor { unit: 0, offset: 0 }
@@ -2410,6 +2416,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   }
   if fitsMemo && memoFirst == NO_NODE && !blocked && next == points.length() { run memo.record(width, lineEnds.asSlice()) }
   run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
-  run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { ready: true, normalized: move normalized, analysis: move analysis, offered: move offered, visual: move visualPlan, barriers: move barriers, memo: move memo })
+  core.ready = true
+  core.origins = move normalized.origins
+  run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
   return result
 }
