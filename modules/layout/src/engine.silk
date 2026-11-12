@@ -317,7 +317,7 @@ fn keptEmptyBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, inp
 }
 
 @inlineAlways
-fn emptyContentWidth(nodes: &BoxTree<'_>, id: usize) -> bool {
+pub fn emptyContentWidth(nodes: &BoxTree<'_>, id: usize) -> bool {
   let node = nodes.node(id)
   let style = nodes.style(id)
   return noInFlowChildren(nodes, id) && node.measurement == Measurement.None && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex)

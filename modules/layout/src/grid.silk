@@ -935,19 +935,21 @@ pub effect fn requestItem<'pass, 'source, M: Measure + TextMeasure>(
     inlineSized = blockSized
     blockSized = swapped
   }
-  // A stretched item in one inflexible track with an automatic minimum needs
-  // no automatic minimum: §12.5 sized that track to at least the item's
+  // A stretched item in one track with an automatic minimum needs no
+  // automatic minimum: §12.5 sized that track to at least the item's
   // minimum contribution, its used minimum plus margins, so the stretched
-  // size already meets it. That contribution read the same inputs when no
-  // percentage resolves against the area and, for widths, the widths ignore
-  // the height that the column pass only estimated.
+  // size already meets it. A flexible column keeps that base size too
+  // (§12.7.1 treats a track its share would shrink as inflexible); a
+  // flexible row is left to the lookup. That contribution read the same
+  // inputs when no percentage resolves against the area and, for widths, the
+  // widths ignore the height that the column pass only estimated.
   let plain = !axis.vertical && !request.fragmentation.active
   // An unchanged item in unchanged tracks keeps its minimum (see
   // ContributionMemos.kept).
   let cleared = output.cache.clearedAt(item.id)
   if !inheritColumns && columnPolicy.automatic && inlineMinimum.kind == DimensionKind.Auto && !inlineSized
     && !(plain && request.known.widthDefinite && columnEnd - column == 1
-      && columns[column].maximum != GridBreadthKind.Flex && percentFree(&output, item.id)
+      && percentFree(&output, item.id)
       && widthIgnoresHeight(nodes, &output, item.id)) {
     let mut kept = Option<ItemContribution>.None
     kept = memos.kept(2 * index, item.id, column, columnEnd, row, rowEnd, cleared)

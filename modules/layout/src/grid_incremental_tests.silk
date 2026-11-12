@@ -546,3 +546,36 @@ test effect fn gridPlacementStandsAcrossInvalidate()
   let mut allocator = Allocator.systemAllocatorProvider()
   run placementAcrossInvalidate() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+// A stretched item in a flexible column takes no separate automatic minimum:
+// the column is at least the item's minimum contribution (Grid §12.7.1).
+effect fn flexibleColumnMinimum()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | GridError | AssertionError<'static>
+  ? &mut Allocator {
+  let mut root = gridStyle()
+  root.width = Dimension.px(100.0)
+  let mut tree = run Tree.make(move root)
+  let top = tree.root()
+  let mut template = GridTemplate.make()
+  run template.columns.tracks.append(GridTrack.breadth(GridBreadth.flex(1.0)))
+  run template.columns.tracks.append(GridTrack.breadth(GridBreadth.flex(1.0)))
+  run tree.setGrid(top, move template)
+  let wide = run tree.append(top, Style.make())
+  let mut inner = Style.make()
+  inner.width = Dimension.px(80.0)
+  inner.height = Dimension.px(10.0)
+  drop run tree.append(wide, move inner)
+  let narrow = run tree.append(top, Style.make())
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, wide, 0.0, 0.0, 80.0, 10.0)
+  run expectBounds(&mut output, narrow, 80.0, 0.0, 20.0, 10.0)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(280.0, 200.0))
+  run expectBounds(&mut output, wide, 0.0, 0.0, 80.0, 10.0)
+}
+test effect fn stretchedItemKeepsItsMinimumInAFlexibleColumn()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | GridError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run flexibleColumnMinimum() |> Effect.provideMut<Allocator>(&mut allocator)
+}

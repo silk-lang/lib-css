@@ -15,7 +15,7 @@ import geometry {
 import style { Style, Dimension, DimensionKind, BoxSizing, WritingMode, FlexWrap, FlexDirection }
 import box_tree { BoxTree }
 import context { Input, ResolvedBox, resolves, isFlex, isGrid, scrollable, overflowForAxis, UNBOUNDED }
-import engine { normalizeKey, probeFresh, shapedBox }
+import engine { normalizeKey, probeFresh, shapedBox, emptyContentWidth }
 import layout_pass { LayoutPass, CacheKind }
 import text { TextMeasure, TextError }
 import fragmentation { FragmentationError }
@@ -281,6 +281,12 @@ fn minimumBox(output: &LayoutPass<'_, '_>, style: &Style, id: usize, input: &Inp
   return shapedBox(output, style, id, &propertyInput)
 }
 
+// A minimum or maximum that is a length or absent: no percentage or content keyword.
+@inlineAlways
+fn plainLimit(value: Dimension) -> bool {
+  return value.kind == DimensionKind.Length || value.kind == DimensionKind.Auto || value.kind == DimensionKind.None
+}
+
 // The caller supplies physical-axis requests and fixed-only track caps. Neither
 // known stretch sizes nor an estimated area establishes a specified suggestion.
 // Masks omit unused intrinsic contributions, not the minimum needed by §12.5.
@@ -376,7 +382,11 @@ pub effect fn measureContributionEdges<'pass, 'source, M: Measure + TextMeasure>
   let mut smallest = inset
   let mut largest = inset
   let mut minWasMax = false
-  if minProbeNeeded {
+  // An empty box of automatic size is its inset under either constraint (see
+  // emptyContentWidth); its own lengths clamp the contributions below.
+  let empty = sizeDimension.kind == DimensionKind.Auto && (minProbeNeeded || maxProbeNeeded)
+    && plainLimit(minDimension) && plainLimit(maxDimension) && emptyContentWidth(nodes, id)
+  if minProbeNeeded && !empty {
     let constraint = minConstraint(style, horizontal)
     let measured = run probe(nodes, &mut output, &mut measurer, id, input, horizontal, constraint)
     smallest = max(inset, axisSize(measured.size, horizontal))
@@ -384,7 +394,7 @@ pub effect fn measureContributionEdges<'pass, 'source, M: Measure + TextMeasure>
     borderRatio = measured.ratioBorderBox
     minWasMax = constraint.kind == AvailableKind.MaxContent
   }
-  if maxProbeNeeded {
+  if maxProbeNeeded && !empty {
     // Ordinary block-axis min-content already used this exact max-content
     // request. Reuse its scalar result instead of rebuilding and looking up a key.
     if minWasMax {
