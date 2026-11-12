@@ -119,6 +119,9 @@ struct Item {
   // A column item's width from its main-size probe at an unknown width, or
   // -1: its hypothetical cross size when that width ignores the height.
   probedCross: f32,
+  // The border-box main and cross sizes of an item laid out ahead of the
+  // lines (`early`); see layoutFlexPass.
+  earlyMain: f32, earlyCross: f32,
   // Flags last so they pack without padding between the f32 fields.
   align: Align,
   autoStart: bool, autoEnd: bool, autoCrossStart: bool, autoCrossEnd: bool, crossAuto: bool,
@@ -126,6 +129,8 @@ struct Item {
   frozen: bool, collapsed: bool, mainDefinite: bool, knownCrossDefinite: bool,
   // An automatic minimum still to measure; see deferredMinimum.
   minimumPending: bool,
+  // The item's final layout is already in place; see layoutFlexPass.
+  early: bool,
 }
 impl Copy for Item {}
 impl Item {
@@ -136,7 +141,7 @@ impl Item {
       cross: 0.0, crossMin: 0.0, crossMax: UNBOUNDED, crossAuto: true, align: Align.Stretch,
       baseline: 0.0, lastBaseline: 0.0, baselineEligible: false, baselineSizesLine: false, baselineEnd: false,
       frozen: false, violation: 0.0, collapsed: false, strut: 0.0, minContribution: 0.0, maxContribution: 0.0, mainDefinite: false,
-      knownCross: 0.0, knownCrossDefinite: false, minimumPending: false, pendingPreferred: 0.0, probedCross: -1.0 }
+      knownCross: 0.0, knownCrossDefinite: false, minimumPending: false, pendingPreferred: 0.0, probedCross: -1.0, earlyMain: 0.0, earlyCross: 0.0, early: false }
   }
 }
 struct Line { start: usize, end: usize, count: usize, cross: f32, baseline: f32, lastBaseline: f32, baselineCross: f32, lastBaselineCross: f32 }
@@ -244,6 +249,30 @@ fn probeInput(childInput: &Input, horizontal: bool, constraint: AvailableSpace, 
   if crossKnown { setKnown(&mut input, !horizontal, cross) }
   return input
 }
+// The final layout of an unfragmented item of a single-line container with a
+// known cross size, as placeFlexLines requests it, before the lines exist:
+// with the item's target main size when `mainKnown`, else with none, so the
+// layout finds the content size a probe would. Marks the item `early`.
+effect fn layoutAhead<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, horizontal: bool, mainKnown: bool) -> Probe ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let id = item.id
+  let mut finalInput = childInput.*
+  if mainKnown { setKnown(&mut finalInput, horizontal, item.target) }
+  setIndefinite(&mut finalInput, horizontal, !item.mainDefinite)
+  let lineCross = optionalSize(childInput.parent, !horizontal)
+  if item.crossAuto && item.align == Align.Stretch && !item.autoCrossStart && !item.autoCrossEnd {
+    setKnown(&mut finalInput, !horizontal, clamp(lineCross - item.crossStart - item.crossEnd, item.crossMin, item.crossMax))
+  } else if axisDimension(nodes.style(id), !horizontal).kind == DimensionKind.FitContent {
+    setAvailable(&mut finalInput, !horizontal, AvailableSpace.definite(lineCross))
+  }
+  if !run layoutEmptyLeafInPlace(nodes, &mut output, id, &finalInput) {
+    run layoutNodeInPlace(nodes, &mut output, &mut measurer, id, &finalInput)
+  }
+  let layout = &output.boxes[id]
+  item.early = true
+  item.earlyMain = axisSize(layout.size, horizontal)
+  item.earlyCross = axisSize(layout.size, !horizontal)
+  return Probe { size: layout.size, preferredRatio: layout.preferredRatio, ratioBorderBox: layout.ratioBorderBox }
+}
 // prepareFresh, or what it made of the item before under the same arguments.
 // `request` is FlexMemos.request for the container pass.
 effect fn prepare<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, axis: &Axes, parentStyle: &Style, mainConstraint: AvailableSpace, intrinsic: bool, containerMainDefinite: bool, request: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
@@ -257,11 +286,11 @@ effect fn prepare<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'sou
     }
   }
   // Specialized per main axis so the axis selects fold away.
-  if axis.horizontal { run prepareFresh(nodes, &mut output, &mut measurer, &mut item, &childInput, &axis, &parentStyle, mainConstraint, intrinsic, containerMainDefinite, true) }
-  else { run prepareFresh(nodes, &mut output, &mut measurer, &mut item, &childInput, &axis, &parentStyle, mainConstraint, intrinsic, containerMainDefinite, false) }
+  if axis.horizontal { run prepareFresh(nodes, &mut output, &mut measurer, &mut item, &childInput, &axis, &parentStyle, mainConstraint, intrinsic, containerMainDefinite, false, true) }
+  else { run prepareFresh(nodes, &mut output, &mut measurer, &mut item, &childInput, &axis, &parentStyle, mainConstraint, intrinsic, containerMainDefinite, false, false) }
   if memoable { run output.cache.flexMemos.remember(id, request, &item) }
 }
-effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, axis: &Axes, parentStyle: &Style, mainConstraint: AvailableSpace, intrinsic: bool, containerMainDefinite: bool, static horizontal: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, axis: &Axes, parentStyle: &Style, mainConstraint: AvailableSpace, intrinsic: bool, containerMainDefinite: bool, early: bool, static horizontal: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let id = item.id
   let style = nodes.style(id)
   let box = shapedBox(&output, style, id, &childInput)
@@ -329,6 +358,11 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
   let mut minimumCross = crossSize
   let mut minProbe = Probe { size: Size.zero(), preferredRatio: 0.0, ratioBorderBox: false }
   let mut minProbed = false
+  // An item whose block-axis content size is its laid out size is laid out
+  // once, with its final request less the main size, in place of the probe.
+  let ahead = early && !horizontal && style.writingMode == WritingMode.HorizontalTb && style.aspectRatio == 0.0 && !style.replaced && nodes.node(id).measurement != Measurement.Natural
+    && preferred.kind == DimensionKind.Auto && style.flexBasis.kind == DimensionKind.Auto
+    && blockAxisConstraint(style, horizontal, AvailableSpace.minContent()).kind == AvailableKind.MaxContent
   // §4.5: the automatic minimum is at most the preferred size. When the flex
   // base is at least that large, the minimum cannot change the hypothetical
   // size or a growing line; only a shrinking line reads it, so measure the
@@ -353,7 +387,9 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
       borderRatio = false
       minProbe = Probe { size: Size { width: item.inset, height: crossSize }, preferredRatio: 0.0, ratioBorderBox: false }
     } else {
-      let measured = run probe(nodes, &mut output, &mut measurer, id, &childInput, horizontal, blockAxisConstraint(style, horizontal, AvailableSpace.minContent()), crossDefinite, crossSize)
+      let mut measured = minProbe
+      if ahead { measured = run layoutAhead(nodes, &mut output, &mut measurer, &mut item, &childInput, horizontal, false) }
+      else { measured = run probe(nodes, &mut output, &mut measurer, id, &childInput, horizontal, blockAxisConstraint(style, horizontal, AvailableSpace.minContent()), crossDefinite, crossSize) }
       minContent = axisSize(measured.size, horizontal)
       minimumCross = axisSize(measured.size, !horizontal)
       ratio = measured.preferredRatio
@@ -367,13 +403,17 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
   if !basisDefinite || (intrinsic && !deferMinimum) || minimumDimension.kind == DimensionKind.MaxContent || maximumDimension.kind == DimensionKind.MaxContent || minimumDimension.kind == DimensionKind.FitContent || maximumDimension.kind == DimensionKind.FitContent {
     // An empty box's max-content probe has its min-content probe's key.
     let mut measured = minProbe
-    if !minProbed || !constraintFreeProbe(output.keyShape(id)) { measured = run probe(nodes, &mut output, &mut measurer, id, &childInput, horizontal, AvailableSpace.maxContent(), crossDefinite, crossSize) }
+    if ahead { if !item.early { measured = run layoutAhead(nodes, &mut output, &mut measurer, &mut item, &childInput, horizontal, false) } }
+    else if !minProbed || !constraintFreeProbe(output.keyShape(id)) { measured = run probe(nodes, &mut output, &mut measurer, id, &childInput, horizontal, AvailableSpace.maxContent(), crossDefinite, crossSize) }
     maxContent = axisSize(measured.size, horizontal)
     contentCross = axisSize(measured.size, !horizontal)
     if !horizontal && !crossDefinite && crossIgnoresMain(nodes, &output, id) { item.probedCross = contentCross }
     ratio = measured.preferredRatio
     borderRatio = measured.ratioBorderBox
   }
+  // A layout its own minimum or maximum size may have clamped is no content
+  // size: no target equals -1, so the container lays out again with probes.
+  if ahead && item.early && ((minimumDimension.kind != DimensionKind.Auto && item.earlyMain <= axisSize(box.min, horizontal)) || item.earlyMain >= axisSize(box.max, horizontal)) { item.earlyMain = -1.0 }
   if minimumDimension.kind == DimensionKind.MinContent { item.minimum = minContent }
   if minimumDimension.kind == DimensionKind.MaxContent { item.minimum = maxContent }
   if maximumDimension.kind == DimensionKind.MinContent { item.maximum = minContent }
@@ -658,6 +698,11 @@ effect fn crossSizes<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       item.cross = item.crossMin
       item.baseline = 0.0
       item.lastBaseline = 0.0
+    } else if item.early {
+      item.cross = item.earlyCross
+      item.baseline = 0.0
+      item.lastBaseline = 0.0
+      result.cross = max(result.cross, item.cross + item.crossStart + item.crossEnd)
     } else if fixedCross(nodes, &item.*, parentStyle) && !input.fragmentation.active && item.align != Align.Baseline && item.align != Align.LastBaseline && !(input.baselines && !input.performLayout) && active(&item.*, collapsed) {
       item.cross = item.knownCross
       item.baseline = 0.0
@@ -1072,7 +1117,7 @@ pub effect fn layoutFlex<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
     Option<FlexScratch>.Some { value: spare } => { scratch = move spare }
     Option<FlexScratch>.None => {}
   }
-  return run layoutFlexPass(nodes, &mut output, &mut measurer, id, &input, &box, false, move scratch)
+  return run layoutFlexPass(nodes, &mut output, &mut measurer, id, &input, &box, false, true, move scratch)
 }
 
 // A flex pass's item and line lists, kept in LayoutPass between passes.
@@ -1302,7 +1347,7 @@ fn sameAxes(a: &Axes, b: &Axes) -> bool {
   return a.horizontal == b.horizontal && a.row == b.row && a.mainReverse == b.mainReverse && a.crossReverse == b.crossReverse
     && a.mainStartReverse == b.mainStartReverse && a.crossStartReverse == b.crossStartReverse
 }
-effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, resolvedIntrinsicInline: bool, owned: FlexScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, resolvedIntrinsicInline: bool, aheadAllowed: bool, owned: FlexScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut scratch = move owned
   let style = nodes.style(id)
   let axis = axes(style)
@@ -1398,13 +1443,32 @@ effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
   let mut hasCollapsed = false
   let mut request: usize = 0
   let mut weighed = false
-  if output.frame == NO_NODE {
+  // A single-line column with a known width and a content height lays each
+  // item out as it is prepared (layoutAhead): no line is flexed when the
+  // items' sizes add up to the container's, so those layouts are final and
+  // an item needs no probe of the height its layout finds. When a line is
+  // flexed after all, the layouts are undone and placeFlexLines repeats them.
+  let mut early = aheadAllowed && input.performLayout && !input.fragmentation.active && output.frame == NO_NODE && inlineHorizontal && !axis.horizontal && style.flexWrap == FlexWrap.NoWrap && crossKnown && !mainKnown && count > 0
+  while early && index < count {
+    let childStyle = nodes.style(scratch.items.get(index).id)
+    let align = alignment(childStyle, style)
+    if childStyle.visibility == Visibility.Collapse || align == Align.Baseline || align == Align.LastBaseline { early = false }
+    index = index + 1
+  }
+  index = 0
+  let aheadStart = output.checkpoint()
+  if output.frame == NO_NODE && !early {
     request = run output.cache.flexMemos.request(id, &childInput, &axis, style, mainConstraint, !mainKnown, mainDefinite)
     weighed = request != 0 && output.cache.flexMemos.earlier
   }
   let found = output.cache.flexMemos.found
   while index < count {
-    run prepare(nodes, &mut output, &mut measurer, &mut scratch.items.asMutSlice()[index], &childInput, &axis, style, mainConstraint, !mainKnown, mainDefinite, request)
+    if early {
+      run prepareFresh(nodes, &mut output, &mut measurer, &mut scratch.items.asMutSlice()[index], &childInput, &axis, style, mainConstraint, !mainKnown, mainDefinite, true, false)
+      if !scratch.items.asSlice()[index].early { drop run layoutAhead(nodes, &mut output, &mut measurer, &mut scratch.items.asMutSlice()[index], &childInput, false, true) }
+    } else {
+      run prepare(nodes, &mut output, &mut measurer, &mut scratch.items.asMutSlice()[index], &childInput, &axis, style, mainConstraint, !mainKnown, mainDefinite, request)
+    }
     hasCollapsed = hasCollapsed || scratch.items.asSlice()[index].collapsed
     index = index + 1
   }
@@ -1496,6 +1560,17 @@ effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
     }
     collapsed = true
   }
+  if early {
+    let mut settled = scratch.lines.length() == 1
+    index = 0
+    while index < count { let item = scratch.items.get(index)
+      if item.target != item.earlyMain { settled = false }
+      index = index + 1 }
+    if !settled {
+      output.restoreCheckpoint(aheadStart)
+      return run layoutFlexPass(nodes, &mut output, &mut measurer, id, &input, &box, resolvedIntrinsicInline, false, move scratch)
+    }
+  }
   // A width probe's unread cross size still honors its min and max, so the
   // min/max relayout never runs for a height it did not measure.
   if sizeOnly && !crossKnown { cross = max(0.0, clamp(crossInset, axisSize(box.min, !axis.horizontal), axisSize(box.max, !axis.horizontal)) - crossInset) }
@@ -1514,7 +1589,7 @@ effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
       resolvedBox.size.height = inlineSize
       resolvedBox.size.heightDefinite = true
     }
-    return run layoutFlexPass(nodes, &mut output, &mut measurer, id, &input, &resolvedBox, true, move scratch)
+    return run layoutFlexPass(nodes, &mut output, &mut measurer, id, &input, &resolvedBox, true, aheadAllowed, move scratch)
   }
   if input.fragmentation.active && input.performLayout {
     return run layoutFlexFragment(nodes, &mut output, &mut measurer, id, &input, &box, &childInput, axis, scratch.items.asSlice(), scratch.lines.asSlice(), main, cross, mainGap, crossGap, collapsed)
@@ -1631,7 +1706,7 @@ effect fn placeFlexLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
         } else {
           // Unfragmented, layoutNode already stored the child's layout: place
           // it there instead of copying the whole result out.
-          if !run layoutEmptyLeafInPlace(nodes, &mut output, item.id, &finalInput) {
+          if !item.early && !run layoutEmptyLeafInPlace(nodes, &mut output, item.id, &finalInput) {
             run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &finalInput)
           }
           let mut usedMargin = output.boxes[item.id].usedMargin
