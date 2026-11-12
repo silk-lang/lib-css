@@ -726,6 +726,8 @@ pub fn normalizeKey(shape: u16, key: &mut Input, viewportFree: bool) {
     key.parent.height = 0.0
     key.parent.heightDefinite = false
     key.minimum.height = 0.0
+    key.intrinsicHeight = false
+    key.indefiniteHeight = false
   }
   // Inline formatting boxes and replaced boxes keep the rest of the request.
   if shape & KEY_FIXED != 0 { return }
