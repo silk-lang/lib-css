@@ -1674,7 +1674,12 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
     wasNormalComplete = previous.normalComplete
   }
   let mut sizing = BoxSizing { box: shapedBox(&output, nodes.style(id), id, &input), request: input.*, natural: NaturalDimensions.none(), ratio: 0.0, ratioBorder: false, ratioInsetWidth: 0.0, ratioInsetHeight: 0.0 }
+  let shaped = sizing.box.size
   run prepareSizing(nodes, &mut output, &mut measurer, id, &input, fragmented, monolithic, &mut sizing)
+  let contentsProbe = !input.performLayout && input.intrinsicWidth && !input.intrinsicHeight && !input.fullSize && !input.baselines && !fragmented && output.frame == NO_NODE
+    && input.availableWidth.kind == AvailableKind.MaxContent && !input.known.widthDefinite && input.bfcContentOrigin.x == 0.0 && input.bfcContentOrigin.y == 0.0
+    && isFlex(style) && plainSizing(style, node, &input, fragmented, &effectiveDisplay(style, &input))
+    && shaped.width == sizing.box.size.width && shaped.height == sizing.box.size.height && shaped.widthDefinite == sizing.box.size.widthDefinite && shaped.heightDefinite == sizing.box.size.heightDefinite
   let natural = sizing.natural
   let ratio = sizing.ratio
   let ratioBorder = sizing.ratioBorder
@@ -1732,6 +1737,15 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
   }
   let passCheckpoint = output.checkpoint()
   let mut result = run firstContents(nodes, &mut output, &mut measurer, id, &sizing.request, &sizing.box, natural, &mut bfc)
+  // A flex container's max-content width probe ran the contents pass its
+  // own shrink-to-fit sizing asks `intrinsic` for, on the box as resolved:
+  // keep the contents' size for it.
+  if contentsProbe {
+    let probeShape = output.keyShape(id)
+    let probeFree = output.viewportFree(id)
+    let probeKey = cacheKey(probeShape, &input, probeFree)
+    run output.remember(id, &probeKey, CacheKind.IntrinsicContents, &result)
+  }
   if fragmented {
     let state = output.resumes.get(id)
     if state.blocked || state.skipped {
