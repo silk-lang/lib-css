@@ -1,7 +1,7 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.usize
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
-import style { Style, Display, Dimension, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource }
+import style { Style, Display, Dimension, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
 import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
@@ -14,7 +14,7 @@ import positioned { positionScroll, positionTree, positionVisits, reachableLimit
 import bfc { BfcState }
 import silk.core.option { Option }
 import layout_pass { LayoutPass, PassState, CacheKind, FullBoxGeometry, REUSE_INDEPENDENT, REUSE_IN_FLOW }
-import layout_cache { LayoutCache, BoxFacts, CachedProbe, FinalRange, AGES_NONE, AGES_OLDER }
+import layout_cache { LayoutCache, BoxFacts, CachedProbe, FinalRange, AGES_NONE, AGES_OLDER, PLAIN_UNKNOWN, PLAIN_NEVER }
 import incremental as Incremental
 import replaced { layoutReplaced, preferredRatio, borderRatio }
 import box_tree as Boxes
@@ -240,6 +240,10 @@ effect fn intrinsic<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
   // A childless box without content measurement has no content to size: its
   // intrinsic width is its padding and border, with no cache entry needed.
   if horizontal && emptyContentWidth(nodes, id) { return resolveBox(nodes.style(id), &request).inset.horizontal() }
+  if horizontal && request.parentWritingMode == WritingMode.HorizontalTb && request.gridContext == 0 {
+    let plain = run plainWidth(nodes, &mut output, id)
+    if plain >= 0.0 { return plain }
+  }
   // Cross-axis request bounds can change an opaque measurer's intrinsic
   // answer. Use the normal min/max sizing loop rather than raw contents.
   if (horizontal && !request.intrinsicHeight && request.minimum.height > 0.0) || (!horizontal && !request.intrinsicWidth && request.minimum.width > 0.0) {
@@ -263,6 +267,65 @@ effect fn intrinsic<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
   run output.remember(id, &key, CacheKind.IntrinsicContents, &result)
   if horizontal { return result.size.width }
   return result.size.height
+}
+
+// The content-based width of a plain box, which is what a width probe of it
+// finds under any request: its padding and border around its widest item.
+// A box is plain when it and every box below it has no in-flow children or
+// is a single-line column flex container of boxes with length or automatic
+// widths, with no percentages, text, measured or replaced content, aspect
+// ratio, scrollbars or floats (KEY_CONTENT_FREE_TREE), so that no request
+// reaches its widths and its min- and max-content widths agree. Negative
+// for any other box. Kept per box until the box's cache entries are dropped.
+pub effect fn plainWidth(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize) -> f32 ! OutOfMemoryError ? &mut Allocator {
+  let count = nodes.boxes.length()
+  if output.facts.keyShapes.length() != count { return PLAIN_NEVER }
+  if output.cache.plainWidths.length() != count {
+    output.cache.plainWidths.clear()
+    run output.cache.plainWidths.appendRepeated(PLAIN_UNKNOWN, count)
+  }
+  let known = output.cache.plainWidths.get(id)
+  if known != PLAIN_UNKNOWN { return known }
+  let base = Input.make(OptionalSize.none())
+  return plainWidthOf(nodes, output.facts.keyShapes.asSlice(), output.cache.plainWidths.asMutSlice(), &base, id)
+}
+fn plainDimension(value: &Dimension, none: bool) -> bool {
+  return value.kind == DimensionKind.Auto || value.kind == DimensionKind.Length || (none && value.kind == DimensionKind.None)
+}
+fn plainWidthOf(nodes: &BoxTree<'_>, shapes: &[u16], widths: &mut [f32], base: &Input, id: usize) -> f32 {
+  let known = widths[id]
+  if known != PLAIN_UNKNOWN { return known }
+  let mut result = PLAIN_NEVER
+  let shape = shapes[id]
+  if shape & (KEY_CONTENT_FREE_TREE | KEY_PERCENT) == KEY_CONTENT_FREE_TREE {
+    let style = nodes.style(id)
+    let node = nodes.node(id)
+    let column = node.kind == BoxKind.Flex && isFlex(style) && style.flexWrap == FlexWrap.NoWrap && (style.flexDirection == FlexDirection.Column || style.flexDirection == FlexDirection.ColumnReverse)
+    let mut plain = true
+    let mut widest: f32 = 0.0
+    let mut child = node.firstChild
+    while plain && child != NO_NODE {
+      let childStyle = nodes.style(child)
+      if !outOfFlow(childStyle) {
+        if !column || childStyle.visibility == Visibility.Collapse || childStyle.replaced || !plainDimension(&childStyle.width, false) || !plainDimension(&childStyle.minWidth, false) || !plainDimension(&childStyle.maxWidth, true) {
+          plain = false
+        } else {
+          let content = plainWidthOf(nodes, shapes, &mut widths, base, child)
+          if content < 0.0 { plain = false } else {
+            let childBox = resolveBoxEdges(childStyle, base, shapes[child] & KEY_ZERO_EDGES != 0)
+            let mut width = content
+            if childBox.size.widthDefinite { width = childBox.size.width }
+            width = clamp(width, childBox.min.width, childBox.max.width)
+            widest = max(widest, width + childBox.margin.horizontal())
+          }
+        }
+      }
+      child = nodes.node(child).nextSibling
+    }
+    if plain { result = resolveBoxEdges(style, base, shape & KEY_ZERO_EDGES != 0).inset.horizontal() + widest }
+  }
+  widths[id] = result
+  return result
 }
 
 // Whether a box has no in-flow children: absolutely positioned children take
@@ -2171,8 +2234,10 @@ fn inheritedGridItem(nodes: &BoxTree<'_>, id: usize) -> bool {
 }
 
 // The changed boxes to lay out alone, and the size probes of each of them
-// (`probes[ends[i - 1]..ends[i]]`) that the previous compute used.
-effect fn cutoffCandidates(tree: &Tree, since: usize, nodes: &BoxTree<'_>, output: &LayoutTree, changes: &[usize], boxes: &mut List<usize>, ranges: &mut List<FinalRange>, probes: &mut List<CachedProbe>, ends: &mut List<usize>) ! OutOfMemoryError ? &mut Allocator {
+// (`probes[ends[i - 1]..ends[i]]`) that the previous compute used. A plain
+// box's width is read without a probe (see plainWidth): `plains` has what
+// each box's was when anything asked for it, else PLAIN_UNKNOWN.
+effect fn cutoffCandidates(tree: &Tree, since: usize, nodes: &BoxTree<'_>, output: &LayoutTree, changes: &[usize], boxes: &mut List<usize>, ranges: &mut List<FinalRange>, probes: &mut List<CachedProbe>, ends: &mut List<usize>, plains: &mut List<f32>) ! OutOfMemoryError ? &mut Allocator {
   if !output.fragments.settledOutput() { return }
   if output.boxes.length() != nodes.boxes.length() { return }
   let previous = output.cache.previousGeneration()
@@ -2241,6 +2306,9 @@ effect fn cutoffCandidates(tree: &Tree, since: usize, nodes: &BoxTree<'_>, outpu
       ancestor = nodes.node(ancestor).parent
     }
     if !eligible { continue }
+    let mut plain = PLAIN_UNKNOWN
+    if id < output.cache.plainWidths.length() { plain = output.cache.plainWidths.get(id) }
+    if plain != PLAIN_UNKNOWN { probed = true }
     if probed && (insets || output.cache.result(id).beside) { continue }
     if resting(output.cutoffMisses.asSlice(), id) { continue }
     let mark = probes.length()
@@ -2251,6 +2319,7 @@ effect fn cutoffCandidates(tree: &Tree, since: usize, nodes: &BoxTree<'_>, outpu
     run boxes.append(id)
     run ranges.append(range)
     run ends.append(probes.length())
+    run plains.append(plain)
   }
 }
 
@@ -2531,7 +2600,7 @@ fn unsetSubtree(nodes: &BoxTree<'_>, fragments: &mut FragmentArena, id: usize) {
 
 // Lays out a candidate alone and, when its parent would see no change,
 // splices it into the previous output; see cutoffCandidates.
-effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutTree, facts: &mut BoxFacts, measurer: &mut M, id: usize, range: FinalRange, probes: &[CachedProbe], first: usize, end: usize) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutTree, facts: &mut BoxFacts, measurer: &mut M, id: usize, range: FinalRange, probes: &[CachedProbe], first: usize, end: usize, plain: f32) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let final = output.cache.result(id).*
   let count = nodes.boxes.length()
   let mut scratchBoxes = Intrinsic.replace(output.scratchBoxes, List<Layout>.make())
@@ -2561,6 +2630,8 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>,
     same = Layout.sameBesideOverflow(&pass.boxes[id], &probes[at].layout, baselines)
     at = at + 1
   }
+  // What read the box's plain width in place of a probe must find it again.
+  if same && plain != PLAIN_UNKNOWN { same = (run plainWidth(nodes, &mut pass, id)) == plain }
   if same {
     if final.beside {
       let mut bfc = BfcState.make()
@@ -2692,10 +2763,11 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   let mut aloneRanges = List<FinalRange>.make()
   let mut aloneProbes = List<CachedProbe>.make()
   let mut aloneEnds = List<usize>.make()
+  let mut alonePlains = List<f32>.make()
   if !sameBoxes { output.cutoffMisses.clear() }
   if sameBoxes {
     run output.cache.rotateFinals()
-    if logged { run cutoffCandidates(tree, since, &nodes, &output, changes.asSlice(), &mut alone, &mut aloneRanges, &mut aloneProbes, &mut aloneEnds) }
+    if logged { run cutoffCandidates(tree, since, &nodes, &output, changes.asSlice(), &mut alone, &mut aloneRanges, &mut aloneProbes, &mut aloneEnds, &mut alonePlains) }
     Incremental.invalidateChanged(tree, &nodes, &mut output.cache, since, logged, changes.asSlice(), alone.asSlice())
     run output.cache.compact()
   } else if kept {
@@ -2763,7 +2835,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   while candidate < alone.length() {
     let mut first: usize = 0
     if candidate > 0 { first = aloneEnds.get(candidate - 1) }
-    let held = run cutoffBox(&nodes, &mut output, &mut facts, &mut measurer, alone.get(candidate), aloneRanges.get(candidate), aloneProbes.asSlice(), first, aloneEnds.get(candidate))
+    let held = run cutoffBox(&nodes, &mut output, &mut facts, &mut measurer, alone.get(candidate), aloneRanges.get(candidate), aloneProbes.asSlice(), first, aloneEnds.get(candidate), alonePlains.get(candidate))
     run noteCutoff(&mut output.cutoffMisses, alone.get(candidate), held)
     if !held {
       Incremental.invalidateBox(&nodes, &mut output.cache, alone.get(candidate), true)

@@ -10,7 +10,7 @@ import style { Style, Dimension, DimensionKind, Direction, WritingMode, TextOrie
 import tree { NO_NODE, Measurement }
 import box_tree { BoxTree }
 import context { Input, ResolvedBox, resolveBox, childrenInput, resolve, resolves, outOfFlow, isFlex, scrollable, overflowForAxis, UNBOUNDED }
-import engine { widthIgnoresHeight, crossIgnoresMain, layoutNode, layoutNodeInPlace, layoutEmptyLeafInPlace, plainMeasuredBox, probeFresh, normalizeKey, constraintFreeProbe, sizeEmptyBox, emptyIntrinsicWidth, shapedBox, ITEM_OUT_OF_FLOW, ITEM_ORDERED }
+import engine { plainWidth, widthIgnoresHeight, crossIgnoresMain, layoutNode, layoutNodeInPlace, layoutEmptyLeafInPlace, plainMeasuredBox, probeFresh, normalizeKey, constraintFreeProbe, sizeEmptyBox, emptyIntrinsicWidth, shapedBox, ITEM_OUT_OF_FLOW, ITEM_ORDERED }
 import layout_pass { LayoutPass, CacheKind }
 import layout_cache { LayoutCache }
 import text { TextMeasure, TextError }
@@ -210,6 +210,10 @@ fn blockAxisConstraint(style: &Style, horizontal: bool, constraint: AvailableSpa
   return AvailableSpace.maxContent()
 }
 effect fn probe<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, childInput: &Input, horizontal: bool, constraint: AvailableSpace, crossKnown: bool, cross: f32) -> Probe ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  if horizontal && constraint.kind != AvailableKind.Definite && childInput.parentWritingMode == WritingMode.HorizontalTb && childInput.gridContext == 0 {
+    let plain = run plainWidth(nodes, &mut output, id)
+    if plain >= 0.0 { return Probe { size: Size { width: plain, height: 0.0 }, preferredRatio: 0.0, ratioBorderBox: false } }
+  }
   // A childless box without measured content.
   let shape = output.keyShape(id)
   if constraintFreeProbe(shape) {

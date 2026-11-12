@@ -342,12 +342,17 @@ pub struct LayoutCache {
   pub subgrids: SubgridPool,
   // Each block's BlockBase slot, or ABSENT; see noteBlockBase.
   blockSlots: List<usize>, blockBases: List<BlockBase>,
+  // Each box's plain content width (see engine.plainWidth), PLAIN_UNKNOWN
+  // until asked for, or PLAIN_NEVER; dropped where the box's entries are.
+  pub plainWidths: List<f32>,
 }
+pub const PLAIN_UNKNOWN: f32 = -1.0
+pub const PLAIN_NEVER: f32 = -2.0
 const CLEAR_LOG: usize = 16
 
 impl LayoutCache {
   pub fn make() -> LayoutCache {
-    return LayoutCache { heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<Input>.make(), layouts: List<Layout>.make(), spare: List<Entry>.make(), spareInputs: List<Input>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make() }
+    return LayoutCache { heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<Input>.make(), layouts: List<Layout>.make(), spare: List<Entry>.make(), spareInputs: List<Input>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make() }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() - self.dead }
   pub fn clear(self: &mut Self) {
@@ -381,6 +386,7 @@ impl LayoutCache {
     self.emptyAtStart = true
     self.blockSlots.clear()
     self.blockBases.clear()
+    self.plainWidths.clear()
   }
   // Starts a compute: the previous compute's final layouts become reusable.
   pub effect fn rotateFinals(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
@@ -608,6 +614,7 @@ impl LayoutCache {
     self.clearLogNext = (at + 1) % CLEAR_LOG
     self.flexMemos.dropBox(id)
     self.gridGeometry.dropBox(id)
+    if id < self.plainWidths.length() { self.plainWidths.set(id, PLAIN_UNKNOWN) }
     // The paragraph is prepared again, into the lists the old one leaves.
     if id < self.texts.length() && self.texts.asSlice()[id].length() != 0 {
       let kept = self.texts.asMutSlice()[id].asMutSlice()
@@ -866,6 +873,7 @@ impl LayoutCache {
     self.gridMemos.clear()
     self.blockSlots.clear()
     self.blockBases.clear()
+    self.plainWidths.clear()
     // Stored Inputs retain their immutable identities; only owner-indexed
     // lookup buckets become invalid when generated box indices change.
     self.subgrids.resetOwners()
