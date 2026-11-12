@@ -2,13 +2,14 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.ownership { Copy }
 import silk.collections.list { List }
 import silk.core.option { Option }
-import inline_text { NormalizedText }
+import silk.mem.box { Box }
 import inline_visual { Plan }
 import text { TextToken, TextAnalysis, TextBreak, TextCursor }
 import inline_items { Item, Scope, FontBox }
 import inline_visual { Line }
+import style { Direction }
 import fragments { TextFragmentKind }
-import geometry { ResolvedEdges }
+import geometry { ResolvedEdges, Layout }
 import tree { NO_NODE }
 
 // `font` is the font the run was shaped with (fallback included); `box` is the style's
@@ -67,38 +68,73 @@ impl TextCandidate {
 
 // An entire normalized paragraph belongs to one compute pass. Fragment cursors
 // address these tokens, never a suffix whose bidi or source coordinates differ.
+// `hasTokens` is false for one whose core a previous compute kept: its tokens
+// are still to be rebuilt.
 pub struct PreparedInline<'source> {
+  pub tokens: List<TextToken<'source>>,
+  pub core: Box<PreparedCore>,
+  pub hasTokens: bool,
+}
+
+// What a paragraph's preparation keeps between computes of a LayoutTree:
+// everything but the normalized tokens, which borrow source text and are
+// rebuilt. It is boxed so that handing a paragraph from probe to probe and
+// from compute to compute moves a pointer.
+pub struct PreparedCore {
   pub ready: bool,
-  pub normalized: NormalizedText<'source>,
   pub analysis: TextAnalysis,
   pub offered: List<TextBreak>,
   pub visual: Plan,
   pub barriers: List<bool>,
   pub memo: TextMemo,
+  // The tokens' origins; between computes their storage alone, which the
+  // next normalization fills.
+  pub origins: List<usize>,
 }
-impl<'p> PreparedInline<'p> {
-  pub fn make<'source>() -> PreparedInline<'source> {
-    return PreparedInline {
+impl PreparedCore {
+  pub fn make() -> PreparedCore {
+    return PreparedCore {
       ready: false,
-      normalized: NormalizedText { tokens: List<TextToken<'source>>.make(), origins: List<usize>.make() },
       analysis: TextAnalysis.uniform(0, 0, 0, false),
-      offered: List<TextBreak>.make(), visual: Plan.make(), barriers: List<bool>.make(), memo: TextMemo.make(),
+      offered: List<TextBreak>.make(), visual: Plan.make(), barriers: List<bool>.make(), memo: TextMemo.make(), origins: List<usize>.make(),
     }
   }
 }
 
-// What a paragraph's preparation keeps between computes of a LayoutTree:
-// everything but the normalized tokens, which borrow source text and are
-// rebuilt. Compute drops it with the box's other kept results when a change
-// can reach the box's content.
+// A paragraph's core between computes. Compute drops it with the box's other
+// kept results when a change can reach the box's content.
 pub struct KeptText {
-  pub analysis: TextAnalysis, pub offered: List<TextBreak>, pub visual: Plan, pub barriers: List<bool>, pub memo: TextMemo,
-  // The token origins' storage alone: the next normalization fills it.
-  pub origins: List<usize>,
-  // Set when a change reached the box's content: nothing here holds any
-  // more, but the paragraph's next preparation fills these lists again
+  pub core: Box<PreparedCore>,
+  // Set when a change reached the box's content: nothing in the core holds
+  // any more, but the paragraph's next preparation fills its lists again
   // instead of allocating its own.
   pub stale: bool,
+}
+
+pub struct LineBox {
+  pub start: usize, pub end: usize, pub y: f32, pub left: f32, pub width: f32, pub advance: f32, pub hangingStart: f32,
+  pub height: f32, pub baseline: f32, pub real: bool, pub last: bool, pub direction: Direction, pub visual: Line,
+}
+
+// The lines a paragraph of plain text was last fitted into, beside no
+// floats and unfragmented: the request they answer, its result, and the
+// lines with their items and text leaves. The same request is answered from
+// here, and emits its fragments from these lines, without fitting again.
+pub struct FittedLines {
+  pub valid: bool,
+  pub width: f32, pub inset: ResolvedEdges, pub heightDefinite: bool, pub height: f32, pub firstFormatted: bool,
+  pub result: Layout,
+  pub lines: List<LineBox>, pub items: List<Item>, pub texts: List<TextLeaf>,
+}
+impl FittedLines {
+  pub fn make() -> FittedLines {
+    return FittedLines { valid: false, width: 0.0, inset: ResolvedEdges.zero(), heightDefinite: false, height: 0.0, firstFormatted: false,
+      result: Layout.zero(), lines: List<LineBox>.make(), items: List<Item>.make(), texts: List<TextLeaf>.make() }
+  }
+  pub fn answers(self: &Self, width: f32, inset: &ResolvedEdges, heightDefinite: bool, height: f32, firstFormatted: bool) -> bool {
+    return self.valid && self.width == width && sameEdges(&self.inset, inset) && self.heightDefinite == heightDefinite
+      && (!heightDefinite || self.height == height) && self.firstFormatted == firstFormatted
+  }
 }
 
 // Line fitting results that depend only on the prepared paragraph, its items
@@ -117,6 +153,7 @@ pub struct TextMemo {
   // Fonts that candidates' text leaves index, and ranges shaped without a
   // visual plan, chained by the unit they start in.
   pub fonts: List<TextFont>, pub segments: List<Segment>, pub heads: List<usize>,
+  pub fitted: FittedLines,
   // Candidates of dropped segments, whose lists the next segments reuse.
   spare: List<TextCandidate>,
   valid: bool,
@@ -127,7 +164,7 @@ impl TextMemo {
       items: List<Item>.make(), scopes: List<Scope>.make(), prefix: List<f32>.make(),
       minContent: 0.0, maxContent: 0.0, hasMin: false, hasMax: false,
       widths: List<f32>.make(), counts: List<usize>.make(), ends: List<usize>.make(),
-      fonts: List<TextFont>.make(), segments: List<Segment>.make(), heads: List<usize>.make(), spare: List<TextCandidate>.make(), valid: false,
+      fonts: List<TextFont>.make(), segments: List<Segment>.make(), heads: List<usize>.make(), fitted: FittedLines.make(), spare: List<TextCandidate>.make(), valid: false,
     }
   }
   // Keeps the results when they were computed from the same items and
@@ -146,6 +183,7 @@ impl TextMemo {
     }
     if same { return }
     self.valid = true
+    self.fitted.valid = false
     run self.dropSegments()
     self.heads.clear()
     self.fonts.clear()
@@ -177,6 +215,7 @@ impl TextMemo {
   // Drops every result, for a paragraph whose tokens changed.
   pub fn forget(self: &mut Self) {
     self.valid = false
+    self.fitted.valid = false
     self.prefix.clear()
   }
   // The shaped range [start, end), or NO_NODE.
