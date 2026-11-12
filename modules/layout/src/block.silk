@@ -258,6 +258,145 @@ pub fn leafBlockInto(style: &Style, input: &Input, physicalBox: &ResolvedBox, bf
   if result.collapsesThrough { result.collapsesThrough = selfCollapsingSize(style, input.parent, box.size.widthDefinite) }
 }
 
+// A block whose one child is an anonymous run of text (a label, a paragraph):
+// layoutBlockPass's result for it, without the pass. The engine sizes the box
+// and takes this path outside fragmentation, in a formatting context that
+// holds no floats; text places none.
+//
+// textLeafChild is the pass's preparation of the child, from the request and
+// the box as resolved for it: false when the child is independent or its
+// inline size is not yet known, which the pass handles.
+pub struct TextLeafChild { child: Child }
+pub fn textLeafChild(nodes: &BoxTree<'_>, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, leaf: &mut TextLeafChild) -> bool {
+  let axes = Axes.make(style.writingMode)
+  let box = axes.box(physicalBox.*)
+  let mut parent = OptionalSize.none()
+  if physicalBox.size.widthDefinite {
+    parent.width = max(0.0, physicalBox.size.width - physicalBox.inset.horizontal())
+    parent.widthDefinite = !axes.vertical || !input.indefiniteWidth
+  }
+  if physicalBox.size.heightDefinite {
+    parent.height = max(0.0, physicalBox.size.height - physicalBox.inset.vertical())
+    parent.heightDefinite = axes.vertical || !input.indefiniteHeight
+  }
+  let childBase = childrenInput(&input, style, &physicalBox, parent)
+  let childId = nodes.node(id).firstChild
+  prepareChildInto(nodes, childId, &childBase, axes, &box, input.availableWidth, false, &mut leaf.child)
+  let childStyle = nodes.style(childId)
+  return childStyle.float == Float.None && !leaf.child.input.blockRoot && !establishesContext(childStyle, &leaf.child.input) && !childStyle.replaced
+}
+impl TextLeafChild {
+  pub fn make(input: &Input) -> TextLeafChild {
+    return TextLeafChild { child: Child { id: NO_NODE, margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), input: input.*, width: 0.0, parallel: false } }
+  }
+}
+
+// The max-content inline size of a text leaf, as the pass computes it for an
+// intrinsic request: `leaf` is textLeafChild's for that request and `box`
+// the box resolved for it, of indefinite inline size.
+pub effect fn textLeafLargest<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, style: &Style, physicalBox: &ResolvedBox, leaf: &TextLeafChild) -> f32 ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let axes = Axes.make(style.writingMode)
+  let box = axes.box(physicalBox.*)
+  run probeNode(nodes, &mut output, &mut measurer, leaf.child.id, &leaf.child.input)
+  let width = axes.size(output.boxes[leaf.child.id].size).width
+  return clamp(max(0.0, width + leaf.child.margin.horizontal()) + box.inset.horizontal(), box.min.width, box.max.width)
+}
+
+// The pass itself, for a box of definite inline size: lays the child out
+// and places it, and fills `result`, which starts as Layout.zero().
+pub effect fn textLeafContents<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, leaf: &mut TextLeafChild, result: &mut Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let axes = Axes.make(style.writingMode)
+  let box = axes.box(physicalBox.*)
+  let origin = input.bfcContentOrigin
+  let formattingRoot = input.blockRoot || establishesContext(style, &input) || style.writingMode != input.parentWritingMode
+  let collapseTop = !formattingRoot && box.inset.top == 0.0
+  let collapseBottom = !formattingRoot && box.inset.bottom == 0.0 && !box.size.heightDefinite
+  // What the last final pass gave the children is not what this one gives.
+  if input.performLayout { drop output.cache.takeBlockBase(id) }
+  let width = box.size.width
+  let contentWidth = max(0.0, width - box.inset.horizontal())
+  let externalMargin = Axes.make(input.parentWritingMode).edges(physicalBox.margin)
+  let mut top = Margins.single(externalMargin.top)
+  let mut bottom = Margins.single(externalMargin.bottom)
+  let item = &mut leaf.child
+  let childStyle = nodes.style(item.id)
+  let mut x = inlineOffset(childStyle, &item.input, &axes, style.usedDirection(), item.margin, item.width, contentWidth)
+  // Without floats nothing clears the child or pushes it down.
+  let mut joined = Margins.single(item.margin.top)
+  let mut y: f32 = 0.0
+  if !collapseTop { y = joined.value() }
+  item.input.bfcContentOrigin = Point { x: origin.x + x + item.inset.left, y: origin.y + y + item.inset.top }
+  bfc.sourceFloor = max(bfc.sourceFloor, origin.y + y - item.margin.top)
+  drop run layoutInFlow(nodes, &mut output, &mut measurer, item.id, &item.input, &mut bfc)
+  let mut childLayout = Layout.zero()
+  readStored(&mut childLayout, &output.boxes[item.id])
+  childLayout.size = axes.size(childLayout.size)
+  let childTop = topMargins(&childLayout)
+  joined = childTop
+  if childLayout.size.width != item.width { x = inlineOffset(childStyle, &item.input, &axes, style.usedDirection(), item.margin, childLayout.size.width, contentWidth) }
+  y = 0.0
+  if !collapseTop { y = joined.value() }
+  let childBottom = bottomMargins(&childLayout)
+  if collapseTop {
+    top = top.join(childTop)
+    if childLayout.collapsesThrough { top = top.join(childBottom) }
+  }
+  let mut cursor: f32 = 0.0
+  let mut pending = childBottom
+  let mut leading = true
+  let mut allThrough = true
+  if childLayout.collapsesThrough { pending = joined.join(childBottom) }
+  else {
+    cursor = y + childLayout.size.height
+    leading = false
+    allThrough = false
+  }
+  bfc.sourceFloor = max(bfc.sourceFloor, origin.y + y - item.margin.top)
+  let childAxes = Axes.make(childStyle.writingMode)
+  if axes.vertical == childAxes.vertical {
+    if childLayout.hasFirstBaseline {
+      let mut first = childLayout.firstBaselines
+      if axes.reverseBlock != childAxes.reverseBlock { first = first.reversed(childLayout.size.height) }
+      result.firstBaselines = first.translated(box.inset.top + y)
+      result.hasFirstBaseline = true
+    }
+    if childLayout.hasLastBaseline {
+      let mut last = childLayout.lastBaselines
+      if axes.reverseBlock != childAxes.reverseBlock { last = last.reversed(childLayout.size.height) }
+      result.lastBaselines = last.translated(box.inset.top + y)
+      result.hasLastBaseline = true
+    }
+  }
+  let mut usedMargin = item.margin
+  if blockJustification(childStyle, &item.input) == Align.Normal || axes.lowAuto(childStyle) || axes.highAuto(childStyle) {
+    usedMargin.left = x
+    usedMargin.right = contentWidth - childLayout.size.width - x
+  }
+  run output.place(item.id, Point { x: box.inset.left + x, y: box.inset.top + y }, axes.physicalEdges(usedMargin), childLayout.hasClearance, input.performLayout)
+  let bottomAdjoins = collapseBottom && !(allThrough && collapseTop && box.min.height > box.inset.vertical())
+  if bottomAdjoins { bottom = bottom.join(pending) }
+  if !bottomAdjoins && !(leading && collapseTop) { cursor = cursor + pending.value() }
+  let mut height = clamp(max(0.0, cursor) + box.inset.vertical(), box.min.height, box.max.height)
+  if box.size.heightDefinite { height = box.size.height }
+  let contentHeight = max(0.0, height - box.inset.vertical())
+  let alignmentOffset = blockContentOffset(style, contentHeight - max(0.0, cursor))
+  result.size = axes.size(Size { width: width, height: height })
+  if result.hasFirstBaseline { result.firstBaselines = result.firstBaselines.translated(alignmentOffset) }
+  if result.hasLastBaseline { result.lastBaselines = result.lastBaselines.translated(alignmentOffset) }
+  if axes.vertical || alignmentOffset != 0.0 {
+    let mut child = output.boxes[item.id]
+    let point = Point { x: child.location.x, y: child.location.y + alignmentOffset }
+    child.location = axes.physicalPoint(point, child.size, result.size)
+    run output.store(item.id, &child, input.performLayout)
+  }
+  result.marginTopPositive = top.positive
+  result.marginTopNegative = top.negative
+  result.marginBottomPositive = bottom.positive
+  result.marginBottomNegative = bottom.negative
+  result.collapsesThrough = !formattingRoot && allThrough && box.inset.vertical() == 0.0 && box.min.height == 0.0 && height == 0.0
+  if result.collapsesThrough { result.collapsesThrough = selfCollapsingSize(style, input.parent, box.size.widthDefinite) }
+}
+
 // A block pass's child list, kept in LayoutPass between passes.
 pub struct BlockScratch { children: List<Child> }
 

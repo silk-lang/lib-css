@@ -13,6 +13,7 @@ import fragments { Fragment, FragmentArena, FragmentKind, one }
 import fragmentation { ResumeStore, ResumeCheckpoint, StaticAnchor, Fragmentainers, Fragmentainer, FragmentAncestor, FragmentationError }
 import breaks { ForcedBreaks, PageSide, BreakKinds }
 import inline_prepared { PreparedInline, KeptText }
+import text { TextToken }
 
 import flex { FlexScratch }
 import inline_layout { InlineScratch }
@@ -72,7 +73,9 @@ pub struct LayoutPass<'a, 'source> {
   pub frameOffsets: List<f32>,
   fullBoxes: List<FullBoxGeometry>,
   fullIndices: List<usize>,
-  pub inlinePrepared: List<List<PreparedInline<'source>>>,
+    pub inlinePrepared: List<List<PreparedInline<'source>>>,
+  // A paragraph's tokens before normalization, one paragraph at a time.
+  pub rawTokens: List<TextToken<'source>>,
   lineLimits: List<LineLimit>,
   pub cache: &'a mut LayoutCache,
   // The previous compute's normal-flow result, and which boxes head subtrees
@@ -133,7 +136,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   pub effect fn over(boxes: &'a mut [Layout], fragments: &'a mut FragmentArena, sources: &'source [Node], cache: &'a mut LayoutCache, previous: &'a mut Snapshot, writes: &'a mut BoxWrites, facts: &'a mut BoxFacts) -> LayoutPass<'a, 'source> ! OutOfMemoryError ? &mut Allocator {
     // The paragraph cache may borrow text from these source nodes.
     drop sources
-    return LayoutPass { boxes: move boxes, fragments: move fragments, fragmentParent: NO_NODE, frame: NO_NODE, resumes: ResumeStore.make(), frames: Fragmentainers.empty(), frameRoots: List<usize>.make(), frameOffsets: List<f32>.make(), fullBoxes: List<FullBoxGeometry>.make(), fullIndices: List<usize>.make(), inlinePrepared: List<List<PreparedInline<'source>>>.make(), lineLimits: List<LineLimit>.make(), cache: move cache, previous: move previous, facts: move facts, floatContext: List<FloatBox>.make(), outOfFlowBoxes: List<u64>.make(), overflowEscapes: List<usize>.make(), overflowMarks: List<u64>.make(), relativeOffsets: List<Point>.make(), absoluteInputOwner: NO_NODE, absoluteInput: Input.make(OptionalSize.definite(0.0, 0.0)), absoluteBox: ResolvedBox { padding: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(), min: Size.zero(), max: Size.zero(), size: OptionalSize.none() }, absoluteRect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, absoluteLimits: ResolvedEdges.zero(), absoluteLimitsSet: false, absoluteScrollParent: NO_NODE, absoluteScrolled: false, absoluteScrollport: Size.zero(), inPlace: false, writes: move writes, tracking: true, deferSticky: false, anchors: List<StaticAnchor>.make(), selections: List<ScrollbarSelection>.make(), frameSelections: List<List<FrameScrollbarSelection>>.make(), scrollbarSnapshots: List<ScrollbarSnapshot>.make(), hasAutoScrollbars: false, needsRelayout: false, stats: LayoutStats.zero(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make() }
+    return LayoutPass { boxes: move boxes, fragments: move fragments, fragmentParent: NO_NODE, frame: NO_NODE, resumes: ResumeStore.make(), frames: Fragmentainers.empty(), frameRoots: List<usize>.make(), frameOffsets: List<f32>.make(), fullBoxes: List<FullBoxGeometry>.make(), fullIndices: List<usize>.make(), inlinePrepared: List<List<PreparedInline<'source>>>.make(), rawTokens: List<TextToken<'source>>.make(), lineLimits: List<LineLimit>.make(), cache: move cache, previous: move previous, facts: move facts, floatContext: List<FloatBox>.make(), outOfFlowBoxes: List<u64>.make(), overflowEscapes: List<usize>.make(), overflowMarks: List<u64>.make(), relativeOffsets: List<Point>.make(), absoluteInputOwner: NO_NODE, absoluteInput: Input.make(OptionalSize.definite(0.0, 0.0)), absoluteBox: ResolvedBox { padding: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(), min: Size.zero(), max: Size.zero(), size: OptionalSize.none() }, absoluteRect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, absoluteLimits: ResolvedEdges.zero(), absoluteLimitsSet: false, absoluteScrollParent: NO_NODE, absoluteScrolled: false, absoluteScrollport: Size.zero(), inPlace: false, writes: move writes, tracking: true, deferSticky: false, anchors: List<StaticAnchor>.make(), selections: List<ScrollbarSelection>.make(), frameSelections: List<List<FrameScrollbarSelection>>.make(), scrollbarSnapshots: List<ScrollbarSnapshot>.make(), hasAutoScrollbars: false, needsRelayout: false, stats: LayoutStats.zero(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make() }
   }
   pub effect fn beginFrame(self: &mut Self, frame: usize) ! OutOfMemoryError ? &mut Allocator {
     if self.frame == NO_NODE { run self.resumes.prepare(self.boxes.length) }
@@ -606,7 +609,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
     while id < self.inlinePrepared.length() {
       match self.inlinePrepared.asMutSlice()[id].pop() {
         Option<PreparedInline<'source>>.Some { value } => {
-          run self.cache.keepText(id, KeptText { analysis: move value.analysis, offered: move value.offered, visual: move value.visual, barriers: move value.barriers, memo: move value.memo })
+          run self.cache.keepText(id, KeptText { analysis: move value.analysis, offered: move value.offered, visual: move value.visual, barriers: move value.barriers, memo: move value.memo, origins: move value.normalized.origins, stale: false })
         }
         Option<PreparedInline<'source>>.None => {}
       }

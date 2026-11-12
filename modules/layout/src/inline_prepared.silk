@@ -1,6 +1,7 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.ownership { Copy }
 import silk.collections.list { List }
+import silk.core.option { Option }
 import inline_text { NormalizedText }
 import inline_visual { Plan }
 import text { TextToken, TextAnalysis, TextBreak, TextCursor }
@@ -21,6 +22,22 @@ pub struct TextCandidate {
 impl TextCandidate {
   pub fn make() -> TextCandidate {
     return TextCandidate { items: List<Item>.make(), texts: List<TextLeaf>.make(), advance: 0.0, hanging: 0.0, hangingItems: 0, real: false, visual: Line.make() }
+  }
+  // Back to make()'s state, keeping the lists' storage.
+  pub fn reset(self: &mut Self) {
+    self.items.clear()
+    self.texts.clear()
+    self.advance = 0.0
+    self.hanging = 0.0
+    self.hangingItems = 0
+    self.real = false
+    self.visual.active = false
+    self.visual.order.clear()
+    self.visual.positions.clear()
+    self.visual.spans.clear()
+    self.visual.firstSpan = NO_NODE
+    self.visual.advance = 0.0
+    self.visual.real = false
   }
   // Copies a candidate shaped without a visual plan.
   pub effect fn copyPlain(self: &mut Self, from: &TextCandidate) ! OutOfMemoryError ? &mut Allocator {
@@ -76,6 +93,12 @@ impl<'p> PreparedInline<'p> {
 // can reach the box's content.
 pub struct KeptText {
   pub analysis: TextAnalysis, pub offered: List<TextBreak>, pub visual: Plan, pub barriers: List<bool>, pub memo: TextMemo,
+  // The token origins' storage alone: the next normalization fills it.
+  pub origins: List<usize>,
+  // Set when a change reached the box's content: nothing here holds any
+  // more, but the paragraph's next preparation fills these lists again
+  // instead of allocating its own.
+  pub stale: bool,
 }
 
 // Line fitting results that depend only on the prepared paragraph, its items
@@ -94,6 +117,8 @@ pub struct TextMemo {
   // Fonts that candidates' text leaves index, and ranges shaped without a
   // visual plan, chained by the unit they start in.
   pub fonts: List<TextFont>, pub segments: List<Segment>, pub heads: List<usize>,
+  // Candidates of dropped segments, whose lists the next segments reuse.
+  spare: List<TextCandidate>,
   valid: bool,
 }
 impl TextMemo {
@@ -102,7 +127,7 @@ impl TextMemo {
       items: List<Item>.make(), scopes: List<Scope>.make(), prefix: List<f32>.make(),
       minContent: 0.0, maxContent: 0.0, hasMin: false, hasMax: false,
       widths: List<f32>.make(), counts: List<usize>.make(), ends: List<usize>.make(),
-      fonts: List<TextFont>.make(), segments: List<Segment>.make(), heads: List<usize>.make(), valid: false,
+      fonts: List<TextFont>.make(), segments: List<Segment>.make(), heads: List<usize>.make(), spare: List<TextCandidate>.make(), valid: false,
     }
   }
   // Keeps the results when they were computed from the same items and
@@ -121,7 +146,7 @@ impl TextMemo {
     }
     if same { return }
     self.valid = true
-    self.segments.clear()
+    run self.dropSegments()
     self.heads.clear()
     self.fonts.clear()
     self.hasMin = false
@@ -139,6 +164,15 @@ impl TextMemo {
     index = 0
     while index < scopes.length { run self.scopes.append(scopes[index])
       index = index + 1 }
+  }
+  // Empties `segments`, keeping their candidates' lists for the next ones.
+  effect fn dropSegments(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    while true {
+      match self.segments.pop() {
+        Option<Segment>.Some { value } => { run self.spare.append(move value.candidate) }
+        Option<Segment>.None => { break }
+      }
+    }
   }
   // Drops every result, for a paragraph whose tokens changed.
   pub fn forget(self: &mut Self) {
@@ -160,11 +194,15 @@ impl TextMemo {
   // `limit` of them (a drag-resize fits new lines each compute).
   pub effect fn addSegment(self: &mut Self, start: TextCursor, end: TextCursor, candidate: &TextCandidate, limit: usize) ! OutOfMemoryError ? &mut Allocator {
     if self.segments.length() >= limit {
-      self.segments.clear()
+      run self.dropSegments()
       self.heads.clear()
     }
     while self.heads.length() <= start.unit { run self.heads.append(NO_NODE) }
     let mut entry = Segment { start: start, end: end, next: self.heads.get(start.unit), candidate: TextCandidate.make() }
+    match self.spare.pop() {
+      Option<TextCandidate>.Some { value } => { entry.candidate = move value }
+      Option<TextCandidate>.None => {}
+    }
     run entry.candidate.copyPlain(candidate)
     self.heads.set(start.unit, self.segments.length())
     run self.segments.append(move entry)

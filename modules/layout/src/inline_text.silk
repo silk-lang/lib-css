@@ -39,8 +39,10 @@ fn controlLength(bytes: &[u8], at: usize) -> usize {
   return 0
 }
 
-pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node]) -> NormalizedText<'a> ! OutOfMemoryError ? &mut Allocator {
-  let mut result = NormalizedText { tokens: List<TextToken<'a>>.make(), origins: List<usize>.make() }
+// `origins` is a spare list whose storage the result's origins take.
+pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: List<usize>) -> NormalizedText<'a> ! OutOfMemoryError ? &mut Allocator {
+  let mut result = NormalizedText { tokens: List<TextToken<'a>>.make(), origins: move origins }
+  result.origins.clear()
   let mut pending = NO_NODE
   let mut segment = false
   let mut localPending = false

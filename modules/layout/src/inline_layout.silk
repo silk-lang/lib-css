@@ -823,11 +823,14 @@ pub struct InlineScratch { scopes: List<Scope>, extents: List<Extent>, items: Li
 struct TextScratch {
   original: List<Item>, points: List<TextBreak>, shaped: List<TextRun>, hangingRanges: List<TextRange>,
   finalItems: List<Item>, finalTexts: List<TextLeaf>, lines: List<LineBox>, lineEnds: List<usize>,
+  // The line being fitted and the last one that fit, and emitLine's spans.
+  candidate: TextCandidate, accepted: TextCandidate, spans: List<Span>,
 }
 impl TextScratch {
   fn make() -> TextScratch {
     return TextScratch { original: List<Item>.make(), points: List<TextBreak>.make(), shaped: List<TextRun>.make(), hangingRanges: List<TextRange>.make(),
-      finalItems: List<Item>.make(), finalTexts: List<TextLeaf>.make(), lines: List<LineBox>.make(), lineEnds: List<usize>.make() }
+      finalItems: List<Item>.make(), finalTexts: List<TextLeaf>.make(), lines: List<LineBox>.make(), lineEnds: List<usize>.make(),
+      candidate: TextCandidate.make(), accepted: TextCandidate.make(), spans: List<Span>.make() }
   }
   fn clear(self: &mut Self) {
     self.original.clear()
@@ -838,6 +841,9 @@ impl TextScratch {
     self.finalTexts.clear()
     self.lines.clear()
     self.lineEnds.clear()
+    self.candidate.reset()
+    self.accepted.reset()
+    self.spans.clear()
   }
 }
 
@@ -1348,8 +1354,8 @@ fn shapingBarrier(nodes: &BoxTree<'_>, item: &Item, scopes: &[Scope]) -> bool {
   return scope.inset.horizontal() != 0.0 || scope.margin.left != 0.0 || scope.margin.right != 0.0 || nodes.style(item.id).verticalAlign.kind != VerticalAlignKind.Baseline
 }
 
-effect fn tokensFor<'a>(nodes: &BoxTree<'a>, items: &[Item], scopes: &[Scope]) -> List<TextToken<'a>> ! OutOfMemoryError | TextError ? &mut Allocator {
-  let mut result = List<TextToken<'a>>.make()
+effect fn tokensFor<'a>(nodes: &BoxTree<'a>, items: &[Item], scopes: &[Scope], result: &mut List<TextToken<'a>>) ! OutOfMemoryError | TextError ? &mut Allocator {
+  result.clear()
   run result.reserveExact(items.length)
   let mut index: usize = 0
   while index < items.length {
@@ -1376,7 +1382,6 @@ effect fn tokensFor<'a>(nodes: &BoxTree<'a>, items: &[Item], scopes: &[Scope]) -
     run result.append(TextToken { kind: kind, text: value, source: node.source, sourceStart: 0, sourceEnd: String.byteLength(value), fontKey: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: style.unicodeBidi, replacedInline: inlineReplaced(style), whiteSpaceCollapse: style.whiteSpaceCollapse, textJustify: style.textJustify, shapingBarrier: barrier })
     index = index + 1
   }
-  return move result
 }
 
 effect fn textFont<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, fonts: &mut List<TextFont>, scopes: &[Scope], item: Item, key: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
@@ -1716,12 +1721,14 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     Option<PreparedInline<'source>>.None => {
       match output.cache.takeText(id) {
         Option<KeptText>.Some { value } => {
-          saved.ready = true
+          // A stale one lends its lists alone.
+          saved.ready = !value.stale
           saved.analysis = move value.analysis
           saved.offered = move value.offered
           saved.visual = move value.visual
           saved.barriers = move value.barriers
           saved.memo = move value.memo
+          saved.normalized.origins = move value.origins
           haveTokens = false
         }
         Option<KeptText>.None => {}
@@ -1739,8 +1746,11 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let mut memo = move saved.memo
   if !reuse { memo.forget() }
   if !reuse || !haveTokens {
-    let rawTokens = run tokensFor(nodes, raw, scopes)
-    normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources)
+    let mut rawTokens = Intrinsic.replace(output.rawTokens, List<TextToken<'source>>.make())
+    run tokensFor(nodes, raw, scopes, &mut rawTokens)
+    let origins = Intrinsic.replace(normalized.origins, List<usize>.make())
+    normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins)
+    output.rawTokens = move rawTokens
   }
   // Kept analysis covers exactly the tokens it was made for.
   if reuse && !haveTokens {
@@ -1861,8 +1871,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     index = index + 1
   }
   let shaped = &mut text.shaped
-  let mut candidate = TextCandidate.make()
-  let mut accepted = TextCandidate.make()
+  let mut candidate = Intrinsic.replace(text.candidate, TextCandidate.make())
+  let mut accepted = Intrinsic.replace(text.accepted, TextCandidate.make())
   let hangingRanges = &mut text.hangingRanges
   let mut available = input.availableWidth
   if axes.vertical { available = input.availableHeight }
@@ -2365,7 +2375,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   result.contentSize = axes.size(Size { width: width, height: cursor })
   if input.performLayout {
     if fragmented && !blocked { run emitPendingFloats(nodes, &mut output, &mut measurer, id, original.asSlice(), atomics.asSlice(), &input, &box, result.size, axes) }
-    let mut spans = Spans { values: List<Span>.make(), first: NO_NODE, last: NO_NODE }
+    let mut spans = Spans { values: Intrinsic.replace(text.spans, List<Span>.make()), first: NO_NODE, last: NO_NODE }
     run spans.values.reserveExact(scopes.length)
     index = 0
     while index < scopes.length { run spans.values.append(Span.make(NO_NODE))
@@ -2376,6 +2386,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       run emitLine(nodes, &mut output, &mut measurer, finalItems.asSlice(), atomics.asSlice(), finalTexts.asSlice(), memo.fonts.asSlice(), scopes, &mut extents, &mut spans, id, style, &axes, &box, result.size, line, baselineOffsets.translated(line.baseline), &input)
       index = index + 1
     }
+    text.spans = move spans.values
   }
   if fragmented {
     if sourceRequest.kinds.any() && !blocked {
@@ -2396,6 +2407,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     run output.resumes.set(id, state)
   }
   if fitsMemo && memoFirst == NO_NODE && !blocked && next == points.length() { run memo.record(width, lineEnds.asSlice()) }
+  text.candidate = move candidate
+  text.accepted = move accepted
   run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
   run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { ready: true, normalized: move normalized, analysis: move analysis, offered: move offered, visual: move visualPlan, barriers: move barriers, memo: move memo })
   return result
