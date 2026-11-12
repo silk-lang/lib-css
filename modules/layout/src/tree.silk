@@ -734,7 +734,7 @@ impl LayoutTree {
   pub fn invalidate(self: &mut Self) {
     self.scrollReady = false
     self.keptReusable = false
-    self.cache.clear()
+    self.cache.clearMeasured()
     self.snapshot.clear()
   }
   pub fn treeRevision(self: &Self) -> usize { return self.keptRevision }
