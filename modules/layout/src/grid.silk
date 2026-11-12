@@ -924,6 +924,17 @@ pub effect fn requestItem<'pass, 'source, M: Measure + TextMeasure>(
     inlineMinimum = style.minHeight
     blockMinimum = style.minWidth
   }
+  // An automatic minimum is at most a preferred length (Grid §6.6: the
+  // specified size suggestion, capped), and a box with a preferred length
+  // takes that length whatever smaller minimum it is given: such an axis
+  // needs no automatic minimum.
+  let mut inlineSized = style.width.kind == DimensionKind.Length && !style.replaced
+  let mut blockSized = style.height.kind == DimensionKind.Length && !style.replaced
+  if axis.vertical {
+    let swapped = inlineSized
+    inlineSized = blockSized
+    blockSized = swapped
+  }
   // A stretched item in one inflexible track with an automatic minimum needs
   // no automatic minimum: §12.5 sized that track to at least the item's
   // minimum contribution, its used minimum plus margins, so the stretched
@@ -934,7 +945,7 @@ pub effect fn requestItem<'pass, 'source, M: Measure + TextMeasure>(
   // An unchanged item in unchanged tracks keeps its minimum (see
   // ContributionMemos.kept).
   let cleared = output.cache.clearedAt(item.id)
-  if !inheritColumns && columnPolicy.automatic && inlineMinimum.kind == DimensionKind.Auto
+  if !inheritColumns && columnPolicy.automatic && inlineMinimum.kind == DimensionKind.Auto && !inlineSized
     && !(plain && request.known.widthDefinite && columnEnd - column == 1
       && columns[column].maximum != GridBreadthKind.Flex && percentFree(&output, item.id)
       && widthIgnoresHeight(nodes, &output, item.id)) {
@@ -953,7 +964,7 @@ pub effect fn requestItem<'pass, 'source, M: Measure + TextMeasure>(
       }
     }
   }
-  if !inheritRows && rowPolicy.automatic && blockMinimum.kind == DimensionKind.Auto
+  if !inheritRows && rowPolicy.automatic && blockMinimum.kind == DimensionKind.Auto && !blockSized
     && !(plain && request.known.heightDefinite && rowEnd - row == 1
       && rows[row].maximum != GridBreadthKind.Flex && percentFree(&output, item.id)) {
     let mut kept = Option<ItemContribution>.None

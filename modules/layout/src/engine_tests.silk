@@ -1091,3 +1091,33 @@ test effect fn contentFreeTreeExcludesWrapping() ! OutOfMemoryError | InvalidNod
   run compute(&tree, &mut output, &mut content, OptionalSize.definite(100.0, 100.0)) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(output.facts.keyShapes.get(output.firstBySource.get(root.index)) & 8192 != 0, "a restyled single-line container frees its ancestors")
 }
+
+// invalidate() followed by markDirty keeps the boxes: no style, text or
+// structure changed. A style change after it still regenerates them.
+test effect fn boxesStandAcrossMarkedInvalidation() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut style = Style.make()
+  style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  style.flexDirection = FlexDirection.Column
+  style.width = Dimension.px(300.0)
+  let mut tree = run Tree.make(move style) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let item = run tree.append(root, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run tree.setMeasurement(item, 0)
+  let mut output = LayoutTree.make()
+  let mut content = Content { minimum: 20.0, maximum: 60.0, height: 18.0 }
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  output.invalidate()
+  run tree.markDirty(item)
+  content.height = 30.0
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.boxes.get(output.firstBySource.get(item.index)).size.height == 30.0, "a marked leaf is measured again on the boxes that stand")
+  run Testing.expect(output.boxes.get(output.firstBySource.get(root.index)).size.height == 30.0, "its container follows")
+  output.invalidate()
+  run tree.markDirty(item)
+  let mut hidden = Style.make()
+  hidden.display = Display.None
+  run tree.setStyle(item, hidden)
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.boxes.get(output.firstBySource.get(root.index)).size.height == 0.0, "a style change after the mark regenerates the boxes")
+}

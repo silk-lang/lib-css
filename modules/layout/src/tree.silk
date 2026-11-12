@@ -161,6 +161,8 @@ pub struct Tree {
   // Scroll offset changes, which move fragments without a revision: the
   // count so far and the last SCROLL_LOG nodes changed.
   scrolls: usize, scrollNodes: List<usize>,
+  // The number of markDirty calls so far.
+  marks: usize,
   // Whether each slot of `nodes` holds a node; destroy frees a slot and
   // create takes the last freed one. Freed element style slots and grid
   // slots are reused the same way.
@@ -201,7 +203,7 @@ impl Tree {
     run scrollNodes.appendRepeated(NO_NODE, SCROLL_LOG)
     let mut live = List<bool>.make()
     run live.append(true)
-    return Tree { nodes: move nodes, styles: move styles, grids: move grids, gridNames: move gridNames, gridRevisions: move gridRevisions, viewportScrollOffset: Point { x: 0.0, y: 0.0 }, stickyDeferred: false, current: 1, structure: 1, generated: 1, changed: move changed, outer: move outer, insets: move insets, placed: move placed, logNodes: move logNodes, logRevisions: move logRevisions, logged: 0, logLost: 0, scrolls: 0, scrollNodes: move scrollNodes, live: move live, freeNodes: List<usize>.make(), freeStyles: List<usize>.make(), freeGrids: List<usize>.make() }
+    return Tree { nodes: move nodes, styles: move styles, grids: move grids, gridNames: move gridNames, gridRevisions: move gridRevisions, viewportScrollOffset: Point { x: 0.0, y: 0.0 }, stickyDeferred: false, marks: 0, current: 1, structure: 1, generated: 1, changed: move changed, outer: move outer, insets: move insets, placed: move placed, logNodes: move logNodes, logRevisions: move logRevisions, logged: 0, logLost: 0, scrolls: 0, scrollNodes: move scrollNodes, live: move live, freeNodes: List<usize>.make(), freeStyles: List<usize>.make(), freeGrids: List<usize>.make() }
   }
   // The current revision; it advances on every change.
   pub fn revision(self: &Self) -> usize { return self.current }
@@ -278,7 +280,11 @@ impl Tree {
     if !self.contains(id) { fail InvalidNode { index: id.index } }
     self.touch(id.index)
     self.generated = self.current
+    self.marks = self.marks + 1
   }
+  // The number of markDirty calls so far: revisions that changed no style,
+  // text or structure.
+  pub fn markRevision(self: &Self) -> usize { return self.marks }
   pub effect fn internGridName(self: &mut Self, name: string) -> usize ! GridError | OutOfMemoryError ? &mut Allocator {
     if !validGridName(name) { fail GridError {} }
     return run self.internName(name)
@@ -661,7 +667,7 @@ pub struct LayoutTree {
   pub facts: BoxFacts, pub writes: BoxWrites,
   // The viewport, viewport scroll offset and Tree scroll revision of the
   // last compute.
-  pub keptViewport: OptionalSize, pub keptScroll: Point, pub keptScrolls: usize,
+  pub keptViewport: OptionalSize, pub keptScroll: Point, pub keptScrolls: usize, pub keptMarks: usize,
   // Settled visual offsets before scroll/sticky positioning, for scroll-only updates.
   pub normalOffsets: List<Point>, pub scrollReady: bool,
   // Whether the last compute of the same boxes as the one before laid out
@@ -692,7 +698,7 @@ impl LayoutTree {
   pub fn make() -> LayoutTree {
     return LayoutTree {
       stats: LayoutStats.zero(),
-      cache: LayoutCache.make(), snapshot: Snapshot.make(), facts: BoxFacts.make(), writes: BoxWrites.make(), keptRevision: 0, keptReusable: false, normalOffsets: List<Point>.make(), scrollReady: false, keptViewport: OptionalSize.none(), keptScroll: Point { x: 0.0, y: 0.0 }, keptScrolls: 0, relaidMost: false, reuseIdle: 0,
+      cache: LayoutCache.make(), snapshot: Snapshot.make(), facts: BoxFacts.make(), writes: BoxWrites.make(), keptRevision: 0, keptReusable: false, normalOffsets: List<Point>.make(), scrollReady: false, keptViewport: OptionalSize.none(), keptScroll: Point { x: 0.0, y: 0.0 }, keptScrolls: 0, keptMarks: 0, relaidMost: false, reuseIdle: 0,
       boxes: List<Layout>.make(), boxNodes: List<BoxNode>.make(),
       anonymousStyles: List<Style>.make(),
       anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
