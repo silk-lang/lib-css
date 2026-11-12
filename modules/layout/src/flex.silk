@@ -10,7 +10,7 @@ import style { Style, Dimension, DimensionKind, Direction, WritingMode, TextOrie
 import tree { NO_NODE, Measurement }
 import box_tree { BoxTree }
 import context { Input, ResolvedBox, resolveBox, childrenInput, resolve, resolves, outOfFlow, isFlex, scrollable, overflowForAxis, UNBOUNDED }
-import engine { widthIgnoresHeight, layoutNode, layoutNodeInPlace, layoutEmptyLeafInPlace, plainMeasuredBox, probeFresh, normalizeKey, constraintFreeProbe, sizeEmptyBox, emptyIntrinsicWidth, shapedBox, ITEM_OUT_OF_FLOW, ITEM_ORDERED }
+import engine { widthIgnoresHeight, crossIgnoresMain, layoutNode, layoutNodeInPlace, layoutEmptyLeafInPlace, plainMeasuredBox, probeFresh, normalizeKey, constraintFreeProbe, sizeEmptyBox, emptyIntrinsicWidth, shapedBox, ITEM_OUT_OF_FLOW, ITEM_ORDERED }
 import layout_pass { LayoutPass, CacheKind }
 import layout_cache { LayoutCache }
 import text { TextMeasure, TextError }
@@ -116,6 +116,9 @@ struct Item {
   knownCross: f32,
   // The preferred main size a pending automatic minimum depends on.
   pendingPreferred: f32,
+  // A column item's width from its main-size probe at an unknown width, or
+  // -1: its hypothetical cross size when that width ignores the height.
+  probedCross: f32,
   // Flags last so they pack without padding between the f32 fields.
   align: Align,
   autoStart: bool, autoEnd: bool, autoCrossStart: bool, autoCrossEnd: bool, crossAuto: bool,
@@ -133,7 +136,7 @@ impl Item {
       cross: 0.0, crossMin: 0.0, crossMax: UNBOUNDED, crossAuto: true, align: Align.Stretch,
       baseline: 0.0, lastBaseline: 0.0, baselineEligible: false, baselineSizesLine: false, baselineEnd: false,
       frozen: false, violation: 0.0, collapsed: false, strut: 0.0, minContribution: 0.0, maxContribution: 0.0, mainDefinite: false,
-      knownCross: 0.0, knownCrossDefinite: false, minimumPending: false, pendingPreferred: 0.0 }
+      knownCross: 0.0, knownCrossDefinite: false, minimumPending: false, pendingPreferred: 0.0, probedCross: -1.0 }
   }
 }
 struct Line { start: usize, end: usize, count: usize, cross: f32, baseline: f32, lastBaseline: f32, baselineCross: f32, lastBaselineCross: f32 }
@@ -367,6 +370,7 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
     if !minProbed || !constraintFreeProbe(output.keyShape(id)) { measured = run probe(nodes, &mut output, &mut measurer, id, &childInput, horizontal, AvailableSpace.maxContent(), crossDefinite, crossSize) }
     maxContent = axisSize(measured.size, horizontal)
     contentCross = axisSize(measured.size, !horizontal)
+    if !horizontal && !crossDefinite && crossIgnoresMain(nodes, &output, id) { item.probedCross = contentCross }
     ratio = measured.preferredRatio
     borderRatio = measured.ratioBorderBox
   }
@@ -656,6 +660,14 @@ effect fn crossSizes<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       item.lastBaseline = 0.0
     } else if fixedCross(nodes, &item.*, parentStyle) && !input.fragmentation.active && item.align != Align.Baseline && item.align != Align.LastBaseline && !(input.baselines && !input.performLayout) && active(&item.*, collapsed) {
       item.cross = item.knownCross
+      item.baseline = 0.0
+      item.lastBaseline = 0.0
+      result.cross = max(result.cross, item.cross + item.crossStart + item.crossEnd)
+    } else if item.probedCross >= 0.0 && !axis.horizontal && !input.fragmentation.active && output.frame == NO_NODE && item.align != Align.Baseline && item.align != Align.LastBaseline && !(input.baselines && !input.performLayout) && active(&item.*, collapsed) {
+      // A column item whose width ignores its height has the width its
+      // main-size probe found, under the same width constraints, at any
+      // main size (§9.4 step 7 lays it out only for that width).
+      item.cross = item.probedCross
       item.baseline = 0.0
       item.lastBaseline = 0.0
       result.cross = max(result.cross, item.cross + item.crossStart + item.crossEnd)
