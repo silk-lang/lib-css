@@ -9,7 +9,7 @@ import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
 import style { Style, Dimension, Edges, Float, Display, DisplayOutside, DisplayInside, Position, BoxSizing, TextAlign, TextWrap, Direction, WhiteSpaceCollapse, TabSize, BoxDecorationBreak, FlexDirection, FlexWrap, Align }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableKind, max, min, abs }
-import tree { Tree, LayoutTree, InvalidNode, InvalidBox, BoxId, NO_NODE }
+import tree { Tree, LayoutTree, NodeId, InvalidNode, InvalidBox, BoxId, NO_NODE }
 import engine { compute }
 import fragments { Fragment, FragmentKind }
 
@@ -1159,6 +1159,65 @@ test effect fn plainWidthsHoldTheEarlyCutoff() ! OutOfMemoryError | TextError | 
     run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
     run Testing.expect(output.boxes.get(output.firstBySource.get(fitted.index)).size.width == 120.0 - usize.toF32(step) * 10.0, "the column follows an item of a stretched item")
     run Testing.expect(output.boxes.get(output.firstBySource.get(stretched.index)).size.width == 120.0 - usize.toF32(step) * 10.0, "the stretched item follows")
+    step = step + 1
+  }
+}
+
+// A box whose size changes clears its in-flow subtree, but a flex container
+// inside it is cleared alone: its items keep their results where their
+// requests stand and are laid out again where they do not.
+test effect fn resizedBlocksKeepItemsOfTheirFlexChildren() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let mut outer = Style.make()
+  outer.width = Dimension.px(400.0)
+  outer.padding.left = Dimension.px(3.0)
+  let block = run tree.append(root, outer) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut row = Style.make()
+  row.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  row.flexWrap = FlexWrap.Wrap
+  let flex = run tree.append(block, row) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut fixed = Style.make()
+  fixed.width = Dimension.px(150.0)
+  fixed.height = Dimension.px(10.0)
+  let mut half = Style.make()
+  half.width = Dimension.pct(0.5)
+  half.height = Dimension.px(12.0)
+  let mut items = List<NodeId>.make()
+  let mut at: usize = 0
+  while at < 6 {
+    let mut style = fixed
+    if at % 2 == 1 { style = half }
+    let item = run tree.append(flex, style) |> Effect.provideMut<Allocator>(&mut allocator)
+    let inner = run tree.append(item, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    run tree.setMeasurement(inner, 0)
+    run items.append(item) |> Effect.provideMut<Allocator>(&mut allocator)
+    run items.append(inner) |> Effect.provideMut<Allocator>(&mut allocator)
+    at = at + 1
+  }
+  let after = run tree.append(block, fixed) |> Effect.provideMut<Allocator>(&mut allocator)
+  run items.append(after) |> Effect.provideMut<Allocator>(&mut allocator)
+  run items.append(flex) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut output = LayoutTree.make()
+  let mut content = Content { minimum: 20.0, maximum: 60.0, height: 18.0 }
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut step: usize = 0
+  while step < 4 {
+    let mut resized = Style.make()
+    resized.width = Dimension.px(360.0 - usize.toF32(step) * 70.0)
+    resized.padding.left = Dimension.px(3.0)
+    run tree.setStyle(block, resized)
+    run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut fresh = LayoutTree.make()
+    run compute(&tree, &mut fresh, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut index: usize = 0
+    while index < items.length() {
+      let bounds = run output.sourceBounds(items.get(index))
+      let expected = run fresh.sourceBounds(items.get(index))
+      run Testing.expect(bounds.x == expected.x && bounds.y == expected.y && bounds.width == expected.width && bounds.height == expected.height, "a box below a resized block matches a fresh compute")
+      index = index + 1
+    }
     step = step + 1
   }
 }

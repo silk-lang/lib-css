@@ -50,11 +50,17 @@ fn clearSubtree(nodes: &BoxTree<'_>, cache: &mut LayoutCache, root: usize) {
 // clearSubtree but for the out-of-flow boxes below the root, with their
 // subtrees: each is laid out alone, for a request its cache compares, and
 // positioning places it again.
+// An independent formatting context below the root keeps its children's
+// results as one that changed itself does (see invalidateSource): it is
+// cleared alone.
 fn clearInFlow(nodes: &BoxTree<'_>, cache: &mut LayoutCache, root: usize) {
   cache.clearBox(root)
   let mut child = nodes.node(root).firstChild
   while child != NO_NODE {
-    if !outOfFlow(nodes.style(child)) { clearInFlow(nodes, &mut cache, child) }
+    if !outOfFlow(nodes.style(child)) {
+      if keepsChildren(nodes, child) { cache.clearBox(child) }
+      else { clearInFlow(nodes, &mut cache, child) }
+    }
     child = nodes.node(child).nextSibling
   }
 }
