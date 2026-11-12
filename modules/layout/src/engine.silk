@@ -2673,6 +2673,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   // style, text or structure: boxes are generated from those alone.
   let onlyMarked = tree.revision() >= since && tree.revision() - since == tree.markRevision() - output.keptMarks
   let boxesStand = !kept && output.boxNodes.length() != 0 && onlyMarked && tree.scrollRevision() == output.keptScrolls
+  output.cache.gridMemos.settle(boxesStand)
   let nodes = run boxesFor(tree, &mut output, since, restoringKept || boxesStand)
   let restoring = restoringKept
   let sameBoxes = restoring || (kept && Incremental.sameBoxes(output.boxNodes.asSlice(), nodes.boxes.asSlice()))
@@ -2706,7 +2707,12 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     Incremental.invalidateChanged(tree, &nodes, &mut output.cache, since, logged, changes.asSlice(), &[])
     run output.cache.compact()
   } else {
-    output.cache.clear()
+    if boxesStand {
+      output.cache.clearMeasured()
+      output.cache.gridMemos.settle(true)
+    } else {
+      output.cache.clear()
+    }
     output.cache.flexMemos.startFresh()
   }
   // Style facts of the same boxes need refreshing only where styles changed.

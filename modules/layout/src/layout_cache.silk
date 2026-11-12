@@ -351,13 +351,19 @@ impl LayoutCache {
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() - self.dead }
   pub fn clear(self: &mut Self) {
+    self.clearMeasured()
+    self.gridMemos.clear()
+  }
+  // clear, but grids keep their placement for a compute of the same boxes
+  // (see GridMemos.keepPlacement).
+  pub fn clearMeasured(self: &mut Self) {
     self.clock = self.clock + 1
     self.clearedAll = self.clock
     self.forgetClears()
     self.runs.clear()
     self.flexMemos.clear()
     self.gridGeometry.clear()
-    self.gridMemos.clear()
+    self.gridMemos.keepPlacement()
     self.subgrids.clear()
     self.heads.clear()
     self.entries.clear()

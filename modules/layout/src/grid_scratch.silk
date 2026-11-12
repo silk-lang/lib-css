@@ -533,6 +533,9 @@ pub struct GridLease {
 
 struct GridMemoSlot {
   valid: bool,
+  // After keepPlacement, until the box's next lease: its items and bounds
+  // stand though nothing measured does.
+  placed: bool,
   // None while the box's lease is out.
   value: Option<Box<GridScratch>>,
 }
@@ -546,6 +549,8 @@ pub struct GridMemos {
   // A recursion-depth pool, separate from ordinary per-box sizing leases.
   // Continuous layout neither allocates nor moves fragment-item vectors.
   pub fragmentScratch: List<GridFragmentScratch>,
+  // keepPlacement ran and no compute has settled it since.
+  unsettled: bool,
 }
 
 impl GridMemos {
@@ -555,6 +560,7 @@ impl GridMemos {
       slots: List<GridMemoSlot>.make(),
       used: 0,
       fragmentScratch: List<GridFragmentScratch>.make(),
+      unsettled: false,
     }
   }
 
@@ -562,6 +568,41 @@ impl GridMemos {
   pub fn clear(self: &mut Self) {
     self.index.clear()
     self.used = 0
+    self.unsettled = false
+    self.forgetFragments()
+  }
+
+  // clear when what the measurer returns may have changed, but perhaps not
+  // the tree: placement comes from styles and structure alone, so a plain
+  // grid's stands for a compute that finds the boxes standing (see settle).
+  // An expanded template's doesn't: it names subgrid contexts.
+  pub fn keepPlacement(self: &mut Self) {
+    let slots = self.slots.asMutSlice()
+    let mut at: usize = 0
+    while at < self.used {
+      let mut placed = slots[at].placed
+      if slots[at].valid {
+        match &slots[at].value {
+          Option<Box<GridScratch>>.Some { value } => { placed = value.get()[0].template.length() == 0 }
+          Option<Box<GridScratch>>.None => {}
+        }
+      }
+      slots[at].placed = placed
+      slots[at].valid = false
+      at = at + 1
+    }
+    self.unsettled = true
+    self.forgetFragments()
+  }
+
+  // A compute begins: placement kept by keepPlacement stands only if the
+  // boxes do.
+  pub fn settle(self: &mut Self, boxesStand: bool) {
+    if self.unsettled && !boxesStand { self.clear() }
+    self.unsettled = false
+  }
+
+  fn forgetFragments(self: &mut Self) {
     let values = self.fragmentScratch.asMutSlice()
     let mut at: usize = 0
     while at < values.length {
@@ -641,6 +682,7 @@ impl GridMemos {
     if slot != usize.MAX {
       let slots = self.slots.asMutSlice()
       slots[slot].valid = false
+      slots[slot].placed = false
     }
   }
 
@@ -656,8 +698,10 @@ impl GridMemos {
     if fresh {
       slot = self.used
       if slot == self.slots.length() {
-        run self.slots.append(GridMemoSlot { valid: false, value: Option<Box<GridScratch>>.None })
+        run self.slots.append(GridMemoSlot { valid: false, placed: false, value: Option<Box<GridScratch>>.None })
       }
+      let created = self.slots.asMutSlice()
+      created[slot].placed = false
       self.used = self.used + 1
       self.index.set(boxId, slot)
     }
@@ -666,6 +710,8 @@ impl GridMemos {
 
     // An abandoned lease cannot leave an empty slot marked as prepared.
     slots[slot].valid = false
+    let placed = fresh && slots[slot].placed
+    slots[slot].placed = false
     let taken = Intrinsic.replace(slots[slot].value, Option<Box<GridScratch>>.None)
     let mut value = match move taken {
       Option<Box<GridScratch>>.Some { value } => move value
@@ -673,8 +719,12 @@ impl GridMemos {
     }
     if fresh {
       let scratch = &mut value.getMut()[0]
-      scratch.items.clear()
-      scratch.bounds = GridBounds.empty()
+      if placed {
+        fresh = false
+      } else {
+        scratch.items.clear()
+        scratch.bounds = GridBounds.empty()
+      }
       scratch.columns.clear()
       scratch.rows.clear()
       scratch.finalMemos.clear()

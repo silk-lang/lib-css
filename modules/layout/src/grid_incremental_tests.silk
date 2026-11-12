@@ -494,3 +494,55 @@ test effect fn fixedGridItemsResizeAlone()
   let mut allocator = Allocator.systemAllocatorProvider()
   run fixedGridItemResize() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+// invalidate() keeps a plain grid's placement for a compute of the boxes
+// that stand; a structure or placement change after it places the items anew.
+effect fn placementAcrossInvalidate()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | GridError | AssertionError<'static>
+  ? &mut Allocator {
+  let mut tree = run Tree.make(gridStyle())
+  let root = tree.root()
+  let mut template = GridTemplate.make()
+  let mut at: usize = 0
+  while at < 3 {
+    run template.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(50.0)))
+    run template.rows.tracks.append(GridTrack.breadth(GridBreadth.fixed(40.0)))
+    at = at + 1
+  }
+  run tree.setGrid(root, move template)
+  let mut items = List<NodeId>.make()
+  at = 0
+  while at < 6 {
+    run items.append(run tree.append(root, startItem(1.0)))
+    at = at + 1
+  }
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, items.get(4), 50.0, 40.0, 2.0, 2.0)
+  output.invalidate()
+  run tree.markDirty(root)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, items.get(4), 50.0, 40.0, 2.0, 2.0)
+  run expectBounds(&mut output, items.get(5), 100.0, 40.0, 2.0, 2.0)
+  output.invalidate()
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, items.get(2), 100.0, 0.0, 2.0, 2.0)
+  output.invalidate()
+  run tree.remove(items.get(0))
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, items.get(4), 0.0, 40.0, 2.0, 2.0)
+  output.invalidate()
+  run tree.markDirty(root)
+  let mut placed = GridTemplate.make()
+  placed.placement.columnStart = GridLine { kind: GridLineKind.Line, number: 3, name: 0 }
+  run tree.setGrid(items.get(1), move placed)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, items.get(1), 100.0, 0.0, 2.0, 2.0)
+  run expectBounds(&mut output, items.get(2), 0.0, 40.0, 2.0, 2.0)
+}
+test effect fn gridPlacementStandsAcrossInvalidate()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | GridError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run placementAcrossInvalidate() |> Effect.provideMut<Allocator>(&mut allocator)
+}
