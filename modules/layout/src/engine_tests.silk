@@ -892,9 +892,10 @@ test effect fn columnItemsShareTheirBlockAxisProbes() ! OutOfMemoryError | TextE
   let mut output = LayoutTree.make()
   let mut content = Content { minimum: 20.0, maximum: 60.0, height: 18.0 }
   run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
-  // Sizing §5.1: the item's min-content and max-content heights are equal, so
-  // the automatic minimum reuses the flex base probe.
-  run Testing.expect(output.stats.sizeProbes == 1 && output.stats.cacheHits == 1, "a column item's min-content height reuses its max-content probe")
+  // Sizing §5.1: the item's min-content and max-content heights are equal, and
+  // both are the height of its layout, which the container runs ahead of its
+  // lines in place of a probe.
+  run Testing.expect(output.stats.sizeProbes == 0 && output.stats.cacheHits == 0, "a column item's content heights come from its one layout")
   run Testing.expect(output.boxes.get(output.firstBySource.get(item.index)).size.height == 18.0, "the item keeps its content height")
 }
 
