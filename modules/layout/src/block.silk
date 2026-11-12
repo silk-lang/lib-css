@@ -258,7 +258,25 @@ pub fn leafBlockInto(style: &Style, input: &Input, physicalBox: &ResolvedBox, bf
   if result.collapsesThrough { result.collapsesThrough = selfCollapsingSize(style, input.parent, box.size.widthDefinite) }
 }
 
+// A block pass's child list, kept in LayoutPass between passes.
+pub struct BlockScratch { children: List<Child> }
+
 effect fn layoutBlockPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, endBefore: usize, endBreak: ForcedBreaks, static fragmentable: bool) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let mut scratch = BlockScratch { children: List<Child>.make() }
+  match output.blockScratch.pop() {
+    Option<BlockScratch>.Some { value: spare } => {
+      scratch = move spare
+      scratch.children.clear()
+    }
+    Option<BlockScratch>.None => {}
+  }
+  let result = run layoutBlockPassWith(nodes, &mut output, &mut measurer, id, style, &input, &physicalBox, &mut bfc, endBefore, endBreak, fragmentable, &mut scratch.children)
+  run output.blockScratch.append(move scratch)
+  return result
+}
+
+// layoutBlockPass with its child list, empty, from BlockScratch.
+effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, endBefore: usize, endBreak: ForcedBreaks, static fragmentable: bool, children: &mut List<Child>) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let axes = Axes.make(style.writingMode)
   let box = axes.box(physicalBox.*)
   // The common unfragmented instance drops every fragmentation path, which keeps its code small.
@@ -281,7 +299,6 @@ effect fn layoutBlockPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxT
   }
   let mut availableInline = input.availableWidth
   if axes.vertical { availableInline = input.availableHeight }
-  let mut children = List<Child>.make()
   let mut intrinsicWidth: f32 = 0.0
   let mut floatRun: f32 = 0.0
   let mut nextChild = boxChild(nodes, nodes.node(id).firstChild)
