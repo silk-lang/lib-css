@@ -21,7 +21,7 @@ import inline_bidi as Bidi
 import inline_items { FontBox, Scope, ItemKind, Item }
 import inline_visual as Visual
 import inline_visual { Line }
-import inline_prepared { PreparedInline, PreparedCore, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText }
+import inline_prepared { PreparedInline, PreparedCore, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText, LineBox }
 import fragmentation { FlowCursor, FragmentationError, BoundaryProbe }
 import breaks { BreakBoundary, BreakRelaxation, ForcedBreaks, allowsLineBreak }
 import fragment_box as FragmentBox
@@ -377,10 +377,6 @@ fn atomicLineMargins(nodes: &BoxTree<'_>, items: &mut [Item], atomics: &mut [Ato
 
 struct Chunk { start: usize, end: usize, advance: f32, real: bool, breakBefore: bool }
 impl Copy for Chunk {}
-struct LineBox {
-  start: usize, end: usize, y: f32, left: f32, width: f32, advance: f32, hangingStart: f32,
-  height: f32, baseline: f32, real: bool, last: bool, direction: Direction, visual: Line,
-}
 struct Span { active: bool, next: usize, start: f32, end: f32, opened: bool, closed: bool, fragment: usize, origin: Point }
 impl Copy for Span {}
 impl Span {
@@ -1707,6 +1703,23 @@ effect fn analyzeAnchors<M: TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, 
   }
 }
 
+// Emits the fragments of a paragraph's fitted lines. `held` lends the span
+// list's storage.
+effect fn emitLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, lines: &[LineBox], items: &[Item], atomics: &[AtomicData], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, held: &mut List<Span>, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, baselineOffsets: &BaselineSet, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let mut spans = Spans { values: Intrinsic.replace(held.*, List<Span>.make()), first: NO_NODE, last: NO_NODE }
+  spans.values.clear()
+  run spans.values.reserveExact(scopes.length)
+  let mut index: usize = 0
+  while index < scopes.length { run spans.values.append(Span.make(NO_NODE))
+    index = index + 1 }
+  index = 0
+  while index < lines.length {
+    let line = &lines[index]
+    run emitLine(nodes, &mut output, &mut measurer, items, atomics, texts, fonts, scopes, &mut extents, &mut spans, id, style, &axes, &box, container, line, baselineOffsets.translated(line.baseline), &input)
+    index = index + 1
+  }
+  held.* = move spans.values
+}
 // The box's paragraph as this pass last prepared it, else the core an earlier
 // compute kept, else an empty one.
 effect fn takePrepared<'pass, 'source>(output: &mut LayoutPass<'pass, 'source>, id: usize) -> PreparedInline<'source> ! OutOfMemoryError ? &mut Allocator {
@@ -1803,6 +1816,34 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     index = index + 1
   }
   run memo.prepare(original.asSlice(), scopes)
+  // Plain text fitted before for this request (see FittedLines) keeps its
+  // lines: only their fragments are still to emit.
+  if reuse && memo.fitted.valid && !input.fragmentation.active && bfc.clearBelow(input.bfcContentOrigin.y) {
+    let mut offeredSpace = input.availableWidth
+    if axes.vertical { offeredSpace = input.availableHeight }
+    let mut known = true
+    let mut fittedWidth: f32 = 0.0
+    if box.size.widthDefinite { fittedWidth = max(0.0, box.size.width - box.inset.horizontal()) }
+    else if offeredSpace.kind == AvailableKind.Definite { fittedWidth = max(0.0, offeredSpace.value - box.inset.horizontal()) }
+    else if offeredSpace.kind == AvailableKind.MinContent {
+      known = memo.hasMin
+      fittedWidth = memo.minContent
+    } else {
+      known = memo.hasMax
+      fittedWidth = memo.maxContent
+    }
+    if known && memo.fitted.answers(fittedWidth, &box.inset, box.size.heightDefinite, box.size.height, nodes.node(id).firstFormattedRun) {
+      let result = memo.fitted.result
+      if input.performLayout {
+        let baselineOffsets = fontBaselines(&scopes[0].font, style.writingMode).translated(-scopes[0].font.baseline)
+        run emitLines(nodes, &mut output, &mut measurer, memo.fitted.lines.asSlice(), memo.fitted.items.asSlice(), atomics.asSlice(), memo.fitted.texts.asSlice(), memo.fonts.asSlice(), scopes, &mut extents, &mut text.spans, id, style, &axes, &box, result.size, &baselineOffsets, &input)
+      }
+      core.origins = move normalized.origins
+      run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
+      run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
+      return result
+    }
+  }
   let context = TextContext { tokens: normalized.tokens.asSlice(), writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: unicodeBidi, textJustify: style.textJustify }
   if !reuse { offered.clear() }
   let points = &mut text.points
@@ -1986,20 +2027,27 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   // Fast line fitting (see the line loop) needs the advance of every unit,
   // taken from one shaping of the whole paragraph. It applies to unfragmented
   // left-to-right text without floats, tabs, preserved spaces or hyphens.
-  let mut fastFit = !fragmented && !hasFloats && hasText && !visualPlan.active && points.length() > 1
+  let mut plainText = !fragmented && !hasFloats && hasText && !visualPlan.active
   index = 0
-  while fastFit && index < context.tokens.length {
+  while plainText && index < context.tokens.length {
     let kind = context.tokens[index].kind
-    fastFit = kind == TextTokenKind.Text || kind == TextTokenKind.Space || kind == TextTokenKind.Open || kind == TextTokenKind.Close || kind == TextTokenKind.Atomic || kind == TextTokenKind.Anchor
+    plainText = kind == TextTokenKind.Text || kind == TextTokenKind.Space || kind == TextTokenKind.Open || kind == TextTokenKind.Close || kind == TextTokenKind.Atomic || kind == TextTokenKind.Anchor
     index = index + 1
   }
   index = 0
-  while fastFit && index < points.length() {
-    fastFit = points.get(index).kind != TextBreakKind.Hyphenated
+  while plainText && index < points.length() {
+    plainText = points.get(index).kind != TextBreakKind.Hyphenated
     index = index + 1
   }
+  let fastFit = plainText && points.length() > 1
+  let clearAtEntry = plainText && bfc.clearBelow(input.bfcContentOrigin.y)
   // Every line of a width fitted before in this pass ends where it did then.
-  let fitsMemo = fastFit && bfc.clearBelow(input.bfcContentOrigin.y)
+  let fitsMemo = fastFit && clearAtEntry
+  // The lines are kept for the same request (see FittedLines). Justified
+  // lines are shaped again only when laid out, and a min-content probe's
+  // width is seldom the final one.
+  let recording = clearAtEntry && !input.fragmentation.active && style.textAlign != TextAlign.Justify && style.textAlignLast != TextAlign.Justify
+    && (input.performLayout || available.kind != AvailableKind.MinContent)
   let mut memoFirst = NO_NODE
   if fitsMemo { memoFirst = memo.linesFor(width) }
   let mut memoLine: usize = 0
@@ -2326,7 +2374,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       result.hasLastBaseline = true
       result.collapsesThrough = false
     }
-    if input.performLayout {
+    if input.performLayout || recording {
       let lineStart = finalItems.length()
       let base = finalTexts.length()
       index = 0
@@ -2383,18 +2431,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   result.contentSize = axes.size(Size { width: width, height: cursor })
   if input.performLayout {
     if fragmented && !blocked { run emitPendingFloats(nodes, &mut output, &mut measurer, id, original.asSlice(), atomics.asSlice(), &input, &box, result.size, axes) }
-    let mut spans = Spans { values: Intrinsic.replace(text.spans, List<Span>.make()), first: NO_NODE, last: NO_NODE }
-    run spans.values.reserveExact(scopes.length)
-    index = 0
-    while index < scopes.length { run spans.values.append(Span.make(NO_NODE))
-      index = index + 1 }
-    index = 0
-    while index < lines.length() {
-      let line = &lines.asSlice()[index]
-      run emitLine(nodes, &mut output, &mut measurer, finalItems.asSlice(), atomics.asSlice(), finalTexts.asSlice(), memo.fonts.asSlice(), scopes, &mut extents, &mut spans, id, style, &axes, &box, result.size, line, baselineOffsets.translated(line.baseline), &input)
-      index = index + 1
-    }
-    text.spans = move spans.values
+    run emitLines(nodes, &mut output, &mut measurer, lines.asSlice(), finalItems.asSlice(), atomics.asSlice(), finalTexts.asSlice(), memo.fonts.asSlice(), scopes, &mut extents, &mut text.spans, id, style, &axes, &box, result.size, &baselineOffsets, &input)
   }
   if fragmented {
     if sourceRequest.kinds.any() && !blocked {
@@ -2416,6 +2453,22 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   }
   if fitsMemo && memoFirst == NO_NODE && !blocked && next == points.length() { run memo.record(width, lineEnds.asSlice()) }
   run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
+  if recording && !blocked && next == points.length() {
+    memo.fitted.valid = true
+    memo.fitted.width = width
+    memo.fitted.inset = box.inset
+    memo.fitted.heightDefinite = box.size.heightDefinite
+    memo.fitted.height = box.size.height
+    memo.fitted.firstFormatted = nodes.node(id).firstFormattedRun
+    memo.fitted.result = result
+    // The lists trade places with the scratch's, which the next paragraph clears.
+    let oldLines = Intrinsic.replace(memo.fitted.lines, Intrinsic.replace(text.lines, List<LineBox>.make()))
+    text.lines = move oldLines
+    let oldItems = Intrinsic.replace(memo.fitted.items, Intrinsic.replace(text.finalItems, List<Item>.make()))
+    text.finalItems = move oldItems
+    let oldTexts = Intrinsic.replace(memo.fitted.texts, Intrinsic.replace(text.finalTexts, List<TextLeaf>.make()))
+    text.finalTexts = move oldTexts
+  }
   core.ready = true
   core.origins = move normalized.origins
   run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
