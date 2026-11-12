@@ -1952,6 +1952,15 @@ fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: 
       if output.frame == NO_NODE || single { output.boxes[id].scrollableOverflow = overflow }
       continue
     }
+    // A line, a run of text or an inline box whose rectangles lie inside
+    // what its parent's overflow holds by now adds nothing to it either.
+    if kind != FragmentKind.Box && !nonpainting && parentId != NO_NODE && inside && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0 {
+      let holds = output.fragments.values.asSlice()[parentId].scrollableOverflow
+      let right = holds.x + holds.width
+      let bottom = holds.y + holds.height
+      if border.x >= holds.x && border.y >= holds.y && border.x + border.width <= right && border.y + border.height <= bottom
+        && position.x + bounds.x >= holds.x && position.y + bounds.y >= holds.y && position.x + bounds.x + bounds.width <= right && position.y + bounds.y + bounds.height <= bottom { continue }
+    }
     if id != NO_NODE {
       let style = nodes.style(id)
       positioned = outOfFlow(style)
