@@ -10,7 +10,7 @@ import style { Style, Dimension, DimensionKind, Direction, WritingMode, TextOrie
 import tree { NO_NODE, Measurement }
 import box_tree { BoxTree }
 import context { Input, ResolvedBox, resolveBox, childrenInput, resolve, resolves, outOfFlow, isFlex, scrollable, overflowForAxis, UNBOUNDED }
-import engine { layoutNode, layoutNodeInPlace, layoutEmptyLeafInPlace, plainMeasuredBox, probeFresh, normalizeKey, constraintFreeProbe, sizeEmptyBox, emptyIntrinsicWidth, shapedBox, ITEM_OUT_OF_FLOW, ITEM_ORDERED }
+import engine { widthIgnoresHeight, layoutNode, layoutNodeInPlace, layoutEmptyLeafInPlace, plainMeasuredBox, probeFresh, normalizeKey, constraintFreeProbe, sizeEmptyBox, emptyIntrinsicWidth, shapedBox, ITEM_OUT_OF_FLOW, ITEM_ORDERED }
 import layout_pass { LayoutPass, CacheKind }
 import layout_cache { LayoutCache }
 import text { TextMeasure, TextError }
@@ -1273,6 +1273,19 @@ impl FlexMemos {
     self.heads.set(id, slot)
   }
 }
+// Whether no item of a column can have a width that reads its height, or
+// a collapsed item's strut, or a cross size from an aspect ratio.
+fn columnWidthFree(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[Item]) -> bool {
+  let mut index: usize = 0
+  while index < items.length {
+    let id = items[index].id
+    let style = nodes.style(id)
+    if style.visibility == Visibility.Collapse || style.aspectRatio > 0.0 || style.replaced || style.writingMode != WritingMode.HorizontalTb { return false }
+    if !widthIgnoresHeight(nodes, &output, id) { return false }
+    index = index + 1
+  }
+  return true
+}
 fn sameAxes(a: &Axes, b: &Axes) -> bool {
   return a.horizontal == b.horizontal && a.row == b.row && a.mainReverse == b.mainReverse && a.crossReverse == b.crossReverse
     && a.mainStartReverse == b.mainStartReverse && a.crossStartReverse == b.crossStartReverse
@@ -1341,6 +1354,33 @@ effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
       crossIndex = crossIndex + 1
     }
     if crossConstraint.kind == AvailableKind.MaxContent { setAvailable(&mut childInput, !axis.horizontal, AvailableSpace.definite(intrinsicCross)) }
+  }
+  // A single-line column's width probe whose caller reads no height: its
+  // width is the largest item width contribution (§9.9.1), which no item's
+  // main size changes when no item's width can read its height. The items'
+  // main sizes, the lines and the cross sizing that would only feed the
+  // unread height are skipped.
+  if !input.performLayout && !input.baselines && !input.fragmentation.active && input.intrinsicWidth && !input.fullSize
+    && inlineHorizontal && !axis.horizontal && style.flexWrap == FlexWrap.NoWrap && !crossKnown && crossConstraint.kind != AvailableKind.Definite
+    && columnWidthFree(nodes, &output, scratch.items.asSlice()) {
+    let mut widest: f32 = 0.0
+    let mut widthIndex: usize = 0
+    while widthIndex < count {
+      let child = scratch.items.get(widthIndex).id
+      let childBox = resolveBox(nodes.style(child), &childInput)
+      let mut width = childBox.size.width
+      if !childBox.size.widthDefinite {
+        let measured = run probe(nodes, &mut output, &mut measurer, child, &childInput, true, crossConstraint, false, 0.0)
+        width = measured.size.width
+      }
+      width = clamp(width, childBox.min.width, childBox.max.width)
+      widest = max(widest, width + childBox.margin.horizontal())
+      widthIndex = widthIndex + 1
+    }
+    cross = max(0.0, clamp(widest + crossInset, box.min.width, box.max.width) - crossInset)
+    if !mainKnown { main = max(0.0, clamp(mainInset, box.min.height, box.max.height) - mainInset) }
+    scratch.lines.clear()
+    return run placeFlexLines(nodes, &mut output, &mut measurer, id, &input, &box, &childInput, &axis, move scratch, main, cross, mainGap, crossGap, false)
   }
   let mut index: usize = 0
   let mut hasCollapsed = false
