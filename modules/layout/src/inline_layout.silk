@@ -816,18 +816,58 @@ fn suppressPhantomClones(nodes: &BoxTree<'_>, items: &mut [Item], scopes: &mut [
   }
 }
 
+// layoutInline's per-call lists, kept in LayoutPass between calls so that
+// laying out many small inline formatting contexts allocates them once.
+pub struct InlineScratch { scopes: List<Scope>, extents: List<Extent>, items: List<Item>, atomics: List<AtomicData>, text: TextScratch }
+// layoutText's per-call lists, part of InlineScratch.
+struct TextScratch {
+  original: List<Item>, points: List<TextBreak>, shaped: List<TextRun>, hangingRanges: List<TextRange>,
+  finalItems: List<Item>, finalTexts: List<TextLeaf>, lines: List<LineBox>, lineEnds: List<usize>,
+}
+impl TextScratch {
+  fn make() -> TextScratch {
+    return TextScratch { original: List<Item>.make(), points: List<TextBreak>.make(), shaped: List<TextRun>.make(), hangingRanges: List<TextRange>.make(),
+      finalItems: List<Item>.make(), finalTexts: List<TextLeaf>.make(), lines: List<LineBox>.make(), lineEnds: List<usize>.make() }
+  }
+  fn clear(self: &mut Self) {
+    self.original.clear()
+    self.points.clear()
+    self.shaped.clear()
+    self.hangingRanges.clear()
+    self.finalItems.clear()
+    self.finalTexts.clear()
+    self.lines.clear()
+    self.lineEnds.clear()
+  }
+}
+
 pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let mut scratch = InlineScratch { scopes: List<Scope>.make(), extents: List<Extent>.make(), items: List<Item>.make(), atomics: List<AtomicData>.make(), text: TextScratch.make() }
+  match output.inlineScratch.pop() {
+    Option<InlineScratch>.Some { value: spare } => {
+      scratch = move spare
+      scratch.scopes.clear()
+      scratch.extents.clear()
+      scratch.items.clear()
+      scratch.atomics.clear()
+      scratch.text.clear()
+    }
+    Option<InlineScratch>.None => {}
+  }
+  let result = run layoutInlineWith(nodes, &mut output, &mut measurer, id, &input, &physicalBox, &mut bfc, &mut scratch.scopes, &mut scratch.extents, &mut scratch.items, &mut scratch.atomics, &mut scratch.text)
+  run output.inlineScratch.append(move scratch)
+  return result
+}
+
+// layoutInline with its lists, empty, from InlineScratch.
+effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, scopes: &mut List<Scope>, extents: &mut List<Extent>, items: &mut List<Item>, atomics: &mut List<AtomicData>, text: &mut TextScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let axes = Axes.make(style.writingMode)
   let box = axes.box(physicalBox.*)
   let rtl = style.usedDirection() == Direction.Rtl
   let rootFont = fontBox(&mut measurer, style)
-  let mut scopes = List<Scope>.make()
   run scopes.append(Scope { id: id, parent: 0, group: 0, font: rootFont, offset: 0.0, inset: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), phantomClone: false })
-  let mut extents = List<Extent>.make()
   run extents.append(Extent.make(VerticalAlignKind.Baseline))
-  let mut items = List<Item>.make()
-  let mut atomics = List<AtomicData>.make()
   let mut childInput = Input.make(input.parent)
   childInput.initialContainingBlock = input.initialContainingBlock
   childInput.parentMaxSize = input.parentMaxSize
@@ -863,7 +903,7 @@ pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
     textIndex = textIndex + 1
   }
   if needsAnalysis || needsVisual || (input.fragmentation.active && input.performLayout) {
-    return run layoutText(nodes, &mut output, &mut measurer, id, rootBidi, needsAnalysis, &input, &box, &mut bfc, items.asSlice(), &mut atomics, scopes.asSlice(), &mut extents)
+    return run layoutText(nodes, &mut output, &mut measurer, id, rootBidi, needsAnalysis, &input, &box, &mut bfc, items.asSlice(), &mut atomics, scopes.asSlice(), &mut extents, &mut text)
   }
   let chunks = run chunksFor(nodes, items.asSlice(), scopes.asSlice())
   let mut maximum: f32 = 0.0
@@ -1659,7 +1699,7 @@ effect fn analyzeAnchors<M: TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, 
   }
 }
 
-effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, unicodeBidi: UnicodeBidi, externalAnalysis: bool, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, unicodeBidi: UnicodeBidi, externalAnalysis: bool, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let axes = Axes.make(style.writingMode)
   let rtl = style.usedDirection() == Direction.Rtl
@@ -1719,7 +1759,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       barrierIndex = barrierIndex + 1
     }
   }
-  let mut original = List<Item>.make()
+  let original = &mut text.original
   run original.reserveExact(normalized.origins.length())
   let mut index: usize = 0
   let mut hasFloats = false
@@ -1745,7 +1785,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let context = TextContext { tokens: normalized.tokens.asSlice(), writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: unicodeBidi, textJustify: style.textJustify }
   let mut offered = move saved.offered
   if !reuse { offered.clear() }
-  let mut points = List<TextBreak>.make()
+  let points = &mut text.points
   let terminal = TextCursor { unit: context.tokens.length, offset: 0 }
   let mut baseLevel: u8 = 0
   if rtl { baseLevel = 1 }
@@ -1820,10 +1860,10 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     wholeReusable = context.tokens[index].kind != TextTokenKind.Tab
     index = index + 1
   }
-  let mut shaped = List<TextRun>.make()
+  let shaped = &mut text.shaped
   let mut candidate = TextCandidate.make()
   let mut accepted = TextCandidate.make()
-  let mut hangingRanges = List<TextRange>.make()
+  let hangingRanges = &mut text.hangingRanges
   let mut available = input.availableWidth
   if axes.vertical { available = input.availableHeight }
   let mut width: f32 = 0.0
@@ -1886,9 +1926,9 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   }
   let mut floatProgress = false
   if fragmented { floatProgress = run fitPendingFloats(nodes, &mut output, &mut measurer, id, original.asSlice(), atomics.asMutSlice(), &input, &box, &mut bfc, width, axes) }
-  let mut finalItems = List<Item>.make()
-  let mut finalTexts = List<TextLeaf>.make()
-  let mut lines = List<LineBox>.make()
+  let finalItems = &mut text.finalItems
+  let finalTexts = &mut text.finalTexts
+  let lines = &mut text.lines
   let mut result = Layout.zero()
   result.collapsesThrough = true
   let baselineOffsets = fontBaselines(&scopes[0].font, style.writingMode).translated(-scopes[0].font.baseline)
@@ -1944,7 +1984,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let mut memoFirst = NO_NODE
   if fitsMemo { memoFirst = memo.linesFor(width) }
   let mut memoLine: usize = 0
-  let mut lineEnds = List<usize>.make()
+  let lineEnds = &mut text.lineEnds
   if fastFit && memoFirst == NO_NODE && memo.prefix.length() != context.tokens.length + 1 {
     memo.prefix.clear()
     run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, terminal, false, 0.0, wholeReusable, segmentLimit)

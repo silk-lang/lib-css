@@ -12,6 +12,8 @@ import box_tree { BoxTree, BoxNode }
 import fragments { FragmentArena, FragmentKind, TextFragmentKind }
 import layout_cache { LayoutCache, Snapshot, BoxFacts, BoxWrites }
 import flex { FlexScratch }
+import inline_layout { InlineScratch }
+import block { BlockScratch }
 import grid_style { GridTemplate, GridError, validGridName, validGridAreaName }
 
 pub const NO_NODE: usize = usize.MAX
@@ -683,6 +685,8 @@ pub struct LayoutTree {
   // Flex item and line lists, kept so nested containers don't allocate on
   // every compute.
   pub flexScratch: List<FlexScratch>,
+  pub inlineScratch: List<InlineScratch>,
+  pub blockScratch: List<BlockScratch>,
 }
 impl LayoutTree {
   pub fn make() -> LayoutTree {
@@ -694,7 +698,7 @@ impl LayoutTree {
       anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
       firstBySource: List<usize>.make(), lastBySource: List<usize>.make(),
       fragments: FragmentArena.make(), viewportOverflow: Rect.zero(),
-      scratchBoxes: List<Layout>.make(), scratchFragments: FragmentArena.make(), cutoffMisses: List<CutoffMiss>.make(), flexScratch: List<FlexScratch>.make(),
+      scratchBoxes: List<Layout>.make(), scratchFragments: FragmentArena.make(), cutoffMisses: List<CutoffMiss>.make(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(),
     }
   }
   pub effect fn prepare(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {

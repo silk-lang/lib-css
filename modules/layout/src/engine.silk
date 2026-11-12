@@ -4,7 +4,7 @@ import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, Availa
 import style { Style, Display, Dimension, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
 import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
-import block { layoutBlock, leafBlockInto }
+import block { layoutBlock, leafBlockInto, BlockScratch }
 import flex { layoutFlex, emptyFlexSize, FlexScratch }
 import grid { layoutGrid }
 import grid_subgrid as Subgrid
@@ -21,7 +21,7 @@ import box_tree as Boxes
 import box_tree { BoxTree, BoxKind, BoxNode }
 import silk.collections.list { List }
 import fragments { FragmentKind, FragmentArena, Fragment }
-import inline_layout { layoutInline }
+import inline_layout { layoutInline, InlineScratch }
 import text { TextMeasure, TextError }
 import fragment_box as FragmentBox
 import fragmentation { FragmentationError, BoundaryProbe }
@@ -2397,6 +2397,8 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>,
   state.facts.itemFlags = Intrinsic.replace(facts.itemFlags, List<u8>.make())
   let mut pass = run LayoutPass.make(scratchBoxes.asMutSlice(), &mut scratchFragments, nodes.sources, &mut state)
   pass.flexScratch = Intrinsic.replace(output.flexScratch, List<FlexScratch>.make())
+  pass.inlineScratch = Intrinsic.replace(output.inlineScratch, List<InlineScratch>.make())
+  pass.blockScratch = Intrinsic.replace(output.blockScratch, List<BlockScratch>.make())
   let baselines = baselinesMatter(nodes, &pass.cache, &output.fragments, id, range.start)
   let mut moved = Point { x: 0.0, y: 0.0 }
   let mut resized = false
@@ -2444,6 +2446,8 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>,
   }
   if same { run pass.keepTexts() }
   output.flexScratch = Intrinsic.replace(pass.flexScratch, List<FlexScratch>.make())
+  output.inlineScratch = Intrinsic.replace(pass.inlineScratch, List<InlineScratch>.make())
+  output.blockScratch = Intrinsic.replace(pass.blockScratch, List<BlockScratch>.make())
   drop pass
   output.cache = Intrinsic.replace(state.cache, LayoutCache.make())
   facts.reusable = Intrinsic.replace(state.facts.reusable, List<u8>.make())
@@ -2624,6 +2628,8 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   if sameBoxes && !inPlace { output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, false) }
   output.relaidMost = false
   let flexScratch = Intrinsic.replace(output.flexScratch, List<FlexScratch>.make())
+  let inlineScratch = Intrinsic.replace(output.inlineScratch, List<InlineScratch>.make())
+  let blockScratch = Intrinsic.replace(output.blockScratch, List<BlockScratch>.make())
   // A compute that fails part way leaves nothing to reuse.
   output.holdUnsettled(since)
   run output.prepareBoxes(nodes.boxes.length(), inPlace)
@@ -2637,6 +2643,8 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   boxes.cache.skipFinals(sameBoxes && output.reuseIdle % 8 != 0 && output.reuseIdle % 8 != 7 && !sameViewport(&output.keptViewport, &viewport))
   run boxes.cache.reserveBoxes(nodes.boxes.length())
   boxes.flexScratch = move flexScratch
+  boxes.inlineScratch = move inlineScratch
+  boxes.blockScratch = move blockScratch
   boxes.inPlace = inPlace
   boxes.deferSticky = tree.stickyDeferred
   // After computes that laid out most boxes again and copied none, copying
@@ -2662,8 +2670,12 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       // Auto scrollbar selection is not part of a cache key.
       let settled = !boxes.hasAutoScrollbars
       let keptScratch = Intrinsic.replace(boxes.flexScratch, List<FlexScratch>.make())
+      let keptInline = Intrinsic.replace(boxes.inlineScratch, List<InlineScratch>.make())
+      let keptBlock = Intrinsic.replace(boxes.blockScratch, List<BlockScratch>.make())
       drop boxes
       output.flexScratch = move keptScratch
+      output.inlineScratch = move keptInline
+      output.blockScratch = move keptBlock
       output.facts = move facts
       output.keep(tree.revision(), settled)
       output.keptViewport = viewport
