@@ -5,7 +5,7 @@ import silk.core.option { Option }
 import silk.mem.box { Box }
 import silk.text.string { String }
 import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min }
-import style { Style, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, Position }
+import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, Position }
 import tree { Node, NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, TextFragment, TextFragmentKind }
@@ -20,8 +20,8 @@ import inline_text { NormalizedText }
 import inline_bidi as Bidi
 import inline_items { FontBox, Scope, ItemKind, Item }
 import inline_visual as Visual
-import inline_visual { Line }
-import inline_prepared { PreparedInline, PreparedCore, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText, LineBox }
+import inline_visual { Line, Plan }
+import inline_prepared { PreparedInline, PreparedCore, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText, LineBox, PlainLine }
 import fragmentation { FlowCursor, FragmentationError, BoundaryProbe }
 import breaks { BreakBoundary, BreakRelaxation, ForcedBreaks, allowsLineBreak }
 import fragment_box as FragmentBox
@@ -825,12 +825,15 @@ struct TextScratch {
   finalItems: List<Item>, finalTexts: List<TextLeaf>, lines: List<LineBox>, lineEnds: List<usize>,
   // The line being fitted and the last one that fit, and emitLine's spans.
   candidate: TextCandidate, accepted: TextCandidate, spans: List<Span>,
+  // plainLine's token origins and its one font.
+  origins: List<usize>, fonts: List<TextFont>,
 }
 impl TextScratch {
   fn make() -> TextScratch {
     return TextScratch { original: List<Item>.make(), points: List<TextBreak>.make(), shaped: List<TextRun>.make(), hangingRanges: List<TextRange>.make(),
       finalItems: List<Item>.make(), finalTexts: List<TextLeaf>.make(), lines: List<LineBox>.make(), lineEnds: List<usize>.make(),
-      candidate: TextCandidate.make(), accepted: TextCandidate.make(), spans: List<Span>.make() }
+      candidate: TextCandidate.make(), accepted: TextCandidate.make(), spans: List<Span>.make(),
+      origins: List<usize>.make(), fonts: List<TextFont>.make() }
   }
   fn clear(self: &mut Self) {
     self.original.clear()
@@ -844,7 +847,148 @@ impl TextScratch {
     self.candidate.reset()
     self.accepted.reset()
     self.spans.clear()
+    self.origins.clear()
+    self.fonts.clear()
   }
+}
+
+// Whether `style` leaves a line of text where plainLine puts it: horizontal
+// left-to-right text with collapsed spaces, no indent and no justification.
+fn plainLineStyle(style: &Style) -> bool {
+  return style.writingMode == WritingMode.HorizontalTb && style.usedDirection() == Direction.Ltr && style.unicodeBidi == UnicodeBidi.Normal
+    && style.whiteSpaceCollapse == WhiteSpaceCollapse.Collapse && style.textAlign != TextAlign.Justify && style.textAlignLast != TextAlign.Justify
+    && resolve(style.textIndent.value, 0.0, true, 0.0) == 0.0 && resolve(style.textIndent.value, 1000.0, true, 0.0) == 0.0
+}
+
+// Shapes the paragraph of the one text box `raw[0]` into `line` when its
+// text is plain: printable ASCII words separated by single collapsed
+// spaces, shaped in one font. Such text has one bidi level and no forced
+// break, so it needs no analysis, and layoutText's shaping of the whole
+// paragraph is this one. False, with `line` refused, for any other text.
+effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, raw: &[Item], scopes: &[Scope], text: &mut TextScratch, line: &mut PlainLine) -> bool ! OutOfMemoryError | TextError ? &mut Allocator {
+  let style = nodes.style(id)
+  line.valid = true
+  line.refused = true
+  line.item = raw[0].id
+  line.fontSize = scopes[0].font.metrics.fontSize
+  line.lineHeight = scopes[0].font.lineHeight
+  let mut rawTokens = Intrinsic.replace(output.rawTokens, List<TextToken<'source>>.make())
+  run tokensFor(nodes, raw, scopes, &mut rawTokens)
+  let origins = Intrinsic.replace(text.origins, List<usize>.make())
+  let mut normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins)
+  output.rawTokens = move rawTokens
+  let tokens = normalized.tokens.asSlice()
+  let mut plain = tokens.length != 0
+  let mut index: usize = 0
+  while plain && index < tokens.length {
+    let token = &tokens[index]
+    if token.kind == TextTokenKind.Text {
+      let bytes = String.utf8Bytes(token.text)
+      plain = bytes.length != 0
+      let mut at: usize = 0
+      while plain && at < bytes.length {
+        plain = bytes[at] > 32 && bytes[at] < 127
+        at = at + 1
+      }
+    } else {
+      plain = token.kind == TextTokenKind.Space && index != 0 && index + 1 != tokens.length
+    }
+    index = index + 1
+  }
+  if !plain {
+    text.origins = move normalized.origins
+    return false
+  }
+  let original = &mut text.original
+  original.clear()
+  run original.reserveExact(tokens.length)
+  index = 0
+  while index < tokens.length {
+    let mut item = raw[0]
+    item.start = TextCursor { unit: index, offset: 0 }
+    run original.append(item)
+    index = index + 1
+  }
+  let context = TextContext { tokens: tokens, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: UnicodeBidi.Normal, textJustify: style.textJustify }
+  let mut analysis = TextAnalysis.uniform(tokens.length, 0, 0, false)
+  run Bidi.normalizeAnalysis(context, &mut analysis)
+  let mut plan = Plan.make()
+  let fonts = &mut text.fonts
+  fonts.clear()
+  let candidate = &mut text.candidate
+  run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, original.asSlice(), scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, 0.0, 0.0, &[])
+  plain = candidate.real && !candidate.visual.active && candidate.hanging == 0.0 && fonts.length() == 1
+  if plain {
+    line.items.clear()
+    line.texts.clear()
+    run line.items.reserveExact(candidate.items.length())
+    run line.texts.reserveExact(candidate.texts.length())
+    index = 0
+    while index < candidate.items.length() { run line.items.append(candidate.items.get(index))
+      index = index + 1 }
+    index = 0
+    while index < candidate.texts.length() { run line.texts.append(candidate.texts.get(index))
+      index = index + 1 }
+    line.advance = candidate.advance
+    line.font = fonts.get(0)
+    line.refused = false
+  }
+  text.origins = move normalized.origins
+  return plain
+}
+
+// layoutText for a paragraph that is one text box of plain text (see
+// shapePlain) fitting one line, beside no floats and unfragmented: the line
+// layoutText fits, without its preparation, analysis and line fitting. The
+// shaped line is kept in the cache (PlainLine), so a later probe or compute
+// of the box shapes nothing. False, with nothing written, where layoutText
+// is needed: other text, a min-content request, or a line too long.
+effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &[AtomicData], scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let style = nodes.style(id)
+  if !plainLineStyle(style) || !plainLineStyle(nodes.style(raw[0].id)) { return false }
+  if input.fragmentation.active || !bfc.clearBelow(input.bfcContentOrigin.y) { return false }
+  let mut width: f32 = 0.0
+  let mut offered = true
+  if box.size.widthDefinite { width = max(0.0, box.size.width - box.inset.horizontal()) }
+  else if input.availableWidth.kind == AvailableKind.Definite { width = max(0.0, input.availableWidth.value - box.inset.horizontal()) }
+  else if input.availableWidth.kind == AvailableKind.MinContent { return false }
+  else { offered = false }
+  let mut line = output.cache.takePlain(id)
+  let current = line.valid && line.item == raw[0].id && line.fontSize == scopes[0].font.metrics.fontSize && line.lineHeight == scopes[0].font.lineHeight
+  let mut plain = current && !line.refused
+  if !current { plain = run shapePlain(nodes, &mut output, &mut measurer, id, raw, scopes, &mut text, &mut line) }
+  if !offered { width = max(0.0, line.advance) }
+  let axes = Axes.make(style.writingMode)
+  let mut metrics = Size.zero()
+  let mut band = Band { left: 0.0, right: width, nextBottom: 0.0, occupied: false }
+  if plain {
+    metrics = lineExtents(line.items.asSlice(), scopes, extents.asMutSlice(), 0, line.items.length(), true)
+    band = indentBand(bfc.band(input.bfcContentOrigin, width, 0.0, metrics.height), 0.0, false)
+    plain = line.advance <= band.right - band.left
+  }
+  if !plain {
+    run output.cache.keepPlain(id, move line)
+    return false
+  }
+  let baselineOffsets = fontBaselines(&scopes[0].font, style.writingMode).translated(-scopes[0].font.baseline)
+  let exported = baselineOffsets.translated(box.inset.top + metrics.width)
+  result.firstBaselines = exported
+  result.hasFirstBaseline = true
+  result.lastBaselines = exported
+  result.hasLastBaseline = true
+  let mut height = metrics.height + box.inset.vertical()
+  if box.size.heightDefinite { height = box.size.height }
+  result.size = axes.size(Size { width: width + box.inset.horizontal(), height: height })
+  result.contentSize = axes.size(Size { width: width, height: metrics.height })
+  if input.performLayout {
+    text.lines.clear()
+    run text.lines.append(LineBox { start: 0, end: line.items.length(), y: 0.0, left: band.left, width: band.right - band.left, advance: line.advance, hangingStart: 0.0, height: metrics.height, baseline: metrics.width, real: true, last: true, direction: style.usedDirection(), visual: Line.make() })
+    text.fonts.clear()
+    run text.fonts.append(line.font)
+    run emitLines(nodes, &mut output, &mut measurer, text.lines.asSlice(), line.items.asSlice(), atomics, line.texts.asSlice(), text.fonts.asSlice(), scopes, &mut extents, &mut text.spans, id, style, &axes, &box, result.size, &baselineOffsets, &input)
+  }
+  run output.cache.keepPlain(id, move line)
+  return true
 }
 
 pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
@@ -890,6 +1034,12 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   }
   suppressPhantomClones(nodes, items.asMutSlice(), scopes.asMutSlice())
   let rootBidi = paragraphBidi(nodes, id)
+  if items.length() == 1 && items.get(0).kind == ItemKind.Text && rootBidi == UnicodeBidi.Normal && TextMeasure.plainText(&measurer) {
+    let mut plain = Layout.zero()
+    if run plainLine(nodes, &mut output, &mut measurer, id, &input, &box, &mut bfc, items.asSlice(), atomics.asSlice(), scopes.asSlice(), &mut extents, &mut text, &mut plain) {
+      return plain
+    }
+  }
   let mut needsAnalysis = rootBidi != UnicodeBidi.Normal
   let mut needsVisual = false
   let mut textIndex: usize = 0

@@ -9,7 +9,7 @@ import inline_items { Item, Scope, FontBox }
 import inline_visual { Line }
 import style { Direction }
 import fragments { TextFragmentKind }
-import geometry { ResolvedEdges, Layout }
+import geometry { ResolvedEdges, Layout, FontMetrics }
 import tree { NO_NODE }
 
 // `font` is the font the run was shaped with (fallback included); `box` is the style's
@@ -17,6 +17,7 @@ import tree { NO_NODE }
 pub struct TextLeaf { pub font: usize, pub box: usize, pub start: usize, pub end: usize, pub key: usize, pub kind: TextFragmentKind }
 impl Copy for TextLeaf {}
 pub struct TextFont { pub style: usize, pub key: usize, pub font: FontBox }
+impl Copy for TextFont {}
 pub struct TextCandidate {
   pub items: List<Item>, pub texts: List<TextLeaf>, pub advance: f32, pub hanging: f32, pub hangingItems: usize, pub real: bool, pub visual: Line,
 }
@@ -134,6 +135,27 @@ impl FittedLines {
   pub fn answers(self: &Self, width: f32, inset: &ResolvedEdges, heightDefinite: bool, height: f32, firstFormatted: bool) -> bool {
     return self.valid && self.width == width && sameEdges(&self.inset, inset) && self.heightDefinite == heightDefinite
       && (!heightDefinite || self.height == height) && self.firstFormatted == firstFormatted
+  }
+}
+
+// A paragraph that is one run of plain text (see plainLine in inline_layout)
+// as it was last shaped: the items and text leaves of its one line and the
+// font they index. The cache keeps it between probes and computes, and
+// drops it with the box's other results.
+pub struct PlainLine {
+  // `refused` marks text that is not plain: the general path lays it out
+  // until the box's content changes.
+  pub valid: bool, pub refused: bool,
+  // What the shaping read besides the text: the text box and the root font.
+  pub item: usize, pub fontSize: f32, pub lineHeight: f32,
+  pub advance: f32, pub font: TextFont,
+  pub items: List<Item>, pub texts: List<TextLeaf>,
+}
+impl PlainLine {
+  pub fn make() -> PlainLine {
+    return PlainLine { valid: false, refused: false, item: NO_NODE, fontSize: 0.0, lineHeight: 0.0, advance: 0.0,
+      font: TextFont { style: NO_NODE, key: 0, font: FontBox { metrics: FontMetrics.zero(), baseline: 0.0, height: 0.0, lineHeight: 0.0, before: 0.0, after: 0.0 } },
+      items: List<Item>.make(), texts: List<TextLeaf>.make() }
   }
 }
 

@@ -9,7 +9,7 @@ import geometry { Layout, OptionalSize, AvailableSpace, AvailableKind, Rect, Poi
 import fragments { FragmentArena, Shift, one }
 import bfc { FloatBox }
 import silk.collections.slice { Slice }
-import inline_prepared { KeptText }
+import inline_prepared { KeptText, PlainLine }
 import flex { FlexMemos }
 import grid_geometry { GridGeometryStore }
 import grid_scratch { GridMemos }
@@ -345,6 +345,8 @@ pub struct LayoutCache {
   // Each box's plain content width (see engine.plainWidth), PLAIN_UNKNOWN
   // until asked for, or PLAIN_NEVER; dropped where the box's entries are.
   pub plainWidths: List<f32>,
+  // Each inline formatting box's PlainLine slot, or ABSENT.
+  plainSlots: List<usize>, plainLines: List<PlainLine>,
 }
 pub const PLAIN_UNKNOWN: f32 = -1.0
 pub const PLAIN_NEVER: f32 = -2.0
@@ -352,7 +354,7 @@ const CLEAR_LOG: usize = 16
 
 impl LayoutCache {
   pub fn make() -> LayoutCache {
-    return LayoutCache { heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<Input>.make(), layouts: List<Layout>.make(), spare: List<Entry>.make(), spareInputs: List<Input>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make() }
+    return LayoutCache { heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<Input>.make(), layouts: List<Layout>.make(), spare: List<Entry>.make(), spareInputs: List<Input>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make(), plainSlots: List<usize>.make(), plainLines: List<PlainLine>.make() }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() - self.dead }
   pub fn clear(self: &mut Self) {
@@ -387,6 +389,8 @@ impl LayoutCache {
     self.blockSlots.clear()
     self.blockBases.clear()
     self.plainWidths.clear()
+    self.plainSlots.clear()
+    self.plainLines.clear()
   }
   // Starts a compute: the previous compute's final layouts become reusable.
   pub effect fn rotateFinals(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
@@ -615,6 +619,10 @@ impl LayoutCache {
     self.flexMemos.dropBox(id)
     self.gridGeometry.dropBox(id)
     if id < self.plainWidths.length() { self.plainWidths.set(id, PLAIN_UNKNOWN) }
+    if id < self.plainSlots.length() && self.plainSlots.get(id) != ABSENT {
+      let lines = self.plainLines.asMutSlice()
+      lines[self.plainSlots.get(id)].valid = false
+    }
     // The paragraph is prepared again, into the lists the old one leaves.
     if id < self.texts.length() && self.texts.asSlice()[id].length() != 0 {
       let kept = self.texts.asMutSlice()[id].asMutSlice()
@@ -923,6 +931,41 @@ impl LayoutCache {
       id = id + 1
     }
     self.texts = move texts
+    let mut slots = List<usize>.make()
+    let mut lines = List<PlainLine>.make()
+    if self.plainLines.length() != 0 {
+      run slots.reserveExact(toOld.length)
+      id = 0
+      while id < toOld.length {
+        let from = toOld[id]
+        let mut slot = ABSENT
+        if from != ABSENT && from < self.plainSlots.length() && self.plainSlots.get(from) != ABSENT {
+          slot = lines.length()
+          run lines.append(Intrinsic.replace(self.plainLines.asMutSlice()[self.plainSlots.get(from)], PlainLine.make()))
+        }
+        run slots.append(slot)
+        id = id + 1
+      }
+    }
+    self.plainSlots = move slots
+    self.plainLines = move lines
+  }
+  // Box `id`'s PlainLine, taken out for the caller to fill or read and hand
+  // back with keepPlain; an empty one when the box has none.
+  pub fn takePlain(self: &mut Self, id: usize) -> PlainLine {
+    if id >= self.plainSlots.length() || self.plainSlots.get(id) == ABSENT { return PlainLine.make() }
+    return Intrinsic.replace(self.plainLines.asMutSlice()[self.plainSlots.get(id)], PlainLine.make())
+  }
+  pub effect fn keepPlain(self: &mut Self, id: usize, line: PlainLine) ! OutOfMemoryError ? &mut Allocator {
+    let have = self.plainSlots.length()
+    if id >= have { run self.plainSlots.appendRepeated(ABSENT, id + 1 - have) }
+    let slot = self.plainSlots.get(id)
+    if slot == ABSENT {
+      self.plainSlots.set(id, self.plainLines.length())
+      run self.plainLines.append(move line)
+      return
+    }
+    self.plainLines.set(slot, move line)
   }
   pub fn takeText(self: &mut Self, id: usize) -> Option<KeptText> {
     if id >= self.texts.length() { return Option<KeptText>.None }

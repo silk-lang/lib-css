@@ -1221,3 +1221,112 @@ test effect fn resizedBlocksKeepItemsOfTheirFlexChildren() ! OutOfMemoryError | 
     step = step + 1
   }
 }
+
+// A text service that offers a break after every space, with or without the
+// plain text guarantee, and counts its analyses.
+struct Words { paragraph: Paragraph, plain: bool, analyses: usize }
+impl Measure for Words {
+  fn font(provider: &mut Self, request: FontRequest) -> FontMetrics { return Measure.font(&mut provider.paragraph, request) }
+  fn scrollbars(provider: &mut Self, request: ScrollbarRequest) -> ScrollbarMetrics { return ScrollbarMetrics.zero() }
+  fn natural(provider: &mut Self, key: usize) -> NaturalDimensions { return Measure.natural(&mut provider.paragraph, key) }
+  fn measure(provider: &mut Self, key: usize, request: MeasureRequest<'_>) -> Measured { return Measure.measure(&mut provider.paragraph, key, request) }
+}
+impl TextMeasure for Words {
+  fn beginTextLayout(provider: &mut Self) {}
+  fn plainText(provider: &Self) -> bool { return provider.plain }
+  effect fn analyze(provider: &mut Self, context: TextContext<'_, '_>, output: &mut List<TextBreak>) -> TextAnalysis ! OutOfMemoryError | TextError ? &mut Allocator {
+    provider.analyses = provider.analyses + 1
+    let mut unit: usize = 0
+    while unit < context.tokens.length {
+      if context.tokens[unit].kind == TextTokenKind.Space { run output.append(TextBreak { at: TextCursor { unit: unit + 1, offset: 0 }, kind: TextBreakKind.Soft }) }
+      unit = unit + 1
+    }
+    run output.append(TextBreak { at: TextCursor { unit: context.tokens.length, offset: 0 }, kind: TextBreakKind.Soft })
+    return TextAnalysis.uniform(context.tokens.length, 0, 0, true)
+  }
+  effect fn shape(provider: &mut Self, request: TextShapeRequest<'_, '_>, output: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator {
+    run TextMeasure.shape(&mut provider.paragraph, request, &mut output)
+  }
+}
+
+test effect fn plainLinesMatchAnalyzedParagraphs() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut column = Style.make()
+  column.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  column.flexDirection = FlexDirection.Column
+  column.alignItems = Align.FlexStart
+  column.width = Dimension.px(200.0)
+  let mut tree = run Tree.make(move column) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let mut nodes = List<NodeId>.make()
+  let mut padded = Style.make()
+  padded.padding.left = Dimension.px(3.0)
+  padded.padding.top = Dimension.px(2.0)
+  let mut narrow = Style.make()
+  narrow.width = Dimension.px(30.0)
+  let mut right = Style.make()
+  right.width = Dimension.px(120.0)
+  right.textAlign = TextAlign.Right
+  let contents: [string<'static>; 6] = ["one two", "label", "alpha beta gamma", "right side", " spaced  out ", "caf\u{e9} au lait"]
+  let mut at: usize = 0
+  while at < 6 {
+    let mut style = Style.make()
+    if at == 0 { style = padded }
+    if at == 2 { style = narrow }
+    if at == 3 { style = right }
+    let label = run tree.append(root, style) |> Effect.provideMut<Allocator>(&mut allocator)
+    let value = run String.copy(contents[at]) |> Effect.provideMut<Allocator>(&mut allocator)
+    let text = run tree.appendText(label, move value) |> Effect.provideMut<Allocator>(&mut allocator)
+    run nodes.append(label) |> Effect.provideMut<Allocator>(&mut allocator)
+    run nodes.append(text) |> Effect.provideMut<Allocator>(&mut allocator)
+    at = at + 1
+  }
+  let mut fast = LayoutTree.make()
+  let mut slow = LayoutTree.make()
+  let mut plain = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: true, analyses: 0 }
+  let mut analyzed = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: false, analyses: 0 }
+  let mut step: usize = 0
+  while step < 5 {
+    if step == 1 {
+      let value = run String.copy("changed text") |> Effect.provideMut<Allocator>(&mut allocator)
+      run tree.setText(nodes.get(3), move value)
+    }
+    if step == 2 || step == 3 {
+      let mut resized = Style.make()
+      resized.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+      resized.flexDirection = FlexDirection.Column
+      resized.alignItems = Align.FlexStart
+      resized.width = Dimension.px(40.0)
+      if step == 3 { resized.width = Dimension.px(200.0) }
+      run tree.setStyle(root, resized)
+    }
+    if step == 4 {
+      let value = run String.copy("two\nlines") |> Effect.provideMut<Allocator>(&mut allocator)
+      run tree.setText(nodes.get(1), move value)
+    }
+    run compute(&tree, &mut fast, &mut plain, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+    run compute(&tree, &mut slow, &mut analyzed, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut index: usize = 0
+    while index < nodes.length() {
+      let a = run fast.sourceBounds(nodes.get(index))
+      let b = run slow.sourceBounds(nodes.get(index))
+      run Testing.expect(a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height, "a plain line is laid out where the analyzed paragraph is")
+      let mut left = run fast.sourceRects(nodes.get(index))
+      let mut other = run slow.sourceRects(nodes.get(index))
+      while true {
+        let first = match move left.next() {
+          Option<Rect>.Some { value } => value
+          Option<Rect>.None => { break }
+        }
+        let second = match move other.next() {
+          Option<Rect>.Some { value } => value
+          Option<Rect>.None => Rect { x: -1.0, y: -1.0, width: -1.0, height: -1.0 }
+        }
+        run Testing.expect(first.x == second.x && first.y == second.y && first.width == second.width && first.height == second.height, "a plain line emits the fragments of the analyzed paragraph")
+      }
+      index = index + 1
+    }
+    step = step + 1
+  }
+  run Testing.expect(plain.analyses < analyzed.analyses && plain.analyses != 0, "plain lines skip analysis; wrapped, spaced and non-ASCII text keeps it")
+}
