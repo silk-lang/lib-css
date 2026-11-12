@@ -289,6 +289,18 @@ pub effect fn plainWidth(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, i
   let base = Input.make(OptionalSize.none())
   return plainWidthOf(nodes, output.facts.keyShapes.asSlice(), output.cache.plainWidths.asMutSlice(), &base, id)
 }
+// Whether a grid item's contributions are plainContribution's: a childless
+// box without content, ratio, scrollbars, floats or percentages (so that
+// emptyContentWidth holds and no request reaches its sizes), whose sizes and
+// limits are lengths or absent.
+pub fn plainGridItem(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
+  let need = KEY_EMPTY | KEY_WIDTH_FREE
+  if output.keyShape(id) & (need | KEY_PERCENT) != need { return false }
+  let style = nodes.style(id)
+  return !isGrid(style) && plainDimension(&style.width, false) && plainDimension(&style.height, false)
+    && plainDimension(&style.minWidth, false) && plainDimension(&style.minHeight, false)
+    && plainDimension(&style.maxWidth, true) && plainDimension(&style.maxHeight, true)
+}
 fn plainDimension(value: &Dimension, none: bool) -> bool {
   return value.kind == DimensionKind.Auto || value.kind == DimensionKind.Length || (none && value.kind == DimensionKind.None)
 }

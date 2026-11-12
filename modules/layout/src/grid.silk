@@ -19,7 +19,7 @@ import style { Style, Dimension, DimensionKind, Direction, Align, Position, Writ
 import context { Input, ResolvedBox, UNBOUNDED, childrenInput, resolve }
 import box_tree { BoxTree }
 import layout_pass { LayoutPass }
-import engine { layoutNodeInPlace, percentFree, probeNode, shapedBox, widthIgnoresHeight, baselineValue, ITEM_SUBGRID, ITEM_SELF_BASELINE }
+import engine { layoutNodeInPlace, plainGridItem, percentFree, probeNode, shapedBox, widthIgnoresHeight, baselineValue, ITEM_SUBGRID, ITEM_SELF_BASELINE }
 import text { TextMeasure, TextError }
 import tree { NO_NODE }
 import fragmentation { FragmentationError, FlowCursor, BoundaryProbe, ResumeCheckpoint }
@@ -34,7 +34,7 @@ import layout_cache { REUSE_INDEPENDENT }
 import grid_lines { LineNames }
 import grid_template { expandedTracks, expandedLines }
 import grid_preparation { needsPreparation, prepareTemplate, preferredSizes }
-import grid_contributions { ItemContribution, measureContribution }
+import grid_contributions { ItemContribution, measureContribution, plainContribution }
 import grid_alignment { selfAlignment, alignTracks, alignItem }
 import grid_baselines as Baselines
 import grid_baselines { GridBaselines }
@@ -432,6 +432,9 @@ effect fn collectContributions<'pass, 'source, M: Measure + TextMeasure>(
       at = at + 1
     }
   }
+  // What a plain item's box resolves against (see plainContribution).
+  let mut plainBase = Input.make(OptionalSize.none())
+  plainBase.minimum = base.effectiveMinimum()
   let mut changed = false
   // Whether any contribution differs at all, which `changed` leaves out.
   let mut differs = false
@@ -482,6 +485,15 @@ effect fn collectContributions<'pass, 'source, M: Measure + TextMeasure>(
         && widthIgnoresHeight(nodes, &output, item.id)
       if unchanged {
         contribution = own.contributions.asSlice()[index]
+      } else if policy.intrinsic && !aligned && output.frame == NO_NODE && !descendants && plainGridItem(nodes, &output, item.id) {
+        // A plain item's contribution comes from its style alone: no request,
+        // key or memo entry is made for it.
+        let itemStyle = nodes.style(item.id)
+        let box = shapedBox(&output, itemStyle, item.id, &plainBase)
+        let value = plainContribution(itemStyle, &box, sizing.columns != axis.vertical, policy.automatic, policy.cap, policy.needMin, policy.needMax && !checkOnly)
+        contribution.minimum = value.minimum
+        contribution.minContent = value.minContent
+        contribution.maxContent = value.maxContent
       } else if (!descendants || !Subgrid.inherits(nodes, item.id, parent, sizing.columns)) && (policy.intrinsic || aligned) {
         let mut kept = Option<ItemContribution>.None
         if quick && !fast && policy.intrinsic && !aligned
