@@ -1166,6 +1166,10 @@ effect fn probeText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
     if found != usize.MAX && output.cache.layoutAt(found).size.width <= request.availableWidth.value {
       let result = output.cache.layoutAt(found).widenedTo(request.availableWidth.value, !request.indefiniteWidth)
       output.stats.cacheHits = output.stats.cacheHits + 1
+      // Stored as a cache hit stores it (see storeCached).
+      run output.preserveLayout(id)
+      run output.touch(id)
+      output.boxes[id] = result
       run output.remember(id, &key, CacheKind.IndependentBox, &result)
       return result
     }
