@@ -290,6 +290,13 @@ pub fn widthIgnoresHeight(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: 
   if id < output.facts.itemFlags.length() { return output.facts.itemFlags.get(id) & ITEM_MEASURED_WIDTH != 0 }
   return measuredWidthLeaf(nodes, id)
 }
+// Whether a horizontal box's laid-out width cannot read its own height:
+// widthIgnoresHeight, or a block holding only text (textContents) whose
+// own style lets no height feed its width (KEY_WIDTH_FREE).
+pub fn crossIgnoresMain(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
+  if widthIgnoresHeight(nodes, output, id) { return true }
+  return output.keyShape(id) & KEY_WIDTH_FREE != 0 && textContents(nodes, id)
+}
 // The leaf case of widthIgnoresHeight, which itemFlags records.
 fn measuredWidthLeaf(nodes: &BoxTree<'_>, id: usize) -> bool {
   let node = nodes.node(id)
