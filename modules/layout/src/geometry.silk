@@ -291,6 +291,20 @@ impl Layout {
       && a.marginBottomPositive == b.marginBottomPositive && a.marginBottomNegative == b.marginBottomNegative
       && a.collapsesThrough == b.collapsesThrough && a.hasClearance == b.hasClearance
   }
+  // This result of a box with no insets of its own, at a width at least its
+  // own width that places all its content as before (see probeText).
+  pub fn widenedTo(self: &Self, width: f32, definite: bool) -> Layout {
+    let mut result = self.*
+    let grow = width - self.size.width
+    result.size.width = width
+    result.contentSize.width = self.contentSize.width + grow
+    result.paddingBox.width = self.paddingBox.width + grow
+    result.contentBox.width = self.contentBox.width + grow
+    result.flowOverflow.width = self.flowOverflow.width + grow
+    result.scrollableOverflow.width = self.scrollableOverflow.width + grow
+    result.widthDefinite = definite
+    return result
+  }
   pub fn normalFlowOverflow(self: &Self) -> Rect { return self.flowOverflow }
   pub fn paddingRect(self: &Self) -> Rect { return self.paddingBox }
   pub fn contentRect(self: &Self) -> Rect { return self.contentBox }
