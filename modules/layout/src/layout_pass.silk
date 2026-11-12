@@ -609,7 +609,8 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
       id = id + 1
     }
   }
-  pub fn restart(self: &mut Self) {
+  pub effect fn restart(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    run self.fragments.finishInPlace()
     self.fragments.rollback(0)
     self.fragments.restartFlow()
     self.fragmentParent = NO_NODE
@@ -724,6 +725,36 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
     let slot = self.cache.keptRange(id)
     if !slot.valid { return false }
     return run self.reuseRange(nodes, id, slot, false)
+  }
+  // The fragment range of a box this compute has neither written nor
+  // reached below, kept where it stands at the write position under
+  // `parent`, with the box's final layout, as reuseRange keeps it: for a box
+  // whose caller knows it would request what it last requested. `location`
+  // is where the caller would place the box and its first fragment: when
+  // either stands elsewhere, nothing is kept.
+  pub effect fn keepUntouched(self: &mut Self, id: usize, parent: usize, location: Point) -> bool ! OutOfMemoryError ? &mut Allocator {
+    if !self.keptAsBefore(id, REUSE_INDEPENDENT) { return false }
+    let generation = self.writes.generation
+    let mark = self.writes.marks.asSlice()[id]
+    if mark.relaid == generation || mark.written == generation || mark.below == generation { return false }
+    let slot = self.cache.keptRange(id)
+    if slot.floatCount != 0 || !self.fragments.viewsPrevious() || !self.fragments.previousWhole() || id >= self.fragments.boxCount()
+      || self.fragments.previousFirst(id) != slot.start || !self.fragments.canKeep(slot.start, slot.end) { return false }
+    let placed = self.fragments.values.asSlice()[slot.start].location
+    let at = self.boxes[id].location
+    if placed.x != location.x || placed.y != location.y || at.x != location.x || at.y != location.y { return false }
+    let base = self.fragments.checkpoint()
+    run self.fragments.keepRange(slot.start, slot.end, parent)
+    let record = self.cache.result(id)
+    let overflow = record.scrollableOverflow
+    let horizontal = record.horizontalScrollbar
+    let vertical = record.verticalScrollbar
+    self.boxes[id].scrollableOverflow = overflow
+    self.boxes[id].horizontalScrollbar = horizontal
+    self.boxes[id].verticalScrollbar = vertical
+    run self.cache.carryFinal(id, slot, base, self.fragments.checkpoint())
+    self.stats.reusedLayouts = self.stats.reusedLayouts + 1
+    return true
   }
   effect fn reuseRange(self: &mut Self, nodes: &BoxTree<'_>, id: usize, kept: FinalRange, beside: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
     let mut slot = kept

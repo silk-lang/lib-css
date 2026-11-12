@@ -140,6 +140,6 @@ pub effect fn computeFragmented<'frames, 'source, M: Measure + TextMeasure>(tree
       output.adopt(move nodes)
       return
     }
-    pass.restart()
+    run pass.restart()
   }
 }
