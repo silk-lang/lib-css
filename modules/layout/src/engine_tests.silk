@@ -7,7 +7,7 @@ import silk.core.option { Option }
 import text { TextMeasure, TextError, TextContext, TextTokenKind, TextCursor, TextBreak, TextBreakKind, TextLevel, TextAnalysis, TextShapeRequest, TextRun }
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
-import style { Style, Dimension, Edges, Float, Display, DisplayOutside, DisplayInside, Position, BoxSizing, TextAlign, TextWrap, Direction, WhiteSpaceCollapse, TabSize, BoxDecorationBreak, FlexDirection, FlexWrap }
+import style { Style, Dimension, Edges, Float, Display, DisplayOutside, DisplayInside, Position, BoxSizing, TextAlign, TextWrap, Direction, WhiteSpaceCollapse, TabSize, BoxDecorationBreak, FlexDirection, FlexWrap, Align }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableKind, max, min, abs }
 import tree { Tree, LayoutTree, InvalidNode, InvalidBox, BoxId, NO_NODE }
 import engine { compute }
@@ -1120,4 +1120,45 @@ test effect fn boxesStandAcrossMarkedInvalidation() ! OutOfMemoryError | TextErr
   run tree.setStyle(item, hidden)
   run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(output.boxes.get(output.firstBySource.get(root.index)).size.height == 0.0, "a style change after the mark regenerates the boxes")
+}
+
+// A plain box's content width is read without a size probe (plainWidth), so
+// the early cutoff compares it too: a stretched column that holds the widest
+// item of its shrink-to-fit parent keeps its own size when it is laid out
+// alone after the item narrows, and the parent must still narrow.
+test effect fn plainWidthsHoldTheEarlyCutoff() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut column = Style.make()
+  column.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  column.flexDirection = FlexDirection.Column
+  let mut start = column
+  start.alignItems = Align.FlexStart
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let outer = run tree.append(root, start) |> Effect.provideMut<Allocator>(&mut allocator)
+  let fitted = run tree.append(outer, column) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut wide = Style.make()
+  wide.width = Dimension.px(50.0)
+  wide.height = Dimension.px(10.0)
+  drop run tree.append(fitted, wide) |> Effect.provideMut<Allocator>(&mut allocator)
+  let stretched = run tree.append(fitted, column) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut narrow = Style.make()
+  narrow.width = Dimension.px(150.0)
+  narrow.height = Dimension.px(10.0)
+  let leaf = run tree.append(stretched, narrow) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut output = LayoutTree.make()
+  let mut content = Content { minimum: 20.0, maximum: 60.0, height: 18.0 }
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.boxes.get(output.firstBySource.get(fitted.index)).size.width == 150.0, "the column fits its widest item")
+  let mut step: usize = 0
+  while step < 3 {
+    let mut grown = Style.make()
+    grown.width = Dimension.px(120.0 - usize.toF32(step) * 10.0)
+    grown.height = Dimension.px(10.0)
+    run tree.setStyle(leaf, grown)
+    run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(output.boxes.get(output.firstBySource.get(fitted.index)).size.width == 120.0 - usize.toF32(step) * 10.0, "the column follows an item of a stretched item")
+    run Testing.expect(output.boxes.get(output.firstBySource.get(stretched.index)).size.width == 120.0 - usize.toF32(step) * 10.0, "the stretched item follows")
+    step = step + 1
+  }
 }

@@ -588,6 +588,38 @@ pub effect fn measureContributionEdges<'pass, 'source, M: Measure + TextMeasure>
   return result
 }
 
+// measureContributionEdges for an item engine.plainGridItem holds for, with
+// no extra margins: it is empty, so its content sizes are its padding and
+// border, and nothing of the request but its minimum (`minimum`, the
+// request's effectiveMinimum) reaches its box. `box` is the item's style
+// resolved for `minimum` with no known size.
+pub fn plainContribution(style: &Style, box: &ResolvedBox, horizontal: bool, autoMinimumAllowed: bool, fixedMaximum: f32, needMinContent: bool, needMaxContent: bool) -> ItemContribution {
+  let sizeDimension = preferred(style, horizontal)
+  let autoMinimum = autoMinimumAllowed && minimum(style, horizontal).kind == DimensionKind.Auto
+  let minimumUsesPreferred = sizeDimension.kind != DimensionKind.Auto
+  let margin = edges(box.margin, horizontal)
+  let mut usedMinimum = axisSize(box.min, horizontal)
+  if !needMinContent && !needMaxContent && !minimumUsesPreferred && !autoMinimum {
+    return ItemContribution { minimum: usedMinimum + margin, minContent: 0.0, maxContent: 0.0, usedMinimum: usedMinimum }
+  }
+  let inset = edges(box.inset, horizontal)
+  let usedMaximum = axisSize(box.max, horizontal)
+  let mut content = inset
+  if definite(box.size, horizontal) { content = optionalSize(box.size, horizontal) }
+  if autoMinimum {
+    let mut suggestion = min(content, max(inset, fixedMaximum - margin))
+    if resolves(maximum(style, horizontal), false) { suggestion = min(suggestion, usedMaximum) }
+    usedMinimum = max(inset, suggestion)
+  }
+  let mut minContribution = clamp(content, usedMinimum, usedMaximum) + margin
+  let mut maxContribution = max(minContribution, clamp(content, usedMinimum, usedMaximum) + margin)
+  let mut minimumContribution = usedMinimum + margin
+  if minimumUsesPreferred { minimumContribution = minContribution }
+  if !needMinContent { minContribution = 0.0 }
+  if !needMaxContent { maxContribution = 0.0 }
+  return ItemContribution { minimum: minimumContribution, minContent: minContribution, maxContent: maxContribution, usedMinimum: usedMinimum }
+}
+
 pub effect fn measureContribution<'pass, 'source, M: Measure + TextMeasure>(
   nodes: &BoxTree<'source>,
   output: &mut LayoutPass<'pass, 'source>,
