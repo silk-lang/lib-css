@@ -1,11 +1,11 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
 import context { outOfFlow }
-import style { Float, Dimension, Edges, Position, WritingMode }
+import style { Float, Dimension, DimensionKind, Edges, Position, Style, WritingMode }
 import tree { Tree, NO_NODE }
 import box_tree { BoxTree, BoxNode, BoxKind }
 import grid_subgrid as Subgrid
-import layout_cache { LayoutCache, BoxFacts, REUSE_NONE, REUSE_INDEPENDENT, REUSE_IN_FLOW, REUSE_LEVEL, FACT_FREE }
+import layout_cache { LayoutCache, BoxFacts, REUSE_NONE, REUSE_INDEPENDENT, REUSE_IN_FLOW, REUSE_LEVEL, FACT_FREE, FACT_ANCHORED }
 
 // Kept results are addressed by generated box index, so they survive only
 // while box construction yields the same boxes. Scroll offsets only move
@@ -273,8 +273,9 @@ pub fn invalidateUnmatched(nodes: &BoxTree<'_>, cache: &mut LayoutCache, changed
 // Two flags per box, from each box's own facts and its subtree's.
 //
 // reusable: how much of a box's previous layout may be copied into the next
-// compute. A subtree with out-of-flow boxes or inline interruptions is never
-// copied: positioning, not normal-flow layout, completes those. One with
+// compute. A subtree with out-of-flow boxes below its root or inline
+// interruptions is never copied: positioning, not normal-flow layout,
+// completes those. An out-of-flow box's own subtree may be. One with
 // floats is copied only where it starts a formatting context, since its
 // floats would otherwise join exclusions it shares with its siblings. So is
 // one with negative margins, which could lift a box into the floats above it.
@@ -328,7 +329,10 @@ pub effect fn markSubtrees(nodes: &BoxTree<'_>, facts: &mut BoxFacts) ! OutOfMem
 
 // The reuse level a subtree allows its parent: a float's is at most
 // independent, since its float joins exclusions it shares with its siblings.
+// An out-of-flow box may reuse its own layout, but positioning, not its
+// parent's layout, places it: a parent holding one is never copied.
 fn passedUp(nodes: &BoxTree<'_>, id: usize, level: u8) -> u8 {
+  if outOfFlow(nodes.style(id)) { return REUSE_NONE }
   if nodes.style(id).float != Float.None && level > REUSE_INDEPENDENT { return REUSE_INDEPENDENT }
   return level
 }
@@ -337,14 +341,30 @@ fn ownFacts(nodes: &BoxTree<'_>, index: usize) -> u8 {
   let node = nodes.node(index)
   let style = nodes.style(index)
   let mut facts = REUSE_IN_FLOW
-  if outOfFlow(style) || node.interruptionFirst != NO_NODE { facts = REUSE_NONE }
+  if node.interruptionFirst != NO_NODE { facts = REUSE_NONE }
+  else if outOfFlow(style) { facts = REUSE_INDEPENDENT }
   else if !nonNegative(&style.margin) { facts = REUSE_INDEPENDENT }
   let horizontal = style.writingMode == WritingMode.HorizontalTb
   let mut free = !style.replaced && style.position != Position.Fixed
   if node.parent == NO_NODE { free = free && horizontal }
   else { free = free && horizontal == (nodes.style(node.parent).writingMode == WritingMode.HorizontalTb) }
   if free { facts = facts | FACT_FREE }
+  if insetAnchored(style) { facts = facts | FACT_ANCHORED }
   return facts
+}
+
+fn length(value: &Dimension) -> bool { return value.kind == DimensionKind.Length }
+fn lengths(edges: &Edges) -> bool { return length(&edges.top) && length(&edges.right) && length(&edges.bottom) && length(&edges.left) }
+// Whether an absolute box's layout and place read nothing of its containing
+// block but where its padding box starts: lengths size it, and its left and
+// top insets alone place it (Position 3 §4.1), so no self alignment applies.
+pub fn insetAnchored(style: &Style) -> bool {
+  if style.position != Position.Absolute || style.replaced || style.writingMode != WritingMode.HorizontalTb { return false }
+  if !length(&style.inset.left) || !length(&style.inset.top) || style.inset.right.kind != DimensionKind.Auto || style.inset.bottom.kind != DimensionKind.Auto { return false }
+  if !length(&style.width) || !length(&style.height) { return false }
+  if (style.minWidth.kind != DimensionKind.Auto && !length(&style.minWidth)) || (style.minHeight.kind != DimensionKind.Auto && !length(&style.minHeight)) { return false }
+  if (style.maxWidth.kind != DimensionKind.None && !length(&style.maxWidth)) || (style.maxHeight.kind != DimensionKind.None && !length(&style.maxHeight)) { return false }
+  return lengths(&style.margin) && lengths(&style.padding) && lengths(&style.border)
 }
 
 // The tree node whose style a box takes: text shares its parent's.

@@ -7,7 +7,7 @@ import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
 import style { Style, Dimension, Edges, Display, DisplayOutside, DisplayInside, Position, Direction, WritingMode, FlexDirection, FlexWrap, Align, OverflowAlignment }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, abs }
-import tree { Tree, LayoutTree, InvalidNode, NO_NODE }
+import tree { Tree, LayoutTree, InvalidNode, NodeId, NO_NODE }
 import engine { compute }
 
 struct EmptyMeasure {}
@@ -343,4 +343,73 @@ test effect fn absoluteInsetStretchClampsAndInvertedRectangleReducesEndInset() !
   // §3.5.2 reduces bottom from 30 to -20: zero-height rectangle at 120.
   // §4.2 then divides -20 between the block-axis auto margins.
   run near(invertedBox.y - parentBounds.y, 110.0)
+}
+
+// Absolute boxes sized by lengths and placed by their left and top insets
+// keep their layout and place when their containing block resizes, and
+// follow it when its padding box moves.
+test effect fn insetAnchoredBoxesStayAcrossContainingBlockChanges() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut root = Style.make()
+  root.width = Dimension.px(400.0)
+  let mut tree = run Tree.make(move root) |> Effect.provideMut<Allocator>(&mut allocator)
+  let top = tree.root()
+  let mut canvasStyle = Style.make()
+  canvasStyle.position = Position.Relative
+  canvasStyle.height = Dimension.px(100.0)
+  let canvas = run tree.append(top, canvasStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut boxes = List<NodeId>.make()
+  let mut i: usize = 0
+  while i < 3 {
+    let mut s = Style.make()
+    s.position = Position.Absolute
+    s.width = Dimension.px(10.0)
+    s.height = Dimension.px(4.0)
+    s.inset.left = Dimension.px(usize.toF32(i) * 20.0)
+    s.inset.top = Dimension.px(6.0)
+    s.margin.left = Dimension.px(1.0)
+    run boxes.append(run tree.append(canvas, s) |> Effect.provideMut<Allocator>(&mut allocator)) |> Effect.provideMut<Allocator>(&mut allocator)
+    i = i + 1
+  }
+  let mut output = LayoutTree.make()
+  let mut measure = EmptyMeasure {}
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut narrow = Style.make()
+  narrow.width = Dimension.px(300.0)
+  run tree.setStyle(top, narrow)
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.stats.reusedLayouts == 3, "the anchored boxes are kept")
+  i = 0
+  while i < 3 {
+    let bounds = run output.sourceBounds(boxes.get(i))
+    run near(bounds.x, usize.toF32(i) * 20.0 + 1.0)
+    run near(bounds.y, 6.0)
+    run near(bounds.width, 10.0)
+    i = i + 1
+  }
+  // A border moves the padding box, and the boxes with it.
+  canvasStyle.border.left = Dimension.px(5.0)
+  canvasStyle.border.top = Dimension.px(2.0)
+  run tree.setStyle(canvas, canvasStyle)
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  i = 0
+  while i < 3 {
+    let bounds = run output.sourceBounds(boxes.get(i))
+    run near(bounds.x, usize.toF32(i) * 20.0 + 6.0)
+    run near(bounds.y, 8.0)
+    i = i + 1
+  }
+  // A moved box moves alone; the others stay kept.
+  let mut moved = Style.make()
+  moved.position = Position.Absolute
+  moved.width = Dimension.px(10.0)
+  moved.height = Dimension.px(4.0)
+  moved.inset.left = Dimension.px(100.0)
+  moved.inset.top = Dimension.px(6.0)
+  run tree.setStyle(boxes.get(1), moved)
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let middle = run output.sourceBounds(boxes.get(1))
+  run near(middle.x, 105.0)
+  let last = run output.sourceBounds(boxes.get(2))
+  run near(last.x, 46.0)
 }

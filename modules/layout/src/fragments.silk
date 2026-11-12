@@ -223,7 +223,10 @@ pub struct FragmentArena {
   // Whether world locations and text first/last flags await
   // resolveLocations (see deferLocations).
   stale: bool,
-  afterFlow: bool, flowEnd: usize,
+  afterFlow: bool, flowEnd: usize, flowTexts: usize,
+  // Kept fragments whose next-sibling link may still name the fragment that
+  // followed them in the previous output (see keepRange, closeSiblings).
+  openSiblings: List<usize>,
   adopted: List<usize>, previousAdopted: List<usize>,
   // How many times this compute moved the previous output.
   shifts: usize,
@@ -251,7 +254,7 @@ impl FragmentArena {
       offsets: false,
       resolveAll: true, edited: List<usize>.make(),
       stale: false,
-      afterFlow: false, flowEnd: 0, plain: true,
+      afterFlow: false, flowEnd: 0, flowTexts: 0, openSiblings: List<usize>.make(), plain: true,
       adopted: List<usize>.make(), previousAdopted: List<usize>.make(),
       shifts: 0,
     }
@@ -349,6 +352,7 @@ impl FragmentArena {
     self.settled.clear()
     self.savedFragments.clear()
     self.savedPositions.clear()
+    self.openSiblings.clear()
     self.savedTexts.clear()
     self.savedFirst.clear()
     self.savedLast.clear()
@@ -371,12 +375,24 @@ impl FragmentArena {
     }
   }
 
-  // Ends the normal flow. Writing in place ends too: later writes append,
-  // and the previous output past the write position stays readable.
+  // Ends the normal flow, and writing in place (see finishInPlace), unless
+  // the flow ended where the previous one did: then positioning's fragments
+  // may stand where they were too, and writing in place goes on.
   pub effect fn endFlow(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
     if self.afterFlow { return }
     self.afterFlow = true
+    let previousEnd = self.flowEnd
+    let previousTexts = self.flowTexts
     self.flowEnd = self.count
+    self.flowTexts = self.textCount
+    if !self.inPlace { return }
+    if !self.damaged && self.count == previousEnd && self.textCount == previousTexts { return }
+    run self.finishInPlace()
+  }
+  // Ends writing in place: later writes append, and the previous output
+  // past the write position stays readable.
+  pub effect fn finishInPlace(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    run self.closeSiblings()
     if !self.inPlace { return }
     self.inPlace = false
     self.closedAt = self.count
@@ -962,11 +978,44 @@ impl FragmentArena {
     if self.values.asSlice()[end - 1].textData != NO_NODE { texts = texts + 1 }
     self.count = end
     self.textCount = texts
-    run self.editPosition(start)
-    let values = self.values.asMutSlice()
-    values[start].parent = parent
-    run self.linkParent(start)
+    // A range kept after the sibling it followed before keeps its own links:
+    // only its parent's change, and its next-sibling link waits for the
+    // next child, or closeSiblings.
+    let last = if parent == NO_NODE { NO_NODE } else { self.values.asSlice()[parent].lastChild }
+    let standing = parent != NO_NODE && self.values.asSlice()[start].parent == parent && self.values.asSlice()[start].previousSibling == last
+      && (last == NO_NODE || self.values.asSlice()[last].nextSibling == start)
+    if standing {
+      run self.editPosition(parent)
+      let values = self.values.asMutSlice()
+      if last == NO_NODE { values[parent].firstChild = start }
+      values[parent].lastChild = start
+      // The sibling before, if it was open, is closed now.
+      let open = self.openSiblings.length()
+      if open > 0 && self.openSiblings.get(open - 1) == last { self.openSiblings.truncate(open - 1) }
+      if values[start].nextSibling != NO_NODE { run self.openSiblings.append(start) }
+    } else {
+      run self.editPosition(start)
+      let values = self.values.asMutSlice()
+      values[start].parent = parent
+      run self.linkParent(start)
+    }
     run self.settled.append(SettledRange { start: start, end: end, overflow: overflow, kept: true })
+  }
+  // Ends the next-sibling links keepRange left open on fragments that stayed
+  // their parent's last child.
+  pub effect fn closeSiblings(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    let mut at: usize = 0
+    while at < self.openSiblings.length() {
+      let index = self.openSiblings.get(at)
+      let parent = self.values.asSlice()[index].parent
+      if index < self.count && parent != NO_NODE && self.values.asSlice()[index].nextSibling != NO_NODE && self.values.asSlice()[parent].lastChild == index {
+        run self.editPosition(index)
+        let values = self.values.asMutSlice()
+        values[index].nextSibling = NO_NODE
+      }
+      at = at + 1
+    }
+    self.openSiblings.clear()
   }
   // Appends a copy of the previous range [start, end), as appendRange does
   // from another arena.
@@ -1111,7 +1160,7 @@ impl FragmentArena {
     if parent != NO_NODE {
       run self.editPosition(parent)
       previousSibling = self.values.asSlice()[parent].lastChild
-      if previousSibling != NO_NODE { run self.editPosition(previousSibling) }
+      if previousSibling != NO_NODE && self.values.asSlice()[previousSibling].nextSibling != index { run self.editPosition(previousSibling) }
     }
     let values = self.values.asMutSlice()
     values[index].previousSibling = previousSibling

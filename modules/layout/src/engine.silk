@@ -2644,6 +2644,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     drop viewportLayout
     run boxes.fragments.endFlow()
     let overflow = run positionTree(&nodes, &mut boxes, &mut measurer, viewport, tree.viewportScrollOffset, &mut output.normalOffsets)
+    run boxes.fragments.finishInPlace()
     boxes.stats.passes = boxes.stats.passes + 1
     if !boxes.needsRelayout {
       output.stats = boxes.stats
@@ -2667,6 +2668,6 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       output.adopt(move nodes)
       return
     }
-    boxes.restart()
+    run boxes.restart()
   }
 }

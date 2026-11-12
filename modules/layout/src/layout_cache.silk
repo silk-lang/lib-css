@@ -24,6 +24,9 @@ pub const REUSE_LEVEL: u8 = 3
 // A box's own share of the facts above, from its style and its parent's
 // writing mode, plus whether it reads no viewport limits.
 pub const FACT_FREE: u8 = 8
+// An absolute box whose layout and place in its containing block read none
+// of that block's size (see Incremental.insetAnchored).
+pub const FACT_ANCHORED: u8 = 16
 
 // Per-box facts drawn from styles, kept across computes of the same boxes
 // and refreshed only where a style changed; see Incremental.markSubtrees.
