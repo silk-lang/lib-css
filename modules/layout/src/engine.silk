@@ -2675,7 +2675,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     // Every style a visit depends on (position, overflow, display) regenerates
     // boxes when it changes; see Tree.setStyle.
     if !restoring {
-      run positionVisits(&nodes, &mut facts.visits)
+      if run positionVisits(&nodes, &mut facts.visits) { facts.visitsRevision = facts.visitsRevision + 1 }
       run Incremental.indexStyleSources(tree, &nodes, &mut facts.styledOffsets, &mut facts.styledBoxes)
     }
   } else if boxesStand && facts.covers(nodes.boxes.length()) && facts.styledOffsets.length() == tree.nodes.length() + 1 && facts.styledBoxes.length() == nodes.boxes.length() {
@@ -2683,7 +2683,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   } else {
     run Incremental.markSubtrees(&nodes, &mut facts)
     run keyShapes(&nodes, &mut facts.keyShapes, &mut facts.itemFlags)
-    run positionVisits(&nodes, &mut facts.visits)
+    if run positionVisits(&nodes, &mut facts.visits) { facts.visitsRevision = facts.visitsRevision + 1 }
     run Incremental.indexStyleSources(tree, &nodes, &mut facts.styledOffsets, &mut facts.styledBoxes)
   }
   // Changed boxes laid out alone first; see cutoffCandidates.

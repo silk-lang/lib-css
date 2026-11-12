@@ -418,3 +418,87 @@ test effect fn insetAnchoredBoxesStayAcrossContainingBlockChanges() ! OutOfMemor
   let last = run output.sourceBounds(boxes.get(2))
   run near(last.x, 46.0)
 }
+
+// A run of such boxes is kept at once from the second resize on, until one
+// of them changes; an incremental compute then matches a fresh one.
+test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut root = Style.make()
+  root.width = Dimension.px(400.0)
+  let mut tree = run Tree.make(move root) |> Effect.provideMut<Allocator>(&mut allocator)
+  let top = tree.root()
+  let mut wrapStyle = Style.make()
+  wrapStyle.position = Position.Relative
+  wrapStyle.width = Dimension.px(400.0)
+  let wrap = run tree.append(top, wrapStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut canvasStyle = Style.make()
+  canvasStyle.position = Position.Relative
+  canvasStyle.height = Dimension.px(100.0)
+  let canvas = run tree.append(wrap, canvasStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut boxes = List<NodeId>.make()
+  let mut i: usize = 0
+  while i < 6 {
+    let mut s = Style.make()
+    s.position = Position.Absolute
+    s.width = Dimension.px(10.0)
+    s.height = Dimension.px(4.0)
+    s.inset.left = Dimension.px(usize.toF32(i) * 20.0)
+    s.inset.top = Dimension.px(6.0)
+    run boxes.append(run tree.append(canvas, s) |> Effect.provideMut<Allocator>(&mut allocator)) |> Effect.provideMut<Allocator>(&mut allocator)
+    i = i + 1
+  }
+  let mut output = LayoutTree.make()
+  let mut measure = EmptyMeasure {}
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  // Wide, wide, then too narrow for the last boxes, and wide again.
+  let widths: [f32; 5] = [300.0, 350.0, 320.0, 60.0, 340.0]
+  let mut step: usize = 0
+  while step < 5 {
+    wrapStyle.width = Dimension.px(widths[step])
+    run tree.setStyle(wrap, wrapStyle)
+    run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(output.stats.reusedLayouts == 6, "every box of the run is kept")
+    let mut fresh = LayoutTree.make()
+    run compute(&tree, &mut fresh, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+    i = 0
+    while i < 6 {
+      let bounds = run output.sourceBounds(boxes.get(i))
+      let expected = run fresh.sourceBounds(boxes.get(i))
+      run near(bounds.x, expected.x)
+      run near(bounds.y, expected.y)
+      run near(bounds.width, expected.width)
+      run near(bounds.x, usize.toF32(i) * 20.0)
+      i = i + 1
+    }
+    let held = run output.sourceBounds(canvas)
+    let wanted = run fresh.sourceBounds(canvas)
+    run near(held.width, wanted.width)
+    step = step + 1
+  }
+  // A box of the run that moves is laid out again, alone.
+  let mut moved = Style.make()
+  moved.position = Position.Absolute
+  moved.width = Dimension.px(10.0)
+  moved.height = Dimension.px(4.0)
+  moved.inset.left = Dimension.px(200.0)
+  moved.inset.top = Dimension.px(6.0)
+  run tree.setStyle(boxes.get(3), moved)
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let changed = run output.sourceBounds(boxes.get(3))
+  run near(changed.x, 200.0)
+  let after = run output.sourceBounds(boxes.get(4))
+  run near(after.x, 80.0)
+  // The run forms again around it.
+  step = 0
+  while step < 3 {
+    wrapStyle.width = Dimension.px(widths[step])
+    run tree.setStyle(wrap, wrapStyle)
+    run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(output.stats.reusedLayouts == 6, "the boxes are kept again")
+    let again = run output.sourceBounds(boxes.get(3))
+    run near(again.x, 200.0)
+    let last = run output.sourceBounds(boxes.get(5))
+    run near(last.x, 100.0)
+    step = step + 1
+  }
+}

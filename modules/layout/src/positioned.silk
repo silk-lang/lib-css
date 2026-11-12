@@ -10,7 +10,7 @@ import fragments { FragmentKind }
 import context { Input, ResolvedBox, resolveBox, childrenInput, withGutter, resolve, resolves, outOfFlow, isFlex, isGrid, scrollable, usedOverflowForAxis, UNBOUNDED }
 import engine { layoutNode, layoutNodeInPlace, layoutInBfc, flowMarginRect, resolveFragmentBox, shapedBox }
 import layout_pass { LayoutPass, FullBoxGeometry, CacheKind, REUSE_INDEPENDENT }
-import layout_cache { FACT_ANCHORED }
+import layout_cache { FACT_ANCHORED, PositionedRun }
 import text { TextMeasure, TextError }
 import fragmentation { FragmentationError, FragmentInput, FragmentAncestor }
 import breaks { FragmentainerKind, BreakRelaxation }
@@ -1870,6 +1870,7 @@ fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: 
       let range = output.fragments.settled.get(settled - 1)
       settled = settled - 1
       index = range.start
+      if range.siblings { continue }
       let values = output.fragments.values.asMutSlice()
       values[index].scrollableOverflow = range.overflow
     }
@@ -1918,6 +1919,13 @@ fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: 
         // An absolute box's overflow inside its border box adds nothing
         // past that border box (see below).
         if !positioned || !inside || nonpainting { overflow = propagatedOverflow(style, overflow, paddingRect) }
+        // An absolute box inside what its parent's overflow holds by now
+        // adds nothing to it. Leaving the union out keeps the parent's
+        // edges from re-rounding, as a run kept at once leaves them.
+        if positioned && !fixed && inside && !nonpainting && parentId != NO_NODE {
+          let holds = output.fragments.values.asSlice()[parentId].scrollableOverflow
+          if border.x >= holds.x && border.y >= holds.y && border.x + border.width <= holds.x + holds.width && border.y + border.height <= holds.y + holds.height { continue }
+        }
       }
     }
     if !fixed {
@@ -2130,9 +2138,15 @@ effect fn positionRelative(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>,
 // interruption, out-of-flow, relative, sticky or scrollable boxes, and the
 // non-inline boxes at the top of the generated tree. Every other box is left
 // as normal-flow layout placed it. Depends only on the boxes and their styles.
-pub effect fn positionVisits(nodes: &BoxTree<'_>, result: &mut List<usize>) ! OutOfMemoryError ? &mut Allocator {
-  result.clear()
-  if nodes.sources.length == 0 { return }
+// Returns whether the visits changed.
+pub effect fn positionVisits(nodes: &BoxTree<'_>, result: &mut List<usize>) -> bool ! OutOfMemoryError ? &mut Allocator {
+  let before = result.length()
+  let mut count: usize = 0
+  let mut changed = false
+  if nodes.sources.length == 0 {
+    result.clear()
+    return before != 0
+  }
   let mut source: usize = 0
   while source != NO_NODE {
     let mut id = nodes.firstBySource.get(source)
@@ -2144,11 +2158,27 @@ pub effect fn positionVisits(nodes: &BoxTree<'_>, result: &mut List<usize>) ! Ou
       if !visit && node.kind != BoxKind.Inline {
         visit = scrollable(usedOverflowForAxis(style, true)) || scrollable(usedOverflowForAxis(style, false)) || generatedParent(nodes, id) == NO_NODE
       }
-      if visit { run result.append(id) }
+      if visit {
+        if count < result.length() {
+          if result.get(count) != id {
+            result.set(count, id)
+            changed = true
+          }
+        } else {
+          run result.append(id)
+          changed = true
+        }
+        count = count + 1
+      }
       id = node.nextContinuation
     }
     source = nextPositionSource(nodes, source)
   }
+  if count != before {
+    result.truncate(count)
+    changed = true
+  }
+  return changed
 }
 
 // The containing block of the last boxes keepAnchored kept, the source
@@ -2162,6 +2192,15 @@ struct AnchoredBlock { cb: usize, sourceParent: usize, fragment: usize, origin: 
 // that block's padding box starts, and the parts of the request the block's
 // style gives, compared here. See absolute, whose arithmetic this follows.
 effect fn keepAnchored(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, anchored: &mut AnchoredBlock) -> bool ! OutOfMemoryError ? &mut Allocator {
+  if !anchorBlock(nodes, &output, id, &mut anchored) { return false }
+  let style = nodes.style(id)
+  let x = anchored.padding.x + (style.inset.left.value + style.margin.left.value)
+  let y = anchored.padding.y + (style.inset.top.value + style.margin.top.value)
+  return run output.keepUntouched(id, anchored.fragment, Point { x: x - anchored.origin.x, y: y - anchored.origin.y })
+}
+// keepAnchored's conditions on the box and its containing block, which it
+// leaves in `anchored`.
+fn anchorBlock(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, anchored: &mut AnchoredBlock) -> bool {
   if (output.facts.own.get(id) & FACT_ANCHORED) == 0 || !output.facts.viewportFree.get(id) || !output.keptAsBefore(id, REUSE_INDEPENDENT) { return false }
   let cb = nodes.node(id).parent
   let source = nodes.node(id).source
@@ -2185,10 +2224,100 @@ effect fn keepAnchored(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id:
   let request = &output.cache.result(id).input
   if request.parentWritingMode != cbStyle.writingMode || request.parentTextOrientation != cbStyle.textOrientation
     || request.parentJustifyItems != cbStyle.justifyItems || request.parentJustifyItemsSafety != cbStyle.justifyItemsSafety { return false }
+  return true
+}
+
+// A run being gathered from boxes keepAnchored kept one after another.
+struct RunBuilder { active: bool, fragment: usize, value: PositionedRun }
+impl RunBuilder {
+  fn make() -> RunBuilder {
+    return RunBuilder { active: false, fragment: NO_NODE, value: PositionedRun { cb: NO_NODE, firstVisit: 0, count: 0, first: NO_NODE, last: NO_NODE, start: 0, end: 0, lastStart: 0,
+      delta: Point { x: 0.0, y: 0.0 }, left: 0.0, top: 0.0, right: 0.0, bottom: 0.0, clock: 0, visits: 0 } }
+  }
+  effect fn close(self: &mut Self, runs: &mut List<PositionedRun>) ! OutOfMemoryError ? &mut Allocator {
+    if self.active && self.value.count >= 2 { run runs.append(self.value) }
+    self.active = false
+  }
+}
+
+// Adds the box at visit `at`, which keepAnchored just kept under
+// `anchored`, to the run being gathered, or starts one with it. Only a box
+// that scrolls nothing, in one unmoved fragment holding its own overflow,
+// joins a run.
+effect fn gatherRun(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, builder: &mut RunBuilder, runs: &mut List<PositionedRun>, id: usize, at: usize, anchored: &AnchoredBlock) ! OutOfMemoryError ? &mut Allocator {
   let style = nodes.style(id)
-  let x = anchored.padding.x + (style.inset.left.value + style.margin.left.value)
-  let y = anchored.padding.y + (style.inset.top.value + style.margin.top.value)
-  return run output.keepUntouched(id, anchored.fragment, Point { x: x - anchored.origin.x, y: y - anchored.origin.y })
+  let node = nodes.node(id)
+  let start = output.fragments.first(id)
+  let end = output.fragments.checkpoint()
+  let mut fits = start != NO_NODE && start < end && node.interruptionFirst == NO_NODE
+    && !scrollable(usedOverflowForAxis(style, true)) && !scrollable(usedOverflowForAxis(style, false))
+  let mut border = Rect.zero()
+  if fits {
+    let fragment = &output.fragments.values.asSlice()[start]
+    let overflow = fragment.scrollableOverflow
+    border = Rect { x: fragment.location.x, y: fragment.location.y, width: fragment.size.width, height: fragment.size.height }
+    fits = fragment.kind == FragmentKind.Box && fragment.box == id && fragment.parent == anchored.fragment && !fragment.nonpainting
+      && fragment.previousForBox == NO_NODE && fragment.nextForBox == NO_NODE
+      && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0
+      && overflow.x >= 0.0 && overflow.y >= 0.0 && overflow.x + overflow.width <= fragment.size.width && overflow.y + overflow.height <= fragment.size.height
+  }
+  if !fits {
+    run builder.close(&mut runs)
+    return
+  }
+  if builder.active && builder.value.cb == anchored.cb && builder.fragment == anchored.fragment && builder.value.end == start && builder.value.firstVisit + builder.value.count == at {
+    builder.value.count = builder.value.count + 1
+    builder.value.last = id
+    builder.value.lastStart = start
+    builder.value.end = end
+    builder.value.left = min(builder.value.left, border.x)
+    builder.value.top = min(builder.value.top, border.y)
+    builder.value.right = max(builder.value.right, border.x + border.width)
+    builder.value.bottom = max(builder.value.bottom, border.y + border.height)
+    return
+  }
+  run builder.close(&mut runs)
+  builder.active = true
+  builder.fragment = anchored.fragment
+  builder.value = PositionedRun { cb: anchored.cb, firstVisit: at, count: 1, first: id, last: id, start: start, end: end, lastStart: start,
+    delta: Point { x: anchored.padding.x - anchored.origin.x, y: anchored.padding.y - anchored.origin.y },
+    left: border.x, top: border.y, right: border.x + border.width, bottom: border.y + border.height,
+    clock: output.cache.clearClock(), visits: output.facts.visitsRevision }
+}
+
+// Keeps a whole run where it stood, as keepAnchored would keep each of its
+// boxes: none of them was cleared since the run was gathered, their
+// containing block's padding box starts where it did, and their fragments
+// still follow its last child. The run must also lie inside the block's
+// overflow as laid out, to which it then adds nothing (see treeOverflow).
+effect fn keepRun(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, saved: &mut PositionedRun, at: usize, anchored: &mut AnchoredBlock) -> bool ! OutOfMemoryError ? &mut Allocator {
+  if saved.visits != output.facts.visitsRevision || at + saved.count > output.facts.visits.length() { return false }
+  if output.facts.visits.get(at) != saved.first || output.facts.visits.get(at + saved.count - 1) != saved.last { return false }
+  let clock = output.cache.clearClock()
+  if clock != saved.clock {
+    if !output.cache.clearsLoggedSince(saved.clock) { return false }
+    let mut logged: usize = 0
+    while logged < output.cache.clearLogLength() {
+      if output.cache.clearLoggedAt(logged) > saved.clock {
+        let box = output.cache.clearLogged(logged)
+        if box >= nodes.boxes.length() || nodes.node(box).parent == saved.cb { return false }
+      }
+      logged = logged + 1
+    }
+  }
+  if !output.keptAsBefore(saved.last, REUSE_INDEPENDENT) || !anchorBlock(nodes, &output, saved.first, &mut anchored) { return false }
+  if anchored.cb != saved.cb || anchored.padding.x - anchored.origin.x != saved.delta.x || anchored.padding.y - anchored.origin.y != saved.delta.y { return false }
+  let cbStyle = nodes.style(saved.cb)
+  if scrollable(usedOverflowForAxis(cbStyle, true)) || scrollable(usedOverflowForAxis(cbStyle, false)) { return false }
+  if !output.fragments.viewsPrevious() || !output.fragments.previousWhole() || saved.last >= output.fragments.boxCount()
+    || output.fragments.previousFirst(saved.first) != saved.start || output.fragments.previousFirst(saved.last) != saved.lastStart
+    || !output.fragments.canKeep(saved.start, saved.end) { return false }
+  let holds = output.fragments.values.asSlice()[anchored.fragment].scrollableOverflow
+  if saved.left < holds.x || saved.top < holds.y || saved.right > holds.x + holds.width || saved.bottom > holds.y + holds.height { return false }
+  if !run output.fragments.keepRun(saved.start, saved.end, saved.lastStart, anchored.fragment) { return false }
+  output.stats.reusedLayouts = output.stats.reusedLayouts + saved.count
+  saved.clock = clock
+  return true
 }
 
 pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, viewport: OptionalSize, viewportScroll: Point, normalOffsets: &mut List<Point>) -> Rect ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
@@ -2208,8 +2337,25 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   // Whether no box is fixed, interrupted, or a scroll container with children.
   let mut plainParents = true
   let mut anchored = AnchoredBlock { cb: NO_NODE, sourceParent: NO_NODE, fragment: NO_NODE, origin: Point { x: 0.0, y: 0.0 }, padding: Point { x: 0.0, y: 0.0 } }
+  // Runs kept last time are kept at once where they still hold; the rest
+  // are gathered again from the boxes kept one by one.
+  let known = Intrinsic.replace(output.cache.runs, List<PositionedRun>.make())
+  let mut runs = Intrinsic.replace(output.cache.spareRuns, List<PositionedRun>.make())
+  runs.clear()
+  let mut nextRun: usize = 0
+  let mut builder = RunBuilder.make()
   let mut at: usize = 0
   while at < output.facts.visits.length() {
+    while nextRun < known.length() && known.get(nextRun).firstVisit < at { nextRun = nextRun + 1 }
+    if nextRun < known.length() && known.get(nextRun).firstVisit == at {
+      let mut saved = known.get(nextRun)
+      if run keepRun(nodes, &mut output, &mut saved, at, &mut anchored) {
+        run builder.close(&mut runs)
+        run runs.append(saved)
+        at = at + saved.count
+        continue
+      }
+    }
     let id = output.facts.visits.get(at)
     let style = nodes.style(id)
     if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst != NO_NODE {
@@ -2221,7 +2367,10 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
       if style.position == Position.Fixed { plainParents = false }
       let word = u64.bitOr(output.outOfFlowBoxes.get(id / 64), u64.shiftLeft(1, usize.toU64(id % 64)))
       output.outOfFlowBoxes.set(id / 64, word)
-      if !run keepAnchored(nodes, &mut output, id, &mut anchored) {
+      if run keepAnchored(nodes, &mut output, id, &mut anchored) {
+        run gatherRun(nodes, &output, &mut builder, &mut runs, id, at, &anchored)
+      } else {
+        run builder.close(&mut runs)
         anchored.cb = NO_NODE
         run absolute(nodes, &mut output, &mut measurer, id, viewport, false, &viewportStyle)
       }
@@ -2252,6 +2401,9 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
     visual = visual || (style.position == Position.Sticky && !output.deferSticky) || scroll.x != 0.0 || scroll.y != 0.0
     at = at + 1
   }
+  run builder.close(&mut runs)
+  output.cache.runs = move runs
+  output.cache.spareRuns = move known
   let mut moved = false
   if relative { moved = run positionRelative(nodes, &mut output, viewport) }
   if moved || visual { output.fragments.offsetting() }
