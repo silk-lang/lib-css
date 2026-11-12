@@ -6,7 +6,7 @@ import geometry { Layout, Point, Size, Rect, ResolvedEdges, OptionalSize, Availa
 import style { Style, Position, DimensionKind, Direction, WritingMode, Align, FlexDirection, FlexWrap, OverflowAlignment, Overflow, Float, BoxDecorationBreak }
 import tree { NO_NODE }
 import box_tree { BoxTree, BoxKind }
-import fragments { FragmentKind }
+import fragments { FragmentKind, SettledRange }
 import context { Input, ResolvedBox, resolveBox, childrenInput, withGutter, resolve, resolves, outOfFlow, isFlex, isGrid, scrollable, usedOverflowForAxis, UNBOUNDED }
 import engine { layoutNode, layoutNodeInPlace, layoutInBfc, flowMarginRect, resolveFragmentBox, shapedBox }
 import layout_pass { LayoutPass, FullBoxGeometry, CacheKind, REUSE_INDEPENDENT }
@@ -1807,6 +1807,7 @@ pub fn subtreeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>) {
 effect fn markOverflowEscapes(output: &mut LayoutPass<'_, '_>) ! OutOfMemoryError ? &mut Allocator {
   let count = output.fragments.values.length()
   output.overflowMarks.clear()
+  output.overflowRuns = 0
   run output.overflowMarks.appendRepeated(0, (count + 63) / 64)
   let marks = output.overflowMarks.asMutSlice()
   if count > 0 { marks[0] = 1 }
@@ -1818,6 +1819,10 @@ effect fn markOverflowEscapes(output: &mut LayoutPass<'_, '_>) ! OutOfMemoryErro
     let settled = output.fragments.settled.get(range)
     let first = settled.start
     values[first].scrollableOverflow = settled.overflow
+    if settled.adds {
+      marks[settled.last / 64] = u64.bitOr(marks[settled.last / 64], u64.shiftLeft(1, usize.toU64(settled.last % 64)))
+      output.overflowRuns = output.overflowRuns + 1
+    }
     let overflow = settled.overflow
     if values[first].parent == 0 && (overflow.x < 0.0 || overflow.y < 0.0 || overflow.x + overflow.width > values[first].size.width || overflow.y + overflow.height > values[first].size.height) {
       marks[first / 64] = u64.bitOr(marks[first / 64], u64.shiftLeft(1, usize.toU64(first % 64)))
@@ -1841,6 +1846,35 @@ fn previousMark(marks: &[u64], index: usize) -> usize {
   }
   return word * 64 + 63 - u32.toUsize(u64.leadingZeros(bits))
 }
+// Adds the border boxes of a kept run's members (see keepRun) to their
+// parent's overflow, last to first, as treeOverflow adds each absolute box
+// whose own overflow stays inside its border box.
+fn runOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, range: &SettledRange, plain: bool) {
+  let values = output.fragments.values.asMutSlice()
+  let parentId = values[range.start].parent
+  let cb = values[parentId].box
+  let mut normal = values[parentId].contentRect
+  if output.frame == NO_NODE { normal = output.boxes[cb].normalFlowOverflow() }
+  let limits = reachableLimits(nodes.style(cb), values[parentId].paddingRect, normal, cb == 0)
+  let mut holds = values[parentId].scrollableOverflow
+  let mut grown = false
+  let mut member = range.last
+  while true {
+    let fragment = &values[member]
+    let border = Rect { x: fragment.location.x, y: fragment.location.y, width: fragment.size.width, height: fragment.size.height }
+    if border.x < holds.x || border.y < holds.y || border.x + border.width > holds.x + holds.width || border.y + border.height > holds.y + holds.height {
+      holds = addOverflow(holds, border, limits)
+      grown = true
+    }
+    if member == range.start { break }
+    member = fragment.previousSibling
+  }
+  values[parentId].scrollableOverflow = holds
+  if plain && grown && (holds.x < 0.0 || holds.y < 0.0 || holds.x + holds.width > values[parentId].size.width || holds.y + holds.height > values[parentId].size.height) {
+    let marks = output.overflowMarks.asMutSlice()
+    marks[parentId / 64] = u64.bitOr(marks[parentId / 64], u64.shiftLeft(1, usize.toU64(parentId % 64)))
+  }
+}
 fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: Rect, normalViewport: Rect, marked: bool, plain: bool) -> Rect {
   let mut result = normalViewport
   let viewportStyle = Style.make()
@@ -1859,6 +1893,11 @@ fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: 
   // markOverflowEscapes restored their first fragments' overflow.
   let mut settled = output.fragments.settled.length()
   if output.frame != NO_NODE || plain { settled = 0 }
+  // A plain pass reaches a run that adds to its parent's overflow by its
+  // last member, which markOverflowEscapes marked.
+  let mut addingRuns: usize = 0
+  let mut runCursor = output.fragments.settled.length()
+  if plain { addingRuns = output.overflowRuns }
   let mut limitsParent = NO_NODE
   let mut parentLimits = unlimited
   // Whether the parent's layout-time scrollable overflow already holds the
@@ -1866,11 +1905,26 @@ fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: 
   let mut parentCovers = false
   while index > 0 {
     if plain { index = previousMark(output.overflowMarks.asSlice(), index) } else { index = index - 1 }
+    if addingRuns > 0 {
+      while runCursor > 0 && output.fragments.settled.get(runCursor - 1).start > index { runCursor = runCursor - 1 }
+      if runCursor > 0 {
+        let range = output.fragments.settled.get(runCursor - 1)
+        if range.adds && range.last == index {
+          runOverflow(nodes, &mut output, &range, true)
+          addingRuns = addingRuns - 1
+          index = range.start
+          continue
+        }
+      }
+    }
     if settled > 0 && index + 1 == output.fragments.settled.get(settled - 1).end {
       let range = output.fragments.settled.get(settled - 1)
       settled = settled - 1
       index = range.start
-      if range.siblings { continue }
+      if range.siblings {
+        if range.adds { runOverflow(nodes, &mut output, &range, false) }
+        continue
+      }
       let values = output.fragments.values.asMutSlice()
       values[index].scrollableOverflow = range.overflow
     }
@@ -2250,7 +2304,7 @@ effect fn gatherRun(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, builder: &
   let start = output.fragments.first(id)
   let end = output.fragments.checkpoint()
   let mut fits = start != NO_NODE && start < end && node.interruptionFirst == NO_NODE
-    && !scrollable(usedOverflowForAxis(style, true)) && !scrollable(usedOverflowForAxis(style, false))
+    && style.position != Position.Fixed && !scrollable(usedOverflowForAxis(style, true)) && !scrollable(usedOverflowForAxis(style, false))
   let mut border = Rect.zero()
   if fits {
     let fragment = &output.fragments.values.asSlice()[start]
@@ -2313,8 +2367,8 @@ effect fn keepRun(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, saved: &
     || output.fragments.previousFirst(saved.first) != saved.start || output.fragments.previousFirst(saved.last) != saved.lastStart
     || !output.fragments.canKeep(saved.start, saved.end) { return false }
   let holds = output.fragments.values.asSlice()[anchored.fragment].scrollableOverflow
-  if saved.left < holds.x || saved.top < holds.y || saved.right > holds.x + holds.width || saved.bottom > holds.y + holds.height { return false }
-  if !run output.fragments.keepRun(saved.start, saved.end, saved.lastStart, anchored.fragment) { return false }
+  let adds = saved.left < holds.x || saved.top < holds.y || saved.right > holds.x + holds.width || saved.bottom > holds.y + holds.height
+  if !run output.fragments.keepRun(saved.start, saved.end, saved.lastStart, anchored.fragment, adds) { return false }
   output.stats.reusedLayouts = output.stats.reusedLayouts + saved.count
   saved.clock = clock
   return true

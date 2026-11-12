@@ -7,7 +7,8 @@ import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
 import style { Style, Dimension, Edges, Display, DisplayOutside, DisplayInside, Position, Direction, WritingMode, FlexDirection, FlexWrap, Align, OverflowAlignment }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, abs }
-import tree { Tree, LayoutTree, InvalidNode, NodeId, NO_NODE }
+import tree { Tree, LayoutTree, InvalidNode, InvalidBox, NodeId, BoxId, NO_NODE }
+import silk.core.option { Option }
 import engine { compute }
 
 struct EmptyMeasure {}
@@ -421,7 +422,7 @@ test effect fn insetAnchoredBoxesStayAcrossContainingBlockChanges() ! OutOfMemor
 
 // A run of such boxes is kept at once from the second resize on, until one
 // of them changes; an incremental compute then matches a fresh one.
-test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | InvalidBox | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut root = Style.make()
   root.width = Dimension.px(400.0)
@@ -450,10 +451,10 @@ test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError |
   let mut output = LayoutTree.make()
   let mut measure = EmptyMeasure {}
   run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
-  // Wide, wide, then too narrow for the last boxes, and wide again.
-  let widths: [f32; 5] = [300.0, 350.0, 320.0, 60.0, 340.0]
+  // Wide, wide, then twice too narrow for the last boxes, and wide again.
+  let widths: [f32; 6] = [300.0, 350.0, 320.0, 60.0, 50.0, 340.0]
   let mut step: usize = 0
-  while step < 5 {
+  while step < 6 {
     wrapStyle.width = Dimension.px(widths[step])
     run tree.setStyle(wrap, wrapStyle)
     run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -473,6 +474,26 @@ test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError |
     let held = run output.sourceBounds(canvas)
     let wanted = run fresh.sourceBounds(canvas)
     run near(held.width, wanted.width)
+    // The boxes past a narrow block's edge still count in its overflow.
+    let scopes: [NodeId; 3] = [canvas, wrap, top]
+    let mut scope: usize = 0
+    while scope < 3 {
+      let box = match run output.firstBox(scopes[scope]) {
+        Option<BoxId>.Some { value } => value
+        Option<BoxId>.None => BoxId { index: 0 }
+      }
+      let overflow = (run output.getBox(box)).scrollableOverflow
+      let expectedOverflow = (run fresh.getBox(box)).scrollableOverflow
+      run Testing.expect(overflow.x == expectedOverflow.x && overflow.y == expectedOverflow.y && overflow.width == expectedOverflow.width && overflow.height == expectedOverflow.height, "the overflow matches a fresh layout")
+      scope = scope + 1
+    }
+    if scope == 3 && widths[step] < 100.0 {
+      let box = match run output.firstBox(canvas) {
+        Option<BoxId>.Some { value } => value
+        Option<BoxId>.None => BoxId { index: 0 }
+      }
+      run near((run output.getBox(box)).scrollableOverflow.width, 110.0)
+    }
     step = step + 1
   }
   // A box of the run that moves is laid out again, alone.
