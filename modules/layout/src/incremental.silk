@@ -47,6 +47,18 @@ fn clearSubtree(nodes: &BoxTree<'_>, cache: &mut LayoutCache, root: usize) {
 // which take its tracks. Other children see the box only through their
 // requests, which the cache compares, and keep their results. A grid whose
 // template stayed keeps its placement, which its items' own changes clear.
+// clearSubtree but for the out-of-flow boxes below the root, with their
+// subtrees: each is laid out alone, for a request its cache compares, and
+// positioning places it again.
+fn clearInFlow(nodes: &BoxTree<'_>, cache: &mut LayoutCache, root: usize) {
+  cache.clearBox(root)
+  let mut child = nodes.node(root).firstChild
+  while child != NO_NODE {
+    if !outOfFlow(nodes.style(child)) { clearInFlow(nodes, &mut cache, child) }
+    child = nodes.node(child).nextSibling
+  }
+}
+
 fn clearChanged(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut LayoutCache, source: usize, root: usize) {
   if tree.gridChangedAt(source) <= since && !Subgrid.eligible(nodes, root) { cache.clearPlaced(root) }
   else { cache.clearBox(root) }
@@ -93,8 +105,9 @@ fn invalidateSource(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut 
     // where its children's previous fragments were: those go too.
     // An independent formatting context outside grids keeps the results of
     // its children when it resizes or moves: they are relative to it, and
-    // their requests are compared. Others clear their subtree.
-    if (tree.outerChangedAt(source) > since || tree.placedChangedAt(source) > since) && !keepsChildren(nodes, box) { clearSubtree(nodes, &mut cache, box) }
+    // their requests are compared. Others clear their subtree but for its
+    // out-of-flow boxes, which are independent too.
+    if (tree.outerChangedAt(source) > since || tree.placedChangedAt(source) > since) && !keepsChildren(nodes, box) { clearInFlow(nodes, &mut cache, box) }
     else { clearChanged(tree, since, nodes, &mut cache, source, box) }
     let mut ancestor = box
     // Whether a subgrid lies between the changed box and the ancestor, which
