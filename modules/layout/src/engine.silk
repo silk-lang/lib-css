@@ -1130,6 +1130,43 @@ effect fn layoutTextLeaf<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
   return true
 }
 
+// Whether layoutBox reduces to layoutTextRun: an anonymous inline formatting
+// box with no fragment of its own, under emptyBoxPlain's conditions on the
+// request. Its style sets no size or edge, so min and max sizes leave its
+// contents' size as it is.
+@inlineAlways
+fn textRunBox(nodes: &BoxTree<'_>, id: usize, input: &Input) -> bool {
+  let node = nodes.node(id)
+  if node.kind != BoxKind.InlineFormatting || node.anonymousStyle == NO_NODE || node.anonymousBlock || node.measurement != Measurement.None { return false }
+  let style = nodes.style(id)
+  if !plainLeafStyle(style) || outOfFlow(style) || input.gridContext != 0 { return false }
+  if input.parentWritingMode != WritingMode.HorizontalTb || input.fragmentation.active || input.fragmentation.boundaryProbe != BoundaryProbe.None || boxInputChanges(nodes, id, &input) { return false }
+  return effectiveDisplay(style, &input).outsideIs(DisplayOutside.Block)
+}
+
+// layoutBox for a box textRunBox holds for, outside fragmentation, once
+// plainLeafWidth has sized `box`: the lines are laid out, and no size
+// constraint or ratio lays them out again.
+@inlineNever
+effect fn layoutTextRun<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let style = nodes.style(id)
+  if input.performLayout {
+    output.stats.fullLayouts = output.stats.fullLayouts + 1
+    run output.preserveLayout(id)
+    run output.relayout(id)
+    output.boxes[id].location = Point { x: 0.0, y: 0.0 }
+  } else {
+    output.stats.sizeProbes = output.stats.sizeProbes + 1
+  }
+  let mut result = run layoutInline(nodes, &mut output, &mut measurer, id, &input, &box, &mut bfc)
+  plainLeafTail(style, &input, &box, &mut result)
+  result.preferredRatio = 0.0
+  result.ratioBorderBox = false
+  if input.performLayout { overflowGeometry(nodes, &output, id, &box, &mut result) }
+  run output.store(id, &result, input.performLayout)
+  return result
+}
+
 // layoutBox for a box plainMeasuredBox holds for, outside fragmentation,
 // once plainLeafWidth has sized `box`.
 @inlineNever
@@ -1592,6 +1629,13 @@ effect fn layoutBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
   if output.frame == NO_NODE && textLeafBox(nodes, &output, id, &incoming, &bfc) {
     let mut result = Layout.zero()
     if run layoutTextLeaf(nodes, &mut output, &mut measurer, id, &incoming, &mut bfc, &mut result) { return result }
+  }
+  if output.frame == NO_NODE && textRunBox(nodes, id, &incoming) {
+    let style = nodes.style(id)
+    let mut box = shapedBox(&output, style, id, &incoming)
+    if box.min.width <= 0.0 && box.min.height <= 0.0 && box.max.width >= UNBOUNDED && box.max.height >= UNBOUNDED && plainLeafWidth(style, &incoming, &mut box, false) {
+      return run layoutTextRun(nodes, &mut output, &mut measurer, id, &incoming, &mut bfc, &box)
+    }
   }
   // Most requests already carry what adjustBoxInput would set: lay those
   // out from the caller's input instead of a copy.
