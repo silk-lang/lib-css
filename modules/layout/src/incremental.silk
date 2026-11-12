@@ -91,7 +91,10 @@ fn invalidateSource(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut 
     // Ancestors up to the first box laid out alone, which reads the change.
     // A change its parent sees may move the box among its siblings, past
     // where its children's previous fragments were: those go too.
-    if tree.outerChangedAt(source) > since || tree.placedChangedAt(source) > since { clearSubtree(nodes, &mut cache, box) }
+    // An independent formatting context outside grids keeps the results of
+    // its children when it resizes or moves: they are relative to it, and
+    // their requests are compared. Others clear their subtree.
+    if (tree.outerChangedAt(source) > since || tree.placedChangedAt(source) > since) && !keepsChildren(nodes, box) { clearSubtree(nodes, &mut cache, box) }
     else { clearChanged(tree, since, nodes, &mut cache, source, box) }
     let mut ancestor = box
     // Whether a subgrid lies between the changed box and the ancestor, which
@@ -109,6 +112,12 @@ fn invalidateSource(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut 
     }
     box = nodes.node(box).nextContinuation
   }
+}
+fn keepsChildren(nodes: &BoxTree<'_>, box: usize) -> bool {
+  let node = nodes.node(box)
+  if !node.independentRoot || node.kind == BoxKind.Grid || Subgrid.eligible(nodes, box) { return false }
+  if node.nextContinuation != NO_NODE || node.previousContinuation != NO_NODE { return false }
+  return node.parent == NO_NODE || nodes.node(node.parent).kind != BoxKind.Grid
 }
 fn contains(values: &[usize], value: usize) -> bool {
   let mut at: usize = 0
