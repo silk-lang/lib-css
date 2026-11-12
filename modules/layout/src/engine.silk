@@ -4,7 +4,7 @@ import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, Availa
 import style { Style, Display, Dimension, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
 import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
-import block { layoutBlock, leafBlockInto, BlockScratch }
+import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
 import flex { layoutFlex, emptyFlexSize, FlexScratch }
 import grid { layoutGrid }
 import grid_subgrid as Subgrid
@@ -650,6 +650,8 @@ pub const ITEM_ORDERED: u8 = 2
 pub const ITEM_SELF_BASELINE: u8 = 4
 pub const ITEM_SUBGRID: u8 = 8
 pub const ITEM_MEASURED_WIDTH: u8 = 16
+// textLeafShape, which layoutBox reads of every box.
+pub const ITEM_TEXT_LEAF: u8 = 32
 pub fn baselineValue(value: Align) -> bool { return value == Align.Baseline || value == Align.LastBaseline }
 fn itemFlags(nodes: &BoxTree<'_>, id: usize) -> u8 {
   let style = nodes.style(id)
@@ -659,6 +661,7 @@ fn itemFlags(nodes: &BoxTree<'_>, id: usize) -> u8 {
   if baselineValue(style.justifySelf) || baselineValue(style.alignSelf) { flags = flags | ITEM_SELF_BASELINE }
   if Subgrid.eligible(nodes, id) { flags = flags | ITEM_SUBGRID }
   if measuredWidthLeaf(nodes, id) { flags = flags | ITEM_MEASURED_WIDTH }
+  if textLeafShape(nodes, id) { flags = flags | ITEM_TEXT_LEAF }
   return flags
 }
 
@@ -1040,6 +1043,91 @@ pub fn plainMeasuredBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: us
   } else if !plainLeafShape(nodes.style(id), nodes.node(id)) || !noInFlowChildren(nodes, id) { return false }
   if input.parentWritingMode != WritingMode.HorizontalTb || input.fragmentation.active || input.fragmentation.boundaryProbe != BoundaryProbe.None || boxInputChanges(nodes, id, &input) { return false }
   return effectiveDisplay(nodes.style(id), &input).outsideIs(DisplayOutside.Block)
+}
+
+// A plain in-flow block whose one child is an anonymous run of text, both
+// in its own horizontal writing mode: the conditions of textLeafBox that
+// the box tree and the styles alone decide.
+fn textLeafShape(nodes: &BoxTree<'_>, id: usize) -> bool {
+  let node = nodes.node(id)
+  let style = nodes.style(id)
+  if node.kind != BoxKind.Block || node.measurement != Measurement.None || !plainLeafStyle(style) || outOfFlow(style) { return false }
+  let child = node.firstChild
+  if child == NO_NODE { return false }
+  let childNode = nodes.node(child)
+  let childStyle = nodes.style(child)
+  return childNode.nextSibling == NO_NODE && childNode.anonymousStyle != NO_NODE && !childNode.independentRoot && textOnly(nodes, child)
+    && childStyle.writingMode == WritingMode.HorizontalTb && childStyle.float == Float.None && !childStyle.replaced
+}
+
+// Whether layoutBox reduces to layoutTextLeaf: a textLeafShape box under
+// emptyBoxPlain's conditions on the request, in a formatting context
+// without floats, whose inline size does not come from an intrinsic request.
+@inlineAlways
+fn textLeafBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, input: &Input, bfc: &BfcState) -> bool {
+  if id < output.facts.itemFlags.length() {
+    if output.facts.itemFlags.get(id) & ITEM_TEXT_LEAF == 0 { return false }
+  } else if !textLeafShape(nodes, id) { return false }
+  if input.intrinsicWidth || input.gridContext != 0 || bfc.count != 0 || !bfc.settled() { return false }
+  if input.parentWritingMode != WritingMode.HorizontalTb || input.fragmentation.active || input.fragmentation.boundaryProbe != BoundaryProbe.None || boxInputChanges(nodes, id, &input) { return false }
+  return effectiveDisplay(nodes.style(id), &input).outsideIs(DisplayOutside.Block)
+}
+
+// layoutBox for a box textLeafBox holds for, outside fragmentation: the
+// box is sized as prepareSizing sizes it and its text laid out as the block
+// pass lays out an only child (see textLeafContents), without either.
+// False, with nothing written, where the general path is needed: an
+// independent child, or a shrink-to-fit size the text does not fit.
+@inlineNever
+effect fn layoutTextLeaf<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let style = nodes.style(id)
+  let mut box = shapedBox(&output, style, id, &input)
+  let mut leaf = TextLeafChild.make(&input)
+  if !plainLeafWidth(style, &input, &mut box, false) {
+    // prepareSizing's shrink-to-fit: the max-content size where it fits,
+    // which for text is then at least the min-content size (see textContents).
+    let mut request = input.*
+    request.performLayout = false
+    request.baselines = false
+    request.intrinsicWidth = true
+    request.fullSize = false
+    request.known.widthDefinite = false
+    request.availableWidth = AvailableSpace.maxContent()
+    request.bfcContentOrigin = Point { x: 0.0, y: 0.0 }
+    if !request.intrinsicHeight && request.minimum.height > 0.0 { return false }
+    let intrinsicBox = resolveBox(style, &request)
+    if intrinsicBox.size.widthDefinite || !textLeafChild(nodes, id, style, &request, &intrinsicBox, &mut leaf) { return false }
+    let largest = run textLeafLargest(nodes, &mut output, &mut measurer, style, &intrinsicBox, &leaf)
+    if largest > max(0.0, input.availableWidth.value - box.margin.horizontal()) { return false }
+    box.size.width = clamp(largest, box.min.width, box.max.width)
+    box.size.widthDefinite = true
+    if box.size.heightDefinite { box.size.height = clamp(box.size.height, box.min.height, box.max.height) }
+  }
+  if !box.size.widthDefinite || !textLeafChild(nodes, id, style, &input, &box, &mut leaf) { return false }
+  let previousParent = output.fragmentParent
+  if input.performLayout {
+    output.stats.fullLayouts = output.stats.fullLayouts + 1
+    let node = nodes.node(id)
+    run output.preserveLayout(id)
+    run output.relayout(id)
+    output.boxes[id].location = Point { x: 0.0, y: 0.0 }
+    let mut first = true
+    let mut last = true
+    if node.source != NO_NODE {
+      first = node.firstForSource
+      last = node.lastForSource
+    }
+    let emitted = run output.fragments.appendBox(id, node.source, FragmentKind.Box, previousParent, 0, first, last)
+    output.fragmentParent = emitted.index
+  } else {
+    output.stats.sizeProbes = output.stats.sizeProbes + 1
+  }
+  run textLeafContents(nodes, &mut output, &mut measurer, id, style, &input, &box, &mut bfc, &mut leaf, &mut result)
+  plainLeafTail(style, &input, &box, &mut result)
+  if input.performLayout { overflowGeometry(nodes, &output, id, &box, &mut result) }
+  run output.store(id, &result, input.performLayout)
+  output.fragmentParent = previousParent
+  return true
 }
 
 // layoutBox for a box plainMeasuredBox holds for, outside fragmentation,
@@ -1500,6 +1588,10 @@ effect fn layoutBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
     let style = nodes.style(id)
     let mut box = shapedBox(&output, style, id, &incoming)
     if plainLeafWidth(style, &incoming, &mut box, false) { return run layoutMeasuredBox(nodes, &mut output, &mut measurer, id, &incoming, &bfc, &mut box) }
+  }
+  if output.frame == NO_NODE && textLeafBox(nodes, &output, id, &incoming, &bfc) {
+    let mut result = Layout.zero()
+    if run layoutTextLeaf(nodes, &mut output, &mut measurer, id, &incoming, &mut bfc, &mut result) { return result }
   }
   // Most requests already carry what adjustBoxInput would set: lay those
   // out from the caller's input instead of a copy.

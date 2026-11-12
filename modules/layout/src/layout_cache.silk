@@ -582,7 +582,11 @@ impl LayoutCache {
     self.clearLogNext = (at + 1) % CLEAR_LOG
     self.flexMemos.dropBox(id)
     self.gridGeometry.dropBox(id)
-    if id < self.texts.length() { self.texts.asMutSlice()[id].clear() }
+    // The paragraph is prepared again, into the lists the old one leaves.
+    if id < self.texts.length() && self.texts.asSlice()[id].length() != 0 {
+      let kept = self.texts.asMutSlice()[id].asMutSlice()
+      kept[0].stale = true
+    }
     if id < self.ranges.length() {
       let ranges = self.ranges.asMutSlice()
       ranges[id].range = FinalRange.none()
