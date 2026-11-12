@@ -2,6 +2,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.core.option { Option }
+import silk.mem.box { Box }
 import silk.text.string { String }
 import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min }
 import style { Style, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, Position }
@@ -817,8 +818,10 @@ fn suppressPhantomClones(nodes: &BoxTree<'_>, items: &mut [Item], scopes: &mut [
 }
 
 // layoutInline's per-call lists, kept in LayoutPass between calls so that
-// laying out many small inline formatting contexts allocates them once.
-pub struct InlineScratch { scopes: List<Scope>, extents: List<Extent>, items: List<Item>, atomics: List<AtomicData>, text: TextScratch }
+// laying out many small inline formatting contexts allocates them once. They live behind one
+// allocation so that taking and returning them moves a pointer.
+pub struct InlineScratch { lists: Box<InlineLists> }
+struct InlineLists { scopes: List<Scope>, extents: List<Extent>, items: List<Item>, atomics: List<AtomicData>, text: TextScratch }
 // layoutText's per-call lists, part of InlineScratch.
 struct TextScratch {
   original: List<Item>, points: List<TextBreak>, shaped: List<TextRun>, hangingRanges: List<TextRange>,
@@ -848,19 +851,18 @@ impl TextScratch {
 }
 
 pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
-  let mut scratch = InlineScratch { scopes: List<Scope>.make(), extents: List<Extent>.make(), items: List<Item>.make(), atomics: List<AtomicData>.make(), text: TextScratch.make() }
-  match output.inlineScratch.pop() {
-    Option<InlineScratch>.Some { value: spare } => {
-      scratch = move spare
-      scratch.scopes.clear()
-      scratch.extents.clear()
-      scratch.items.clear()
-      scratch.atomics.clear()
-      scratch.text.clear()
-    }
-    Option<InlineScratch>.None => {}
+  let mut scratch = match output.inlineScratch.pop() {
+    Option<InlineScratch>.Some { value: spare } => move spare
+    Option<InlineScratch>.None => InlineScratch { lists: run Box.make(InlineLists { scopes: List<Scope>.make(), extents: List<Extent>.make(), items: List<Item>.make(), atomics: List<AtomicData>.make(), text: TextScratch.make() }) }
   }
-  let result = run layoutInlineWith(nodes, &mut output, &mut measurer, id, &input, &physicalBox, &mut bfc, &mut scratch.scopes, &mut scratch.extents, &mut scratch.items, &mut scratch.atomics, &mut scratch.text)
+  let held = scratch.lists.getMut()
+  let lists = &mut held[0]
+  lists.scopes.clear()
+  lists.extents.clear()
+  lists.items.clear()
+  lists.atomics.clear()
+  lists.text.clear()
+  let result = run layoutInlineWith(nodes, &mut output, &mut measurer, id, &input, &physicalBox, &mut bfc, &mut lists.scopes, &mut lists.extents, &mut lists.items, &mut lists.atomics, &mut lists.text)
   run output.inlineScratch.append(move scratch)
   return result
 }
@@ -1871,8 +1873,9 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     index = index + 1
   }
   let shaped = &mut text.shaped
-  let mut candidate = Intrinsic.replace(text.candidate, TextCandidate.make())
-  let mut accepted = Intrinsic.replace(text.accepted, TextCandidate.make())
+  // The two trade places as lines are accepted.
+  let mut candidate = &mut text.candidate
+  let mut accepted = &mut text.accepted
   let hangingRanges = &mut text.hangingRanges
   let mut available = input.availableWidth
   if axes.vertical { available = input.availableHeight }
@@ -2335,8 +2338,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       if lineDirection == Direction.Rtl {
         hangingStart = max(0.0, leading + accepted.advance + textEdge(nodes, original.asSlice(), scopes, end, false, rtl, visualPlan.active) - total)
       }
-      run lines.append(LineBox { start: lineStart, end: finalItems.length(), y: cursor, left: band.left, width: band.right - band.left, advance: total, hangingStart: hangingStart, height: metrics.height, baseline: metrics.width, real: accepted.real, last: last, direction: lineDirection, visual: move accepted.visual })
-      accepted.visual = Line.make()
+      run lines.append(LineBox { start: lineStart, end: finalItems.length(), y: cursor, left: band.left, width: band.right - band.left, advance: total, hangingStart: hangingStart, height: metrics.height, baseline: metrics.width, real: accepted.real, last: last, direction: lineDirection, visual: Intrinsic.replace(accepted.visual, Line.make()) })
     }
     cursor = cursor + metrics.height
     if !floatBoundary && (!sourceEnding || accepted.real) { afterForced = ending.kind == TextBreakKind.Forced }
@@ -2407,8 +2409,6 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     run output.resumes.set(id, state)
   }
   if fitsMemo && memoFirst == NO_NODE && !blocked && next == points.length() { run memo.record(width, lineEnds.asSlice()) }
-  text.candidate = move candidate
-  text.accepted = move accepted
   run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
   run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { ready: true, normalized: move normalized, analysis: move analysis, offered: move offered, visual: move visualPlan, barriers: move barriers, memo: move memo })
   return result
