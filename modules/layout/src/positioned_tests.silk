@@ -354,10 +354,16 @@ test effect fn insetAnchoredBoxesStayAcrossContainingBlockChanges() ! OutOfMemor
   root.width = Dimension.px(400.0)
   let mut tree = run Tree.make(move root) |> Effect.provideMut<Allocator>(&mut allocator)
   let top = tree.root()
+  // A restyled block that is not a formatting context root keeps the
+  // results of the absolute boxes below it.
+  let mut wrapStyle = Style.make()
+  wrapStyle.position = Position.Relative
+  wrapStyle.width = Dimension.px(400.0)
+  let wrap = run tree.append(top, wrapStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut canvasStyle = Style.make()
   canvasStyle.position = Position.Relative
   canvasStyle.height = Dimension.px(100.0)
-  let canvas = run tree.append(top, canvasStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  let canvas = run tree.append(wrap, canvasStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut boxes = List<NodeId>.make()
   let mut i: usize = 0
   while i < 3 {
@@ -374,9 +380,8 @@ test effect fn insetAnchoredBoxesStayAcrossContainingBlockChanges() ! OutOfMemor
   let mut output = LayoutTree.make()
   let mut measure = EmptyMeasure {}
   run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
-  let mut narrow = Style.make()
-  narrow.width = Dimension.px(300.0)
-  run tree.setStyle(top, narrow)
+  wrapStyle.width = Dimension.px(300.0)
+  run tree.setStyle(wrap, wrapStyle)
   run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(output.stats.reusedLayouts == 3, "the anchored boxes are kept")
   i = 0
