@@ -271,6 +271,7 @@ impl Measure for Fixtures {
 
 impl TextMeasure for Fixtures {
   fn beginTextLayout(provider: &mut Self) {}
+  fn plainText(provider: &Self) -> bool { return true }
 
   effect fn analyze(provider: &mut Self, context: TextContext<'_, '_>, output: &mut List<TextBreak>) -> TextAnalysis
     ! OutOfMemoryError | TextError ? &mut Allocator {
