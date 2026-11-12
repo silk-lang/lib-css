@@ -2669,7 +2669,10 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   let restoringKept = kept && tree.structureRevision() <= since && tree.boxRevision() <= since
   // After invalidate() with the tree unchanged since, the boxes still stand:
   // only the cached results are gone, so the compute is fresh on old boxes.
-  let boxesStand = !kept && output.boxNodes.length() != 0 && tree.revision() == since && tree.scrollRevision() == output.keptScrolls
+  // So they do when every change since was a markDirty, which changes no
+  // style, text or structure: boxes are generated from those alone.
+  let onlyMarked = tree.revision() >= since && tree.revision() - since == tree.markRevision() - output.keptMarks
+  let boxesStand = !kept && output.boxNodes.length() != 0 && onlyMarked && tree.scrollRevision() == output.keptScrolls
   let nodes = run boxesFor(tree, &mut output, since, restoringKept || boxesStand)
   let restoring = restoringKept
   let sameBoxes = restoring || (kept && Incremental.sameBoxes(output.boxNodes.asSlice(), nodes.boxes.asSlice()))
@@ -2770,6 +2773,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     output.facts = move facts
     output.stats = LayoutStats.zero()
     output.keep(tree.revision(), true)
+    output.keptMarks = tree.markRevision()
     output.adopt(move nodes)
     return
   }
@@ -2830,6 +2834,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       output.blockScratch = move keptBlock
       output.facts = move facts
       output.keep(tree.revision(), settled)
+      output.keptMarks = tree.markRevision()
       output.keptViewport = viewport
       output.keptScroll = tree.viewportScrollOffset
       output.keptScrolls = tree.scrollRevision()
