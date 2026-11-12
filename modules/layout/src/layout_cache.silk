@@ -741,6 +741,30 @@ impl LayoutCache {
     }
     return ABSENT
   }
+  // find for a box's size probe at a definite width, answered by its
+  // max-content probe under any parent size (see probeText); ABSENT if none.
+  pub fn findWidest(self: &mut Self, id: usize, input: &Input) -> usize {
+    if id >= self.heads.length() { return ABSENT }
+    let mut index = self.heads.get(id)
+    while index != ABSENT {
+      let entry = self.entries.get(index)
+      if entry.kind == CacheKind.IndependentBox && self.inputs.asSlice()[index].availableWidth.kind == AvailableKind.MaxContent {
+        let mut request = input.*
+        request.availableWidth = AvailableSpace.maxContent()
+        request.parent = self.inputs.asSlice()[index].parent
+        if sameInput(&self.inputs.asSlice()[index], &request) {
+          if entry.generation != self.generation {
+            let mutable = self.entries.asMutSlice()
+            mutable[index].generation = self.generation
+            self.touched = self.touched + 1
+          }
+          return index
+        }
+      }
+      index = entry.next
+    }
+    return ABSENT
+  }
   // find for a size probe of a measured leaf with a known width, answered by
   // a width-intrinsic probe of the box that came out that wide (see
   // sameInputAtWidth); ABSENT if there is none.
