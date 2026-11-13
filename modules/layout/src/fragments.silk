@@ -106,6 +106,14 @@ impl Fragment {
 pub struct SettledRange { pub start: usize, pub end: usize, pub overflow: Rect, pub kept: bool, pub siblings: bool, pub last: usize, pub adds: bool }
 impl Copy for SettledRange {}
 
+// Bytes of storage a FragmentArena holds, by part, used or spare (see
+// FragmentArena.storage): `values` the fragments, `valuesUsed` the part of
+// it in use, `texts` the text fragments, `byBox` the box chains, `marks`
+// the per-fragment and per-text bookkeeping, `saved` and `tail` what an
+// in-place compute keeps of the previous output, `settled` the settled ranges.
+pub struct ArenaStorage { pub values: usize, pub valuesUsed: usize, pub texts: usize, pub byBox: usize, pub marks: usize, pub saved: usize, pub tail: usize, pub settled: usize }
+impl Copy for ArenaStorage {}
+
 // A move of the previous output (see FragmentArena.shiftPrevious): indices
 // at or after `start` move `by` up or down.
 pub struct Shift { pub start: usize, pub up: bool, pub by: usize }
@@ -120,6 +128,13 @@ impl Shift {
     if self.up { return index + self.by }
     return index - self.by
   }
+}
+
+// Whether a list's spare room is worth giving back: over a quarter of what
+// it uses and over 64 KiB.
+fn large(length: usize, capacity: usize, bytes: usize) -> bool {
+  let spare = capacity - length
+  return spare * 4 > length && spare * bytes > 64 * 1024
 }
 
 // Adds up a fragment's location as resolveLocations does, from the root down.
@@ -260,6 +275,51 @@ impl FragmentArena {
       adopted: List<usize>.make(), previousAdopted: List<usize>.make(),
       shifts: 0,
     }
+  }
+
+  // Bytes of storage each part of the arena holds, used or spare.
+  pub fn storage(self: &Self) -> ArenaStorage {
+    let f = Intrinsic.layoutOf<Fragment>().bytes
+    let t = Intrinsic.layoutOf<TextFragment>().bytes
+    let u = Intrinsic.layoutOf<usize>().bytes
+    return ArenaStorage {
+      values: self.values.capacity() * f, valuesUsed: self.values.length() * f,
+      texts: self.texts.capacity() * t,
+      byBox: (self.firstByBox.capacity() + self.lastByBox.capacity() + self.boxStamps.capacity() + self.boxSlots.capacity() + self.savedFirst.capacity() + self.savedLast.capacity()) * u,
+      marks: (self.textMarks.capacity() + self.fragmentStamps.capacity() + self.fragmentSlots.capacity() + self.textStamps.capacity() + self.textSlots.capacity()) * u,
+      saved: self.savedFragments.capacity() * f + self.savedPositions.capacity() * Intrinsic.layoutOf<FragmentPosition>().bytes + self.savedTexts.capacity() * t,
+      tail: self.tailFragments.capacity() * f + self.tailTexts.capacity() * t,
+      settled: self.settled.capacity() * Intrinsic.layoutOf<SettledRange>().bytes,
+    }
+  }
+
+  // All the storage the arena holds, in bytes.
+  pub fn storageBytes(self: &Self) -> usize {
+    let s = self.storage()
+    return s.values + s.texts + s.byBox + s.marks + s.saved + s.tail + s.settled
+  }
+  // Reserves room for as many fragments and texts as `other` holds and an
+  // eighth more, in one allocation each: a fresh arena then skips growing by
+  // doubling, and a slightly larger output still fits.
+  pub effect fn reserveLike(self: &mut Self, other: &FragmentArena) ! OutOfMemoryError ? &mut Allocator {
+    let fragments = other.values.length() + other.values.length() / 8
+    let haveFragments = self.values.length()
+    if self.values.capacity() < fragments { run self.values.reserveExact(fragments - haveFragments) }
+    let texts = other.texts.length() + other.texts.length() / 8
+    let haveTexts = self.texts.length()
+    if self.texts.capacity() < texts { run self.texts.reserveExact(texts - haveTexts) }
+    let haveMarks = self.textMarks.length()
+    if self.textMarks.capacity() < fragments { run self.textMarks.reserveExact(fragments - haveMarks) }
+  }
+
+  // Gives back the spare room growth by doubling left in the fragment and
+  // text lists when it is large: up to as much again as they use. Shrinking
+  // usually resizes in place.
+  pub effect fn trimSlack(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    let f = Intrinsic.layoutOf<Fragment>().bytes
+    if large(self.values.length(), self.values.capacity(), f) { run self.values.shrinkToFit() }
+    if large(self.textMarks.length(), self.textMarks.capacity(), Intrinsic.layoutOf<usize>().bytes) { run self.textMarks.shrinkToFit() }
+    if large(self.texts.length(), self.texts.capacity(), Intrinsic.layoutOf<TextFragment>().bytes) { run self.texts.shrinkToFit() }
   }
 
   // A full reset invalidates every fragment ID and checkpoint, retaining capacity.

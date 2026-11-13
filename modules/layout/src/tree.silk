@@ -723,7 +723,10 @@ impl LayoutTree {
     self.firstBySource.clear()
     self.lastBySource.clear()
     if keepBoxes { run self.fragments.beginInPlace(count) }
-    else { run self.fragments.prepare(count) }
+    else {
+      run self.fragments.prepare(count)
+      run self.fragments.reserveLike(&self.snapshot.fragments)
+    }
     if keepBoxes && self.boxes.length() == count { return }
     self.boxes.clear()
     run self.boxes.reserveExact(count)
