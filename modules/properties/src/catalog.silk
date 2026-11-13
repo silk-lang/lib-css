@@ -285,11 +285,17 @@ pub enum(u16) Property {
   CaretColor,
   SilkSelectionColor,
   SilkPlaceholderColor,
+  Transition,
+  TransitionProperty,
+  TransitionDuration,
+  TransitionTimingFunction,
+  TransitionDelay,
+  TransitionBehavior,
 }
 
-pub const COUNT: usize = 282
+pub const COUNT: usize = 288
 
-pub fn all() -> [Property; 282] {
+pub fn all() -> [Property; 288] {
   return [
     Property.Fill,
     Property.FillRule,
@@ -573,6 +579,12 @@ pub fn all() -> [Property; 282] {
     Property.CaretColor,
     Property.SilkSelectionColor,
     Property.SilkPlaceholderColor,
+    Property.Transition,
+    Property.TransitionProperty,
+    Property.TransitionDuration,
+    Property.TransitionTimingFunction,
+    Property.TransitionDelay,
+    Property.TransitionBehavior,
   ]
 }
 
@@ -860,6 +872,12 @@ pub fn index(property: Property) -> usize {
     Property.CaretColor => 279
     Property.SilkSelectionColor => 280
     Property.SilkPlaceholderColor => 281
+    Property.Transition => 282
+    Property.TransitionProperty => 283
+    Property.TransitionDuration => 284
+    Property.TransitionTimingFunction => 285
+    Property.TransitionDelay => 286
+    Property.TransitionBehavior => 287
   }
 }
 
@@ -1147,6 +1165,12 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.CaretColor => b"caret-color"
     Property.SilkSelectionColor => b"-silk-selection-color"
     Property.SilkPlaceholderColor => b"-silk-placeholder-color"
+    Property.Transition => b"transition"
+    Property.TransitionProperty => b"transition-property"
+    Property.TransitionDuration => b"transition-duration"
+    Property.TransitionTimingFunction => b"transition-timing-function"
+    Property.TransitionDelay => b"transition-delay"
+    Property.TransitionBehavior => b"transition-behavior"
   }
 }
 
@@ -1157,6 +1181,26 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
     return Option<Property>.None
   }
   let first = name[0] | 32
+  if first == 116 && name.length >= 10 && (name[1] | 32) == 114 && (name[2] | 32) == 97 {
+    if insensitive(name, b"transition") {
+      return Option<Property>.some(Property.Transition)
+    }
+    if insensitive(name, b"transition-property") {
+      return Option<Property>.some(Property.TransitionProperty)
+    }
+    if insensitive(name, b"transition-duration") {
+      return Option<Property>.some(Property.TransitionDuration)
+    }
+    if insensitive(name, b"transition-timing-function") {
+      return Option<Property>.some(Property.TransitionTimingFunction)
+    }
+    if insensitive(name, b"transition-delay") {
+      return Option<Property>.some(Property.TransitionDelay)
+    }
+    if insensitive(name, b"transition-behavior") {
+      return Option<Property>.some(Property.TransitionBehavior)
+    }
+  }
   match name.length {
     1 => {
       if first == 114 && insensitive(name, b"r") {
@@ -2347,6 +2391,12 @@ pub fn inherited(property: Property) -> bool {
     Property.CaretColor => true
     Property.SilkSelectionColor => true
     Property.SilkPlaceholderColor => true
+    Property.Transition => false
+    Property.TransitionProperty => false
+    Property.TransitionDuration => false
+    Property.TransitionTimingFunction => false
+    Property.TransitionDelay => false
+    Property.TransitionBehavior => false
   }
 }
 
@@ -2636,6 +2686,12 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.CaretColor => b"auto"
     Property.SilkSelectionColor => b"rgb(180, 213, 254)"
     Property.SilkPlaceholderColor => b"auto"
+    Property.Transition => b"all"
+    Property.TransitionProperty => b"all"
+    Property.TransitionDuration => b"0s"
+    Property.TransitionTimingFunction => b"ease"
+    Property.TransitionDelay => b"0s"
+    Property.TransitionBehavior => b"normal"
   }
 }
 
@@ -2670,8 +2726,9 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 241
+    Property.All => 246
     Property.Animation => 8
+    Property.Transition => 5
     Property.WhiteSpace => 3
     Property.Marker => 3
     Property.Font => 19
@@ -2714,6 +2771,18 @@ pub fn longhandCount(property: Property) -> usize {
 
 pub fn longhandAt(property: Property, index: usize) -> Property {
   match property {
+    Property.Transition => {
+      let longhands = [
+        Property.TransitionProperty,
+        Property.TransitionDuration,
+        Property.TransitionTimingFunction,
+        Property.TransitionDelay,
+        Property.TransitionBehavior,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
     Property.Animation => {
       let longhands = [
         Property.AnimationName,
@@ -3452,6 +3521,21 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 240 {
         return Property.SilkPlaceholderColor
+      }
+      if index == 241 {
+        return Property.TransitionProperty
+      }
+      if index == 242 {
+        return Property.TransitionDuration
+      }
+      if index == 243 {
+        return Property.TransitionTimingFunction
+      }
+      if index == 244 {
+        return Property.TransitionDelay
+      }
+      if index == 245 {
+        return Property.TransitionBehavior
       }
     }
     Property.WhiteSpace => {

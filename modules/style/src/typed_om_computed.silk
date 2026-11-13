@@ -22,7 +22,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 /// Detached nodes can expose computed data when the host has computed their styles.
 pub struct ComputedStyleMap {
   elementId: usize,
-  longhands: [Property; 282],
+  longhands: [Property; 288],
   count: usize,
 }
 
@@ -30,7 +30,7 @@ impl ComputedStyleMap {
   pub fn make(element: usize) -> ComputedStyleMap {
     let mut map = ComputedStyleMap {
       elementId: element,
-      longhands: [Property.Color; 282],
+      longhands: [Property.Color; 288],
       count: 0,
     }
     let catalog = properties.all()
