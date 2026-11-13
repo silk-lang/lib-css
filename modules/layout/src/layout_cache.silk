@@ -1028,6 +1028,9 @@ impl LayoutCache {
   }
 }
 
+// Spare snapshot storage at most this large stays for the next compute.
+const SPARE_KEPT_BYTES: usize = 64 * 1024
+
 // The previous compute's output, which reused subtrees are copied from.
 // Copies keep each fragment's and box's final scrollable overflow: inside a
 // reused subtree positioning places everything as before, so propagating
@@ -1044,6 +1047,15 @@ impl Snapshot {
   pub fn clear(self: &mut Self) {
     self.fragments.clear()
     self.boxes.clear()
+  }
+  // Frees the spare storage once a compute is done with the previous output,
+  // unless it is small: a large spare would double the arena's memory for
+  // as long as the tree lives, where a fresh arena costs one allocation
+  // (see FragmentArena.reserveLike).
+  pub fn releaseSpare(self: &mut Self) {
+    if self.fragments.storageBytes() + self.boxes.capacity() * Intrinsic.layoutOf<Layout>().bytes <= SPARE_KEPT_BYTES { return }
+    drop Intrinsic.replace(self.fragments, FragmentArena.make())
+    drop Intrinsic.replace(self.boxes, List<Layout>.make())
   }
   pub fn takeOutput(self: &mut Self, fragments: &mut FragmentArena, boxes: &mut List<Layout>, keepBoxes: bool) {
     if keepBoxes { return }

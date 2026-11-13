@@ -193,3 +193,37 @@ test effect fn keptLayoutFollowsStructuralEdits() ! OutOfMemoryError | TextError
   let mut allocator = Allocator.systemAllocatorProvider()
   run keptLayoutFollowsEdits() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+// A large output keeps no second copy of itself, and little spare room,
+// between computes: adding rows, and editing one row in place.
+effect fn largeOutputHoldsOneArena() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut output = LayoutTree.make()
+  let mut host = BoxHost {}
+  let viewport = OptionalSize.definite(200.0, 100.0)
+  let mut round: usize = 0
+  let mut last = root
+  while round < 2 {
+    let mut at: usize = 0
+    while at < 700 {
+      last = run tree.append(root, row(4.0))
+      at = at + 1
+    }
+    run compute(&tree, &mut output, &mut host, viewport)
+    let values = &output.fragments.values
+    run Testing.expect(values.length() > 700 * (round + 1), "a fragment per row")
+    run Testing.expect(output.snapshot.fragments.storageBytes() <= 64 * 1024, "the previous output is let go once it is copied")
+    run Testing.expect(values.capacity() * 4 <= values.length() * 5, "the fragment list keeps at most a quarter more room than it uses")
+    round = round + 1
+  }
+  run tree.setStyle(last, row(8.0))
+  run compute(&tree, &mut output, &mut host, viewport)
+  run expectBounds(&output, last, 0.0, 4.0 * 1399.0, 200.0, 8.0)
+  run Testing.expect(output.snapshot.fragments.storageBytes() <= 64 * 1024, "an edit in place keeps no spare arena")
+}
+
+test effect fn largeOutputKeepsOneArenaBetweenComputes() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run largeOutputHoldsOneArena() |> Effect.provideMut<Allocator>(&mut allocator)
+}

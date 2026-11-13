@@ -106,6 +106,7 @@ pub import fragments {
   FragmentId,
   Fragment,
   FragmentArena,
+  ArenaStorage,
   TextFragment,
   TextFragmentKind
 }

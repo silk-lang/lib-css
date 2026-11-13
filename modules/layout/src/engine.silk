@@ -2932,6 +2932,11 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       output.viewportOverflow = overflow
       output.scrollReady = output.normalOffsets.length() != 0 && output.normalOffsets.length() == output.fragments.values.length()
       output.adopt(move nodes)
+      // The spare storage serves the next compute that lays the same boxes
+      // out afresh, as this one did; after any other, the next likely
+      // works in place or on other boxes, so it goes.
+      if inPlace || !sameBoxes { output.snapshot.releaseSpare() }
+      if !inPlace { run output.fragments.trimSlack() }
       return
     }
     run boxes.restart()
