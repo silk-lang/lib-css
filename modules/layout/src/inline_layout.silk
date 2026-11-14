@@ -863,6 +863,17 @@ fn plainLineStyle(style: &Style) -> bool {
     && resolve(style.textIndent.value, 0.0, true, 0.0) == 0.0 && resolve(style.textIndent.value, 1000.0, true, 0.0) == 0.0
 }
 
+// Longer one-line text with text-overflow: ellipsis skips plainLine, which shapes it whole.
+const PLAIN_ELLIPSIS_BYTES: usize = 1024
+
+fn textBytes(nodes: &BoxTree<'_>, item: Item) -> usize {
+  if item.kind != ItemKind.Text { return 0 }
+  return match Node.text(&nodes.sources[nodes.node(item.id).source]) {
+    Option<string<'_>>.Some { value } => String.byteLength(value)
+    Option<string<'_>>.None => 0
+  }
+}
+
 // Shapes the paragraph of the one text box `raw[0]` into `line` when its
 // text is plain: printable ASCII words separated by single collapsed
 // spaces, shaped in one font. Such text has one bidi level and no forced
@@ -949,6 +960,8 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
 effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &[AtomicData], scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   if !plainLineStyle(style) || !plainLineStyle(nodes.style(raw[0].id)) { return false }
+  // A long line cut by an ellipsis is shaped by layoutText only as far as it can show.
+  if style.textOverflowEllipsis && textBytes(nodes, raw[0]) > PLAIN_ELLIPSIS_BYTES { return false }
   if input.fragmentation.active || !bfc.clearBelow(input.bfcContentOrigin.y) { return false }
   let mut width: f32 = 0.0
   let mut offered = true
@@ -1575,6 +1588,53 @@ effect fn shapeRange<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &m
   }
   run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut memo.fonts, &mut shaped, &mut result, start, end, hyphenated, false, 0.0, inlineOrigin, &[])
   if reusable && !hyphenated { run memo.addSegment(start, end, &result, limit) }
+}
+
+// The cursor `bytes` bytes of text after `start`, moved on to a UTF-8 scalar boundary, or
+// `end` when [start, end) holds no more.
+fn cursorAfter(context: TextContext<'_, '_>, start: TextCursor, end: TextCursor, bytes: usize) -> TextCursor {
+  let mut left = bytes
+  let mut unit = start.unit
+  let mut low = start.offset
+  while unit < end.unit {
+    let token = &context.tokens[unit]
+    let count = TextFlow.length(token)
+    if count - low > left {
+      let mut offset = low + left
+      if token.kind == TextTokenKind.Text {
+        while offset < count && !String.isCharBoundary(token.text, offset) { offset = offset + 1 }
+      }
+      if offset == count { return TextCursor { unit: unit + 1, offset: 0 } }
+      return TextCursor { unit: unit, offset: offset }
+    }
+    left = left - (count - low)
+    low = 0
+    unit = unit + 1
+  }
+  if unit == end.unit && end.offset > low + left {
+    let token = &context.tokens[unit]
+    let mut offset = low + left
+    if token.kind == TextTokenKind.Text {
+      while offset < end.offset && !String.isCharBoundary(token.text, offset) { offset = offset + 1 }
+    }
+    return TextCursor { unit: unit, offset: offset }
+  }
+  return end
+}
+
+// The end of the first of prefixes of [start, end) doubling in length that is wider than
+// `room`, with its shaping left in `result`; `end` when none is, with nothing shaped then. A
+// line cut by an ellipsis there shapes about twice what it shows, however long its text.
+effect fn overflowProbe<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, room: f32, inlineOrigin: f32, rtl: bool) -> TextCursor ! OutOfMemoryError | TextError ? &mut Allocator {
+  let mut bytes: usize = 256
+  while true {
+    let at = cursorAfter(context, start, end, bytes)
+    if !at.before(end) { return end }
+    run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut fonts, &mut shaped, &mut result, start, at, false, false, 0.0, inlineOrigin, &[])
+    if result.advance + textEdge(nodes, original, scopes, at, false, rtl, visualPlan.active) - result.hanging > room { return at }
+    bytes = bytes * 2
+  }
+  return end
 }
 
 // The end of the longest prefix of [start, end) that fits `room` with an ellipsis after it,
@@ -2331,6 +2391,9 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     let mut sourceEnding = false
     // The line ends at an overflow-wrap break, not at one of `points`.
     let mut wrapped = false
+    // Where an overflowProbe left the shaping of an ellipsized line, short of `end`.
+    let mut probed = false
+    let mut probedEnd = start
     let mut total: f32 = 0.0
     let mut lineClosed = false
     let mut band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, 0.0), indent, indentRtl)
@@ -2411,8 +2474,19 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       }
       let mut inlineOrigin = band.left
       if rtl { inlineOrigin = width - band.right }
-      run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, start, point.at, point.kind == TextBreakKind.Hyphenated, inlineOrigin, wholeReusable, segmentLimit)
-      let natural = leading + candidate.advance + textEdge(nodes, original.asSlice(), scopes, point.at, false, rtl, visualPlan.active)
+      // The last candidate is the line's only one, so it is taken however wide it is. When
+      // an ellipsis will cut it, a prefix that already overflows stands in for it.
+      let mut shapedEnd = point.at
+      if style.textOverflowEllipsis && next == first && next + 1 == points.length() && !fragmented && !hasFloats && !atSource && wraps.length() == 0 && point.kind != TextBreakKind.Hyphenated {
+        shapedEnd = run overflowProbe(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, point.at, band.right - band.left - leading, inlineOrigin, rtl)
+      }
+      if shapedEnd.before(point.at) {
+        probed = true
+        probedEnd = shapedEnd
+      } else {
+        run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, start, point.at, point.kind == TextBreakKind.Hyphenated, inlineOrigin, wholeReusable, segmentLimit)
+      }
+      let natural = leading + candidate.advance + textEdge(nodes, original.asSlice(), scopes, shapedEnd, false, rtl, visualPlan.active)
       let proposed = natural - candidate.hanging
       let mut metrics = lineExtents(candidate.items.asSlice(), scopes, extents.asMutSlice(), 0, candidate.items.length(), candidate.real)
       if hasAtomicMargins {
@@ -2597,7 +2671,9 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     if accepted.real && ((clamped && style.blockEllipsis) || overflowing) {
       let mut inlineOrigin = band.left
       if rtl { inlineOrigin = width - band.right }
-      let cut = run ellipsisCut(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, end, band.right - band.left - leading, inlineOrigin, rtl)
+      let mut cutEnd = end
+      if probed { cutEnd = probedEnd }
+      let cut = run ellipsisCut(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, cutEnd, band.right - band.left - leading, inlineOrigin, rtl)
       let old = move accepted
       accepted = move candidate
       candidate = move old

@@ -1234,7 +1234,8 @@ test effect fn resizedBlocksKeepItemsOfTheirFlexChildren() ! OutOfMemoryError | 
 
 // A text service that offers a break after every space, with or without the
 // plain text guarantee, and counts its analyses.
-struct Words { paragraph: Paragraph, plain: bool, analyses: usize }
+// `shapedUnits` counts the text units of every shaping request.
+struct Words { paragraph: Paragraph, plain: bool, analyses: usize, shapedUnits: usize }
 impl Measure for Words {
   fn font(provider: &mut Self, request: FontRequest) -> FontMetrics { return Measure.font(&mut provider.paragraph, request) }
   fn scrollbars(provider: &mut Self, request: ScrollbarRequest) -> ScrollbarMetrics { return ScrollbarMetrics.zero() }
@@ -1255,6 +1256,7 @@ impl TextMeasure for Words {
     return TextAnalysis.uniform(context.tokens.length, 0, 0, true)
   }
   effect fn shape(provider: &mut Self, request: TextShapeRequest<'_, '_>, output: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator {
+    provider.shapedUnits = provider.shapedUnits + request.end.unit + 1 - request.start.unit
     run TextMeasure.shape(&mut provider.paragraph, request, &mut output)
   }
 }
@@ -1293,8 +1295,8 @@ test effect fn plainLinesMatchAnalyzedParagraphs() ! OutOfMemoryError | TextErro
   }
   let mut fast = LayoutTree.make()
   let mut slow = LayoutTree.make()
-  let mut plain = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: true, analyses: 0 }
-  let mut analyzed = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: false, analyses: 0 }
+  let mut plain = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: true, analyses: 0, shapedUnits: 0 }
+  let mut analyzed = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: false, analyses: 0, shapedUnits: 0 }
   let mut step: usize = 0
   while step < 5 {
     if step == 1 {
@@ -1417,7 +1419,7 @@ effect fn clampedWords(value: string, style: Style) -> Rect ! OutOfMemoryError |
   let root = tree.root()
   let text = run tree.appendText(root, run String.copy(value))
   let mut output = LayoutTree.make()
-  let mut provider = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: false, analyses: 0 }
+  let mut provider = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: false, analyses: 0, shapedUnits: 0 }
   run compute(&tree, &mut output, &mut provider, OptionalSize.definite(100.0, 100.0))
   return run output.sourceBounds(text)
 }
@@ -1457,4 +1459,28 @@ test effect fn textOverflowEllipsisCutsOverflowingLines() ! OutOfMemoryError | T
   run Testing.expect(cut.height == 10.0 && cut.width == 40.0, "the line ends in 'aaa b' and an ellipsis")
   let visible = run clampedWords("aaa bbb ccc", overflowStyle(Overflow.Visible)) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(visible.width == 55.0, "overflow: visible keeps the whole line")
+  let plain = run longEllipsized(true) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(plain.0.height == 10.0 && plain.0.width == 40.0 && plain.1 < 1000, "a 20,000 word line is cut as a short one, shaping only near what shows")
+  let analyzed = run longEllipsized(false) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(analyzed.0.height == 10.0 && analyzed.0.width == 40.0 && analyzed.1 < 1000, "the same without the plain text path")
+}
+
+tuple Shaped(Rect, usize)
+
+// A line of 20,000 words cut by an ellipsis, and the text units its layout shaped.
+effect fn longEllipsized(plain: bool) -> Shaped ! OutOfMemoryError | TextError | FragmentationError | InvalidNode ? &mut Allocator {
+  let mut value = String.make()
+  let mut words: usize = 0
+  while words < 20000 {
+    run value.append("aaa ")
+    words = words + 1
+  }
+  run value.append("aaa")
+  let mut tree = run Tree.make(overflowStyle(Overflow.Hidden))
+  let root = tree.root()
+  let text = run tree.appendText(root, move value)
+  let mut output = LayoutTree.make()
+  let mut provider = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: plain, analyses: 0, shapedUnits: 0 }
+  run compute(&tree, &mut output, &mut provider, OptionalSize.definite(100.0, 100.0))
+  return Shaped(run output.sourceBounds(text), provider.shapedUnits)
 }
