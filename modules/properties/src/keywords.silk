@@ -330,9 +330,13 @@ pub enum(u16) Keyword {
   ScrollState,
   Space,
   SkipAll,
+  Uppercase,
+  Lowercase,
+  Capitalize,
+  FullWidth,
 }
 
-pub const COUNT: usize = 327
+pub const COUNT: usize = 331
 
 /// The CSS spelling. A few SVG keywords are mixed case, such as `sRGB` and `optimizeSpeed`.
 pub fn name(value: Keyword) -> &'static [u8] {
@@ -664,6 +668,10 @@ pub fn name(value: Keyword) -> &'static [u8] {
     Keyword.ScrollState => b"scroll-state"
     Keyword.Space => b"space"
     Keyword.SkipAll => b"skip-all"
+    Keyword.Uppercase => b"uppercase"
+    Keyword.Lowercase => b"lowercase"
+    Keyword.Capitalize => b"capitalize"
+    Keyword.FullWidth => b"full-width"
   }
 }
 
@@ -1333,6 +1341,12 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 112 && insensitive(name, b"proximity") {
         return Option<Keyword>.some(Keyword.Proximity)
       }
+      if first == 117 && insensitive(name, b"uppercase") {
+        return Option<Keyword>.some(Keyword.Uppercase)
+      }
+      if first == 108 && insensitive(name, b"lowercase") {
+        return Option<Keyword>.some(Keyword.Lowercase)
+      }
     }
     10 => {
       if first == 98 && insensitive(name, b"border-box") {
@@ -1409,6 +1423,12 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 109 && insensitive(name, b"margin-box") {
         return Option<Keyword>.some(Keyword.MarginBox)
+      }
+      if first == 99 && insensitive(name, b"capitalize") {
+        return Option<Keyword>.some(Keyword.Capitalize)
+      }
+      if first == 102 && insensitive(name, b"full-width") {
+        return Option<Keyword>.some(Keyword.FullWidth)
       }
     }
     11 => {
