@@ -145,6 +145,76 @@ pub enum OverflowWrap { Normal, BreakWord, Anywhere }
 /// CSS `text-transform`. The host applies it where it shapes text, so source offsets stay the
 /// text as written.
 pub enum TextTransform { None, Uppercase, Lowercase, Capitalize, FullWidth }
+
+/// The OpenType features `font-variant-*` and `font-kerning` turn on or off, as `FEATURE_*`
+/// bits, and the ones `font-feature-settings` names. The host hands them to its shaper.
+pub struct FontFeatures {
+  /// `FEATURE_*` bits; 0 is every `font-variant-*` at `normal` and `font-kerning: auto`.
+  pub variant: u32,
+  /// `font-feature-settings`: its first `MAX_FEATURE_SETTINGS` tags and their values.
+  pub tags: [u32; 8],
+  pub values: [u32; 8],
+  pub count: usize,
+}
+
+impl Copy for FontFeatures {}
+
+/// How many `font-feature-settings` entries `FontFeatures` keeps.
+pub const MAX_FEATURE_SETTINGS: usize = 8
+
+// font-variant-ligatures.
+pub const FEATURE_NO_COMMON_LIGATURES: u32 = 0x1
+pub const FEATURE_DISCRETIONARY_LIGATURES: u32 = 0x2
+pub const FEATURE_HISTORICAL_LIGATURES: u32 = 0x4
+pub const FEATURE_NO_CONTEXTUAL: u32 = 0x8
+pub const FEATURE_LIGATURES: u32 = 0xF
+// font-variant-caps.
+pub const FEATURE_SMALL_CAPS: u32 = 0x10
+pub const FEATURE_CAPS_TO_SMALL_CAPS: u32 = 0x20
+pub const FEATURE_PETITE_CAPS: u32 = 0x40
+pub const FEATURE_CAPS_TO_PETITE_CAPS: u32 = 0x80
+pub const FEATURE_UNICASE: u32 = 0x100
+pub const FEATURE_TITLING_CAPS: u32 = 0x200
+pub const FEATURE_CAPS: u32 = 0x3F0
+// font-variant-numeric.
+pub const FEATURE_LINING_NUMS: u32 = 0x400
+pub const FEATURE_OLDSTYLE_NUMS: u32 = 0x800
+pub const FEATURE_PROPORTIONAL_NUMS: u32 = 0x1000
+pub const FEATURE_TABULAR_NUMS: u32 = 0x2000
+pub const FEATURE_DIAGONAL_FRACTIONS: u32 = 0x4000
+pub const FEATURE_STACKED_FRACTIONS: u32 = 0x8000
+pub const FEATURE_ORDINAL: u32 = 0x10000
+pub const FEATURE_SLASHED_ZERO: u32 = 0x20000
+pub const FEATURE_NUMERIC: u32 = 0x3FC00
+// font-variant-position.
+pub const FEATURE_SUB: u32 = 0x40000
+pub const FEATURE_SUPER: u32 = 0x80000
+pub const FEATURE_POSITION: u32 = 0xC0000
+// font-kerning: none (normal and auto both kern).
+pub const FEATURE_NO_KERNING: u32 = 0x100000
+pub const FEATURE_KERNING: u32 = 0x100000
+
+impl FontFeatures {
+  /// The initial values: no variant and no settings.
+  pub fn normal() -> FontFeatures {
+    return FontFeatures { variant: 0, tags: [0, 0, 0, 0, 0, 0, 0, 0], values: [0, 0, 0, 0, 0, 0, 0, 0], count: 0 }
+  }
+
+  /// Whether `self` and `other` ask the shaper for the same features.
+  pub fn same(self: &Self, other: &FontFeatures) -> bool {
+    if self.variant != other.variant || self.count != other.count {
+      return false
+    }
+    let mut i: usize = 0
+    while i < self.count {
+      if self.tags[i] != other.tags[i] || self.values[i] != other.values[i] {
+        return false
+      }
+      i = i + 1
+    }
+    return true
+  }
+}
 pub enum WhiteSpaceCollapse { Collapse, Discard, Preserve, PreserveBreaks, PreserveSpaces, BreakSpaces }
 pub union TabSize { Number { pub value: f32 }, Length { pub value: f32 } }
 impl Copy for TabSize {}
@@ -302,6 +372,10 @@ pub struct Text {
   pub wordBreak: WordBreak,
   pub overflowWrap: OverflowWrap,
   pub textTransform: TextTransform,
+  /// `font-variant-*`, `font-kerning` and `font-feature-settings`.
+  pub features: FontFeatures,
+  /// `font-width` as a percentage; `normal` is 100.
+  pub width: f32,
   pub orphans: usize,
   pub widows: usize,
   pub visibility: Visibility,
@@ -347,6 +421,8 @@ impl Text {
       wordBreak: WordBreak.Normal,
       overflowWrap: OverflowWrap.Normal,
       textTransform: TextTransform.None,
+      features: FontFeatures.normal(),
+      width: 100.0,
       orphans: 2,
       widows: 2,
       visibility: Visibility.Visible,
