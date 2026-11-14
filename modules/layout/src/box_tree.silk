@@ -80,7 +80,7 @@ impl<'tree> BoxTree<'tree> {
     let origin = self.anonymousOrigins.get(slot)
     if origin == NO_NODE { return }
     let parent = &self.styles[self.sources[origin].styleIndex]
-    let mut style = inherited(parent)
+    let mut style = runStyle(parent)
     if self.anonymousText.get(slot) { style = textStyle(parent) }
     let styles = self.anonymousStyles.asMutSlice()
     styles[slot] = move style
@@ -194,7 +194,7 @@ impl<'tree> BoxTree<'tree> {
   // Anonymous boxes inherit text properties, never element geometry or layout.
   effect fn ensureAnonymousStyle(self: &mut Self, flow: &mut Flow) -> usize ! OutOfMemoryError ? &mut Allocator {
     if flow.anonymousStyle == NO_NODE {
-      let style = inherited(self.style(flow.container))
+      let style = runStyle(self.style(flow.container))
       let origin = self.node(flow.container).styleOwner
       let slot = self.anonymousStyles.length()
       run self.anonymousStyles.append(move style)
@@ -434,6 +434,18 @@ impl Flow {
 fn textStyle(parent: &Style) -> Style {
   let mut style = inherited(parent)
   style.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flow }
+  return move style
+}
+
+// The style of the inline formatting runs of block container `parent`: the inherited text
+// properties, and the container's line-clamp and text-overflow, which act on its lines.
+fn runStyle(parent: &Style) -> Style {
+  let mut style = inherited(parent)
+  style.maxLines = parent.maxLines
+  style.blockEllipsis = parent.blockEllipsis
+  let mut inlineOverflow = parent.overflowX
+  if parent.writingMode != WritingMode.HorizontalTb { inlineOverflow = parent.overflowY }
+  style.textOverflowEllipsis = parent.textOverflowEllipsis && inlineOverflow != Overflow.Visible
   return move style
 }
 

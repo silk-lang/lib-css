@@ -17,6 +17,9 @@ import computed {
   TextAlign,
   TextJustify,
   TextWrap,
+  WordBreak,
+  OverflowWrap,
+  TextTransform,
   WhiteSpaceCollapse,
   BoxDecorationBreak,
   MarginBreak,
@@ -296,6 +299,69 @@ pub fn visibilityOf(value: Keyword) -> Option<Visibility> {
     Keyword.Hidden => Option<Visibility>.some(Visibility.Hidden)
     Keyword.Collapse => Option<Visibility>.some(Visibility.Collapse)
     _ => Option<Visibility>.None
+  }
+}
+
+/// The keyword of a computed `WordBreak`.
+pub fn wordBreakKeyword(value: WordBreak) -> Keyword {
+  return match value {
+    WordBreak.Normal => Keyword.Normal
+    WordBreak.BreakAll => Keyword.BreakAll
+    WordBreak.KeepAll => Keyword.KeepAll
+    WordBreak.BreakWord => Keyword.BreakWord
+  }
+}
+
+/// The computed `WordBreak` a keyword names, if it names one.
+pub fn wordBreakOf(value: Keyword) -> Option<WordBreak> {
+  return match value {
+    Keyword.Normal => Option<WordBreak>.some(WordBreak.Normal)
+    Keyword.BreakAll => Option<WordBreak>.some(WordBreak.BreakAll)
+    Keyword.KeepAll => Option<WordBreak>.some(WordBreak.KeepAll)
+    Keyword.BreakWord => Option<WordBreak>.some(WordBreak.BreakWord)
+    _ => Option<WordBreak>.None
+  }
+}
+
+/// The keyword of a computed `OverflowWrap`.
+pub fn overflowWrapKeyword(value: OverflowWrap) -> Keyword {
+  return match value {
+    OverflowWrap.Normal => Keyword.Normal
+    OverflowWrap.BreakWord => Keyword.BreakWord
+    OverflowWrap.Anywhere => Keyword.Anywhere
+  }
+}
+
+/// The computed `OverflowWrap` a keyword names, if it names one.
+pub fn overflowWrapOf(value: Keyword) -> Option<OverflowWrap> {
+  return match value {
+    Keyword.Normal => Option<OverflowWrap>.some(OverflowWrap.Normal)
+    Keyword.BreakWord => Option<OverflowWrap>.some(OverflowWrap.BreakWord)
+    Keyword.Anywhere => Option<OverflowWrap>.some(OverflowWrap.Anywhere)
+    _ => Option<OverflowWrap>.None
+  }
+}
+
+/// The keyword of a computed `TextTransform`.
+pub fn textTransformKeyword(value: TextTransform) -> Keyword {
+  return match value {
+    TextTransform.None => Keyword.None
+    TextTransform.Uppercase => Keyword.Uppercase
+    TextTransform.Lowercase => Keyword.Lowercase
+    TextTransform.Capitalize => Keyword.Capitalize
+    TextTransform.FullWidth => Keyword.FullWidth
+  }
+}
+
+/// The computed `TextTransform` a keyword names, if it names one.
+pub fn textTransformOf(value: Keyword) -> Option<TextTransform> {
+  return match value {
+    Keyword.None => Option<TextTransform>.some(TextTransform.None)
+    Keyword.Uppercase => Option<TextTransform>.some(TextTransform.Uppercase)
+    Keyword.Lowercase => Option<TextTransform>.some(TextTransform.Lowercase)
+    Keyword.Capitalize => Option<TextTransform>.some(TextTransform.Capitalize)
+    Keyword.FullWidth => Option<TextTransform>.some(TextTransform.FullWidth)
+    _ => Option<TextTransform>.None
   }
 }
 

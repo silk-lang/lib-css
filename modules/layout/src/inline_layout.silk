@@ -821,7 +821,9 @@ pub struct InlineScratch { lists: Box<InlineLists> }
 struct InlineLists { scopes: List<Scope>, extents: List<Extent>, items: List<Item>, atomics: List<AtomicData>, text: TextScratch }
 // layoutText's per-call lists, part of InlineScratch.
 struct TextScratch {
-  original: List<Item>, points: List<TextBreak>, shaped: List<TextRun>, hangingRanges: List<TextRange>,
+  original: List<Item>, points: List<TextBreak>,
+  // overflow-wrap breaks, taken only where a line has no other break that fits.
+  emergency: List<TextBreak>, shaped: List<TextRun>, hangingRanges: List<TextRange>,
   finalItems: List<Item>, finalTexts: List<TextLeaf>, lines: List<LineBox>, lineEnds: List<usize>,
   // The line being fitted and the last one that fit, and emitLine's spans.
   candidate: TextCandidate, accepted: TextCandidate, spans: List<Span>,
@@ -830,7 +832,7 @@ struct TextScratch {
 }
 impl TextScratch {
   fn make() -> TextScratch {
-    return TextScratch { original: List<Item>.make(), points: List<TextBreak>.make(), shaped: List<TextRun>.make(), hangingRanges: List<TextRange>.make(),
+    return TextScratch { original: List<Item>.make(), points: List<TextBreak>.make(), emergency: List<TextBreak>.make(), shaped: List<TextRun>.make(), hangingRanges: List<TextRange>.make(),
       finalItems: List<Item>.make(), finalTexts: List<TextLeaf>.make(), lines: List<LineBox>.make(), lineEnds: List<usize>.make(),
       candidate: TextCandidate.make(), accepted: TextCandidate.make(), spans: List<Span>.make(),
       origins: List<usize>.make(), fonts: List<TextFont>.make() }
@@ -838,6 +840,7 @@ impl TextScratch {
   fn clear(self: &mut Self) {
     self.original.clear()
     self.points.clear()
+    self.emergency.clear()
     self.shaped.clear()
     self.hangingRanges.clear()
     self.finalItems.clear()
@@ -916,7 +919,7 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let fonts = &mut text.fonts
   fonts.clear()
   let candidate = &mut text.candidate
-  run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, original.asSlice(), scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, 0.0, 0.0, &[])
+  run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, original.asSlice(), scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, false, 0.0, 0.0, &[])
   plain = candidate.real && !candidate.visual.active && candidate.hanging == 0.0 && fonts.length() == 1
   if plain {
     line.items.clear()
@@ -1570,11 +1573,54 @@ effect fn shapeRange<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &m
       return
     }
   }
-  run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut memo.fonts, &mut shaped, &mut result, start, end, hyphenated, 0.0, inlineOrigin, &[])
+  run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut memo.fonts, &mut shaped, &mut result, start, end, hyphenated, false, 0.0, inlineOrigin, &[])
   if reusable && !hyphenated { run memo.addSegment(start, end, &result, limit) }
 }
 
-effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, justificationSpace: f32, inlineOrigin: f32, hangingRanges: &[TextRange]) ! OutOfMemoryError | TextError ? &mut Allocator {
+// The end of the longest prefix of [start, end) that fits `room` with an ellipsis after it,
+// cut at a UTF-8 scalar boundary, with that prefix's shaping left in `result`. When no
+// prefix fits, the first scalar and the ellipsis overflow.
+effect fn ellipsisCut<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, room: f32, inlineOrigin: f32, rtl: bool) -> TextCursor ! OutOfMemoryError | TextError ? &mut Allocator {
+  let mut cuts = List<TextCursor>.make()
+  let mut unit = start.unit
+  while unit < end.unit || (unit == end.unit && end.offset != 0) {
+    let token = &context.tokens[unit]
+    let count = TextFlow.length(token)
+    let mut low: usize = 0
+    if unit == start.unit { low = start.offset }
+    let mut high = count
+    if unit == end.unit { high = end.offset }
+    if token.kind == TextTokenKind.Text {
+      let mut offset = low + 1
+      while offset <= high {
+        if offset == count { run cuts.append(TextCursor { unit: unit + 1, offset: 0 }) }
+        else if String.isCharBoundary(token.text, offset) { run cuts.append(TextCursor { unit: unit, offset: offset }) }
+        offset = offset + 1
+      }
+    } else if high > low || count == 0 {
+      run cuts.append(TextCursor { unit: unit + 1, offset: 0 })
+    }
+    unit = unit + 1
+  }
+  if cuts.length() == 0 { run cuts.append(end) }
+  let mut chosen: usize = 0
+  let mut lo: usize = 0
+  let mut hi = cuts.length()
+  while lo < hi {
+    let middle = lo + (hi - lo) / 2
+    let at = cuts.get(middle)
+    run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut fonts, &mut shaped, &mut result, start, at, false, true, 0.0, inlineOrigin, &[])
+    if result.advance + textEdge(nodes, original, scopes, at, false, rtl, visualPlan.active) - result.hanging <= room {
+      chosen = middle
+      lo = middle + 1
+    } else { hi = middle }
+  }
+  let at = cuts.get(chosen)
+  run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut fonts, &mut shaped, &mut result, start, at, false, true, 0.0, inlineOrigin, &[])
+  return at
+}
+
+effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, ellipsis: bool, justificationSpace: f32, inlineOrigin: f32, hangingRanges: &[TextRange]) ! OutOfMemoryError | TextError ? &mut Allocator {
   result.items.clear()
   result.texts.clear()
   result.advance = 0.0
@@ -1606,7 +1652,7 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
   if found {
     last = run TextFlow.checked(context.tokens, last)
     if shapeText {
-      run TextMeasure.shape(&mut measurer, TextShapeRequest { context: context, analysis: analysis, start: first, end: last, hyphenated: hyphenated, justificationSpace: justificationSpace, hangingRanges: hangingRanges }, &mut shaped)
+      run TextMeasure.shape(&mut measurer, TextShapeRequest { context: context, analysis: analysis, start: first, end: last, hyphenated: hyphenated, ellipsis: ellipsis, justificationSpace: justificationSpace, hangingRanges: hangingRanges }, &mut shaped)
     }
   }
   let mut next: usize = 0
@@ -1997,6 +2043,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let context = TextContext { tokens: normalized.tokens.asSlice(), writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: unicodeBidi, textJustify: style.textJustify }
   if !reuse { offered.clear() }
   let points = &mut text.points
+  let wraps = &mut text.emergency
   let terminal = TextCursor { unit: context.tokens.length, offset: 0 }
   let mut baseLevel: u8 = 0
   if rtl { baseLevel = 1 }
@@ -2050,9 +2097,16 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       at.unit = inlineBreakBoundary(original.asSlice(), scopes, cursor.unit)
     }
     let mut prior = TextCursor { unit: 0, offset: 0 }
-    if points.length() != 0 { prior = points.get(points.length() - 1).at }
-    if prior.before(at) && (point.kind == TextBreakKind.Forced || textBoundaryAllowed(nodes, original.asSlice(), scopes, context.tokens, at)) {
-      run points.append(TextBreak { at: at, kind: point.kind })
+    if point.kind == TextBreakKind.Emergency || point.kind == TextBreakKind.Anywhere {
+      if wraps.length() != 0 { prior = wraps.get(wraps.length() - 1).at }
+      if prior.before(at) && at.before(terminal) && textBoundaryAllowed(nodes, original.asSlice(), scopes, context.tokens, at) {
+        run wraps.append(TextBreak { at: at, kind: point.kind })
+      }
+    } else {
+      if points.length() != 0 { prior = points.get(points.length() - 1).at }
+      if prior.before(at) && (point.kind == TextBreakKind.Forced || textBoundaryAllowed(nodes, original.asSlice(), scopes, context.tokens, at)) {
+        run points.append(TextBreak { at: at, kind: point.kind })
+      }
     }
     index = index + 1
   }
@@ -2096,9 +2150,19 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       let mut start = TextCursor { unit: 0, offset: 0 }
       let mut firstIntrinsic = true
       let mut afterForced = false
+      let mut anywhere: usize = 0
       index = 0
       while index < points.length() {
-        let point = points.get(index)
+        let mut point = points.get(index)
+        // overflow-wrap: anywhere breaks count toward min-content; break-word ones do not.
+        let mut extra = false
+        if minimum {
+          while anywhere < wraps.length() && (wraps.get(anywhere).kind != TextBreakKind.Anywhere || !start.before(wraps.get(anywhere).at)) { anywhere = anywhere + 1 }
+          if anywhere < wraps.length() && wraps.get(anywhere).at.before(point.at) {
+            point = wraps.get(anywhere)
+            extra = true
+          }
+        }
         if minimum || point.kind == TextBreakKind.Forced || point.at.equal(terminal) {
           let indent = lineIndent(style, nodes.node(id).firstFormattedRun, firstIntrinsic, afterForced, 0.0)
           run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, start, point.at, minimum && point.kind == TextBreakKind.Hyphenated, indent, wholeReusable, segmentLimit)
@@ -2110,7 +2174,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
           afterForced = point.kind == TextBreakKind.Forced
           start = point.at
         }
-        index = index + 1
+        if !extra { index = index + 1 }
       }
       if minimum { width = max(width, floatMinimum) }
       else { width = max(0.0, width + floatMaximum) }
@@ -2177,7 +2241,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   // Fast line fitting (see the line loop) needs the advance of every unit,
   // taken from one shaping of the whole paragraph. It applies to unfragmented
   // left-to-right text without floats, tabs, preserved spaces or hyphens.
-  let mut plainText = !fragmented && !hasFloats && hasText && !visualPlan.active
+  let mut plainText = !fragmented && !hasFloats && hasText && !visualPlan.active && wraps.length() == 0
   index = 0
   while plainText && index < context.tokens.length {
     let kind = context.tokens[index].kind
@@ -2196,7 +2260,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   // The lines are kept for the same request (see FittedLines). Justified
   // lines are shaped again only when laid out, and a min-content probe's
   // width is seldom the final one.
-  let recording = clearAtEntry && !input.fragmentation.active && style.textAlign != TextAlign.Justify && style.textAlignLast != TextAlign.Justify
+  let recording = clearAtEntry && wraps.length() == 0 && !input.fragmentation.active && style.textAlign != TextAlign.Justify && style.textAlignLast != TextAlign.Justify
     && (input.performLayout || available.kind != AvailableKind.MinContent)
   let mut memoFirst = NO_NODE
   if fitsMemo { memoFirst = memo.linesFor(width) }
@@ -2265,6 +2329,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     let sourceY = cursor
     let mut end = start
     let mut sourceEnding = false
+    // The line ends at an overflow-wrap break, not at one of `points`.
+    let mut wrapped = false
     let mut total: f32 = 0.0
     let mut lineClosed = false
     let mut band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, 0.0), indent, indentRtl)
@@ -2366,6 +2432,39 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
         band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
       }
       if next > first && proposed > band.right - band.left { break }
+      if next == first && !atSource && point.kind != TextBreakKind.Forced && proposed > band.right - band.left && wraps.length() != 0 {
+        // overflow-wrap (CSS Text 3 §5.5): no break fits, so the word breaks at the last
+        // emergency break whose line fits, or at its first.
+        let emergencyRoom = band.right - band.left
+        let mut low: usize = 0
+        while low < wraps.length() && !start.before(wraps.get(low).at) { low = low + 1 }
+        let mut high = low
+        while high < wraps.length() && wraps.get(high).at.before(point.at) { high = high + 1 }
+        if low < high {
+          let mut chosen = low
+          let mut lo = low + 1
+          let mut hi = high
+          while lo < hi {
+            let middle = lo + (hi - lo) / 2
+            let probe = wraps.get(middle).at
+            run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, start, probe, false, inlineOrigin, wholeReusable, segmentLimit)
+            let fitted = leading + candidate.advance + textEdge(nodes, original.asSlice(), scopes, probe, false, rtl, visualPlan.active) - candidate.hanging
+            if fitted <= emergencyRoom {
+              chosen = middle
+              lo = middle + 1
+            } else { hi = middle }
+          }
+          let broken = wraps.get(chosen).at
+          run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, start, broken, false, inlineOrigin, wholeReusable, segmentLimit)
+          let old = move accepted
+          accepted = move candidate
+          candidate = move old
+          total = leading + accepted.advance + textEdge(nodes, original.asSlice(), scopes, broken, false, rtl, visualPlan.active) - accepted.hanging
+          end = broken
+          wrapped = true
+          break
+        }
+      }
       let old = move accepted
       accepted = move candidate
       candidate = move old
@@ -2415,7 +2514,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     if fragmented && hasFloats && frameLines == 0 && accepted.real && input.fragmentation.offset + box.inset.top + cursor + metrics.height > input.fragmentation.limit {
       let prefix = floatPrefix(context, original.asSlice(), start, end)
       if start.before(prefix) {
-        run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, prefix, false, 0.0, 0.0, &[])
+        run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, prefix, false, false, 0.0, 0.0, &[])
         if !candidate.real {
           // Floats may advance independently while the first real line waits.
           // This is a fragment boundary, not a forced text/paragraph break.
@@ -2483,14 +2582,30 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     }
     band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
     let mut ending = TextBreak { at: end, kind: TextBreakKind.Soft }
-    if !floatBoundary && !sourceEnding { ending = points.get(next - 1) }
+    if !floatBoundary && !sourceEnding && !wrapped { ending = points.get(next - 1) }
     if sourceEnding && next > first {
       let point = points.get(next - 1)
       if point.at.equal(end) && point.kind == TextBreakKind.Forced { ending = point }
     }
     let last = next == points.length() || ending.kind == TextBreakKind.Forced
+    // line-clamp (CSS Overflow 4 §4) ends the box after its last allowed line. That line, and
+    // a line overflowing a scroll container with text-overflow: ellipsis (CSS Overflow 3
+    // §5.1), end in an ellipsis that replaces the content it would cover.
+    let clamped = !fragmented && style.maxLines != 0 && accepted.real && realLines + 1 >= style.maxLines && !end.equal(terminal)
+    let overflowing = style.textOverflowEllipsis && total > band.right - band.left
+    let mut ellipsized = false
+    if accepted.real && ((clamped && style.blockEllipsis) || overflowing) {
+      let mut inlineOrigin = band.left
+      if rtl { inlineOrigin = width - band.right }
+      let cut = run ellipsisCut(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, end, band.right - band.left - leading, inlineOrigin, rtl)
+      let old = move accepted
+      accepted = move candidate
+      candidate = move old
+      total = leading + accepted.advance + textEdge(nodes, original.asSlice(), scopes, cut, false, rtl, visualPlan.active) - accepted.hanging
+      ellipsized = true
+    }
     let remaining = band.right - band.left - total
-    if input.performLayout && remaining > 0.0 && effectiveTextAlign(style, last) == TextAlign.Justify {
+    if input.performLayout && !ellipsized && remaining > 0.0 && effectiveTextAlign(style, last) == TextAlign.Justify {
       let mut inlineOrigin = band.left
       if rtl { inlineOrigin = width - band.right }
       hangingRanges.clear()
@@ -2499,7 +2614,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
         if unicodeBidi == UnicodeBidi.Plaintext { hangingRtl = analysis.paragraphAt(start).level == 1 }
         run collectHanging(&accepted, context, hangingRtl, &mut hangingRanges)
       }
-      run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, end, ending.kind == TextBreakKind.Hyphenated, remaining, inlineOrigin, hangingRanges.asSlice())
+      run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, end, ending.kind == TextBreakKind.Hyphenated, false, remaining, inlineOrigin, hangingRanges.asSlice())
       let natural = leading + candidate.advance + textEdge(nodes, original.asSlice(), scopes, end, false, rtl, visualPlan.active)
       total = natural - candidate.hanging
       if last { total = natural - min(candidate.hanging, max(0.0, natural - (band.right - band.left))) }
@@ -2547,6 +2662,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     cursor = cursor + metrics.height
     if !floatBoundary && (!sourceEnding || accepted.real) { afterForced = ending.kind == TextBreakKind.Forced }
     start = end
+    if clamped { break }
     if sourceEnding {
       let event = boundaries.events.get(sourceEvent)
       sourceCut = event.at.unit

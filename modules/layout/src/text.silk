@@ -42,7 +42,9 @@ impl TextCursor {
     return self.unit == other.unit && self.offset == other.offset
   }
 }
-pub enum TextBreakKind { Soft, Forced, Hyphenated }
+// Emergency and Anywhere are overflow-wrap breaks (break-word and anywhere): layout takes one
+// only where a line has no other break that fits. Anywhere breaks also count for min-content.
+pub enum TextBreakKind { Soft, Forced, Hyphenated, Emergency, Anywhere }
 pub struct TextBreak { pub at: TextCursor, pub kind: TextBreakKind }
 impl Copy for TextBreak {}
 pub struct TextLevel {
@@ -137,6 +139,9 @@ pub struct TextShapeRequest<'tokens, 'text> {
   pub context: TextContext<'tokens, 'text>, pub start: TextCursor, pub end: TextCursor,
   pub analysis: &'tokens TextAnalysis,
   pub hyphenated: bool,
+  // Append an ellipsis (U+2026, or "..." without that glyph) after the range's last text
+  // run, in that run's font, for line-clamp and text-overflow.
+  pub ellipsis: bool,
   // Requested extra inline advance after line selection; zero means natural
   // shaping. Preserve content coverage and vertical metrics. If the line has
   // no eligible opportunities, return its natural advances for CSS fallback.
