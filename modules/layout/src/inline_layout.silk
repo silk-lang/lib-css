@@ -821,7 +821,9 @@ pub struct InlineScratch { lists: Box<InlineLists> }
 struct InlineLists { scopes: List<Scope>, extents: List<Extent>, items: List<Item>, atomics: List<AtomicData>, text: TextScratch }
 // layoutText's per-call lists, part of InlineScratch.
 struct TextScratch {
-  original: List<Item>, points: List<TextBreak>, shaped: List<TextRun>, hangingRanges: List<TextRange>,
+  original: List<Item>, points: List<TextBreak>,
+  // overflow-wrap breaks, taken only where a line has no other break that fits.
+  emergency: List<TextBreak>, shaped: List<TextRun>, hangingRanges: List<TextRange>,
   finalItems: List<Item>, finalTexts: List<TextLeaf>, lines: List<LineBox>, lineEnds: List<usize>,
   // The line being fitted and the last one that fit, and emitLine's spans.
   candidate: TextCandidate, accepted: TextCandidate, spans: List<Span>,
@@ -830,7 +832,7 @@ struct TextScratch {
 }
 impl TextScratch {
   fn make() -> TextScratch {
-    return TextScratch { original: List<Item>.make(), points: List<TextBreak>.make(), shaped: List<TextRun>.make(), hangingRanges: List<TextRange>.make(),
+    return TextScratch { original: List<Item>.make(), points: List<TextBreak>.make(), emergency: List<TextBreak>.make(), shaped: List<TextRun>.make(), hangingRanges: List<TextRange>.make(),
       finalItems: List<Item>.make(), finalTexts: List<TextLeaf>.make(), lines: List<LineBox>.make(), lineEnds: List<usize>.make(),
       candidate: TextCandidate.make(), accepted: TextCandidate.make(), spans: List<Span>.make(),
       origins: List<usize>.make(), fonts: List<TextFont>.make() }
@@ -838,6 +840,7 @@ impl TextScratch {
   fn clear(self: &mut Self) {
     self.original.clear()
     self.points.clear()
+    self.emergency.clear()
     self.shaped.clear()
     self.hangingRanges.clear()
     self.finalItems.clear()
@@ -1997,6 +2000,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let context = TextContext { tokens: normalized.tokens.asSlice(), writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: unicodeBidi, textJustify: style.textJustify }
   if !reuse { offered.clear() }
   let points = &mut text.points
+  let wraps = &mut text.emergency
   let terminal = TextCursor { unit: context.tokens.length, offset: 0 }
   let mut baseLevel: u8 = 0
   if rtl { baseLevel = 1 }
@@ -2050,9 +2054,16 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       at.unit = inlineBreakBoundary(original.asSlice(), scopes, cursor.unit)
     }
     let mut prior = TextCursor { unit: 0, offset: 0 }
-    if points.length() != 0 { prior = points.get(points.length() - 1).at }
-    if prior.before(at) && (point.kind == TextBreakKind.Forced || textBoundaryAllowed(nodes, original.asSlice(), scopes, context.tokens, at)) {
-      run points.append(TextBreak { at: at, kind: point.kind })
+    if point.kind == TextBreakKind.Emergency || point.kind == TextBreakKind.Anywhere {
+      if wraps.length() != 0 { prior = wraps.get(wraps.length() - 1).at }
+      if prior.before(at) && at.before(terminal) && textBoundaryAllowed(nodes, original.asSlice(), scopes, context.tokens, at) {
+        run wraps.append(TextBreak { at: at, kind: point.kind })
+      }
+    } else {
+      if points.length() != 0 { prior = points.get(points.length() - 1).at }
+      if prior.before(at) && (point.kind == TextBreakKind.Forced || textBoundaryAllowed(nodes, original.asSlice(), scopes, context.tokens, at)) {
+        run points.append(TextBreak { at: at, kind: point.kind })
+      }
     }
     index = index + 1
   }
@@ -2096,9 +2107,19 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       let mut start = TextCursor { unit: 0, offset: 0 }
       let mut firstIntrinsic = true
       let mut afterForced = false
+      let mut anywhere: usize = 0
       index = 0
       while index < points.length() {
-        let point = points.get(index)
+        let mut point = points.get(index)
+        // overflow-wrap: anywhere breaks count toward min-content; break-word ones do not.
+        let mut extra = false
+        if minimum {
+          while anywhere < wraps.length() && (wraps.get(anywhere).kind != TextBreakKind.Anywhere || !start.before(wraps.get(anywhere).at)) { anywhere = anywhere + 1 }
+          if anywhere < wraps.length() && wraps.get(anywhere).at.before(point.at) {
+            point = wraps.get(anywhere)
+            extra = true
+          }
+        }
         if minimum || point.kind == TextBreakKind.Forced || point.at.equal(terminal) {
           let indent = lineIndent(style, nodes.node(id).firstFormattedRun, firstIntrinsic, afterForced, 0.0)
           run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, start, point.at, minimum && point.kind == TextBreakKind.Hyphenated, indent, wholeReusable, segmentLimit)
@@ -2110,7 +2131,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
           afterForced = point.kind == TextBreakKind.Forced
           start = point.at
         }
-        index = index + 1
+        if !extra { index = index + 1 }
       }
       if minimum { width = max(width, floatMinimum) }
       else { width = max(0.0, width + floatMaximum) }
@@ -2177,7 +2198,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   // Fast line fitting (see the line loop) needs the advance of every unit,
   // taken from one shaping of the whole paragraph. It applies to unfragmented
   // left-to-right text without floats, tabs, preserved spaces or hyphens.
-  let mut plainText = !fragmented && !hasFloats && hasText && !visualPlan.active
+  let mut plainText = !fragmented && !hasFloats && hasText && !visualPlan.active && wraps.length() == 0
   index = 0
   while plainText && index < context.tokens.length {
     let kind = context.tokens[index].kind
@@ -2196,7 +2217,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   // The lines are kept for the same request (see FittedLines). Justified
   // lines are shaped again only when laid out, and a min-content probe's
   // width is seldom the final one.
-  let recording = clearAtEntry && !input.fragmentation.active && style.textAlign != TextAlign.Justify && style.textAlignLast != TextAlign.Justify
+  let recording = clearAtEntry && wraps.length() == 0 && !input.fragmentation.active && style.textAlign != TextAlign.Justify && style.textAlignLast != TextAlign.Justify
     && (input.performLayout || available.kind != AvailableKind.MinContent)
   let mut memoFirst = NO_NODE
   if fitsMemo { memoFirst = memo.linesFor(width) }
@@ -2265,6 +2286,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     let sourceY = cursor
     let mut end = start
     let mut sourceEnding = false
+    // The line ends at an overflow-wrap break, not at one of `points`.
+    let mut wrapped = false
     let mut total: f32 = 0.0
     let mut lineClosed = false
     let mut band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, 0.0), indent, indentRtl)
@@ -2366,6 +2389,39 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
         band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
       }
       if next > first && proposed > band.right - band.left { break }
+      if next == first && !atSource && point.kind != TextBreakKind.Forced && proposed > band.right - band.left && wraps.length() != 0 {
+        // overflow-wrap (CSS Text 3 §5.5): no break fits, so the word breaks at the last
+        // emergency break whose line fits, or at its first.
+        let emergencyRoom = band.right - band.left
+        let mut low: usize = 0
+        while low < wraps.length() && !start.before(wraps.get(low).at) { low = low + 1 }
+        let mut high = low
+        while high < wraps.length() && wraps.get(high).at.before(point.at) { high = high + 1 }
+        if low < high {
+          let mut chosen = low
+          let mut lo = low + 1
+          let mut hi = high
+          while lo < hi {
+            let middle = lo + (hi - lo) / 2
+            let probe = wraps.get(middle).at
+            run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, start, probe, false, inlineOrigin, wholeReusable, segmentLimit)
+            let fitted = leading + candidate.advance + textEdge(nodes, original.asSlice(), scopes, probe, false, rtl, visualPlan.active) - candidate.hanging
+            if fitted <= emergencyRoom {
+              chosen = middle
+              lo = middle + 1
+            } else { hi = middle }
+          }
+          let broken = wraps.get(chosen).at
+          run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, start, broken, false, inlineOrigin, wholeReusable, segmentLimit)
+          let old = move accepted
+          accepted = move candidate
+          candidate = move old
+          total = leading + accepted.advance + textEdge(nodes, original.asSlice(), scopes, broken, false, rtl, visualPlan.active) - accepted.hanging
+          end = broken
+          wrapped = true
+          break
+        }
+      }
       let old = move accepted
       accepted = move candidate
       candidate = move old
@@ -2483,7 +2539,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     }
     band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
     let mut ending = TextBreak { at: end, kind: TextBreakKind.Soft }
-    if !floatBoundary && !sourceEnding { ending = points.get(next - 1) }
+    if !floatBoundary && !sourceEnding && !wrapped { ending = points.get(next - 1) }
     if sourceEnding && next > first {
       let point = points.get(next - 1)
       if point.at.equal(end) && point.kind == TextBreakKind.Forced { ending = point }

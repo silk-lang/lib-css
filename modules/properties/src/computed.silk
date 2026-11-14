@@ -138,6 +138,13 @@ pub enum BaselineSource { Auto, First, Last }
 pub enum TextAlign { Auto, Start, End, Left, Right, Center, Justify }
 pub enum TextJustify { Auto, None, InterWord, InterCharacter }
 pub enum TextWrap { Wrap, NoWrap }
+/// CSS `word-break`. `BreakWord` is the legacy value: `normal` with `overflow-wrap: anywhere`.
+pub enum WordBreak { Normal, BreakAll, KeepAll, BreakWord }
+/// CSS `overflow-wrap` (and its alias `word-wrap`).
+pub enum OverflowWrap { Normal, BreakWord, Anywhere }
+/// CSS `text-transform`. The host applies it where it shapes text, so source offsets stay the
+/// text as written.
+pub enum TextTransform { None, Uppercase, Lowercase, Capitalize, FullWidth }
 pub enum WhiteSpaceCollapse { Collapse, Discard, Preserve, PreserveBreaks, PreserveSpaces, BreakSpaces }
 pub union TabSize { Number { pub value: f32 }, Length { pub value: f32 } }
 impl Copy for TabSize {}
@@ -289,6 +296,12 @@ pub struct Text {
   pub textJustify: TextJustify,
   pub textIndent: TextIndent,
   pub tabSize: TabSize,
+  /// `letter-spacing` and `word-spacing` in CSS pixels; `normal` is 0.
+  pub letterSpacing: f32,
+  pub wordSpacing: f32,
+  pub wordBreak: WordBreak,
+  pub overflowWrap: OverflowWrap,
+  pub textTransform: TextTransform,
   pub orphans: usize,
   pub widows: usize,
   pub visibility: Visibility,
@@ -329,6 +342,11 @@ impl Text {
       textJustify: TextJustify.Auto,
       textIndent: TextIndent { value: Dimension.px(0.0), hanging: false, eachLine: false },
       tabSize: TabSize.Number { value: 8.0 },
+      letterSpacing: 0.0,
+      wordSpacing: 0.0,
+      wordBreak: WordBreak.Normal,
+      overflowWrap: OverflowWrap.Normal,
+      textTransform: TextTransform.None,
       orphans: 2,
       widows: 2,
       visibility: Visibility.Visible,

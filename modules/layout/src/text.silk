@@ -42,7 +42,9 @@ impl TextCursor {
     return self.unit == other.unit && self.offset == other.offset
   }
 }
-pub enum TextBreakKind { Soft, Forced, Hyphenated }
+// Emergency and Anywhere are overflow-wrap breaks (break-word and anywhere): layout takes one
+// only where a line has no other break that fits. Anywhere breaks also count for min-content.
+pub enum TextBreakKind { Soft, Forced, Hyphenated, Emergency, Anywhere }
 pub struct TextBreak { pub at: TextCursor, pub kind: TextBreakKind }
 impl Copy for TextBreak {}
 pub struct TextLevel {
