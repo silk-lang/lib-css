@@ -12,10 +12,11 @@ import these instead of defining their own.
 
 - **The property catalog** (`catalog`): one `Property` enum with each property's name, index,
   inheritance, initial value and shorthand expansion, taken from the pinned specifications.
-  It covers 282 properties: the SVG and text properties first, then the box properties (position
+  It covers 288 properties: the SVG and text properties first, then the box properties (position
   and insets, sizes, margin, padding, border, radius, flex, grid, gap, alignment, background,
-  shadow, breaks), and last the two that have no standard name, `-silk-selection-color` and
-  `-silk-placeholder-color`. `css-style` re-exports it as `properties` and cascades all of it: the
+  shadow, breaks), the two that have no standard name, `-silk-selection-color` and
+  `-silk-placeholder-color`, and last `transition` and its longhands. `shorthands` does not
+  expand `transition`; its consumer reads the comma lists. `css-style` re-exports it as `properties` and cascades all of it: the
   first 172 with their own grammars, the box properties by shape.
 
 - **Paint and text** (also in `computed`): `Paint` (background `Fill`, border, radii, `BoxShadow`,

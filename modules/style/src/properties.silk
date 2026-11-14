@@ -17,13 +17,13 @@ pub import css_properties.catalog {
 /// How many properties css-style supports: the whole catalog. The SVG and text properties,
 /// the first `TYPED`, have their own grammars; the box properties after them are read by
 /// shape (see `box_values`).
-pub const COUNT: usize = 282
+pub const COUNT: usize = 288
 
 /// How many properties, from the start of the catalog, have a grammar of their own.
 pub const TYPED: usize = 172
 
 /// The supported properties in catalog order.
-pub fn all() -> [Property; 282] {
+pub fn all() -> [Property; 288] {
   return catalog.all()
 }
 
