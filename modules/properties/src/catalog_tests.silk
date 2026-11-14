@@ -25,6 +25,11 @@ test effect fn everyPropertyHasOneIndexAndFindsItselfByName() -> ()
   }
   run Testing.expect(upper, "names match ASCII case-insensitively")
   run Testing.expect(catalog.lookup(b"margin-middle").isNone(), "unknown names find nothing")
+  let alias = match catalog.lookup(b"Word-Wrap") {
+    Option<Property>.Some { value } => value == Property.OverflowWrap
+    Option<Property>.None => false
+  }
+  run Testing.expect(alias, "a legacy name finds the property it aliases")
 }
 
 test effect fn shorthandsExpandToLonghands() -> ()
@@ -68,4 +73,7 @@ test effect fn boxPropertiesCarryTheirSpecDefaults() -> ()
   run Testing.expect(!catalog.inherited(Property.MarginTop), "margins do not inherit")
   run Testing.expect(catalog.inherited(Property.CaretColor), "caret-color inherits")
   run Testing.expect(catalog.inherited(Property.Orphans), "orphans inherits")
+  run Testing.expect(catalog.initial(Property.OutlineColor) == b"auto", "outline-color")
+  run Testing.expect(catalog.inherited(Property.ListStyleType), "list-style-type inherits")
+  run Testing.expect(!catalog.inherited(Property.MarginInlineStart), "logical margins do not inherit")
 }

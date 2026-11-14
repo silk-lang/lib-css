@@ -291,11 +291,165 @@ pub enum(u16) Property {
   TransitionTimingFunction,
   TransitionDelay,
   TransitionBehavior,
+  Outline,
+  OutlineWidth,
+  OutlineStyle,
+  OutlineColor,
+  OutlineOffset,
+  UserSelect,
+  AccentColor,
+  Appearance,
+  Resize,
+  BlockSize,
+  MinInlineSize,
+  MinBlockSize,
+  MaxInlineSize,
+  MaxBlockSize,
+  MarginBlockStart,
+  MarginBlockEnd,
+  MarginInlineStart,
+  MarginInlineEnd,
+  MarginBlock,
+  MarginInline,
+  PaddingBlockStart,
+  PaddingBlockEnd,
+  PaddingInlineStart,
+  PaddingInlineEnd,
+  PaddingBlock,
+  PaddingInline,
+  InsetBlockStart,
+  InsetBlockEnd,
+  InsetInlineStart,
+  InsetInlineEnd,
+  InsetBlock,
+  InsetInline,
+  BorderBlockStartWidth,
+  BorderBlockStartStyle,
+  BorderBlockStartColor,
+  BorderBlockEndWidth,
+  BorderBlockEndStyle,
+  BorderBlockEndColor,
+  BorderInlineStartWidth,
+  BorderInlineStartStyle,
+  BorderInlineStartColor,
+  BorderInlineEndWidth,
+  BorderInlineEndStyle,
+  BorderInlineEndColor,
+  BorderBlockStart,
+  BorderBlockEnd,
+  BorderInlineStart,
+  BorderInlineEnd,
+  BorderBlockWidth,
+  BorderBlockStyle,
+  BorderBlockColor,
+  BorderInlineWidth,
+  BorderInlineStyle,
+  BorderInlineColor,
+  BorderBlock,
+  BorderInline,
+  BorderStartStartRadius,
+  BorderStartEndRadius,
+  BorderEndStartRadius,
+  BorderEndEndRadius,
+  OverflowBlock,
+  OverflowInline,
+  LineClamp,
+  WebkitLineClamp,
+  MaxLines,
+  BlockEllipsis,
+  Continue,
+  ScrollbarColor,
+  OverflowAnchor,
+  OverflowClipMargin,
+  TextWrap,
+  TextWrapStyle,
+  HyphenateCharacter,
+  TextSizeAdjust,
+  TextUnderlineOffset,
+  TextDecorationSkipInk,
+  OverscrollBehavior,
+  OverscrollBehaviorX,
+  OverscrollBehaviorY,
+  OverscrollBehaviorInline,
+  OverscrollBehaviorBlock,
+  ScrollBehavior,
+  ScrollSnapType,
+  ScrollSnapAlign,
+  ScrollSnapStop,
+  ScrollMarginTop,
+  ScrollMarginRight,
+  ScrollMarginBottom,
+  ScrollMarginLeft,
+  ScrollMarginBlockStart,
+  ScrollMarginBlockEnd,
+  ScrollMarginInlineStart,
+  ScrollMarginInlineEnd,
+  ScrollMargin,
+  ScrollMarginBlock,
+  ScrollMarginInline,
+  ScrollPaddingTop,
+  ScrollPaddingRight,
+  ScrollPaddingBottom,
+  ScrollPaddingLeft,
+  ScrollPaddingBlockStart,
+  ScrollPaddingBlockEnd,
+  ScrollPaddingInlineStart,
+  ScrollPaddingInlineEnd,
+  ScrollPadding,
+  ScrollPaddingBlock,
+  ScrollPaddingInline,
+  TouchAction,
+  Contain,
+  ContentVisibility,
+  ContainIntrinsicWidth,
+  ContainIntrinsicHeight,
+  ContainIntrinsicBlockSize,
+  ContainIntrinsicInlineSize,
+  ContainIntrinsicSize,
+  ContainerType,
+  ContainerName,
+  Container,
+  WillChange,
+  ListStylePosition,
+  ListStyleImage,
+  ListStyleType,
+  ListStyle,
+  CounterReset,
+  CounterIncrement,
+  CounterSet,
+  Content,
+  Quotes,
+  BorderCollapse,
+  BorderSpacing,
+  TableLayout,
+  CaptionSide,
+  EmptyCells,
+  ColumnCount,
+  ColumnWidth,
+  Columns,
+  ColumnRuleWidth,
+  ColumnRuleStyle,
+  ColumnRuleColor,
+  ColumnRule,
+  ColumnSpan,
+  ColumnFill,
+  BorderImageSource,
+  BorderImageSlice,
+  BorderImageWidth,
+  BorderImageOutset,
+  BorderImageRepeat,
+  BorderImage,
+  ColorScheme,
+  PrintColorAdjust,
+  ForcedColorAdjust,
+  ShapeOutside,
+  ShapeImageThreshold,
+  FieldSizing,
 }
 
-pub const COUNT: usize = 288
+pub const COUNT: usize = 442
 
-pub fn all() -> [Property; 288] {
+pub fn all() -> [Property; COUNT] {
   return [
     Property.Fill,
     Property.FillRule,
@@ -585,6 +739,160 @@ pub fn all() -> [Property; 288] {
     Property.TransitionTimingFunction,
     Property.TransitionDelay,
     Property.TransitionBehavior,
+    Property.Outline,
+    Property.OutlineWidth,
+    Property.OutlineStyle,
+    Property.OutlineColor,
+    Property.OutlineOffset,
+    Property.UserSelect,
+    Property.AccentColor,
+    Property.Appearance,
+    Property.Resize,
+    Property.BlockSize,
+    Property.MinInlineSize,
+    Property.MinBlockSize,
+    Property.MaxInlineSize,
+    Property.MaxBlockSize,
+    Property.MarginBlockStart,
+    Property.MarginBlockEnd,
+    Property.MarginInlineStart,
+    Property.MarginInlineEnd,
+    Property.MarginBlock,
+    Property.MarginInline,
+    Property.PaddingBlockStart,
+    Property.PaddingBlockEnd,
+    Property.PaddingInlineStart,
+    Property.PaddingInlineEnd,
+    Property.PaddingBlock,
+    Property.PaddingInline,
+    Property.InsetBlockStart,
+    Property.InsetBlockEnd,
+    Property.InsetInlineStart,
+    Property.InsetInlineEnd,
+    Property.InsetBlock,
+    Property.InsetInline,
+    Property.BorderBlockStartWidth,
+    Property.BorderBlockStartStyle,
+    Property.BorderBlockStartColor,
+    Property.BorderBlockEndWidth,
+    Property.BorderBlockEndStyle,
+    Property.BorderBlockEndColor,
+    Property.BorderInlineStartWidth,
+    Property.BorderInlineStartStyle,
+    Property.BorderInlineStartColor,
+    Property.BorderInlineEndWidth,
+    Property.BorderInlineEndStyle,
+    Property.BorderInlineEndColor,
+    Property.BorderBlockStart,
+    Property.BorderBlockEnd,
+    Property.BorderInlineStart,
+    Property.BorderInlineEnd,
+    Property.BorderBlockWidth,
+    Property.BorderBlockStyle,
+    Property.BorderBlockColor,
+    Property.BorderInlineWidth,
+    Property.BorderInlineStyle,
+    Property.BorderInlineColor,
+    Property.BorderBlock,
+    Property.BorderInline,
+    Property.BorderStartStartRadius,
+    Property.BorderStartEndRadius,
+    Property.BorderEndStartRadius,
+    Property.BorderEndEndRadius,
+    Property.OverflowBlock,
+    Property.OverflowInline,
+    Property.LineClamp,
+    Property.WebkitLineClamp,
+    Property.MaxLines,
+    Property.BlockEllipsis,
+    Property.Continue,
+    Property.ScrollbarColor,
+    Property.OverflowAnchor,
+    Property.OverflowClipMargin,
+    Property.TextWrap,
+    Property.TextWrapStyle,
+    Property.HyphenateCharacter,
+    Property.TextSizeAdjust,
+    Property.TextUnderlineOffset,
+    Property.TextDecorationSkipInk,
+    Property.OverscrollBehavior,
+    Property.OverscrollBehaviorX,
+    Property.OverscrollBehaviorY,
+    Property.OverscrollBehaviorInline,
+    Property.OverscrollBehaviorBlock,
+    Property.ScrollBehavior,
+    Property.ScrollSnapType,
+    Property.ScrollSnapAlign,
+    Property.ScrollSnapStop,
+    Property.ScrollMarginTop,
+    Property.ScrollMarginRight,
+    Property.ScrollMarginBottom,
+    Property.ScrollMarginLeft,
+    Property.ScrollMarginBlockStart,
+    Property.ScrollMarginBlockEnd,
+    Property.ScrollMarginInlineStart,
+    Property.ScrollMarginInlineEnd,
+    Property.ScrollMargin,
+    Property.ScrollMarginBlock,
+    Property.ScrollMarginInline,
+    Property.ScrollPaddingTop,
+    Property.ScrollPaddingRight,
+    Property.ScrollPaddingBottom,
+    Property.ScrollPaddingLeft,
+    Property.ScrollPaddingBlockStart,
+    Property.ScrollPaddingBlockEnd,
+    Property.ScrollPaddingInlineStart,
+    Property.ScrollPaddingInlineEnd,
+    Property.ScrollPadding,
+    Property.ScrollPaddingBlock,
+    Property.ScrollPaddingInline,
+    Property.TouchAction,
+    Property.Contain,
+    Property.ContentVisibility,
+    Property.ContainIntrinsicWidth,
+    Property.ContainIntrinsicHeight,
+    Property.ContainIntrinsicBlockSize,
+    Property.ContainIntrinsicInlineSize,
+    Property.ContainIntrinsicSize,
+    Property.ContainerType,
+    Property.ContainerName,
+    Property.Container,
+    Property.WillChange,
+    Property.ListStylePosition,
+    Property.ListStyleImage,
+    Property.ListStyleType,
+    Property.ListStyle,
+    Property.CounterReset,
+    Property.CounterIncrement,
+    Property.CounterSet,
+    Property.Content,
+    Property.Quotes,
+    Property.BorderCollapse,
+    Property.BorderSpacing,
+    Property.TableLayout,
+    Property.CaptionSide,
+    Property.EmptyCells,
+    Property.ColumnCount,
+    Property.ColumnWidth,
+    Property.Columns,
+    Property.ColumnRuleWidth,
+    Property.ColumnRuleStyle,
+    Property.ColumnRuleColor,
+    Property.ColumnRule,
+    Property.ColumnSpan,
+    Property.ColumnFill,
+    Property.BorderImageSource,
+    Property.BorderImageSlice,
+    Property.BorderImageWidth,
+    Property.BorderImageOutset,
+    Property.BorderImageRepeat,
+    Property.BorderImage,
+    Property.ColorScheme,
+    Property.PrintColorAdjust,
+    Property.ForcedColorAdjust,
+    Property.ShapeOutside,
+    Property.ShapeImageThreshold,
+    Property.FieldSizing,
   ]
 }
 
@@ -878,6 +1186,160 @@ pub fn index(property: Property) -> usize {
     Property.TransitionTimingFunction => 285
     Property.TransitionDelay => 286
     Property.TransitionBehavior => 287
+    Property.Outline => 288
+    Property.OutlineWidth => 289
+    Property.OutlineStyle => 290
+    Property.OutlineColor => 291
+    Property.OutlineOffset => 292
+    Property.UserSelect => 293
+    Property.AccentColor => 294
+    Property.Appearance => 295
+    Property.Resize => 296
+    Property.BlockSize => 297
+    Property.MinInlineSize => 298
+    Property.MinBlockSize => 299
+    Property.MaxInlineSize => 300
+    Property.MaxBlockSize => 301
+    Property.MarginBlockStart => 302
+    Property.MarginBlockEnd => 303
+    Property.MarginInlineStart => 304
+    Property.MarginInlineEnd => 305
+    Property.MarginBlock => 306
+    Property.MarginInline => 307
+    Property.PaddingBlockStart => 308
+    Property.PaddingBlockEnd => 309
+    Property.PaddingInlineStart => 310
+    Property.PaddingInlineEnd => 311
+    Property.PaddingBlock => 312
+    Property.PaddingInline => 313
+    Property.InsetBlockStart => 314
+    Property.InsetBlockEnd => 315
+    Property.InsetInlineStart => 316
+    Property.InsetInlineEnd => 317
+    Property.InsetBlock => 318
+    Property.InsetInline => 319
+    Property.BorderBlockStartWidth => 320
+    Property.BorderBlockStartStyle => 321
+    Property.BorderBlockStartColor => 322
+    Property.BorderBlockEndWidth => 323
+    Property.BorderBlockEndStyle => 324
+    Property.BorderBlockEndColor => 325
+    Property.BorderInlineStartWidth => 326
+    Property.BorderInlineStartStyle => 327
+    Property.BorderInlineStartColor => 328
+    Property.BorderInlineEndWidth => 329
+    Property.BorderInlineEndStyle => 330
+    Property.BorderInlineEndColor => 331
+    Property.BorderBlockStart => 332
+    Property.BorderBlockEnd => 333
+    Property.BorderInlineStart => 334
+    Property.BorderInlineEnd => 335
+    Property.BorderBlockWidth => 336
+    Property.BorderBlockStyle => 337
+    Property.BorderBlockColor => 338
+    Property.BorderInlineWidth => 339
+    Property.BorderInlineStyle => 340
+    Property.BorderInlineColor => 341
+    Property.BorderBlock => 342
+    Property.BorderInline => 343
+    Property.BorderStartStartRadius => 344
+    Property.BorderStartEndRadius => 345
+    Property.BorderEndStartRadius => 346
+    Property.BorderEndEndRadius => 347
+    Property.OverflowBlock => 348
+    Property.OverflowInline => 349
+    Property.LineClamp => 350
+    Property.WebkitLineClamp => 351
+    Property.MaxLines => 352
+    Property.BlockEllipsis => 353
+    Property.Continue => 354
+    Property.ScrollbarColor => 355
+    Property.OverflowAnchor => 356
+    Property.OverflowClipMargin => 357
+    Property.TextWrap => 358
+    Property.TextWrapStyle => 359
+    Property.HyphenateCharacter => 360
+    Property.TextSizeAdjust => 361
+    Property.TextUnderlineOffset => 362
+    Property.TextDecorationSkipInk => 363
+    Property.OverscrollBehavior => 364
+    Property.OverscrollBehaviorX => 365
+    Property.OverscrollBehaviorY => 366
+    Property.OverscrollBehaviorInline => 367
+    Property.OverscrollBehaviorBlock => 368
+    Property.ScrollBehavior => 369
+    Property.ScrollSnapType => 370
+    Property.ScrollSnapAlign => 371
+    Property.ScrollSnapStop => 372
+    Property.ScrollMarginTop => 373
+    Property.ScrollMarginRight => 374
+    Property.ScrollMarginBottom => 375
+    Property.ScrollMarginLeft => 376
+    Property.ScrollMarginBlockStart => 377
+    Property.ScrollMarginBlockEnd => 378
+    Property.ScrollMarginInlineStart => 379
+    Property.ScrollMarginInlineEnd => 380
+    Property.ScrollMargin => 381
+    Property.ScrollMarginBlock => 382
+    Property.ScrollMarginInline => 383
+    Property.ScrollPaddingTop => 384
+    Property.ScrollPaddingRight => 385
+    Property.ScrollPaddingBottom => 386
+    Property.ScrollPaddingLeft => 387
+    Property.ScrollPaddingBlockStart => 388
+    Property.ScrollPaddingBlockEnd => 389
+    Property.ScrollPaddingInlineStart => 390
+    Property.ScrollPaddingInlineEnd => 391
+    Property.ScrollPadding => 392
+    Property.ScrollPaddingBlock => 393
+    Property.ScrollPaddingInline => 394
+    Property.TouchAction => 395
+    Property.Contain => 396
+    Property.ContentVisibility => 397
+    Property.ContainIntrinsicWidth => 398
+    Property.ContainIntrinsicHeight => 399
+    Property.ContainIntrinsicBlockSize => 400
+    Property.ContainIntrinsicInlineSize => 401
+    Property.ContainIntrinsicSize => 402
+    Property.ContainerType => 403
+    Property.ContainerName => 404
+    Property.Container => 405
+    Property.WillChange => 406
+    Property.ListStylePosition => 407
+    Property.ListStyleImage => 408
+    Property.ListStyleType => 409
+    Property.ListStyle => 410
+    Property.CounterReset => 411
+    Property.CounterIncrement => 412
+    Property.CounterSet => 413
+    Property.Content => 414
+    Property.Quotes => 415
+    Property.BorderCollapse => 416
+    Property.BorderSpacing => 417
+    Property.TableLayout => 418
+    Property.CaptionSide => 419
+    Property.EmptyCells => 420
+    Property.ColumnCount => 421
+    Property.ColumnWidth => 422
+    Property.Columns => 423
+    Property.ColumnRuleWidth => 424
+    Property.ColumnRuleStyle => 425
+    Property.ColumnRuleColor => 426
+    Property.ColumnRule => 427
+    Property.ColumnSpan => 428
+    Property.ColumnFill => 429
+    Property.BorderImageSource => 430
+    Property.BorderImageSlice => 431
+    Property.BorderImageWidth => 432
+    Property.BorderImageOutset => 433
+    Property.BorderImageRepeat => 434
+    Property.BorderImage => 435
+    Property.ColorScheme => 436
+    Property.PrintColorAdjust => 437
+    Property.ForcedColorAdjust => 438
+    Property.ShapeOutside => 439
+    Property.ShapeImageThreshold => 440
+    Property.FieldSizing => 441
   }
 }
 
@@ -1171,36 +1633,171 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.TransitionTimingFunction => b"transition-timing-function"
     Property.TransitionDelay => b"transition-delay"
     Property.TransitionBehavior => b"transition-behavior"
+    Property.Outline => b"outline"
+    Property.OutlineWidth => b"outline-width"
+    Property.OutlineStyle => b"outline-style"
+    Property.OutlineColor => b"outline-color"
+    Property.OutlineOffset => b"outline-offset"
+    Property.UserSelect => b"user-select"
+    Property.AccentColor => b"accent-color"
+    Property.Appearance => b"appearance"
+    Property.Resize => b"resize"
+    Property.BlockSize => b"block-size"
+    Property.MinInlineSize => b"min-inline-size"
+    Property.MinBlockSize => b"min-block-size"
+    Property.MaxInlineSize => b"max-inline-size"
+    Property.MaxBlockSize => b"max-block-size"
+    Property.MarginBlockStart => b"margin-block-start"
+    Property.MarginBlockEnd => b"margin-block-end"
+    Property.MarginInlineStart => b"margin-inline-start"
+    Property.MarginInlineEnd => b"margin-inline-end"
+    Property.MarginBlock => b"margin-block"
+    Property.MarginInline => b"margin-inline"
+    Property.PaddingBlockStart => b"padding-block-start"
+    Property.PaddingBlockEnd => b"padding-block-end"
+    Property.PaddingInlineStart => b"padding-inline-start"
+    Property.PaddingInlineEnd => b"padding-inline-end"
+    Property.PaddingBlock => b"padding-block"
+    Property.PaddingInline => b"padding-inline"
+    Property.InsetBlockStart => b"inset-block-start"
+    Property.InsetBlockEnd => b"inset-block-end"
+    Property.InsetInlineStart => b"inset-inline-start"
+    Property.InsetInlineEnd => b"inset-inline-end"
+    Property.InsetBlock => b"inset-block"
+    Property.InsetInline => b"inset-inline"
+    Property.BorderBlockStartWidth => b"border-block-start-width"
+    Property.BorderBlockStartStyle => b"border-block-start-style"
+    Property.BorderBlockStartColor => b"border-block-start-color"
+    Property.BorderBlockEndWidth => b"border-block-end-width"
+    Property.BorderBlockEndStyle => b"border-block-end-style"
+    Property.BorderBlockEndColor => b"border-block-end-color"
+    Property.BorderInlineStartWidth => b"border-inline-start-width"
+    Property.BorderInlineStartStyle => b"border-inline-start-style"
+    Property.BorderInlineStartColor => b"border-inline-start-color"
+    Property.BorderInlineEndWidth => b"border-inline-end-width"
+    Property.BorderInlineEndStyle => b"border-inline-end-style"
+    Property.BorderInlineEndColor => b"border-inline-end-color"
+    Property.BorderBlockStart => b"border-block-start"
+    Property.BorderBlockEnd => b"border-block-end"
+    Property.BorderInlineStart => b"border-inline-start"
+    Property.BorderInlineEnd => b"border-inline-end"
+    Property.BorderBlockWidth => b"border-block-width"
+    Property.BorderBlockStyle => b"border-block-style"
+    Property.BorderBlockColor => b"border-block-color"
+    Property.BorderInlineWidth => b"border-inline-width"
+    Property.BorderInlineStyle => b"border-inline-style"
+    Property.BorderInlineColor => b"border-inline-color"
+    Property.BorderBlock => b"border-block"
+    Property.BorderInline => b"border-inline"
+    Property.BorderStartStartRadius => b"border-start-start-radius"
+    Property.BorderStartEndRadius => b"border-start-end-radius"
+    Property.BorderEndStartRadius => b"border-end-start-radius"
+    Property.BorderEndEndRadius => b"border-end-end-radius"
+    Property.OverflowBlock => b"overflow-block"
+    Property.OverflowInline => b"overflow-inline"
+    Property.LineClamp => b"line-clamp"
+    Property.WebkitLineClamp => b"-webkit-line-clamp"
+    Property.MaxLines => b"max-lines"
+    Property.BlockEllipsis => b"block-ellipsis"
+    Property.Continue => b"continue"
+    Property.ScrollbarColor => b"scrollbar-color"
+    Property.OverflowAnchor => b"overflow-anchor"
+    Property.OverflowClipMargin => b"overflow-clip-margin"
+    Property.TextWrap => b"text-wrap"
+    Property.TextWrapStyle => b"text-wrap-style"
+    Property.HyphenateCharacter => b"hyphenate-character"
+    Property.TextSizeAdjust => b"text-size-adjust"
+    Property.TextUnderlineOffset => b"text-underline-offset"
+    Property.TextDecorationSkipInk => b"text-decoration-skip-ink"
+    Property.OverscrollBehavior => b"overscroll-behavior"
+    Property.OverscrollBehaviorX => b"overscroll-behavior-x"
+    Property.OverscrollBehaviorY => b"overscroll-behavior-y"
+    Property.OverscrollBehaviorInline => b"overscroll-behavior-inline"
+    Property.OverscrollBehaviorBlock => b"overscroll-behavior-block"
+    Property.ScrollBehavior => b"scroll-behavior"
+    Property.ScrollSnapType => b"scroll-snap-type"
+    Property.ScrollSnapAlign => b"scroll-snap-align"
+    Property.ScrollSnapStop => b"scroll-snap-stop"
+    Property.ScrollMarginTop => b"scroll-margin-top"
+    Property.ScrollMarginRight => b"scroll-margin-right"
+    Property.ScrollMarginBottom => b"scroll-margin-bottom"
+    Property.ScrollMarginLeft => b"scroll-margin-left"
+    Property.ScrollMarginBlockStart => b"scroll-margin-block-start"
+    Property.ScrollMarginBlockEnd => b"scroll-margin-block-end"
+    Property.ScrollMarginInlineStart => b"scroll-margin-inline-start"
+    Property.ScrollMarginInlineEnd => b"scroll-margin-inline-end"
+    Property.ScrollMargin => b"scroll-margin"
+    Property.ScrollMarginBlock => b"scroll-margin-block"
+    Property.ScrollMarginInline => b"scroll-margin-inline"
+    Property.ScrollPaddingTop => b"scroll-padding-top"
+    Property.ScrollPaddingRight => b"scroll-padding-right"
+    Property.ScrollPaddingBottom => b"scroll-padding-bottom"
+    Property.ScrollPaddingLeft => b"scroll-padding-left"
+    Property.ScrollPaddingBlockStart => b"scroll-padding-block-start"
+    Property.ScrollPaddingBlockEnd => b"scroll-padding-block-end"
+    Property.ScrollPaddingInlineStart => b"scroll-padding-inline-start"
+    Property.ScrollPaddingInlineEnd => b"scroll-padding-inline-end"
+    Property.ScrollPadding => b"scroll-padding"
+    Property.ScrollPaddingBlock => b"scroll-padding-block"
+    Property.ScrollPaddingInline => b"scroll-padding-inline"
+    Property.TouchAction => b"touch-action"
+    Property.Contain => b"contain"
+    Property.ContentVisibility => b"content-visibility"
+    Property.ContainIntrinsicWidth => b"contain-intrinsic-width"
+    Property.ContainIntrinsicHeight => b"contain-intrinsic-height"
+    Property.ContainIntrinsicBlockSize => b"contain-intrinsic-block-size"
+    Property.ContainIntrinsicInlineSize => b"contain-intrinsic-inline-size"
+    Property.ContainIntrinsicSize => b"contain-intrinsic-size"
+    Property.ContainerType => b"container-type"
+    Property.ContainerName => b"container-name"
+    Property.Container => b"container"
+    Property.WillChange => b"will-change"
+    Property.ListStylePosition => b"list-style-position"
+    Property.ListStyleImage => b"list-style-image"
+    Property.ListStyleType => b"list-style-type"
+    Property.ListStyle => b"list-style"
+    Property.CounterReset => b"counter-reset"
+    Property.CounterIncrement => b"counter-increment"
+    Property.CounterSet => b"counter-set"
+    Property.Content => b"content"
+    Property.Quotes => b"quotes"
+    Property.BorderCollapse => b"border-collapse"
+    Property.BorderSpacing => b"border-spacing"
+    Property.TableLayout => b"table-layout"
+    Property.CaptionSide => b"caption-side"
+    Property.EmptyCells => b"empty-cells"
+    Property.ColumnCount => b"column-count"
+    Property.ColumnWidth => b"column-width"
+    Property.Columns => b"columns"
+    Property.ColumnRuleWidth => b"column-rule-width"
+    Property.ColumnRuleStyle => b"column-rule-style"
+    Property.ColumnRuleColor => b"column-rule-color"
+    Property.ColumnRule => b"column-rule"
+    Property.ColumnSpan => b"column-span"
+    Property.ColumnFill => b"column-fill"
+    Property.BorderImageSource => b"border-image-source"
+    Property.BorderImageSlice => b"border-image-slice"
+    Property.BorderImageWidth => b"border-image-width"
+    Property.BorderImageOutset => b"border-image-outset"
+    Property.BorderImageRepeat => b"border-image-repeat"
+    Property.BorderImage => b"border-image"
+    Property.ColorScheme => b"color-scheme"
+    Property.PrintColorAdjust => b"print-color-adjust"
+    Property.ForcedColorAdjust => b"forced-color-adjust"
+    Property.ShapeOutside => b"shape-outside"
+    Property.ShapeImageThreshold => b"shape-image-threshold"
+    Property.FieldSizing => b"field-sizing"
   }
 }
 
 pub fn lookup(name: &[u8]) -> Option<Property> {
   // Grouped by length, then filtered on the first byte folded to lowercase, so a name
-  // is compared in full with at most a few candidates.
+  // is compared in full with at most a few candidates. Legacy name aliases (`word-wrap`)
+  // find the property they alias.
   if name.length == 0 {
     return Option<Property>.None
   }
   let first = name[0] | 32
-  if first == 116 && name.length >= 10 && (name[1] | 32) == 114 && (name[2] | 32) == 97 {
-    if insensitive(name, b"transition") {
-      return Option<Property>.some(Property.Transition)
-    }
-    if insensitive(name, b"transition-property") {
-      return Option<Property>.some(Property.TransitionProperty)
-    }
-    if insensitive(name, b"transition-duration") {
-      return Option<Property>.some(Property.TransitionDuration)
-    }
-    if insensitive(name, b"transition-timing-function") {
-      return Option<Property>.some(Property.TransitionTimingFunction)
-    }
-    if insensitive(name, b"transition-delay") {
-      return Option<Property>.some(Property.TransitionDelay)
-    }
-    if insensitive(name, b"transition-behavior") {
-      return Option<Property>.some(Property.TransitionBehavior)
-    }
-  }
   match name.length {
     1 => {
       if first == 114 && insensitive(name, b"r") {
@@ -1321,6 +1918,12 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 119 && insensitive(name, b"widows") {
         return Option<Property>.some(Property.Widows)
       }
+      if first == 114 && insensitive(name, b"resize") {
+        return Option<Property>.some(Property.Resize)
+      }
+      if first == 113 && insensitive(name, b"quotes") {
+        return Option<Property>.some(Property.Quotes)
+      }
     }
     7 => {
       if first == 111 && insensitive(name, b"opacity") {
@@ -1347,6 +1950,18 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 111 && insensitive(name, b"orphans") {
         return Option<Property>.some(Property.Orphans)
       }
+      if first == 111 && insensitive(name, b"outline") {
+        return Option<Property>.some(Property.Outline)
+      }
+      if first == 99 && insensitive(name, b"contain") {
+        return Option<Property>.some(Property.Contain)
+      }
+      if first == 99 && insensitive(name, b"content") {
+        return Option<Property>.some(Property.Content)
+      }
+      if first == 99 && insensitive(name, b"columns") {
+        return Option<Property>.some(Property.Columns)
+      }
     }
     8 => {
       if first == 111 && insensitive(name, b"overflow") {
@@ -1360,6 +1975,12 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 103 && insensitive(name, b"grid-row") {
         return Option<Property>.some(Property.GridRow)
+      }
+      if first == 99 && insensitive(name, b"continue") {
+        return Option<Property>.some(Property.Continue)
+      }
+      if first == 103 && insensitive(name, b"grid-gap") {
+        return Option<Property>.some(Property.Gap)
       }
     }
     9 => {
@@ -1419,6 +2040,18 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 103 && insensitive(name, b"grid-area") {
         return Option<Property>.some(Property.GridArea)
+      }
+      if first == 109 && insensitive(name, b"max-lines") {
+        return Option<Property>.some(Property.MaxLines)
+      }
+      if first == 116 && insensitive(name, b"text-wrap") {
+        return Option<Property>.some(Property.TextWrap)
+      }
+      if first == 99 && insensitive(name, b"container") {
+        return Option<Property>.some(Property.Container)
+      }
+      if first == 119 && insensitive(name, b"word-wrap") {
+        return Option<Property>.some(Property.OverflowWrap)
       }
     }
     10 => {
@@ -1494,6 +2127,21 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 111 && insensitive(name, b"object-fit") {
         return Option<Property>.some(Property.ObjectFit)
       }
+      if first == 116 && insensitive(name, b"transition") {
+        return Option<Property>.some(Property.Transition)
+      }
+      if first == 97 && insensitive(name, b"appearance") {
+        return Option<Property>.some(Property.Appearance)
+      }
+      if first == 98 && insensitive(name, b"block-size") {
+        return Option<Property>.some(Property.BlockSize)
+      }
+      if first == 108 && insensitive(name, b"line-clamp") {
+        return Option<Property>.some(Property.LineClamp)
+      }
+      if first == 108 && insensitive(name, b"list-style") {
+        return Option<Property>.some(Property.ListStyle)
+      }
     }
     11 => {
       if first == 112 && insensitive(name, b"paint-order") {
@@ -1564,6 +2212,30 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 99 && insensitive(name, b"caret-color") {
         return Option<Property>.some(Property.CaretColor)
+      }
+      if first == 117 && insensitive(name, b"user-select") {
+        return Option<Property>.some(Property.UserSelect)
+      }
+      if first == 105 && insensitive(name, b"inset-block") {
+        return Option<Property>.some(Property.InsetBlock)
+      }
+      if first == 119 && insensitive(name, b"will-change") {
+        return Option<Property>.some(Property.WillChange)
+      }
+      if first == 99 && insensitive(name, b"counter-set") {
+        return Option<Property>.some(Property.CounterSet)
+      }
+      if first == 101 && insensitive(name, b"empty-cells") {
+        return Option<Property>.some(Property.EmptyCells)
+      }
+      if first == 99 && insensitive(name, b"column-rule") {
+        return Option<Property>.some(Property.ColumnRule)
+      }
+      if first == 99 && insensitive(name, b"column-span") {
+        return Option<Property>.some(Property.ColumnSpan)
+      }
+      if first == 99 && insensitive(name, b"column-fill") {
+        return Option<Property>.some(Property.ColumnFill)
       }
     }
     12 => {
@@ -1645,6 +2317,45 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 98 && insensitive(name, b"break-inside") {
         return Option<Property>.some(Property.BreakInside)
       }
+      if first == 97 && insensitive(name, b"accent-color") {
+        return Option<Property>.some(Property.AccentColor)
+      }
+      if first == 109 && insensitive(name, b"margin-block") {
+        return Option<Property>.some(Property.MarginBlock)
+      }
+      if first == 105 && insensitive(name, b"inset-inline") {
+        return Option<Property>.some(Property.InsetInline)
+      }
+      if first == 98 && insensitive(name, b"border-block") {
+        return Option<Property>.some(Property.BorderBlock)
+      }
+      if first == 116 && insensitive(name, b"touch-action") {
+        return Option<Property>.some(Property.TouchAction)
+      }
+      if first == 116 && insensitive(name, b"table-layout") {
+        return Option<Property>.some(Property.TableLayout)
+      }
+      if first == 99 && insensitive(name, b"caption-side") {
+        return Option<Property>.some(Property.CaptionSide)
+      }
+      if first == 99 && insensitive(name, b"column-count") {
+        return Option<Property>.some(Property.ColumnCount)
+      }
+      if first == 99 && insensitive(name, b"column-width") {
+        return Option<Property>.some(Property.ColumnWidth)
+      }
+      if first == 98 && insensitive(name, b"border-image") {
+        return Option<Property>.some(Property.BorderImage)
+      }
+      if first == 99 && insensitive(name, b"color-scheme") {
+        return Option<Property>.some(Property.ColorScheme)
+      }
+      if first == 102 && insensitive(name, b"field-sizing") {
+        return Option<Property>.some(Property.FieldSizing)
+      }
+      if first == 103 && insensitive(name, b"grid-row-gap") {
+        return Option<Property>.some(Property.RowGap)
+      }
     }
     13 => {
       if first == 118 && insensitive(name, b"vector-effect") {
@@ -1694,6 +2405,33 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 103 && insensitive(name, b"grid-template") {
         return Option<Property>.some(Property.GridTemplate)
+      }
+      if first == 111 && insensitive(name, b"outline-width") {
+        return Option<Property>.some(Property.OutlineWidth)
+      }
+      if first == 111 && insensitive(name, b"outline-style") {
+        return Option<Property>.some(Property.OutlineStyle)
+      }
+      if first == 111 && insensitive(name, b"outline-color") {
+        return Option<Property>.some(Property.OutlineColor)
+      }
+      if first == 109 && insensitive(name, b"margin-inline") {
+        return Option<Property>.some(Property.MarginInline)
+      }
+      if first == 112 && insensitive(name, b"padding-block") {
+        return Option<Property>.some(Property.PaddingBlock)
+      }
+      if first == 98 && insensitive(name, b"border-inline") {
+        return Option<Property>.some(Property.BorderInline)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin") {
+        return Option<Property>.some(Property.ScrollMargin)
+      }
+      if first == 99 && insensitive(name, b"counter-reset") {
+        return Option<Property>.some(Property.CounterReset)
+      }
+      if first == 115 && insensitive(name, b"shape-outside") {
+        return Option<Property>.some(Property.ShapeOutside)
       }
     }
     14 => {
@@ -1760,6 +2498,36 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 103 && insensitive(name, b"grid-row-start") {
         return Option<Property>.some(Property.GridRowStart)
       }
+      if first == 111 && insensitive(name, b"outline-offset") {
+        return Option<Property>.some(Property.OutlineOffset)
+      }
+      if first == 109 && insensitive(name, b"min-block-size") {
+        return Option<Property>.some(Property.MinBlockSize)
+      }
+      if first == 109 && insensitive(name, b"max-block-size") {
+        return Option<Property>.some(Property.MaxBlockSize)
+      }
+      if first == 112 && insensitive(name, b"padding-inline") {
+        return Option<Property>.some(Property.PaddingInline)
+      }
+      if first == 111 && insensitive(name, b"overflow-block") {
+        return Option<Property>.some(Property.OverflowBlock)
+      }
+      if first == 98 && insensitive(name, b"block-ellipsis") {
+        return Option<Property>.some(Property.BlockEllipsis)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding") {
+        return Option<Property>.some(Property.ScrollPadding)
+      }
+      if first == 99 && insensitive(name, b"container-type") {
+        return Option<Property>.some(Property.ContainerType)
+      }
+      if first == 99 && insensitive(name, b"container-name") {
+        return Option<Property>.some(Property.ContainerName)
+      }
+      if first == 98 && insensitive(name, b"border-spacing") {
+        return Option<Property>.some(Property.BorderSpacing)
+      }
     }
     15 => {
       if first == 115 && insensitive(name, b"stroke-linejoin") {
@@ -1810,6 +2578,39 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 115 && insensitive(name, b"scrollbar-width") {
         return Option<Property>.some(Property.ScrollbarWidth)
       }
+      if first == 109 && insensitive(name, b"min-inline-size") {
+        return Option<Property>.some(Property.MinInlineSize)
+      }
+      if first == 109 && insensitive(name, b"max-inline-size") {
+        return Option<Property>.some(Property.MaxInlineSize)
+      }
+      if first == 105 && insensitive(name, b"inset-block-end") {
+        return Option<Property>.some(Property.InsetBlockEnd)
+      }
+      if first == 111 && insensitive(name, b"overflow-inline") {
+        return Option<Property>.some(Property.OverflowInline)
+      }
+      if first == 115 && insensitive(name, b"scrollbar-color") {
+        return Option<Property>.some(Property.ScrollbarColor)
+      }
+      if first == 111 && insensitive(name, b"overflow-anchor") {
+        return Option<Property>.some(Property.OverflowAnchor)
+      }
+      if first == 116 && insensitive(name, b"text-wrap-style") {
+        return Option<Property>.some(Property.TextWrapStyle)
+      }
+      if first == 115 && insensitive(name, b"scroll-behavior") {
+        return Option<Property>.some(Property.ScrollBehavior)
+      }
+      if first == 108 && insensitive(name, b"list-style-type") {
+        return Option<Property>.some(Property.ListStyleType)
+      }
+      if first == 98 && insensitive(name, b"border-collapse") {
+        return Option<Property>.some(Property.BorderCollapse)
+      }
+      if first == 103 && insensitive(name, b"grid-column-gap") {
+        return Option<Property>.some(Property.ColumnGap)
+      }
     }
     16 => {
       if first == 115 && insensitive(name, b"stroke-dasharray") {
@@ -1847,6 +2648,30 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 115 && insensitive(name, b"scrollbar-gutter") {
         return Option<Property>.some(Property.ScrollbarGutter)
+      }
+      if first == 116 && insensitive(name, b"transition-delay") {
+        return Option<Property>.some(Property.TransitionDelay)
+      }
+      if first == 109 && insensitive(name, b"margin-block-end") {
+        return Option<Property>.some(Property.MarginBlockEnd)
+      }
+      if first == 105 && insensitive(name, b"inset-inline-end") {
+        return Option<Property>.some(Property.InsetInlineEnd)
+      }
+      if first == 98 && insensitive(name, b"border-block-end") {
+        return Option<Property>.some(Property.BorderBlockEnd)
+      }
+      if first == 116 && insensitive(name, b"text-size-adjust") {
+        return Option<Property>.some(Property.TextSizeAdjust)
+      }
+      if first == 115 && insensitive(name, b"scroll-snap-type") {
+        return Option<Property>.some(Property.ScrollSnapType)
+      }
+      if first == 115 && insensitive(name, b"scroll-snap-stop") {
+        return Option<Property>.some(Property.ScrollSnapStop)
+      }
+      if first == 108 && insensitive(name, b"list-style-image") {
+        return Option<Property>.some(Property.ListStyleImage)
       }
     }
     17 => {
@@ -1895,6 +2720,36 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 98 && insensitive(name, b"background-origin") {
         return Option<Property>.some(Property.BackgroundOrigin)
       }
+      if first == 109 && insensitive(name, b"margin-inline-end") {
+        return Option<Property>.some(Property.MarginInlineEnd)
+      }
+      if first == 112 && insensitive(name, b"padding-block-end") {
+        return Option<Property>.some(Property.PaddingBlockEnd)
+      }
+      if first == 105 && insensitive(name, b"inset-block-start") {
+        return Option<Property>.some(Property.InsetBlockStart)
+      }
+      if first == 98 && insensitive(name, b"border-inline-end") {
+        return Option<Property>.some(Property.BorderInlineEnd)
+      }
+      if first == 115 && insensitive(name, b"scroll-snap-align") {
+        return Option<Property>.some(Property.ScrollSnapAlign)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-top") {
+        return Option<Property>.some(Property.ScrollMarginTop)
+      }
+      if first == 99 && insensitive(name, b"counter-increment") {
+        return Option<Property>.some(Property.CounterIncrement)
+      }
+      if first == 99 && insensitive(name, b"column-rule-width") {
+        return Option<Property>.some(Property.ColumnRuleWidth)
+      }
+      if first == 99 && insensitive(name, b"column-rule-style") {
+        return Option<Property>.some(Property.ColumnRuleStyle)
+      }
+      if first == 99 && insensitive(name, b"column-rule-color") {
+        return Option<Property>.some(Property.ColumnRuleColor)
+      }
     }
     18 => {
       if first == 102 && insensitive(name, b"font-variant-emoji") {
@@ -1929,6 +2784,51 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 103 && insensitive(name, b"grid-template-rows") {
         return Option<Property>.some(Property.GridTemplateRows)
+      }
+      if first == 109 && insensitive(name, b"margin-block-start") {
+        return Option<Property>.some(Property.MarginBlockStart)
+      }
+      if first == 112 && insensitive(name, b"padding-inline-end") {
+        return Option<Property>.some(Property.PaddingInlineEnd)
+      }
+      if first == 105 && insensitive(name, b"inset-inline-start") {
+        return Option<Property>.some(Property.InsetInlineStart)
+      }
+      if first == 98 && insensitive(name, b"border-block-start") {
+        return Option<Property>.some(Property.BorderBlockStart)
+      }
+      if first == 98 && insensitive(name, b"border-block-width") {
+        return Option<Property>.some(Property.BorderBlockWidth)
+      }
+      if first == 98 && insensitive(name, b"border-block-style") {
+        return Option<Property>.some(Property.BorderBlockStyle)
+      }
+      if first == 98 && insensitive(name, b"border-block-color") {
+        return Option<Property>.some(Property.BorderBlockColor)
+      }
+      if first == 45 && insensitive(name, b"-webkit-line-clamp") {
+        return Option<Property>.some(Property.WebkitLineClamp)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-left") {
+        return Option<Property>.some(Property.ScrollMarginLeft)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding-top") {
+        return Option<Property>.some(Property.ScrollPaddingTop)
+      }
+      if first == 99 && insensitive(name, b"content-visibility") {
+        return Option<Property>.some(Property.ContentVisibility)
+      }
+      if first == 98 && insensitive(name, b"border-image-slice") {
+        return Option<Property>.some(Property.BorderImageSlice)
+      }
+      if first == 98 && insensitive(name, b"border-image-width") {
+        return Option<Property>.some(Property.BorderImageWidth)
+      }
+      if first == 112 && insensitive(name, b"print-color-adjust") {
+        return Option<Property>.some(Property.PrintColorAdjust)
+      }
+      if first == 45 && insensitive(name, b"-webkit-appearance") {
+        return Option<Property>.some(Property.Appearance)
       }
     }
     19 => {
@@ -1971,6 +2871,66 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 98 && insensitive(name, b"background-position") {
         return Option<Property>.some(Property.BackgroundPosition)
       }
+      if first == 116 && insensitive(name, b"transition-property") {
+        return Option<Property>.some(Property.TransitionProperty)
+      }
+      if first == 116 && insensitive(name, b"transition-duration") {
+        return Option<Property>.some(Property.TransitionDuration)
+      }
+      if first == 116 && insensitive(name, b"transition-behavior") {
+        return Option<Property>.some(Property.TransitionBehavior)
+      }
+      if first == 109 && insensitive(name, b"margin-inline-start") {
+        return Option<Property>.some(Property.MarginInlineStart)
+      }
+      if first == 112 && insensitive(name, b"padding-block-start") {
+        return Option<Property>.some(Property.PaddingBlockStart)
+      }
+      if first == 98 && insensitive(name, b"border-inline-start") {
+        return Option<Property>.some(Property.BorderInlineStart)
+      }
+      if first == 98 && insensitive(name, b"border-inline-width") {
+        return Option<Property>.some(Property.BorderInlineWidth)
+      }
+      if first == 98 && insensitive(name, b"border-inline-style") {
+        return Option<Property>.some(Property.BorderInlineStyle)
+      }
+      if first == 98 && insensitive(name, b"border-inline-color") {
+        return Option<Property>.some(Property.BorderInlineColor)
+      }
+      if first == 104 && insensitive(name, b"hyphenate-character") {
+        return Option<Property>.some(Property.HyphenateCharacter)
+      }
+      if first == 111 && insensitive(name, b"overscroll-behavior") {
+        return Option<Property>.some(Property.OverscrollBehavior)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-right") {
+        return Option<Property>.some(Property.ScrollMarginRight)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-block") {
+        return Option<Property>.some(Property.ScrollMarginBlock)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding-left") {
+        return Option<Property>.some(Property.ScrollPaddingLeft)
+      }
+      if first == 108 && insensitive(name, b"list-style-position") {
+        return Option<Property>.some(Property.ListStylePosition)
+      }
+      if first == 98 && insensitive(name, b"border-image-source") {
+        return Option<Property>.some(Property.BorderImageSource)
+      }
+      if first == 98 && insensitive(name, b"border-image-outset") {
+        return Option<Property>.some(Property.BorderImageOutset)
+      }
+      if first == 98 && insensitive(name, b"border-image-repeat") {
+        return Option<Property>.some(Property.BorderImageRepeat)
+      }
+      if first == 102 && insensitive(name, b"forced-color-adjust") {
+        return Option<Property>.some(Property.ForcedColorAdjust)
+      }
+      if first == 45 && insensitive(name, b"-webkit-user-select") {
+        return Option<Property>.some(Property.UserSelect)
+      }
     }
     20 => {
       if first == 102 && insensitive(name, b"font-variant-numeric") {
@@ -1996,6 +2956,24 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 98 && insensitive(name, b"box-decoration-break") {
         return Option<Property>.some(Property.BoxDecorationBreak)
+      }
+      if first == 112 && insensitive(name, b"padding-inline-start") {
+        return Option<Property>.some(Property.PaddingInlineStart)
+      }
+      if first == 111 && insensitive(name, b"overflow-clip-margin") {
+        return Option<Property>.some(Property.OverflowClipMargin)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-bottom") {
+        return Option<Property>.some(Property.ScrollMarginBottom)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-inline") {
+        return Option<Property>.some(Property.ScrollMarginInline)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding-right") {
+        return Option<Property>.some(Property.ScrollPaddingRight)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding-block") {
+        return Option<Property>.some(Property.ScrollPaddingBlock)
       }
     }
     21 => {
@@ -2026,6 +3004,27 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 45 && insensitive(name, b"-silk-selection-color") {
         return Option<Property>.some(Property.SilkSelectionColor)
       }
+      if first == 98 && insensitive(name, b"border-end-end-radius") {
+        return Option<Property>.some(Property.BorderEndEndRadius)
+      }
+      if first == 116 && insensitive(name, b"text-underline-offset") {
+        return Option<Property>.some(Property.TextUnderlineOffset)
+      }
+      if first == 111 && insensitive(name, b"overscroll-behavior-x") {
+        return Option<Property>.some(Property.OverscrollBehaviorX)
+      }
+      if first == 111 && insensitive(name, b"overscroll-behavior-y") {
+        return Option<Property>.some(Property.OverscrollBehaviorY)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding-bottom") {
+        return Option<Property>.some(Property.ScrollPaddingBottom)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding-inline") {
+        return Option<Property>.some(Property.ScrollPaddingInline)
+      }
+      if first == 115 && insensitive(name, b"shape-image-threshold") {
+        return Option<Property>.some(Property.ShapeImageThreshold)
+      }
     }
     22 => {
       if first == 102 && insensitive(name, b"font-variant-ligatures") {
@@ -2042,6 +3041,18 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
       if first == 98 && insensitive(name, b"border-top-left-radius") {
         return Option<Property>.some(Property.BorderTopLeftRadius)
+      }
+      if first == 98 && insensitive(name, b"border-block-end-width") {
+        return Option<Property>.some(Property.BorderBlockEndWidth)
+      }
+      if first == 98 && insensitive(name, b"border-block-end-style") {
+        return Option<Property>.some(Property.BorderBlockEndStyle)
+      }
+      if first == 98 && insensitive(name, b"border-block-end-color") {
+        return Option<Property>.some(Property.BorderBlockEndColor)
+      }
+      if first == 99 && insensitive(name, b"contain-intrinsic-size") {
+        return Option<Property>.some(Property.ContainIntrinsicSize)
       }
     }
     23 => {
@@ -2066,6 +3077,53 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 45 && insensitive(name, b"-silk-placeholder-color") {
         return Option<Property>.some(Property.SilkPlaceholderColor)
       }
+      if first == 98 && insensitive(name, b"border-inline-end-width") {
+        return Option<Property>.some(Property.BorderInlineEndWidth)
+      }
+      if first == 98 && insensitive(name, b"border-inline-end-style") {
+        return Option<Property>.some(Property.BorderInlineEndStyle)
+      }
+      if first == 98 && insensitive(name, b"border-inline-end-color") {
+        return Option<Property>.some(Property.BorderInlineEndColor)
+      }
+      if first == 98 && insensitive(name, b"border-start-end-radius") {
+        return Option<Property>.some(Property.BorderStartEndRadius)
+      }
+      if first == 98 && insensitive(name, b"border-end-start-radius") {
+        return Option<Property>.some(Property.BorderEndStartRadius)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-block-end") {
+        return Option<Property>.some(Property.ScrollMarginBlockEnd)
+      }
+      if first == 99 && insensitive(name, b"contain-intrinsic-width") {
+        return Option<Property>.some(Property.ContainIntrinsicWidth)
+      }
+    }
+    24 => {
+      if first == 98 && insensitive(name, b"border-block-start-width") {
+        return Option<Property>.some(Property.BorderBlockStartWidth)
+      }
+      if first == 98 && insensitive(name, b"border-block-start-style") {
+        return Option<Property>.some(Property.BorderBlockStartStyle)
+      }
+      if first == 98 && insensitive(name, b"border-block-start-color") {
+        return Option<Property>.some(Property.BorderBlockStartColor)
+      }
+      if first == 116 && insensitive(name, b"text-decoration-skip-ink") {
+        return Option<Property>.some(Property.TextDecorationSkipInk)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-inline-end") {
+        return Option<Property>.some(Property.ScrollMarginInlineEnd)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding-block-end") {
+        return Option<Property>.some(Property.ScrollPaddingBlockEnd)
+      }
+      if first == 99 && insensitive(name, b"contain-intrinsic-height") {
+        return Option<Property>.some(Property.ContainIntrinsicHeight)
+      }
+      if first == 45 && insensitive(name, b"-webkit-text-size-adjust") {
+        return Option<Property>.some(Property.TextSizeAdjust)
+      }
     }
     25 => {
       if first == 102 && insensitive(name, b"font-synthesis-small-caps") {
@@ -2083,6 +3141,27 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 98 && insensitive(name, b"border-bottom-left-radius") {
         return Option<Property>.some(Property.BorderBottomLeftRadius)
       }
+      if first == 98 && insensitive(name, b"border-inline-start-width") {
+        return Option<Property>.some(Property.BorderInlineStartWidth)
+      }
+      if first == 98 && insensitive(name, b"border-inline-start-style") {
+        return Option<Property>.some(Property.BorderInlineStartStyle)
+      }
+      if first == 98 && insensitive(name, b"border-inline-start-color") {
+        return Option<Property>.some(Property.BorderInlineStartColor)
+      }
+      if first == 98 && insensitive(name, b"border-start-start-radius") {
+        return Option<Property>.some(Property.BorderStartStartRadius)
+      }
+      if first == 111 && insensitive(name, b"overscroll-behavior-block") {
+        return Option<Property>.some(Property.OverscrollBehaviorBlock)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-block-start") {
+        return Option<Property>.some(Property.ScrollMarginBlockStart)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding-inline-end") {
+        return Option<Property>.some(Property.ScrollPaddingInlineEnd)
+      }
     }
     26 => {
       if first == 103 && insensitive(name, b"glyph-orientation-vertical") {
@@ -2091,15 +3170,38 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 98 && insensitive(name, b"border-bottom-right-radius") {
         return Option<Property>.some(Property.BorderBottomRightRadius)
       }
+      if first == 116 && insensitive(name, b"transition-timing-function") {
+        return Option<Property>.some(Property.TransitionTimingFunction)
+      }
+      if first == 111 && insensitive(name, b"overscroll-behavior-inline") {
+        return Option<Property>.some(Property.OverscrollBehaviorInline)
+      }
+      if first == 115 && insensitive(name, b"scroll-margin-inline-start") {
+        return Option<Property>.some(Property.ScrollMarginInlineStart)
+      }
+      if first == 115 && insensitive(name, b"scroll-padding-block-start") {
+        return Option<Property>.some(Property.ScrollPaddingBlockStart)
+      }
     }
     27 => {
       if first == 99 && insensitive(name, b"color-interpolation-filters") {
         return Option<Property>.some(Property.ColorInterpolationFilters)
       }
+      if first == 115 && insensitive(name, b"scroll-padding-inline-start") {
+        return Option<Property>.some(Property.ScrollPaddingInlineStart)
+      }
     }
     28 => {
       if first == 103 && insensitive(name, b"glyph-orientation-horizontal") {
         return Option<Property>.some(Property.GlyphOrientationHorizontal)
+      }
+      if first == 99 && insensitive(name, b"contain-intrinsic-block-size") {
+        return Option<Property>.some(Property.ContainIntrinsicBlockSize)
+      }
+    }
+    29 => {
+      if first == 99 && insensitive(name, b"contain-intrinsic-inline-size") {
+        return Option<Property>.some(Property.ContainIntrinsicInlineSize)
       }
     }
     _ => {}
@@ -2397,6 +3499,160 @@ pub fn inherited(property: Property) -> bool {
     Property.TransitionTimingFunction => false
     Property.TransitionDelay => false
     Property.TransitionBehavior => false
+    Property.Outline => false
+    Property.OutlineWidth => false
+    Property.OutlineStyle => false
+    Property.OutlineColor => false
+    Property.OutlineOffset => false
+    Property.UserSelect => false
+    Property.AccentColor => true
+    Property.Appearance => false
+    Property.Resize => false
+    Property.BlockSize => false
+    Property.MinInlineSize => false
+    Property.MinBlockSize => false
+    Property.MaxInlineSize => false
+    Property.MaxBlockSize => false
+    Property.MarginBlockStart => false
+    Property.MarginBlockEnd => false
+    Property.MarginInlineStart => false
+    Property.MarginInlineEnd => false
+    Property.MarginBlock => false
+    Property.MarginInline => false
+    Property.PaddingBlockStart => false
+    Property.PaddingBlockEnd => false
+    Property.PaddingInlineStart => false
+    Property.PaddingInlineEnd => false
+    Property.PaddingBlock => false
+    Property.PaddingInline => false
+    Property.InsetBlockStart => false
+    Property.InsetBlockEnd => false
+    Property.InsetInlineStart => false
+    Property.InsetInlineEnd => false
+    Property.InsetBlock => false
+    Property.InsetInline => false
+    Property.BorderBlockStartWidth => false
+    Property.BorderBlockStartStyle => false
+    Property.BorderBlockStartColor => false
+    Property.BorderBlockEndWidth => false
+    Property.BorderBlockEndStyle => false
+    Property.BorderBlockEndColor => false
+    Property.BorderInlineStartWidth => false
+    Property.BorderInlineStartStyle => false
+    Property.BorderInlineStartColor => false
+    Property.BorderInlineEndWidth => false
+    Property.BorderInlineEndStyle => false
+    Property.BorderInlineEndColor => false
+    Property.BorderBlockStart => false
+    Property.BorderBlockEnd => false
+    Property.BorderInlineStart => false
+    Property.BorderInlineEnd => false
+    Property.BorderBlockWidth => false
+    Property.BorderBlockStyle => false
+    Property.BorderBlockColor => false
+    Property.BorderInlineWidth => false
+    Property.BorderInlineStyle => false
+    Property.BorderInlineColor => false
+    Property.BorderBlock => false
+    Property.BorderInline => false
+    Property.BorderStartStartRadius => false
+    Property.BorderStartEndRadius => false
+    Property.BorderEndStartRadius => false
+    Property.BorderEndEndRadius => false
+    Property.OverflowBlock => false
+    Property.OverflowInline => false
+    Property.LineClamp => false
+    Property.WebkitLineClamp => false
+    Property.MaxLines => false
+    Property.BlockEllipsis => true
+    Property.Continue => false
+    Property.ScrollbarColor => true
+    Property.OverflowAnchor => false
+    Property.OverflowClipMargin => false
+    Property.TextWrap => true
+    Property.TextWrapStyle => true
+    Property.HyphenateCharacter => true
+    Property.TextSizeAdjust => true
+    Property.TextUnderlineOffset => true
+    Property.TextDecorationSkipInk => true
+    Property.OverscrollBehavior => false
+    Property.OverscrollBehaviorX => false
+    Property.OverscrollBehaviorY => false
+    Property.OverscrollBehaviorInline => false
+    Property.OverscrollBehaviorBlock => false
+    Property.ScrollBehavior => false
+    Property.ScrollSnapType => false
+    Property.ScrollSnapAlign => false
+    Property.ScrollSnapStop => false
+    Property.ScrollMarginTop => false
+    Property.ScrollMarginRight => false
+    Property.ScrollMarginBottom => false
+    Property.ScrollMarginLeft => false
+    Property.ScrollMarginBlockStart => false
+    Property.ScrollMarginBlockEnd => false
+    Property.ScrollMarginInlineStart => false
+    Property.ScrollMarginInlineEnd => false
+    Property.ScrollMargin => false
+    Property.ScrollMarginBlock => false
+    Property.ScrollMarginInline => false
+    Property.ScrollPaddingTop => false
+    Property.ScrollPaddingRight => false
+    Property.ScrollPaddingBottom => false
+    Property.ScrollPaddingLeft => false
+    Property.ScrollPaddingBlockStart => false
+    Property.ScrollPaddingBlockEnd => false
+    Property.ScrollPaddingInlineStart => false
+    Property.ScrollPaddingInlineEnd => false
+    Property.ScrollPadding => false
+    Property.ScrollPaddingBlock => false
+    Property.ScrollPaddingInline => false
+    Property.TouchAction => false
+    Property.Contain => false
+    Property.ContentVisibility => false
+    Property.ContainIntrinsicWidth => false
+    Property.ContainIntrinsicHeight => false
+    Property.ContainIntrinsicBlockSize => false
+    Property.ContainIntrinsicInlineSize => false
+    Property.ContainIntrinsicSize => false
+    Property.ContainerType => false
+    Property.ContainerName => false
+    Property.Container => false
+    Property.WillChange => false
+    Property.ListStylePosition => true
+    Property.ListStyleImage => true
+    Property.ListStyleType => true
+    Property.ListStyle => true
+    Property.CounterReset => false
+    Property.CounterIncrement => false
+    Property.CounterSet => false
+    Property.Content => false
+    Property.Quotes => true
+    Property.BorderCollapse => true
+    Property.BorderSpacing => true
+    Property.TableLayout => false
+    Property.CaptionSide => true
+    Property.EmptyCells => true
+    Property.ColumnCount => false
+    Property.ColumnWidth => false
+    Property.Columns => false
+    Property.ColumnRuleWidth => false
+    Property.ColumnRuleStyle => false
+    Property.ColumnRuleColor => false
+    Property.ColumnRule => false
+    Property.ColumnSpan => false
+    Property.ColumnFill => false
+    Property.BorderImageSource => false
+    Property.BorderImageSlice => false
+    Property.BorderImageWidth => false
+    Property.BorderImageOutset => false
+    Property.BorderImageRepeat => false
+    Property.BorderImage => false
+    Property.ColorScheme => true
+    Property.PrintColorAdjust => true
+    Property.ForcedColorAdjust => true
+    Property.ShapeOutside => false
+    Property.ShapeImageThreshold => false
+    Property.FieldSizing => false
   }
 }
 
@@ -2692,6 +3948,160 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.TransitionTimingFunction => b"ease"
     Property.TransitionDelay => b"0s"
     Property.TransitionBehavior => b"normal"
+    Property.Outline => b"medium none auto"
+    Property.OutlineWidth => b"medium"
+    Property.OutlineStyle => b"none"
+    Property.OutlineColor => b"auto"
+    Property.OutlineOffset => b"0"
+    Property.UserSelect => b"auto"
+    Property.AccentColor => b"auto"
+    Property.Appearance => b"none"
+    Property.Resize => b"none"
+    Property.BlockSize => b"auto"
+    Property.MinInlineSize => b"0"
+    Property.MinBlockSize => b"0"
+    Property.MaxInlineSize => b"none"
+    Property.MaxBlockSize => b"none"
+    Property.MarginBlockStart => b"0"
+    Property.MarginBlockEnd => b"0"
+    Property.MarginInlineStart => b"0"
+    Property.MarginInlineEnd => b"0"
+    Property.MarginBlock => b"0"
+    Property.MarginInline => b"0"
+    Property.PaddingBlockStart => b"0"
+    Property.PaddingBlockEnd => b"0"
+    Property.PaddingInlineStart => b"0"
+    Property.PaddingInlineEnd => b"0"
+    Property.PaddingBlock => b"0"
+    Property.PaddingInline => b"0"
+    Property.InsetBlockStart => b"auto"
+    Property.InsetBlockEnd => b"auto"
+    Property.InsetInlineStart => b"auto"
+    Property.InsetInlineEnd => b"auto"
+    Property.InsetBlock => b"auto"
+    Property.InsetInline => b"auto"
+    Property.BorderBlockStartWidth => b"medium"
+    Property.BorderBlockStartStyle => b"none"
+    Property.BorderBlockStartColor => b"currentcolor"
+    Property.BorderBlockEndWidth => b"medium"
+    Property.BorderBlockEndStyle => b"none"
+    Property.BorderBlockEndColor => b"currentcolor"
+    Property.BorderInlineStartWidth => b"medium"
+    Property.BorderInlineStartStyle => b"none"
+    Property.BorderInlineStartColor => b"currentcolor"
+    Property.BorderInlineEndWidth => b"medium"
+    Property.BorderInlineEndStyle => b"none"
+    Property.BorderInlineEndColor => b"currentcolor"
+    Property.BorderBlockStart => b"medium none currentcolor"
+    Property.BorderBlockEnd => b"medium none currentcolor"
+    Property.BorderInlineStart => b"medium none currentcolor"
+    Property.BorderInlineEnd => b"medium none currentcolor"
+    Property.BorderBlockWidth => b"medium"
+    Property.BorderBlockStyle => b"none"
+    Property.BorderBlockColor => b"currentcolor"
+    Property.BorderInlineWidth => b"medium"
+    Property.BorderInlineStyle => b"none"
+    Property.BorderInlineColor => b"currentcolor"
+    Property.BorderBlock => b"medium none currentcolor"
+    Property.BorderInline => b"medium none currentcolor"
+    Property.BorderStartStartRadius => b"0"
+    Property.BorderStartEndRadius => b"0"
+    Property.BorderEndStartRadius => b"0"
+    Property.BorderEndEndRadius => b"0"
+    Property.OverflowBlock => b"visible"
+    Property.OverflowInline => b"visible"
+    Property.LineClamp => b"none"
+    Property.WebkitLineClamp => b"none"
+    Property.MaxLines => b"none"
+    Property.BlockEllipsis => b"no-ellipsis"
+    Property.Continue => b"auto"
+    Property.ScrollbarColor => b"auto"
+    Property.OverflowAnchor => b"auto"
+    Property.OverflowClipMargin => b"0px"
+    Property.TextWrap => b"wrap"
+    Property.TextWrapStyle => b"auto"
+    Property.HyphenateCharacter => b"auto"
+    Property.TextSizeAdjust => b"auto"
+    Property.TextUnderlineOffset => b"auto"
+    Property.TextDecorationSkipInk => b"auto"
+    Property.OverscrollBehavior => b"auto auto"
+    Property.OverscrollBehaviorX => b"auto"
+    Property.OverscrollBehaviorY => b"auto"
+    Property.OverscrollBehaviorInline => b"auto"
+    Property.OverscrollBehaviorBlock => b"auto"
+    Property.ScrollBehavior => b"auto"
+    Property.ScrollSnapType => b"none"
+    Property.ScrollSnapAlign => b"none"
+    Property.ScrollSnapStop => b"normal"
+    Property.ScrollMarginTop => b"0"
+    Property.ScrollMarginRight => b"0"
+    Property.ScrollMarginBottom => b"0"
+    Property.ScrollMarginLeft => b"0"
+    Property.ScrollMarginBlockStart => b"0"
+    Property.ScrollMarginBlockEnd => b"0"
+    Property.ScrollMarginInlineStart => b"0"
+    Property.ScrollMarginInlineEnd => b"0"
+    Property.ScrollMargin => b"0"
+    Property.ScrollMarginBlock => b"0"
+    Property.ScrollMarginInline => b"0"
+    Property.ScrollPaddingTop => b"auto"
+    Property.ScrollPaddingRight => b"auto"
+    Property.ScrollPaddingBottom => b"auto"
+    Property.ScrollPaddingLeft => b"auto"
+    Property.ScrollPaddingBlockStart => b"auto"
+    Property.ScrollPaddingBlockEnd => b"auto"
+    Property.ScrollPaddingInlineStart => b"auto"
+    Property.ScrollPaddingInlineEnd => b"auto"
+    Property.ScrollPadding => b"auto"
+    Property.ScrollPaddingBlock => b"auto"
+    Property.ScrollPaddingInline => b"auto"
+    Property.TouchAction => b"auto"
+    Property.Contain => b"none"
+    Property.ContentVisibility => b"visible"
+    Property.ContainIntrinsicWidth => b"none"
+    Property.ContainIntrinsicHeight => b"none"
+    Property.ContainIntrinsicBlockSize => b"none"
+    Property.ContainIntrinsicInlineSize => b"none"
+    Property.ContainIntrinsicSize => b"none"
+    Property.ContainerType => b"normal"
+    Property.ContainerName => b"none"
+    Property.Container => b"none"
+    Property.WillChange => b"auto"
+    Property.ListStylePosition => b"outside"
+    Property.ListStyleImage => b"none"
+    Property.ListStyleType => b"disc"
+    Property.ListStyle => b"outside none disc"
+    Property.CounterReset => b"none"
+    Property.CounterIncrement => b"none"
+    Property.CounterSet => b"none"
+    Property.Content => b"normal"
+    Property.Quotes => b"auto"
+    Property.BorderCollapse => b"separate"
+    Property.BorderSpacing => b"0px 0px"
+    Property.TableLayout => b"auto"
+    Property.CaptionSide => b"top"
+    Property.EmptyCells => b"show"
+    Property.ColumnCount => b"auto"
+    Property.ColumnWidth => b"auto"
+    Property.Columns => b"auto auto"
+    Property.ColumnRuleWidth => b"medium"
+    Property.ColumnRuleStyle => b"none"
+    Property.ColumnRuleColor => b"currentcolor"
+    Property.ColumnRule => b"medium none currentcolor"
+    Property.ColumnSpan => b"none"
+    Property.ColumnFill => b"balance"
+    Property.BorderImageSource => b"none"
+    Property.BorderImageSlice => b"100%"
+    Property.BorderImageWidth => b"1"
+    Property.BorderImageOutset => b"0"
+    Property.BorderImageRepeat => b"stretch"
+    Property.BorderImage => b"none"
+    Property.ColorScheme => b"normal"
+    Property.PrintColorAdjust => b"economy"
+    Property.ForcedColorAdjust => b"auto"
+    Property.ShapeOutside => b"none"
+    Property.ShapeImageThreshold => b"0"
+    Property.FieldSizing => b"fixed"
   }
 }
 
@@ -2726,7 +4136,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 246
+    Property.All => 365
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -2765,12 +4175,386 @@ pub fn longhandCount(property: Property) -> usize {
     Property.GridTemplate => 3
     Property.Grid => 6
     Property.Background => 8
+    Property.Outline => 3
+    Property.MarginBlock => 2
+    Property.MarginInline => 2
+    Property.PaddingBlock => 2
+    Property.PaddingInline => 2
+    Property.InsetBlock => 2
+    Property.InsetInline => 2
+    Property.BorderBlockStart => 3
+    Property.BorderBlockEnd => 3
+    Property.BorderInlineStart => 3
+    Property.BorderInlineEnd => 3
+    Property.BorderBlockWidth => 2
+    Property.BorderBlockStyle => 2
+    Property.BorderBlockColor => 2
+    Property.BorderInlineWidth => 2
+    Property.BorderInlineStyle => 2
+    Property.BorderInlineColor => 2
+    Property.BorderBlock => 6
+    Property.BorderInline => 6
+    Property.LineClamp => 3
+    Property.WebkitLineClamp => 3
+    Property.TextWrap => 2
+    Property.OverscrollBehavior => 2
+    Property.ScrollMargin => 4
+    Property.ScrollMarginBlock => 2
+    Property.ScrollMarginInline => 2
+    Property.ScrollPadding => 4
+    Property.ScrollPaddingBlock => 2
+    Property.ScrollPaddingInline => 2
+    Property.ContainIntrinsicSize => 2
+    Property.Container => 2
+    Property.ListStyle => 3
+    Property.Columns => 2
+    Property.ColumnRule => 3
+    Property.BorderImage => 5
     _ => 1
   }
 }
 
 pub fn longhandAt(property: Property, index: usize) -> Property {
   match property {
+    Property.Outline => {
+      let longhands = [
+        Property.OutlineWidth,
+        Property.OutlineStyle,
+        Property.OutlineColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.MarginBlock => {
+      let longhands = [
+        Property.MarginBlockStart,
+        Property.MarginBlockEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.MarginInline => {
+      let longhands = [
+        Property.MarginInlineStart,
+        Property.MarginInlineEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.PaddingBlock => {
+      let longhands = [
+        Property.PaddingBlockStart,
+        Property.PaddingBlockEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.PaddingInline => {
+      let longhands = [
+        Property.PaddingInlineStart,
+        Property.PaddingInlineEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.InsetBlock => {
+      let longhands = [
+        Property.InsetBlockStart,
+        Property.InsetBlockEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.InsetInline => {
+      let longhands = [
+        Property.InsetInlineStart,
+        Property.InsetInlineEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderBlockStart => {
+      let longhands = [
+        Property.BorderBlockStartWidth,
+        Property.BorderBlockStartStyle,
+        Property.BorderBlockStartColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderBlockEnd => {
+      let longhands = [
+        Property.BorderBlockEndWidth,
+        Property.BorderBlockEndStyle,
+        Property.BorderBlockEndColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderInlineStart => {
+      let longhands = [
+        Property.BorderInlineStartWidth,
+        Property.BorderInlineStartStyle,
+        Property.BorderInlineStartColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderInlineEnd => {
+      let longhands = [
+        Property.BorderInlineEndWidth,
+        Property.BorderInlineEndStyle,
+        Property.BorderInlineEndColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderBlockWidth => {
+      let longhands = [
+        Property.BorderBlockStartWidth,
+        Property.BorderBlockEndWidth,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderBlockStyle => {
+      let longhands = [
+        Property.BorderBlockStartStyle,
+        Property.BorderBlockEndStyle,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderBlockColor => {
+      let longhands = [
+        Property.BorderBlockStartColor,
+        Property.BorderBlockEndColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderInlineWidth => {
+      let longhands = [
+        Property.BorderInlineStartWidth,
+        Property.BorderInlineEndWidth,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderInlineStyle => {
+      let longhands = [
+        Property.BorderInlineStartStyle,
+        Property.BorderInlineEndStyle,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderInlineColor => {
+      let longhands = [
+        Property.BorderInlineStartColor,
+        Property.BorderInlineEndColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderBlock => {
+      let longhands = [
+        Property.BorderBlockStartWidth,
+        Property.BorderBlockStartStyle,
+        Property.BorderBlockStartColor,
+        Property.BorderBlockEndWidth,
+        Property.BorderBlockEndStyle,
+        Property.BorderBlockEndColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderInline => {
+      let longhands = [
+        Property.BorderInlineStartWidth,
+        Property.BorderInlineStartStyle,
+        Property.BorderInlineStartColor,
+        Property.BorderInlineEndWidth,
+        Property.BorderInlineEndStyle,
+        Property.BorderInlineEndColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.LineClamp => {
+      let longhands = [
+        Property.MaxLines,
+        Property.BlockEllipsis,
+        Property.Continue,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.WebkitLineClamp => {
+      let longhands = [
+        Property.MaxLines,
+        Property.BlockEllipsis,
+        Property.Continue,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.TextWrap => {
+      let longhands = [
+        Property.TextWrapMode,
+        Property.TextWrapStyle,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.OverscrollBehavior => {
+      let longhands = [
+        Property.OverscrollBehaviorX,
+        Property.OverscrollBehaviorY,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.ScrollMargin => {
+      let longhands = [
+        Property.ScrollMarginTop,
+        Property.ScrollMarginRight,
+        Property.ScrollMarginBottom,
+        Property.ScrollMarginLeft,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.ScrollMarginBlock => {
+      let longhands = [
+        Property.ScrollMarginBlockStart,
+        Property.ScrollMarginBlockEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.ScrollMarginInline => {
+      let longhands = [
+        Property.ScrollMarginInlineStart,
+        Property.ScrollMarginInlineEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.ScrollPadding => {
+      let longhands = [
+        Property.ScrollPaddingTop,
+        Property.ScrollPaddingRight,
+        Property.ScrollPaddingBottom,
+        Property.ScrollPaddingLeft,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.ScrollPaddingBlock => {
+      let longhands = [
+        Property.ScrollPaddingBlockStart,
+        Property.ScrollPaddingBlockEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.ScrollPaddingInline => {
+      let longhands = [
+        Property.ScrollPaddingInlineStart,
+        Property.ScrollPaddingInlineEnd,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.ContainIntrinsicSize => {
+      let longhands = [
+        Property.ContainIntrinsicWidth,
+        Property.ContainIntrinsicHeight,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.Container => {
+      let longhands = [
+        Property.ContainerName,
+        Property.ContainerType,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.ListStyle => {
+      let longhands = [
+        Property.ListStylePosition,
+        Property.ListStyleImage,
+        Property.ListStyleType,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.Columns => {
+      let longhands = [
+        Property.ColumnWidth,
+        Property.ColumnCount,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.ColumnRule => {
+      let longhands = [
+        Property.ColumnRuleWidth,
+        Property.ColumnRuleStyle,
+        Property.ColumnRuleColor,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.BorderImage => {
+      let longhands = [
+        Property.BorderImageSource,
+        Property.BorderImageSlice,
+        Property.BorderImageWidth,
+        Property.BorderImageOutset,
+        Property.BorderImageRepeat,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
     Property.Transition => {
       let longhands = [
         Property.TransitionProperty,
@@ -3536,6 +5320,363 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 245 {
         return Property.TransitionBehavior
+      }
+      if index == 246 {
+        return Property.OutlineWidth
+      }
+      if index == 247 {
+        return Property.OutlineStyle
+      }
+      if index == 248 {
+        return Property.OutlineColor
+      }
+      if index == 249 {
+        return Property.OutlineOffset
+      }
+      if index == 250 {
+        return Property.UserSelect
+      }
+      if index == 251 {
+        return Property.AccentColor
+      }
+      if index == 252 {
+        return Property.Appearance
+      }
+      if index == 253 {
+        return Property.Resize
+      }
+      if index == 254 {
+        return Property.BlockSize
+      }
+      if index == 255 {
+        return Property.MinInlineSize
+      }
+      if index == 256 {
+        return Property.MinBlockSize
+      }
+      if index == 257 {
+        return Property.MaxInlineSize
+      }
+      if index == 258 {
+        return Property.MaxBlockSize
+      }
+      if index == 259 {
+        return Property.MarginBlockStart
+      }
+      if index == 260 {
+        return Property.MarginBlockEnd
+      }
+      if index == 261 {
+        return Property.MarginInlineStart
+      }
+      if index == 262 {
+        return Property.MarginInlineEnd
+      }
+      if index == 263 {
+        return Property.PaddingBlockStart
+      }
+      if index == 264 {
+        return Property.PaddingBlockEnd
+      }
+      if index == 265 {
+        return Property.PaddingInlineStart
+      }
+      if index == 266 {
+        return Property.PaddingInlineEnd
+      }
+      if index == 267 {
+        return Property.InsetBlockStart
+      }
+      if index == 268 {
+        return Property.InsetBlockEnd
+      }
+      if index == 269 {
+        return Property.InsetInlineStart
+      }
+      if index == 270 {
+        return Property.InsetInlineEnd
+      }
+      if index == 271 {
+        return Property.BorderBlockStartWidth
+      }
+      if index == 272 {
+        return Property.BorderBlockStartStyle
+      }
+      if index == 273 {
+        return Property.BorderBlockStartColor
+      }
+      if index == 274 {
+        return Property.BorderBlockEndWidth
+      }
+      if index == 275 {
+        return Property.BorderBlockEndStyle
+      }
+      if index == 276 {
+        return Property.BorderBlockEndColor
+      }
+      if index == 277 {
+        return Property.BorderInlineStartWidth
+      }
+      if index == 278 {
+        return Property.BorderInlineStartStyle
+      }
+      if index == 279 {
+        return Property.BorderInlineStartColor
+      }
+      if index == 280 {
+        return Property.BorderInlineEndWidth
+      }
+      if index == 281 {
+        return Property.BorderInlineEndStyle
+      }
+      if index == 282 {
+        return Property.BorderInlineEndColor
+      }
+      if index == 283 {
+        return Property.BorderStartStartRadius
+      }
+      if index == 284 {
+        return Property.BorderStartEndRadius
+      }
+      if index == 285 {
+        return Property.BorderEndStartRadius
+      }
+      if index == 286 {
+        return Property.BorderEndEndRadius
+      }
+      if index == 287 {
+        return Property.OverflowBlock
+      }
+      if index == 288 {
+        return Property.OverflowInline
+      }
+      if index == 289 {
+        return Property.MaxLines
+      }
+      if index == 290 {
+        return Property.BlockEllipsis
+      }
+      if index == 291 {
+        return Property.Continue
+      }
+      if index == 292 {
+        return Property.ScrollbarColor
+      }
+      if index == 293 {
+        return Property.OverflowAnchor
+      }
+      if index == 294 {
+        return Property.OverflowClipMargin
+      }
+      if index == 295 {
+        return Property.TextWrapStyle
+      }
+      if index == 296 {
+        return Property.HyphenateCharacter
+      }
+      if index == 297 {
+        return Property.TextSizeAdjust
+      }
+      if index == 298 {
+        return Property.TextUnderlineOffset
+      }
+      if index == 299 {
+        return Property.TextDecorationSkipInk
+      }
+      if index == 300 {
+        return Property.OverscrollBehaviorX
+      }
+      if index == 301 {
+        return Property.OverscrollBehaviorY
+      }
+      if index == 302 {
+        return Property.OverscrollBehaviorInline
+      }
+      if index == 303 {
+        return Property.OverscrollBehaviorBlock
+      }
+      if index == 304 {
+        return Property.ScrollBehavior
+      }
+      if index == 305 {
+        return Property.ScrollSnapType
+      }
+      if index == 306 {
+        return Property.ScrollSnapAlign
+      }
+      if index == 307 {
+        return Property.ScrollSnapStop
+      }
+      if index == 308 {
+        return Property.ScrollMarginTop
+      }
+      if index == 309 {
+        return Property.ScrollMarginRight
+      }
+      if index == 310 {
+        return Property.ScrollMarginBottom
+      }
+      if index == 311 {
+        return Property.ScrollMarginLeft
+      }
+      if index == 312 {
+        return Property.ScrollMarginBlockStart
+      }
+      if index == 313 {
+        return Property.ScrollMarginBlockEnd
+      }
+      if index == 314 {
+        return Property.ScrollMarginInlineStart
+      }
+      if index == 315 {
+        return Property.ScrollMarginInlineEnd
+      }
+      if index == 316 {
+        return Property.ScrollPaddingTop
+      }
+      if index == 317 {
+        return Property.ScrollPaddingRight
+      }
+      if index == 318 {
+        return Property.ScrollPaddingBottom
+      }
+      if index == 319 {
+        return Property.ScrollPaddingLeft
+      }
+      if index == 320 {
+        return Property.ScrollPaddingBlockStart
+      }
+      if index == 321 {
+        return Property.ScrollPaddingBlockEnd
+      }
+      if index == 322 {
+        return Property.ScrollPaddingInlineStart
+      }
+      if index == 323 {
+        return Property.ScrollPaddingInlineEnd
+      }
+      if index == 324 {
+        return Property.TouchAction
+      }
+      if index == 325 {
+        return Property.Contain
+      }
+      if index == 326 {
+        return Property.ContentVisibility
+      }
+      if index == 327 {
+        return Property.ContainIntrinsicWidth
+      }
+      if index == 328 {
+        return Property.ContainIntrinsicHeight
+      }
+      if index == 329 {
+        return Property.ContainIntrinsicBlockSize
+      }
+      if index == 330 {
+        return Property.ContainIntrinsicInlineSize
+      }
+      if index == 331 {
+        return Property.ContainerType
+      }
+      if index == 332 {
+        return Property.ContainerName
+      }
+      if index == 333 {
+        return Property.WillChange
+      }
+      if index == 334 {
+        return Property.ListStylePosition
+      }
+      if index == 335 {
+        return Property.ListStyleImage
+      }
+      if index == 336 {
+        return Property.ListStyleType
+      }
+      if index == 337 {
+        return Property.CounterReset
+      }
+      if index == 338 {
+        return Property.CounterIncrement
+      }
+      if index == 339 {
+        return Property.CounterSet
+      }
+      if index == 340 {
+        return Property.Content
+      }
+      if index == 341 {
+        return Property.Quotes
+      }
+      if index == 342 {
+        return Property.BorderCollapse
+      }
+      if index == 343 {
+        return Property.BorderSpacing
+      }
+      if index == 344 {
+        return Property.TableLayout
+      }
+      if index == 345 {
+        return Property.CaptionSide
+      }
+      if index == 346 {
+        return Property.EmptyCells
+      }
+      if index == 347 {
+        return Property.ColumnCount
+      }
+      if index == 348 {
+        return Property.ColumnWidth
+      }
+      if index == 349 {
+        return Property.ColumnRuleWidth
+      }
+      if index == 350 {
+        return Property.ColumnRuleStyle
+      }
+      if index == 351 {
+        return Property.ColumnRuleColor
+      }
+      if index == 352 {
+        return Property.ColumnSpan
+      }
+      if index == 353 {
+        return Property.ColumnFill
+      }
+      if index == 354 {
+        return Property.BorderImageSource
+      }
+      if index == 355 {
+        return Property.BorderImageSlice
+      }
+      if index == 356 {
+        return Property.BorderImageWidth
+      }
+      if index == 357 {
+        return Property.BorderImageOutset
+      }
+      if index == 358 {
+        return Property.BorderImageRepeat
+      }
+      if index == 359 {
+        return Property.ColorScheme
+      }
+      if index == 360 {
+        return Property.PrintColorAdjust
+      }
+      if index == 361 {
+        return Property.ForcedColorAdjust
+      }
+      if index == 362 {
+        return Property.ShapeOutside
+      }
+      if index == 363 {
+        return Property.ShapeImageThreshold
+      }
+      if index == 364 {
+        return Property.FieldSizing
       }
     }
     Property.WhiteSpace => {
