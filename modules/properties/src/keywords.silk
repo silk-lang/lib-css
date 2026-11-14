@@ -334,9 +334,10 @@ pub enum(u16) Keyword {
   Lowercase,
   Capitalize,
   FullWidth,
+  Ellipsis,
 }
 
-pub const COUNT: usize = 331
+pub const COUNT: usize = 332
 
 /// The CSS spelling. A few SVG keywords are mixed case, such as `sRGB` and `optimizeSpeed`.
 pub fn name(value: Keyword) -> &'static [u8] {
@@ -672,6 +673,7 @@ pub fn name(value: Keyword) -> &'static [u8] {
     Keyword.Lowercase => b"lowercase"
     Keyword.Capitalize => b"capitalize"
     Keyword.FullWidth => b"full-width"
+    Keyword.Ellipsis => b"ellipsis"
   }
 }
 
@@ -1177,6 +1179,9 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
     }
     8 => {
+      if first == 101 && insensitive(name, b"ellipsis") {
+        return Option<Keyword>.some(Keyword.Ellipsis)
+      }
       if first == 115 && insensitive(name, b"sideways") {
         return Option<Keyword>.some(Keyword.Sideways)
       }
