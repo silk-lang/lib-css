@@ -27,7 +27,7 @@ import silk.num.i64
 import silk.num.usize
 
 const LAYOUT: string = "modules/layout"
-const PIN: string = "0.1.0-dev.72+9c780a04d6ef"
+const PIN: string = "0.1.0-dev.74+205aea3f5b2e"
 
 fn pathText(path: &Path) -> string { return unsafe String.fromUtf8Unchecked(Path.rawBytes(path)) }
 effect fn path(value: string) -> Path ! TaskError | FileError | HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator {
