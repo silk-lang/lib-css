@@ -258,9 +258,81 @@ pub enum(u16) Keyword {
   NwseResize,
   ZoomIn,
   ZoomOut,
+  Balance,
+  Pretty,
+  AvoidOrphans,
+  PanX,
+  PanY,
+  PanLeft,
+  PanRight,
+  PanUp,
+  PanDown,
+  PinchZoom,
+  Manipulation,
+  MenulistButton,
+  Textfield,
+  Base,
+  Button,
+  Checkbox,
+  Radio,
+  Listbox,
+  Menulist,
+  Meter,
+  ProgressBar,
+  PushButton,
+  Searchfield,
+  SliderHorizontal,
+  SquareButton,
+  Textarea,
+  Horizontal,
+  Vertical,
+  Size,
+  InlineSize,
+  Layout,
+  Style,
+  Paint,
+  Inside,
+  Outside,
+  Disc,
+  Circle,
+  Decimal,
+  DecimalLeadingZero,
+  LowerRoman,
+  UpperRoman,
+  LowerAlpha,
+  UpperAlpha,
+  LowerLatin,
+  UpperLatin,
+  LowerGreek,
+  DisclosureOpen,
+  DisclosureClosed,
+  Separate,
+  BalanceAll,
+  NoEllipsis,
+  X,
+  Y,
+  Mandatory,
+  Proximity,
+  Light,
+  Dark,
+  Only,
+  OpenQuote,
+  CloseQuote,
+  NoOpenQuote,
+  NoCloseQuote,
+  Show,
+  Hide,
+  Economy,
+  Exact,
+  PreserveParentColor,
+  ScrollPosition,
+  MarginBox,
+  ScrollState,
+  Space,
+  SkipAll,
 }
 
-pub const COUNT: usize = 255
+pub const COUNT: usize = 327
 
 /// The CSS spelling. A few SVG keywords are mixed case, such as `sRGB` and `optimizeSpeed`.
 pub fn name(value: Keyword) -> &'static [u8] {
@@ -520,6 +592,78 @@ pub fn name(value: Keyword) -> &'static [u8] {
     Keyword.NwseResize => b"nwse-resize"
     Keyword.ZoomIn => b"zoom-in"
     Keyword.ZoomOut => b"zoom-out"
+    Keyword.Balance => b"balance"
+    Keyword.Pretty => b"pretty"
+    Keyword.AvoidOrphans => b"avoid-orphans"
+    Keyword.PanX => b"pan-x"
+    Keyword.PanY => b"pan-y"
+    Keyword.PanLeft => b"pan-left"
+    Keyword.PanRight => b"pan-right"
+    Keyword.PanUp => b"pan-up"
+    Keyword.PanDown => b"pan-down"
+    Keyword.PinchZoom => b"pinch-zoom"
+    Keyword.Manipulation => b"manipulation"
+    Keyword.MenulistButton => b"menulist-button"
+    Keyword.Textfield => b"textfield"
+    Keyword.Base => b"base"
+    Keyword.Button => b"button"
+    Keyword.Checkbox => b"checkbox"
+    Keyword.Radio => b"radio"
+    Keyword.Listbox => b"listbox"
+    Keyword.Menulist => b"menulist"
+    Keyword.Meter => b"meter"
+    Keyword.ProgressBar => b"progress-bar"
+    Keyword.PushButton => b"push-button"
+    Keyword.Searchfield => b"searchfield"
+    Keyword.SliderHorizontal => b"slider-horizontal"
+    Keyword.SquareButton => b"square-button"
+    Keyword.Textarea => b"textarea"
+    Keyword.Horizontal => b"horizontal"
+    Keyword.Vertical => b"vertical"
+    Keyword.Size => b"size"
+    Keyword.InlineSize => b"inline-size"
+    Keyword.Layout => b"layout"
+    Keyword.Style => b"style"
+    Keyword.Paint => b"paint"
+    Keyword.Inside => b"inside"
+    Keyword.Outside => b"outside"
+    Keyword.Disc => b"disc"
+    Keyword.Circle => b"circle"
+    Keyword.Decimal => b"decimal"
+    Keyword.DecimalLeadingZero => b"decimal-leading-zero"
+    Keyword.LowerRoman => b"lower-roman"
+    Keyword.UpperRoman => b"upper-roman"
+    Keyword.LowerAlpha => b"lower-alpha"
+    Keyword.UpperAlpha => b"upper-alpha"
+    Keyword.LowerLatin => b"lower-latin"
+    Keyword.UpperLatin => b"upper-latin"
+    Keyword.LowerGreek => b"lower-greek"
+    Keyword.DisclosureOpen => b"disclosure-open"
+    Keyword.DisclosureClosed => b"disclosure-closed"
+    Keyword.Separate => b"separate"
+    Keyword.BalanceAll => b"balance-all"
+    Keyword.NoEllipsis => b"no-ellipsis"
+    Keyword.X => b"x"
+    Keyword.Y => b"y"
+    Keyword.Mandatory => b"mandatory"
+    Keyword.Proximity => b"proximity"
+    Keyword.Light => b"light"
+    Keyword.Dark => b"dark"
+    Keyword.Only => b"only"
+    Keyword.OpenQuote => b"open-quote"
+    Keyword.CloseQuote => b"close-quote"
+    Keyword.NoOpenQuote => b"no-open-quote"
+    Keyword.NoCloseQuote => b"no-close-quote"
+    Keyword.Show => b"show"
+    Keyword.Hide => b"hide"
+    Keyword.Economy => b"economy"
+    Keyword.Exact => b"exact"
+    Keyword.PreserveParentColor => b"preserve-parent-color"
+    Keyword.ScrollPosition => b"scroll-position"
+    Keyword.MarginBox => b"margin-box"
+    Keyword.ScrollState => b"scroll-state"
+    Keyword.Space => b"space"
+    Keyword.SkipAll => b"skip-all"
   }
 }
 
@@ -530,6 +674,14 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
   }
   let first = name[0] | 32
   match name.length {
+    1 => {
+      if first == 120 && insensitive(name, b"x") {
+        return Option<Keyword>.some(Keyword.X)
+      }
+      if first == 121 && insensitive(name, b"y") {
+        return Option<Keyword>.some(Keyword.Y)
+      }
+    }
     2 => {
       if first == 108 && insensitive(name, b"lr") {
         return Option<Keyword>.some(Keyword.Lr)
@@ -655,6 +807,27 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 103 && insensitive(name, b"grab") {
         return Option<Keyword>.some(Keyword.Grab)
       }
+      if first == 98 && insensitive(name, b"base") {
+        return Option<Keyword>.some(Keyword.Base)
+      }
+      if first == 115 && insensitive(name, b"size") {
+        return Option<Keyword>.some(Keyword.Size)
+      }
+      if first == 100 && insensitive(name, b"disc") {
+        return Option<Keyword>.some(Keyword.Disc)
+      }
+      if first == 100 && insensitive(name, b"dark") {
+        return Option<Keyword>.some(Keyword.Dark)
+      }
+      if first == 111 && insensitive(name, b"only") {
+        return Option<Keyword>.some(Keyword.Only)
+      }
+      if first == 115 && insensitive(name, b"show") {
+        return Option<Keyword>.some(Keyword.Show)
+      }
+      if first == 104 && insensitive(name, b"hide") {
+        return Option<Keyword>.some(Keyword.Hide)
+      }
     }
     5 => {
       if first == 117 && insensitive(name, b"unset") {
@@ -752,6 +925,33 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 97 && insensitive(name, b"alias") {
         return Option<Keyword>.some(Keyword.Alias)
+      }
+      if first == 112 && insensitive(name, b"pan-x") {
+        return Option<Keyword>.some(Keyword.PanX)
+      }
+      if first == 112 && insensitive(name, b"pan-y") {
+        return Option<Keyword>.some(Keyword.PanY)
+      }
+      if first == 114 && insensitive(name, b"radio") {
+        return Option<Keyword>.some(Keyword.Radio)
+      }
+      if first == 109 && insensitive(name, b"meter") {
+        return Option<Keyword>.some(Keyword.Meter)
+      }
+      if first == 115 && insensitive(name, b"style") {
+        return Option<Keyword>.some(Keyword.Style)
+      }
+      if first == 112 && insensitive(name, b"paint") {
+        return Option<Keyword>.some(Keyword.Paint)
+      }
+      if first == 108 && insensitive(name, b"light") {
+        return Option<Keyword>.some(Keyword.Light)
+      }
+      if first == 101 && insensitive(name, b"exact") {
+        return Option<Keyword>.some(Keyword.Exact)
+      }
+      if first == 115 && insensitive(name, b"space") {
+        return Option<Keyword>.some(Keyword.Space)
       }
     }
     6 => {
@@ -860,6 +1060,24 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 100 && insensitive(name, b"darken") {
         return Option<Keyword>.some(Keyword.Darken)
       }
+      if first == 112 && insensitive(name, b"pretty") {
+        return Option<Keyword>.some(Keyword.Pretty)
+      }
+      if first == 112 && insensitive(name, b"pan-up") {
+        return Option<Keyword>.some(Keyword.PanUp)
+      }
+      if first == 98 && insensitive(name, b"button") {
+        return Option<Keyword>.some(Keyword.Button)
+      }
+      if first == 108 && insensitive(name, b"layout") {
+        return Option<Keyword>.some(Keyword.Layout)
+      }
+      if first == 105 && insensitive(name, b"inside") {
+        return Option<Keyword>.some(Keyword.Inside)
+      }
+      if first == 99 && insensitive(name, b"circle") {
+        return Option<Keyword>.some(Keyword.Circle)
+      }
     }
     7 => {
       if first == 105 && insensitive(name, b"initial") {
@@ -934,6 +1152,21 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 122 && insensitive(name, b"zoom-in") {
         return Option<Keyword>.some(Keyword.ZoomIn)
       }
+      if first == 98 && insensitive(name, b"balance") {
+        return Option<Keyword>.some(Keyword.Balance)
+      }
+      if first == 108 && insensitive(name, b"listbox") {
+        return Option<Keyword>.some(Keyword.Listbox)
+      }
+      if first == 111 && insensitive(name, b"outside") {
+        return Option<Keyword>.some(Keyword.Outside)
+      }
+      if first == 100 && insensitive(name, b"decimal") {
+        return Option<Keyword>.some(Keyword.Decimal)
+      }
+      if first == 101 && insensitive(name, b"economy") {
+        return Option<Keyword>.some(Keyword.Economy)
+      }
     }
     8 => {
       if first == 115 && insensitive(name, b"sideways") {
@@ -1005,6 +1238,30 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 122 && insensitive(name, b"zoom-out") {
         return Option<Keyword>.some(Keyword.ZoomOut)
       }
+      if first == 112 && insensitive(name, b"pan-left") {
+        return Option<Keyword>.some(Keyword.PanLeft)
+      }
+      if first == 112 && insensitive(name, b"pan-down") {
+        return Option<Keyword>.some(Keyword.PanDown)
+      }
+      if first == 99 && insensitive(name, b"checkbox") {
+        return Option<Keyword>.some(Keyword.Checkbox)
+      }
+      if first == 109 && insensitive(name, b"menulist") {
+        return Option<Keyword>.some(Keyword.Menulist)
+      }
+      if first == 116 && insensitive(name, b"textarea") {
+        return Option<Keyword>.some(Keyword.Textarea)
+      }
+      if first == 118 && insensitive(name, b"vertical") {
+        return Option<Keyword>.some(Keyword.Vertical)
+      }
+      if first == 115 && insensitive(name, b"separate") {
+        return Option<Keyword>.some(Keyword.Separate)
+      }
+      if first == 115 && insensitive(name, b"skip-all") {
+        return Option<Keyword>.some(Keyword.SkipAll)
+      }
     }
     9 => {
       if first == 112 && insensitive(name, b"plaintext") {
@@ -1063,6 +1320,18 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 110 && insensitive(name, b"ns-resize") {
         return Option<Keyword>.some(Keyword.NsResize)
+      }
+      if first == 112 && insensitive(name, b"pan-right") {
+        return Option<Keyword>.some(Keyword.PanRight)
+      }
+      if first == 116 && insensitive(name, b"textfield") {
+        return Option<Keyword>.some(Keyword.Textfield)
+      }
+      if first == 109 && insensitive(name, b"mandatory") {
+        return Option<Keyword>.some(Keyword.Mandatory)
+      }
+      if first == 112 && insensitive(name, b"proximity") {
+        return Option<Keyword>.some(Keyword.Proximity)
       }
     }
     10 => {
@@ -1129,6 +1398,18 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 114 && insensitive(name, b"row-resize") {
         return Option<Keyword>.some(Keyword.RowResize)
       }
+      if first == 112 && insensitive(name, b"pinch-zoom") {
+        return Option<Keyword>.some(Keyword.PinchZoom)
+      }
+      if first == 104 && insensitive(name, b"horizontal") {
+        return Option<Keyword>.some(Keyword.Horizontal)
+      }
+      if first == 111 && insensitive(name, b"open-quote") {
+        return Option<Keyword>.some(Keyword.OpenQuote)
+      }
+      if first == 109 && insensitive(name, b"margin-box") {
+        return Option<Keyword>.some(Keyword.MarginBox)
+      }
     }
     11 => {
       if first == 99 && insensitive(name, b"content-box") {
@@ -1194,6 +1475,45 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 110 && insensitive(name, b"nwse-resize") {
         return Option<Keyword>.some(Keyword.NwseResize)
       }
+      if first == 112 && insensitive(name, b"push-button") {
+        return Option<Keyword>.some(Keyword.PushButton)
+      }
+      if first == 115 && insensitive(name, b"searchfield") {
+        return Option<Keyword>.some(Keyword.Searchfield)
+      }
+      if first == 105 && insensitive(name, b"inline-size") {
+        return Option<Keyword>.some(Keyword.InlineSize)
+      }
+      if first == 108 && insensitive(name, b"lower-roman") {
+        return Option<Keyword>.some(Keyword.LowerRoman)
+      }
+      if first == 117 && insensitive(name, b"upper-roman") {
+        return Option<Keyword>.some(Keyword.UpperRoman)
+      }
+      if first == 108 && insensitive(name, b"lower-alpha") {
+        return Option<Keyword>.some(Keyword.LowerAlpha)
+      }
+      if first == 117 && insensitive(name, b"upper-alpha") {
+        return Option<Keyword>.some(Keyword.UpperAlpha)
+      }
+      if first == 108 && insensitive(name, b"lower-latin") {
+        return Option<Keyword>.some(Keyword.LowerLatin)
+      }
+      if first == 117 && insensitive(name, b"upper-latin") {
+        return Option<Keyword>.some(Keyword.UpperLatin)
+      }
+      if first == 108 && insensitive(name, b"lower-greek") {
+        return Option<Keyword>.some(Keyword.LowerGreek)
+      }
+      if first == 98 && insensitive(name, b"balance-all") {
+        return Option<Keyword>.some(Keyword.BalanceAll)
+      }
+      if first == 110 && insensitive(name, b"no-ellipsis") {
+        return Option<Keyword>.some(Keyword.NoEllipsis)
+      }
+      if first == 99 && insensitive(name, b"close-quote") {
+        return Option<Keyword>.some(Keyword.CloseQuote)
+      }
     }
     12 => {
       if first == 114 && insensitive(name, b"revert-layer") {
@@ -1247,6 +1567,15 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 99 && insensitive(name, b"context-menu") {
         return Option<Keyword>.some(Keyword.ContextMenu)
       }
+      if first == 109 && insensitive(name, b"manipulation") {
+        return Option<Keyword>.some(Keyword.Manipulation)
+      }
+      if first == 112 && insensitive(name, b"progress-bar") {
+        return Option<Keyword>.some(Keyword.ProgressBar)
+      }
+      if first == 115 && insensitive(name, b"scroll-state") {
+        return Option<Keyword>.some(Keyword.ScrollState)
+      }
     }
     13 => {
       if first == 98 && insensitive(name, b"bidi-override") {
@@ -1273,6 +1602,15 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 118 && insensitive(name, b"vertical-text") {
         return Option<Keyword>.some(Keyword.VerticalText)
       }
+      if first == 97 && insensitive(name, b"avoid-orphans") {
+        return Option<Keyword>.some(Keyword.AvoidOrphans)
+      }
+      if first == 115 && insensitive(name, b"square-button") {
+        return Option<Keyword>.some(Keyword.SquareButton)
+      }
+      if first == 110 && insensitive(name, b"no-open-quote") {
+        return Option<Keyword>.some(Keyword.NoOpenQuote)
+      }
     }
     14 => {
       if first == 99 && insensitive(name, b"column-reverse") {
@@ -1283,6 +1621,9 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 99 && insensitive(name, b"context-stroke") {
         return Option<Keyword>.some(Keyword.ContextStroke)
+      }
+      if first == 110 && insensitive(name, b"no-close-quote") {
+        return Option<Keyword>.some(Keyword.NoCloseQuote)
       }
     }
     15 => {
@@ -1304,10 +1645,27 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       if first == 116 && insensitive(name, b"table-row-group") {
         return Option<Keyword>.some(Keyword.TableRowGroup)
       }
+      if first == 109 && insensitive(name, b"menulist-button") {
+        return Option<Keyword>.some(Keyword.MenulistButton)
+      }
+      if first == 100 && insensitive(name, b"disclosure-open") {
+        return Option<Keyword>.some(Keyword.DisclosureOpen)
+      }
+      if first == 115 && insensitive(name, b"scroll-position") {
+        return Option<Keyword>.some(Keyword.ScrollPosition)
+      }
     }
     16 => {
       if first == 105 && insensitive(name, b"isolate-override") {
         return Option<Keyword>.some(Keyword.IsolateOverride)
+      }
+    }
+    17 => {
+      if first == 115 && insensitive(name, b"slider-horizontal") {
+        return Option<Keyword>.some(Keyword.SliderHorizontal)
+      }
+      if first == 100 && insensitive(name, b"disclosure-closed") {
+        return Option<Keyword>.some(Keyword.DisclosureClosed)
       }
     }
     18 => {
@@ -1325,6 +1683,16 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
       if first == 116 && insensitive(name, b"table-column-group") {
         return Option<Keyword>.some(Keyword.TableColumnGroup)
+      }
+    }
+    20 => {
+      if first == 100 && insensitive(name, b"decimal-leading-zero") {
+        return Option<Keyword>.some(Keyword.DecimalLeadingZero)
+      }
+    }
+    21 => {
+      if first == 112 && insensitive(name, b"preserve-parent-color") {
+        return Option<Keyword>.some(Keyword.PreserveParentColor)
       }
     }
     _ => {}

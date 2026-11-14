@@ -141,6 +141,31 @@ effect fn blocks() -> () ! AssertionError<'static> | CssError | OutOfMemoryError
   }
 }
 
+// The properties the catalog gained for apps (css-ui, css-logical, css-overflow, css-text,
+// overscroll, scroll snap, lists, tables, multicol), and legacy names that alias others.
+effect fn appProperties() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let list = run written.declarations(
+    b"outline: 2px solid red; outline-offset: 2px; user-select: none; margin-inline: 4px 8px; inset-block-start: 0; line-clamp: 3; text-wrap: balance; overscroll-behavior: contain; scroll-behavior: smooth; scroll-padding-top: 8px; touch-action: pan-y pinch-zoom; accent-color: red; appearance: none; resize: vertical; contain: layout paint; will-change: transform; list-style: none; border-collapse: collapse; border-spacing: 2px; column-count: 2; word-wrap: break-word; -webkit-user-select: text; grid-gap: 4px",
+  )
+  let items = list.asSlice()
+  run Testing.expect(items.length == 23, "every new property and alias is kept")
+  if items.length == 23 {
+    run expectDeclaration(&items[0], b"outline: 2px solid rgb(255, 0, 0)", "outline")
+    run expectDeclaration(&items[2], b"user-select: none", "user-select")
+    run expectDeclaration(&items[3], b"margin-inline: 4px 8px", "a logical shorthand")
+    run expectDeclaration(&items[5], b"line-clamp: 3", "line-clamp")
+    run expectDeclaration(&items[6], b"text-wrap: balance", "text-wrap")
+    run expectDeclaration(&items[9], b"scroll-padding-top: 8px", "scroll-padding-top")
+    run expectDeclaration(&items[10], b"touch-action: pan-y pinch-zoom", "touch-action keywords")
+    run expectDeclaration(&items[13], b"resize: vertical", "resize")
+    run expectDeclaration(&items[14], b"contain: layout paint", "contain keywords")
+    run expectDeclaration(&items[19], b"column-count: 2", "column-count")
+    run expectDeclaration(&items[20], b"overflow-wrap: break-word", "word-wrap is a legacy name for overflow-wrap")
+    run expectDeclaration(&items[21], b"user-select: text", "-webkit-user-select aliases user-select")
+    run expectDeclaration(&items[22], b"gap: 4px", "grid-gap aliases gap")
+  }
+}
+
 effect fn cssom() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
   let limits = Limits.make()
   let style = run StyleDeclaration.parse(b"opacity: 0.5; fill: #00f !important", &limits)
@@ -171,6 +196,7 @@ test effect fn unshapedValuesStayText() -> () ! AssertionError<'static> | CssErr
 test effect fn declarationBlocks() -> () ! AssertionError<'static> | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run blocks() |> Effect.provideMut<Allocator>(&mut allocator)
+  run appProperties() |> Effect.provideMut<Allocator>(&mut allocator)
 }
 
 test effect fn cssomDeclarations() -> () ! AssertionError<'static> | CssError | OutOfMemoryError {
