@@ -3,6 +3,6 @@ name = "css-properties"
 version = "0.1.0"
 kind = "library"
 exports = ["computed", "catalog", "keywords", "keyword_enums", "values", "convert", "declare", "shorthands"]
-silk-version = "0.1.0-dev.72+9c780a04d6ef"
+silk-version = "0.1.0-dev.74+205aea3f5b2e"
 license = "MIT"
 description = "CSS properties and their value types, shared by css-style, css-layout and their clients"
