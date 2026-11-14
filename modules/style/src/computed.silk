@@ -64,7 +64,7 @@ pub struct HostContext<'a> {
 }
 
 // A ComputedValue packed into 12 bytes (value u32.MAX = absent), so a style's
-// 288 entries stay small to build, copy and scan.
+// catalog entries stay small to build, copy and scan.
 struct Entry {
   value: u32,
   buffer: u32,
@@ -116,7 +116,7 @@ fn unpack(entry: Entry) -> Option<ComputedValue> {
 }
 
 struct Style {
-  entries: [Entry; 288],
+  entries: [Entry; properties.COUNT],
   scope: ScopeId,
   dimensions: Context,
   root: StyleId,
@@ -183,17 +183,17 @@ pub struct Engine<'a> {
 
 // Per-property tables of an Engine (see Engine.tables).
 struct Tables {
-  initialSpecified: [u32; 288],
-  initialComputed: [u32; 288],
-  contextFree: [bool; 288],
-  covered: [bool; 288],
+  initialSpecified: [u32; properties.COUNT],
+  initialComputed: [u32; properties.COUNT],
+  contextFree: [bool; properties.COUNT],
+  covered: [bool; properties.COUNT],
   // Cascade winner per covered index in the last build, before any revert (a candidates index).
-  winners: [u32; 288],
-  slots: [Slot; 288],
-  inheritedIndices: [u16; 288],
-  initialEntries: [Entry; 288],
-  pendingSlots: [u16; 288],
-  slotPositions: [u16; 288],
+  winners: [u32; properties.COUNT],
+  slots: [Slot; properties.COUNT],
+  inheritedIndices: [u16; properties.COUNT],
+  initialEntries: [Entry; properties.COUNT],
+  pendingSlots: [u16; properties.COUNT],
+  slotPositions: [u16; properties.COUNT],
 }
 
 impl Copy for Tables {}
@@ -211,7 +211,7 @@ struct Inputs<'i, 'b, 'h> {
 }
 
 struct Template {
-  entries: [Entry; 288],
+  entries: [Entry; properties.COUNT],
 }
 
 impl Copy for Template {}
@@ -224,8 +224,8 @@ struct Slot {
 
 impl Copy for Slot {}
 
-fn inheritedTable(slots: &[Slot; 288], slotCount: usize, count: &mut usize) -> [u16; 288] {
-  let mut indices: [u16; 288] = [0; 288]
+fn inheritedTable(slots: &[Slot; properties.COUNT], slotCount: usize, count: &mut usize) -> [u16; properties.COUNT] {
+  let mut indices: [u16; properties.COUNT] = [0; properties.COUNT]
   let mut i: usize = 0
   while i < slotCount {
     if slots[i].inherited {
@@ -237,8 +237,8 @@ fn inheritedTable(slots: &[Slot; 288], slotCount: usize, count: &mut usize) -> [
   return indices
 }
 
-fn slotTable(count: &mut usize) -> [Slot; 288] {
-  let mut slots = [Slot { property: Property.Color, index: 0, inherited: false }; 288]
+fn slotTable(count: &mut usize) -> [Slot; properties.COUNT] {
+  let mut slots = [Slot { property: Property.Color, index: 0, inherited: false }; properties.COUNT]
   let all = properties.all()
   let mut i: usize = 0
   while i < all.length {
@@ -261,9 +261,9 @@ fn slotTable(count: &mut usize) -> [Slot; 288] {
 /// are parsed per document, as without this.
 pub struct Initials {
   values: Store<'static>,
-  specified: [u32; 288],
+  specified: [u32; properties.COUNT],
   // Initials whose computed value is the specified one in any context.
-  contextFree: [bool; 288],
+  contextFree: [bool; properties.COUNT],
   // Stylesheets every document adds (see prepareSheet), already tokenized.
   sheets: List<PreparedSheet>,
 }
@@ -273,8 +273,8 @@ impl Initials {
     ! OutOfMemoryError
     ? &mut Allocator {
     let mut store = Store.make()
-    let mut specified: [u32; 288] = [u32.MAX; 288]
-    let mut contextFree: [bool; 288] = [false; 288]
+    let mut specified: [u32; properties.COUNT] = [u32.MAX; properties.COUNT]
+    let mut contextFree: [bool; properties.COUNT] = [false; properties.COUNT]
     let all = properties.all()
     let mut i: usize = 0
     while i < all.length {
@@ -435,7 +435,7 @@ impl<'a> Engine<'a> {
       }
     }
     let mut tables = base.tables.get()[0]
-    tables.covered = [false; 288]
+    tables.covered = [false; properties.COUNT]
     return Option<Engine<'a>>.some(
       Engine<'a> {
         tables: run Box<Tables>.make(tables),
@@ -501,7 +501,7 @@ impl<'a> Engine<'a> {
     let slots = slotTable(&mut slotCount)
     let mut inheritedCount: usize = 0
     let inheritedIndices = inheritedTable(&slots, slotCount, &mut inheritedCount)
-    let mut slotPositions: [u16; 288] = [u16.MAX; 288]
+    let mut slotPositions: [u16; properties.COUNT] = [u16.MAX; properties.COUNT]
     let mut k: usize = 0
     while k < slotCount {
       slotPositions[u16.toUsize(slots[k].index)] = usize.toU16(k)
@@ -510,14 +510,14 @@ impl<'a> Engine<'a> {
     let tables = Tables {
       slots: slots,
       inheritedIndices: inheritedIndices,
-      initialEntries: [absent(); 288],
-      pendingSlots: [0; 288],
+      initialEntries: [absent(); properties.COUNT],
+      pendingSlots: [0; properties.COUNT],
       slotPositions: slotPositions,
-      initialSpecified: [u32.MAX; 288],
-      initialComputed: [u32.MAX; 288],
-      contextFree: [false; 288],
-      covered: [false; 288],
-      winners: [0; 288],
+      initialSpecified: [u32.MAX; properties.COUNT],
+      initialComputed: [u32.MAX; properties.COUNT],
+      contextFree: [false; properties.COUNT],
+      covered: [false; properties.COUNT],
+      winners: [0; properties.COUNT],
     }
     return Engine {
       tables: run Box<Tables>.make(tables),
@@ -685,8 +685,8 @@ impl<'a> Engine<'a> {
     }
     if !sameRevision {
       let tables = self.tables.getMut()
-      tables[0].initialComputed = [u32.MAX; 288]
-      tables[0].initialEntries = [absent(); 288]
+      tables[0].initialComputed = [u32.MAX; properties.COUNT]
+      tables[0].initialEntries = [absent(); properties.COUNT]
       self.pendingStale = true
       self.restoreContextFree()
       self.revision = Option<usize>.some(host.revision)
@@ -715,8 +715,8 @@ impl<'a> Engine<'a> {
     }
     let scope = run self.variables.build(buffers, declarations, candidates, parentScope, limits)
     let tables = self.tables.getMut()
-    tables[0].covered = [false; 288]
-    let mut coveredIndices: [u16; 288] = [0; 288]
+    tables[0].covered = [false; properties.COUNT]
+    let mut coveredIndices: [u16; properties.COUNT] = [0; properties.COUNT]
     let mut coveredCount: usize = 0
     let mut c: usize = 0
     while c < candidates.length {
@@ -953,7 +953,7 @@ impl<'a> Engine<'a> {
     }
 
     // Only pending and declared slots can still be unset; visit them in slot order.
-    let mut declaredSlots: [u16; 288] = [0; 288]
+    let mut declaredSlots: [u16; properties.COUNT] = [0; properties.COUNT]
     let mut declaredCount: usize = 0
     d = 0
     while d < coveredCount {
@@ -1047,7 +1047,7 @@ impl<'a> Engine<'a> {
     self: &Self,
     style: &Style,
     parent: StyleId,
-    covered: &[u16; 288],
+    covered: &[u16; properties.COUNT],
     coveredCount: usize,
   ) -> u64 {
     if parent.index >= self.styles.length() {

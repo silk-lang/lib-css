@@ -13,7 +13,9 @@ import values
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
 import silk.core.option { Option }
+import silk.core.equal { Equal }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.f32
 
 /// Whether `property` is a shorthand this module expands.
 pub fn expands(property: Property) -> bool {
@@ -40,6 +42,40 @@ pub fn expands(property: Property) -> bool {
     || property == Property.GridTemplate
     || property == Property.Grid
     || property == Property.Background
+    || property == Property.Outline
+    || property == Property.MarginBlock
+    || property == Property.MarginInline
+    || property == Property.PaddingBlock
+    || property == Property.PaddingInline
+    || property == Property.InsetBlock
+    || property == Property.InsetInline
+    || property == Property.BorderBlockStart
+    || property == Property.BorderBlockEnd
+    || property == Property.BorderInlineStart
+    || property == Property.BorderInlineEnd
+    || property == Property.BorderBlockWidth
+    || property == Property.BorderBlockStyle
+    || property == Property.BorderBlockColor
+    || property == Property.BorderInlineWidth
+    || property == Property.BorderInlineStyle
+    || property == Property.BorderInlineColor
+    || property == Property.BorderBlock
+    || property == Property.BorderInline
+    || property == Property.LineClamp
+    || property == Property.WebkitLineClamp
+    || property == Property.TextWrap
+    || property == Property.OverscrollBehavior
+    || property == Property.ScrollMargin
+    || property == Property.ScrollMarginBlock
+    || property == Property.ScrollMarginInline
+    || property == Property.ScrollPadding
+    || property == Property.ScrollPaddingBlock
+    || property == Property.ScrollPaddingInline
+    || property == Property.ContainIntrinsicSize
+    || property == Property.Container
+    || property == Property.ListStyle
+    || property == Property.Columns
+    || property == Property.ColumnRule
 }
 
 /// The value `target` gets from `value` written for `shorthand`. None when `target` is not
@@ -60,7 +96,24 @@ pub effect fn longhand(shorthand: Property, value: &Value, target: Property) -> 
   }
   if shorthand == Property.Gap || shorthand == Property.PlaceContent
     || shorthand == Property.PlaceItems
-    || shorthand == Property.PlaceSelf {
+    || shorthand == Property.PlaceSelf
+    || shorthand == Property.MarginBlock
+    || shorthand == Property.MarginInline
+    || shorthand == Property.PaddingBlock
+    || shorthand == Property.PaddingInline
+    || shorthand == Property.InsetBlock
+    || shorthand == Property.InsetInline
+    || shorthand == Property.BorderBlockWidth
+    || shorthand == Property.BorderBlockStyle
+    || shorthand == Property.BorderBlockColor
+    || shorthand == Property.BorderInlineWidth
+    || shorthand == Property.BorderInlineStyle
+    || shorthand == Property.BorderInlineColor
+    || shorthand == Property.OverscrollBehavior
+    || shorthand == Property.ScrollMarginBlock
+    || shorthand == Property.ScrollMarginInline
+    || shorthand == Property.ScrollPaddingBlock
+    || shorthand == Property.ScrollPaddingInline {
     return run both(value, index)
   }
   if shorthand == Property.GridRow || shorthand == Property.GridColumn {
@@ -76,12 +129,41 @@ pub effect fn longhand(shorthand: Property, value: &Value, target: Property) -> 
     return run flex(value, index)
   }
   if shorthand == Property.Border {
-    return run border(value, index / 4)
+    return run border(value, index / 4, false)
   }
   if shorthand == Property.BorderTop || shorthand == Property.BorderRight
     || shorthand == Property.BorderBottom
-    || shorthand == Property.BorderLeft {
-    return run border(value, index)
+    || shorthand == Property.BorderLeft
+    || shorthand == Property.BorderBlockStart
+    || shorthand == Property.BorderBlockEnd
+    || shorthand == Property.BorderInlineStart
+    || shorthand == Property.BorderInlineEnd
+    || shorthand == Property.ColumnRule {
+    return run border(value, index, false)
+  }
+  if shorthand == Property.BorderBlock || shorthand == Property.BorderInline {
+    return run border(value, index % 3, false)
+  }
+  if shorthand == Property.Outline {
+    return run border(value, index, true)
+  }
+  if shorthand == Property.LineClamp || shorthand == Property.WebkitLineClamp {
+    return run lineClamp(value, index, shorthand == Property.WebkitLineClamp)
+  }
+  if shorthand == Property.TextWrap {
+    return run anyOrder(value, index, Order.TextWrap)
+  }
+  if shorthand == Property.ListStyle {
+    return run anyOrder(value, index, Order.ListStyle)
+  }
+  if shorthand == Property.Columns {
+    return run anyOrder(value, index, Order.Columns)
+  }
+  if shorthand == Property.Container {
+    return run container(value, index)
+  }
+  if shorthand == Property.ContainIntrinsicSize {
+    return run intrinsicSize(value, index)
   }
   if shorthand == Property.GridTemplate || shorthand == Property.Grid {
     return run grid(value, index)
@@ -99,9 +181,17 @@ fn isText(value: &Value) -> bool {
   }
 }
 
-// Whether `value` is CSS text that is one identifier, such as a grid line name.
+// Whether `value` is one identifier, such as a grid line name. A name spelled like a keyword
+// (`x`, `content`) is one too, unless CSS reserves it.
 fn isIdentifier(value: &Value) -> bool {
   match &value.* {
+    Value.Keyword { value: keyword } => {
+      return !(keyword == Keyword.Auto || keyword == Keyword.Initial || keyword == Keyword.Inherit
+        || keyword == Keyword.Unset
+        || keyword == Keyword.Revert
+        || keyword == Keyword.RevertLayer
+        || keyword == Keyword.Default)
+    }
     Value.Text { css } => {
       let bytes = css.asSlice()
       if bytes.length == 0 || (bytes[0] >= 48 && bytes[0] <= 57) {
@@ -457,8 +547,11 @@ fn lineStyle(keyword: Keyword) -> bool {
     || keyword == Keyword.Outset
 }
 
-// `border` and its four sides: a width (0), a style (1) and a color (2) in any order.
-effect fn border(value: &Value, component: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+// `border` and its sides, `column-rule` and `outline`: a width (0), a style (1) and a color
+// (2) in any order. In `outline`, `auto` is a style and the color defaults to `auto`.
+effect fn border(value: &Value, component: usize, outline: bool) -> Option<Value>
+  ! OutOfMemoryError
+  ? &mut Allocator {
   let count = spaced(value)
   if count > 3 || isText(value) {
     return Option<Value>.None
@@ -476,7 +569,7 @@ effect fn border(value: &Value, component: usize) -> Option<Value> ! OutOfMemory
       Value.Keyword { value: keyword } => {
         if keyword == Keyword.Thin || keyword == Keyword.Medium || keyword == Keyword.Thick {
           0
-        } else if lineStyle(keyword) {
+        } else if lineStyle(keyword) || (outline && keyword == Keyword.Auto) {
           1
         } else {
           2
@@ -504,9 +597,251 @@ effect fn border(value: &Value, component: usize) -> Option<Value> ! OutOfMemory
       if component == 1 {
         return Option<Value>.some(values.none())
       }
+      if outline {
+        return Option<Value>.some(values.auto())
+      }
       return Option<Value>.some(values.keyword(Keyword.Currentcolor))
     }
   }
+}
+
+// The shorthands whose components fill their longhands in any order.
+enum Order {
+  TextWrap,
+  ListStyle,
+  Columns,
+}
+
+impl Equal for Order {
+  fn equals(left: &Order, right: &Order) -> bool {
+    return left.* == right.*
+  }
+}
+
+const AMBIGUOUS: usize = 8
+const INVALID: usize = 9
+
+// Which longhand a component of an `Order` shorthand fills. `none` in `list-style` and `auto`
+// in `columns` are AMBIGUOUS: they fill whichever longhands are left.
+fn slotOf(order: Order, part: &Value) -> usize {
+  if order == Order.TextWrap {
+    return match &part.* {
+      Value.Keyword { value: keyword } => {
+        if keyword == Keyword.Wrap || keyword == Keyword.Nowrap {
+          0
+        } else if keyword == Keyword.Auto || keyword == Keyword.Balance || keyword == Keyword.Stable
+          || keyword == Keyword.Pretty
+          || keyword == Keyword.AvoidOrphans {
+          1
+        } else {
+          INVALID
+        }
+      }
+      _ => INVALID
+    }
+  }
+  if order == Order.Columns {
+    return match &part.* {
+      Value.Keyword { value: keyword } => if keyword == Keyword.Auto { AMBIGUOUS } else { INVALID }
+      Value.Unit { value: amount, unit } => {
+        if unit == Unit.Number {
+          if amount >= 1.0 { 1 } else { INVALID }
+        } else if unit == Unit.Percent || amount < 0.0 {
+          INVALID
+        } else {
+          0
+        }
+      }
+      Value.Math { .. } => 0
+      _ => INVALID
+    }
+  }
+  return match &part.* {
+    Value.Keyword { value: keyword } => {
+      if keyword == Keyword.Inside || keyword == Keyword.Outside {
+        0
+      } else if keyword == Keyword.None {
+        AMBIGUOUS
+      } else {
+        2
+      }
+    }
+    Value.Function { .. } => 1
+    Value.Text { css } => if mentions(css.asSlice(), b"url(") || mentions(css.asSlice(), b"gradient(") { 1 } else { 2 }
+    _ => INVALID
+  }
+}
+
+fn initialOf(order: Order, slot: usize) -> Value {
+  if order == Order.TextWrap {
+    return if slot == 0 { values.keyword(Keyword.Wrap) } else { values.auto() }
+  }
+  if order == Order.Columns {
+    return values.auto()
+  }
+  if slot == 0 {
+    return values.keyword(Keyword.Outside)
+  }
+  if slot == 1 {
+    return values.none()
+  }
+  return values.keyword(Keyword.Disc)
+}
+
+// `text-wrap` (mode, style), `list-style` (position, image, type) and `columns` (width,
+// count): each component fills one longhand, at most once, in any order.
+effect fn anyOrder(value: &Value, index: usize, order: Order) -> Option<Value>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let slots: usize = if order == Order.ListStyle { 3 } else { 2 }
+  let count = spaced(value)
+  if count > slots || isText(value) && order != Order.ListStyle {
+    return Option<Value>.None
+  }
+  let mut seen: [bool; 3] = [false; 3]
+  let mut ambiguous: usize = 0
+  let mut found = Option<Value>.None
+  let mut i: usize = 0
+  while i < count {
+    let part = run spacedAt(value, i)
+    let slot = slotOf(order, &part)
+    if slot == INVALID {
+      return Option<Value>.None
+    }
+    if slot == AMBIGUOUS {
+      ambiguous = ambiguous + 1
+    } else {
+      if seen[slot] {
+        return Option<Value>.None
+      }
+      seen[slot] = true
+      if slot == index {
+        found = Option<Value>.some(move part)
+      }
+    }
+    i = i + 1
+  }
+  if order == Order.ListStyle {
+    let mut open: usize = 0
+    if !seen[1] {
+      open = open + 1
+    }
+    if !seen[2] {
+      open = open + 1
+    }
+    if ambiguous > open {
+      return Option<Value>.None
+    }
+    if ambiguous > 0 && !seen[index] && index > 0 {
+      return Option<Value>.some(values.none())
+    }
+  }
+  return match move found {
+    Option<Value>.Some { value: given } => Option<Value>.some(move given)
+    _ => Option<Value>.some(initialOf(order, index))
+  }
+}
+
+fn isInteger(value: &Value) -> bool {
+  return match &value.* {
+    Value.Unit { value: amount, unit } => unit == Unit.Number && amount >= 1.0 && f32.floor(amount) == amount
+    _ => false
+  }
+}
+
+// `line-clamp` (max-lines, block-ellipsis, continue): `none`, or a line count with an
+// optional ellipsis in either order. `-webkit-line-clamp` takes `none` or a count. A count
+// collapses the lines after it; `-webkit-legacy` is not modeled, so both clamp the same way.
+effect fn lineClamp(value: &Value, index: usize, legacy: bool) -> Option<Value>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  if isKeyword(value, Keyword.None) {
+    return Option<Value>.some(
+      if index == 0 { values.none() } else if index == 1 { values.keyword(Keyword.NoEllipsis) } else { values.auto() },
+    )
+  }
+  let count = spaced(value)
+  let most: usize = if legacy { 1 } else { 2 }
+  if count > most {
+    return Option<Value>.None
+  }
+  let mut lines = Option<Value>.None
+  let mut ellipsis = Option<Value>.None
+  let mut i: usize = 0
+  while i < count {
+    let part = run spacedAt(value, i)
+    if isInteger(&part) && !lines.isSome() {
+      lines = Option<Value>.some(move part)
+    } else if !ellipsis.isSome() && (isKeyword(&part, Keyword.Auto) || isKeyword(&part, Keyword.NoEllipsis) || isText(&part)) {
+      ellipsis = Option<Value>.some(move part)
+    } else {
+      return Option<Value>.None
+    }
+    i = i + 1
+  }
+  if !lines.isSome() {
+    return Option<Value>.None
+  }
+  if index == 0 {
+    return move lines
+  }
+  if index == 1 {
+    return match move ellipsis {
+      Option<Value>.Some { value: given } => Option<Value>.some(move given)
+      _ => Option<Value>.some(values.auto())
+    }
+  }
+  return Option<Value>.some(values.keyword(Keyword.Collapse))
+}
+
+// `container`: a name, then optionally a slash and a type.
+effect fn container(value: &Value, index: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  let parts = match move run slashed(value) {
+    Option<List<Value>>.Some { value: found } => move found
+    _ => {
+      return Option<Value>.None
+    }
+  }
+  if parts.length() > 2 {
+    return Option<Value>.None
+  }
+  if index < parts.length() {
+    return Option<Value>.some(run values.clone(&parts.asSlice()[index]))
+  }
+  return Option<Value>.some(values.normal())
+}
+
+// `contain-intrinsic-size` (width, height): one or two of `none`, a length, or `auto` and a
+// length; one applies to both.
+effect fn intrinsicSize(value: &Value, index: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  let count = spaced(value)
+  if count > 4 || isText(value) {
+    return Option<Value>.None
+  }
+  let mut groups = List<Value>.make()
+  let mut i: usize = 0
+  while i < count {
+    let part = run spacedAt(value, i)
+    if isKeyword(&part, Keyword.Auto) {
+      if i + 1 >= count {
+        return Option<Value>.None
+      }
+      let size = run spacedAt(value, i + 1)
+      if isKeyword(&size, Keyword.Auto) {
+        return Option<Value>.None
+      }
+      run groups.append(run values.pair(move part, move size))
+      i = i + 2
+    } else {
+      run groups.append(move part)
+      i = i + 1
+    }
+  }
+  if groups.length() == 0 || groups.length() > 2 {
+    return Option<Value>.None
+  }
+  let at = if index < groups.length() { index } else { 0 }
+  return Option<Value>.some(groups.remove(at))
 }
 
 fn mentions(css: &[u8], word: &[u8]) -> bool {

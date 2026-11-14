@@ -81,7 +81,7 @@ pub struct ComputedStyle {
   elementId: usize,
   pseudoIdentity: Bytes,
   valid: bool,
-  longhands: [Property; 288],
+  longhands: [Property; properties.COUNT],
   longhandCount: usize,
 }
 
@@ -134,7 +134,7 @@ impl ComputedStyle {
       elementId: element,
       pseudoIdentity: Bytes.make(),
       valid: pseudo.length == 0,
-      longhands: [Property.Color; 288],
+      longhands: [Property.Color; properties.COUNT],
       longhandCount: 0,
     }
 

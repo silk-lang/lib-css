@@ -88,6 +88,52 @@ effect fn expansion() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut 
   run expectLonghand(Property.Background, &fill, Property.BackgroundColor, b"transparent", "an omitted background color is initial")
 }
 
+effect fn appShorthands() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let ring = run values.pair(values.keyword(Keyword.Auto), values.px(2.0))
+  run expectLonghand(Property.Outline, &ring, Property.OutlineStyle, b"auto", "outline: auto is a style")
+  run expectLonghand(Property.Outline, &ring, Property.OutlineWidth, b"2px", "outline width")
+  run expectLonghand(Property.Outline, &ring, Property.OutlineColor, b"auto", "an omitted outline color is auto")
+
+  let inline = run values.pair(values.px(4.0), values.px(8.0))
+  run expectLonghand(Property.MarginInline, &inline, Property.MarginInlineStart, b"4px", "margin-inline start")
+  run expectLonghand(Property.MarginInline, &inline, Property.MarginInlineEnd, b"8px", "margin-inline end")
+  let one = values.px(3.0)
+  run expectLonghand(Property.InsetBlock, &one, Property.InsetBlockEnd, b"3px", "one value sets both ends")
+  run expectLonghand(Property.ScrollPadding, &inline, Property.ScrollPaddingLeft, b"8px", "scroll-padding sides")
+  run expectLonghand(Property.BorderInline, &ring, Property.BorderInlineEndWidth, b"2px", "border-inline sets both ends")
+
+  let three = values.number(3.0)
+  run expectLonghand(Property.LineClamp, &three, Property.MaxLines, b"3", "line-clamp: 3 keeps three lines")
+  run expectLonghand(Property.LineClamp, &three, Property.BlockEllipsis, b"auto", "with an ellipsis")
+  run expectLonghand(Property.LineClamp, &three, Property.Continue, b"collapse", "and collapses the rest")
+  let none = values.none()
+  run expectLonghand(Property.LineClamp, &none, Property.BlockEllipsis, b"no-ellipsis", "line-clamp: none")
+  let half = values.number(1.5)
+  run expectLonghand(Property.WebkitLineClamp, &half, Property.MaxLines, b"", "a line count is an integer")
+
+  let balance = values.keyword(Keyword.Balance)
+  run expectLonghand(Property.TextWrap, &balance, Property.TextWrapStyle, b"balance", "text-wrap style")
+  run expectLonghand(Property.TextWrap, &balance, Property.TextWrapMode, b"wrap", "an omitted mode wraps")
+
+  run expectLonghand(Property.ListStyle, &none, Property.ListStyleType, b"none", "list-style: none clears the type")
+  run expectLonghand(Property.ListStyle, &none, Property.ListStyleImage, b"none", "and the image")
+  run expectLonghand(Property.ListStyle, &none, Property.ListStylePosition, b"outside", "and keeps the position")
+  let square = run values.pair(values.keyword(Keyword.Inside), values.keyword(Keyword.Square))
+  run expectLonghand(Property.ListStyle, &square, Property.ListStyleType, b"square", "list-style type")
+
+  let columns = run values.pair(values.px(200.0), values.number(3.0))
+  run expectLonghand(Property.Columns, &columns, Property.ColumnCount, b"3", "columns count")
+  run expectLonghand(Property.Columns, &columns, Property.ColumnWidth, b"200px", "columns width")
+
+  let contain = values.keyword(Keyword.Contain)
+  run expectLonghand(Property.OverscrollBehavior, &contain, Property.OverscrollBehaviorY, b"contain", "overscroll-behavior both axes")
+}
+
+test effect fn appShorthandsExpand() -> () ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run appShorthands() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
 test effect fn boxShorthandsExpand() -> () ! AssertionError<'static> | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run expansion() |> Effect.provideMut<Allocator>(&mut allocator)
