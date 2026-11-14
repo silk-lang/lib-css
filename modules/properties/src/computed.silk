@@ -145,6 +145,11 @@ pub enum OverflowWrap { Normal, BreakWord, Anywhere }
 /// CSS `text-transform`. The host applies it where it shapes text, so source offsets stay the
 /// text as written.
 pub enum TextTransform { None, Uppercase, Lowercase, Capitalize, FullWidth }
+/// CSS `line-break`: how strictly CJK punctuation and small kana keep to their neighbours, or
+/// `anywhere`, a break between any two characters.
+pub enum LineBreak { Auto, Loose, Normal, Strict, Anywhere }
+/// CSS `hyphens`. `auto` hyphenates no further than `manual` where the host has no dictionary.
+pub enum Hyphens { None, Manual, Auto }
 
 /// The OpenType features `font-variant-*` and `font-kerning` turn on or off, as `FEATURE_*`
 /// bits, and the ones `font-feature-settings` names. The host hands them to its shaper.
@@ -372,6 +377,8 @@ pub struct Text {
   pub wordBreak: WordBreak,
   pub overflowWrap: OverflowWrap,
   pub textTransform: TextTransform,
+  pub lineBreak: LineBreak,
+  pub hyphens: Hyphens,
   /// `font-variant-*`, `font-kerning` and `font-feature-settings`.
   pub features: FontFeatures,
   /// `font-width` as a percentage; `normal` is 100.
@@ -421,6 +428,8 @@ impl Text {
       wordBreak: WordBreak.Normal,
       overflowWrap: OverflowWrap.Normal,
       textTransform: TextTransform.None,
+      lineBreak: LineBreak.Auto,
+      hyphens: Hyphens.Manual,
       features: FontFeatures.normal(),
       width: 100.0,
       orphans: 2,
