@@ -7,7 +7,7 @@ import silk.core.option { Option }
 import text { TextMeasure, TextError, TextContext, TextTokenKind, TextCursor, TextBreak, TextBreakKind, TextLevel, TextAnalysis, TextShapeRequest, TextRun }
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
-import style { Style, Dimension, Edges, Float, Display, DisplayOutside, DisplayInside, Position, BoxSizing, TextAlign, TextWrap, Direction, WhiteSpaceCollapse, TabSize, BoxDecorationBreak, FlexDirection, FlexWrap, Align }
+import style { Style, Dimension, Edges, Float, Display, DisplayOutside, DisplayInside, Position, BoxSizing, TextAlign, TextWrap, Direction, WhiteSpaceCollapse, TabSize, BoxDecorationBreak, FlexDirection, FlexWrap, Align, Overflow }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableKind, max, min, abs }
 import tree { Tree, LayoutTree, NodeId, InvalidNode, InvalidBox, BoxId, NO_NODE }
 import engine { compute }
@@ -117,6 +117,16 @@ impl TextMeasure for Paragraph {
           fontKey: token.fontKey, bidiLevel: request.analysis.level, shapeKey: 0 })
       }
       unit = unit + 1
+    }
+    // An ellipsis is "..." at the fixture's advance.
+    if request.ellipsis && output.length() != 0 {
+      let last = output.length() - 1
+      match output.get(last) {
+        TextRun.Text { unit: at, start, end, advance, fontKey, bidiLevel, shapeKey } => {
+          output.set(last, TextRun.Text { unit: at, start: start, end: end, advance: advance + 3.0 * provider.advance, fontKey: fontKey, bidiLevel: bidiLevel, shapeKey: shapeKey })
+        }
+        _ => {}
+      }
     }
   }
 }
@@ -1400,4 +1410,51 @@ test effect fn overflowWrapAnywhereShrinksMinContent() ! OutOfMemoryError | Text
   run Testing.expect(breakWord.width == 50.0, "break-word keeps the longest word as min-content")
   let anywhere = run wrapped(TextBreakKind.Anywhere, 1.0, true) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(anywhere.width == 5.0, "anywhere breaks count toward min-content")
+}
+
+effect fn clampedWords(value: string, style: Style) -> Rect ! OutOfMemoryError | TextError | FragmentationError | InvalidNode ? &mut Allocator {
+  let mut tree = run Tree.make(move style)
+  let root = tree.root()
+  let text = run tree.appendText(root, run String.copy(value))
+  let mut output = LayoutTree.make()
+  let mut provider = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: false, analyses: 0 }
+  run compute(&tree, &mut output, &mut provider, OptionalSize.definite(100.0, 100.0))
+  return run output.sourceBounds(text)
+}
+
+fn clampStyle(lines: usize, ellipsis: bool) -> Style {
+  let mut style = Style.make()
+  style.width = Dimension.px(40.0)
+  style.maxLines = lines
+  style.blockEllipsis = ellipsis
+  return style
+}
+
+fn overflowStyle(overflow: Overflow) -> Style {
+  let mut style = Style.make()
+  style.width = Dimension.px(40.0)
+  style.textWrap = TextWrap.NoWrap
+  style.overflowX = overflow
+  style.textOverflowEllipsis = true
+  return style
+}
+
+test effect fn lineClampEndsTheBoxAfterItsLastLine() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let all = run clampedWords("aaa bbb ccc ddd eee", clampStyle(0, true)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(all.height == 30.0 && all.width == 35.0, "fixture: three lines of at most 35px")
+  let clamped = run clampedWords("aaa bbb ccc ddd eee", clampStyle(2, false)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(clamped.height == 20.0 && clamped.width == 35.0, "line-clamp: 2 keeps two lines")
+  let ellipsis = run clampedWords("aaa bbb ccc ddd eee", clampStyle(2, true)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(ellipsis.height == 20.0 && ellipsis.width == 40.0, "the last line is cut to 'ccc d' so its ellipsis fits")
+  let short = run clampedWords("aaa bbb", clampStyle(2, true)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(short.height == 10.0 && short.width == 35.0, "nothing is cut, so no ellipsis")
+}
+
+test effect fn textOverflowEllipsisCutsOverflowingLines() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let cut = run clampedWords("aaa bbb ccc", overflowStyle(Overflow.Hidden)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(cut.height == 10.0 && cut.width == 40.0, "the line ends in 'aaa b' and an ellipsis")
+  let visible = run clampedWords("aaa bbb ccc", overflowStyle(Overflow.Visible)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(visible.width == 55.0, "overflow: visible keeps the whole line")
 }

@@ -919,7 +919,7 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let fonts = &mut text.fonts
   fonts.clear()
   let candidate = &mut text.candidate
-  run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, original.asSlice(), scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, 0.0, 0.0, &[])
+  run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, original.asSlice(), scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, false, 0.0, 0.0, &[])
   plain = candidate.real && !candidate.visual.active && candidate.hanging == 0.0 && fonts.length() == 1
   if plain {
     line.items.clear()
@@ -1573,11 +1573,54 @@ effect fn shapeRange<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &m
       return
     }
   }
-  run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut memo.fonts, &mut shaped, &mut result, start, end, hyphenated, 0.0, inlineOrigin, &[])
+  run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut memo.fonts, &mut shaped, &mut result, start, end, hyphenated, false, 0.0, inlineOrigin, &[])
   if reusable && !hyphenated { run memo.addSegment(start, end, &result, limit) }
 }
 
-effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, justificationSpace: f32, inlineOrigin: f32, hangingRanges: &[TextRange]) ! OutOfMemoryError | TextError ? &mut Allocator {
+// The end of the longest prefix of [start, end) that fits `room` with an ellipsis after it,
+// cut at a UTF-8 scalar boundary, with that prefix's shaping left in `result`. When no
+// prefix fits, the first scalar and the ellipsis overflow.
+effect fn ellipsisCut<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, room: f32, inlineOrigin: f32, rtl: bool) -> TextCursor ! OutOfMemoryError | TextError ? &mut Allocator {
+  let mut cuts = List<TextCursor>.make()
+  let mut unit = start.unit
+  while unit < end.unit || (unit == end.unit && end.offset != 0) {
+    let token = &context.tokens[unit]
+    let count = TextFlow.length(token)
+    let mut low: usize = 0
+    if unit == start.unit { low = start.offset }
+    let mut high = count
+    if unit == end.unit { high = end.offset }
+    if token.kind == TextTokenKind.Text {
+      let mut offset = low + 1
+      while offset <= high {
+        if offset == count { run cuts.append(TextCursor { unit: unit + 1, offset: 0 }) }
+        else if String.isCharBoundary(token.text, offset) { run cuts.append(TextCursor { unit: unit, offset: offset }) }
+        offset = offset + 1
+      }
+    } else if high > low || count == 0 {
+      run cuts.append(TextCursor { unit: unit + 1, offset: 0 })
+    }
+    unit = unit + 1
+  }
+  if cuts.length() == 0 { run cuts.append(end) }
+  let mut chosen: usize = 0
+  let mut lo: usize = 0
+  let mut hi = cuts.length()
+  while lo < hi {
+    let middle = lo + (hi - lo) / 2
+    let at = cuts.get(middle)
+    run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut fonts, &mut shaped, &mut result, start, at, false, true, 0.0, inlineOrigin, &[])
+    if result.advance + textEdge(nodes, original, scopes, at, false, rtl, visualPlan.active) - result.hanging <= room {
+      chosen = middle
+      lo = middle + 1
+    } else { hi = middle }
+  }
+  let at = cuts.get(chosen)
+  run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut fonts, &mut shaped, &mut result, start, at, false, true, 0.0, inlineOrigin, &[])
+  return at
+}
+
+effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, ellipsis: bool, justificationSpace: f32, inlineOrigin: f32, hangingRanges: &[TextRange]) ! OutOfMemoryError | TextError ? &mut Allocator {
   result.items.clear()
   result.texts.clear()
   result.advance = 0.0
@@ -1609,7 +1652,7 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
   if found {
     last = run TextFlow.checked(context.tokens, last)
     if shapeText {
-      run TextMeasure.shape(&mut measurer, TextShapeRequest { context: context, analysis: analysis, start: first, end: last, hyphenated: hyphenated, justificationSpace: justificationSpace, hangingRanges: hangingRanges }, &mut shaped)
+      run TextMeasure.shape(&mut measurer, TextShapeRequest { context: context, analysis: analysis, start: first, end: last, hyphenated: hyphenated, ellipsis: ellipsis, justificationSpace: justificationSpace, hangingRanges: hangingRanges }, &mut shaped)
     }
   }
   let mut next: usize = 0
@@ -2471,7 +2514,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     if fragmented && hasFloats && frameLines == 0 && accepted.real && input.fragmentation.offset + box.inset.top + cursor + metrics.height > input.fragmentation.limit {
       let prefix = floatPrefix(context, original.asSlice(), start, end)
       if start.before(prefix) {
-        run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, prefix, false, 0.0, 0.0, &[])
+        run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, prefix, false, false, 0.0, 0.0, &[])
         if !candidate.real {
           // Floats may advance independently while the first real line waits.
           // This is a fragment boundary, not a forced text/paragraph break.
@@ -2545,8 +2588,24 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       if point.at.equal(end) && point.kind == TextBreakKind.Forced { ending = point }
     }
     let last = next == points.length() || ending.kind == TextBreakKind.Forced
+    // line-clamp (CSS Overflow 4 §4) ends the box after its last allowed line. That line, and
+    // a line overflowing a scroll container with text-overflow: ellipsis (CSS Overflow 3
+    // §5.1), end in an ellipsis that replaces the content it would cover.
+    let clamped = !fragmented && style.maxLines != 0 && accepted.real && realLines + 1 >= style.maxLines && !end.equal(terminal)
+    let overflowing = style.textOverflowEllipsis && total > band.right - band.left
+    let mut ellipsized = false
+    if accepted.real && ((clamped && style.blockEllipsis) || overflowing) {
+      let mut inlineOrigin = band.left
+      if rtl { inlineOrigin = width - band.right }
+      let cut = run ellipsisCut(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, end, band.right - band.left - leading, inlineOrigin, rtl)
+      let old = move accepted
+      accepted = move candidate
+      candidate = move old
+      total = leading + accepted.advance + textEdge(nodes, original.asSlice(), scopes, cut, false, rtl, visualPlan.active) - accepted.hanging
+      ellipsized = true
+    }
     let remaining = band.right - band.left - total
-    if input.performLayout && remaining > 0.0 && effectiveTextAlign(style, last) == TextAlign.Justify {
+    if input.performLayout && !ellipsized && remaining > 0.0 && effectiveTextAlign(style, last) == TextAlign.Justify {
       let mut inlineOrigin = band.left
       if rtl { inlineOrigin = width - band.right }
       hangingRanges.clear()
@@ -2555,7 +2614,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
         if unicodeBidi == UnicodeBidi.Plaintext { hangingRtl = analysis.paragraphAt(start).level == 1 }
         run collectHanging(&accepted, context, hangingRtl, &mut hangingRanges)
       }
-      run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, end, ending.kind == TextBreakKind.Hyphenated, remaining, inlineOrigin, hangingRanges.asSlice())
+      run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo.fonts, &mut shaped, &mut candidate, start, end, ending.kind == TextBreakKind.Hyphenated, false, remaining, inlineOrigin, hangingRanges.asSlice())
       let natural = leading + candidate.advance + textEdge(nodes, original.asSlice(), scopes, end, false, rtl, visualPlan.active)
       total = natural - candidate.hanging
       if last { total = natural - min(candidate.hanging, max(0.0, natural - (band.right - band.left))) }
@@ -2603,6 +2662,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     cursor = cursor + metrics.height
     if !floatBoundary && (!sourceEnding || accepted.real) { afterForced = ending.kind == TextBreakKind.Forced }
     start = end
+    if clamped { break }
     if sourceEnding {
       let event = boundaries.events.get(sourceEvent)
       sourceCut = event.at.unit

@@ -65,6 +65,12 @@ pub struct Style {
   pub marginBreak: MarginBreak,
   pub breakBefore: BreakBetween, pub breakAfter: BreakBetween, pub breakInside: BreakInside,
   pub orphans: usize, pub widows: usize,
+  // `line-clamp` (CSS Overflow 4): `maxLines` lines at most, 0 for none, the last of
+  // them ending in an ellipsis when `blockEllipsis` and content was cut after it.
+  pub maxLines: usize, pub blockEllipsis: bool,
+  // `text-overflow: ellipsis` at the inline end of lines that overflow a container whose
+  // inline overflow is not visible. Its inline formatting runs get it only then.
+  pub textOverflowEllipsis: bool,
   pub flexDirection: FlexDirection, pub flexWrap: FlexWrap,
   pub flexGrow: f32, pub flexShrink: f32, pub flexBasis: Dimension,
   pub order: i32,
@@ -126,6 +132,7 @@ impl Style {
       marginBreak: MarginBreak.Auto,
       breakBefore: BreakBetween.Auto, breakAfter: BreakBetween.Auto, breakInside: BreakInside.Auto,
       orphans: 2, widows: 2,
+      maxLines: 0, blockEllipsis: false, textOverflowEllipsis: false,
       flexDirection: FlexDirection.Row, flexWrap: FlexWrap.NoWrap,
       flexGrow: 0.0, flexShrink: 1.0, flexBasis: Dimension.auto(), order: 0,
       justifyContent: Align.Normal, alignItems: Align.Normal, alignSelf: Align.Auto, alignContent: Align.Normal,

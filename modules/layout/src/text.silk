@@ -139,6 +139,9 @@ pub struct TextShapeRequest<'tokens, 'text> {
   pub context: TextContext<'tokens, 'text>, pub start: TextCursor, pub end: TextCursor,
   pub analysis: &'tokens TextAnalysis,
   pub hyphenated: bool,
+  // Append an ellipsis (U+2026, or "..." without that glyph) after the range's last text
+  // run, in that run's font, for line-clamp and text-overflow.
+  pub ellipsis: bool,
   // Requested extra inline advance after line selection; zero means natural
   // shaping. Preserve content coverage and vertical metrics. If the line has
   // no eligible opportunities, return its natural advances for CSS fallback.
