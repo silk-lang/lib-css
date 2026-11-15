@@ -17,9 +17,9 @@ import silk.testing.testing { Testing, AssertionError }
 pub struct Tree { pub hovered: bool }
 impl ElementTree for Tree {
   fn state(self: &Self, node: usize) -> StateBits { return StateBits { bits: if self.hovered { HOVER } else { 0 } } }
-  fn parent(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn parent(self: &Self, node: usize) -> usize { return if node == 1 { 0 } else { NO_ELEMENT } }
   fn containingHost(self: &Self, node: usize) -> usize { return NO_ELEMENT }
-  fn firstChild(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn firstChild(self: &Self, node: usize) -> usize { return if node == 0 { 1 } else { NO_ELEMENT } }
   fn nextSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
   fn previousSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
   fn localName(self: &Self, node: usize) -> &[u8] { return b"button" }
@@ -27,14 +27,14 @@ impl ElementTree for Tree {
   fn attributeCount(self: &Self, node: usize) -> usize { return 1 }
   fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"class" }
   fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
-  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"button hot" }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return if node == 1 { b"a" } else if node == 2 { b"b" } else { b"button hot" } }
   fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
   fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
-    return AttributeText { namespace: b"", name: b"class", value: b"button hot" }
+    return AttributeText { namespace: b"", name: b"class", value: ElementTree.attributeValue(self, node, attribute) }
   }
   fn language(self: &Self, node: usize) -> &[u8] { return b"" }
   fn isRoot(self: &Self, node: usize) -> bool { return true }
-  fn isEmpty(self: &Self, node: usize) -> bool { return true }
+  fn isEmpty(self: &Self, node: usize) -> bool { return node != 0 }
   fn isLink(self: &Self, node: usize) -> bool { return false }
 }
 

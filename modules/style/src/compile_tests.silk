@@ -159,3 +159,19 @@ test effect fn mediaAndStartingConditionsChangeEligibilityOnlyWhenResultsFlip() 
   let reduced = run sheet_conditions.update(&mut sheet, &small, true, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(reduced && !sheet.resolver.rules()[1].enabled, "false parent condition disables nested starting rules")
 }
+
+test effect fn everyNestedSelectorListArmKeepsItsParentConstraintAndSpecificity() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | ResolverError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let compiled = run compile.compile(b".button, #missing { .a, .b { width:1px } }", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bytes = run compiled.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut sheet = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let tree = Tree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheet.resolver.resolve(BufferView.of(sheet.buffers.asSlice()), &tree, 1, &[], &mut context) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.resolver.matches().length == 1, "nested child matches")
+  let specificity = sheet.resolver.matches()[0].specificity
+  run Testing.expect(specificity.ids == 1 && specificity.classes == 1, "nesting uses maximum parent-list specificity")
+  run sheet.resolver.resolve(BufferView.of(sheet.buffers.asSlice()), &tree, 2, &[], &mut context) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.resolver.matches().length == 0, "second selector-list arm cannot escape its parent")
+}
