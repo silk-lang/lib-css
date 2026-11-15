@@ -30,7 +30,7 @@ impl ElementTree for Tree {
   fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return if node == 1 { b"a" } else if node == 2 { b"b" } else { b"button hot" } }
   fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
   fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
-    return AttributeText { namespace: b"", name: b"class", value: ElementTree.attributeValue(self, node, attribute) }
+    return AttributeText { namespace: b"", name: b"class", value: if node == 1 { b"a" } else if node == 2 { b"b" } else { b"button hot" } }
   }
   fn language(self: &Self, node: usize) -> &[u8] { return b"" }
   fn isRoot(self: &Self, node: usize) -> bool { return true }
