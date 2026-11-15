@@ -1,7 +1,6 @@
 //! CSS Properties and Values API registrations over the stylesheet's token buffers.
 import cascade { Name }
 import declaration_values
-import condition_cursor
 import input { Input, TokenView }
 import tokens { TokenBuffer, TokenRange, Kind, Limits, CssError, insensitive, equal }
 import syntax
@@ -80,12 +79,14 @@ fn independent(source: &Input<'_>) -> bool {
 /// additionally be independent of the element's font, color, attributes and custom properties.
 pub effect fn valid(syntax: Syntax, source: &Input<'_>, initial: bool, limits: &Limits) -> bool
   ! CssError | OutOfMemoryError ? &mut Allocator {
+  let mut empty = Cursor.make(source)
+  if syntax == Syntax.Universal && empty.done(source) { return true }
   let validation = run declaration_values.validate(source, limits)
-  if !validation.valid || validation.hasVariables || (initial && !independent(source)) { return false }
+  if !validation.valid || validation.hasVariables || (initial && syntax != Syntax.Universal && !independent(source)) { return false }
   if syntax == Syntax.Universal {
     if initial {
       let mut cursor = Cursor.make(source)
-      if cursor.done(source) { return false }
+      if cursor.done(source) { return true }
       if cursor.ident(source, b"initial") || cursor.ident(source, b"inherit") || cursor.ident(source, b"unset")
         || cursor.ident(source, b"revert") || cursor.ident(source, b"revert-layer") {
         if cursor.done(source) { return false }
@@ -151,8 +152,7 @@ pub effect fn parse(buffer: &TokenBuffer, index: usize, prelude: TokenRange, bod
           if cursor.ident(&source, b"false") && cursor.done(&source) { inherits = Option<bool>.some(false) }
         }
       } else if insensitive(key, b"initial-value") {
-        let structure = run condition_cursor.inspect(&source, limits)
-        if structure.any(0, source.length()) { initial = Option<TokenRange>.some(descriptor.value) }
+        initial = Option<TokenRange>.some(descriptor.value)
       }
     }
     i = i + 1

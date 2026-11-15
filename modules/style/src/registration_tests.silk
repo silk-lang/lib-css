@@ -19,6 +19,9 @@ test effect fn registrationsRequireValidDescriptorsAndIndependentInitialValues()
     b"@property --x { syntax:'<angle>'; inherits:false; initial-value:1turn }",
     b"@property --x { syntax:'<percentage>'; inherits:false; initial-value:50% }",
     b"@property --x { syntax:'<length>'; inherits:false; initial-value:4px; inherits:maybe }",
+    b"@property --x { syntax:'*'; inherits:false; initial-value:1em }",
+    b"@property --x { syntax:'*'; inherits:false; initial-value:currentcolor }",
+    b"@property --x { syntax:'*'; inherits:false; initial-value: }",
     b"@property x { syntax:'*'; inherits:false }",
     b"@property --x { syntax:'<length>'; inherits:false; initial-value:1em }",
     b"@property --x { syntax:'<length>'; inherits:false; initial-value:calc(1px + 2rem) }",
@@ -38,8 +41,8 @@ test effect fn registrationsRequireValidDescriptorsAndIndependentInitialValues()
     let rule = rules.asSlice()[0]
     let parsed = run registration.parse(&buffer, 0, rule.prelude, rule.body, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
     let valid = match &parsed { Parsed.Valid { .. } => true _ => false }
-    run Testing.expect(valid == (i < 8), "registration grammar and independent initial value validation")
-    if i == 18 {
+    run Testing.expect(valid == (i < 11), "registration grammar and independent initial value validation")
+    if i == 21 {
       run Testing.expect(match &parsed { Parsed.Unsupported => true _ => false }, "unsupported grammar is diagnosed separately")
     }
     i = i + 1
