@@ -207,6 +207,22 @@ impl VariableStore {
     }
   }
 
+  /// Starts a full restyle, retaining registrations but invalidating every previous ScopeId.
+  pub fn resetScopes(self: &mut Self) -> () {
+    let mut keep: usize = 0
+    let registrations = self.registrations.asSlice()
+    let mut i: usize = 0
+    while i < registrations.length {
+      if let Option<TokenRange>.Some { value } = registrations[i].initial {
+        if value.end > keep { keep = value.end }
+      }
+      i = i + 1
+    }
+    self.refs.truncate(keep)
+    self.scopes.clear()
+    self.entries.clear()
+  }
+
   /// Adds or replaces a validated registration before the first scope is built.
   /// Registrations share the caller's immutable buffers, as ordinary declarations do.
   pub effect fn register(self: &mut Self, buffers: BufferView<'_>, definition: Registration, limits: &Limits) -> ()

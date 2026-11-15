@@ -212,6 +212,9 @@ effect fn variablesBody() -> ()
   run sheets.resolve(&tree, 1, &[], &mut context)
   let wide = run sheets.variableScope(Option<ScopeId>.None, &Limits.make())
   run Testing.expect(valueIs(&(run pendingValue(&sheets, wide, Property.Height)), b"7px"), "a registration condition flip rebuilds the variable inputs")
+  sheets.resetScopes()
+  let reset = run sheets.variableScope(Option<ScopeId>.None, &Limits.make())
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, reset, Property.Height)), b"7px"), "full restyles reclaim scopes without dropping registration defaults")
 }
 
 test effect fn adoptedVariablesInheritAcrossSheetsAndRefreshRegistrations() -> ()

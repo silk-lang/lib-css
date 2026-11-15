@@ -165,6 +165,13 @@ impl StyleSheets {
     }
   }
 
+  pub fn resetScopes(self: &mut Self) -> () {
+    if let Option<Box<Inputs>>.Some { value } = &mut self.variables {
+      let inputs = value.getMut()
+      inputs[0].variables.resetScopes()
+    }
+  }
+
   pub fn variableInputs(self: &Self) -> &[Inputs] {
     return match &self.variables {
       Option<Box<Inputs>>.Some { value } => value.get()
