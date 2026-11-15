@@ -267,3 +267,12 @@ Contextual mixes inside compound text/effect values still need integration.
 The fixture tests cover Tailwind 4.3.5 and handwritten CSS, binary round trips, malformed data,
 state matching, layer precedence, nesting, and condition changes. They do not establish rendering
 parity with Chromium.
+
+`adopted.StyleSheets` owns compiled sheets in a root's adoption order. Replacing
+an id retains its position; removing a sheet rebuilds first-appearance layer
+order from the surviving sheets. Matching combines indexes from each sheet,
+resolves named layers across sheets, reads importance per declaration, and
+includes caller-supplied inline priorities. Its ordered candidates reference
+the original compiled declarations, and matched rules retain sheet ids.
+Condition updates report whether eligibility changed. It performs no stylesheet
+text parsing; value computation remains the host's responsibility.

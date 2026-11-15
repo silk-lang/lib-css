@@ -56,3 +56,5 @@ import registration_tests
 import color_program_tests
 
 import sheet_colors_tests
+
+import adopted_tests

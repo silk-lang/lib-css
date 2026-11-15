@@ -1,0 +1,158 @@
+import adopted { StyleSheets, AdoptionError, Source }
+import compile { Options, CompileError }
+import compile
+import sheet { Sheet, Declaration }
+import sheet_binary { DecodeError }
+import resolver { ResolverError }
+import resolver_tests { Tree }
+import cascade { Priority, Origin }
+import element { MatchContext, NO_ELEMENT }
+import media_features { Environment }
+import tokens { Limits, CssError }
+import css_properties.catalog { Property }
+import css_properties.values { Value }
+import silk.core.effect { Effect }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+effect fn compiled(source: &[u8]) -> Sheet
+  ! CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let sheet = run compile.compile(source, &Options.make())
+  let bytes = run sheet.encode()
+  return run Sheet.decode(bytes.asSlice(), &Limits.make())
+}
+
+fn winner(sheets: &StyleSheets, property: Property) -> u32 {
+  let mut result: u32 = 0
+  let items = sheets.candidates()
+  let mut i: usize = 0
+  while i < items.length {
+    match items[i].source {
+      Source.Inline { .. } => { result = 999 }
+      Source.Sheet { sheet, declaration } => {
+        let target = match &sheets.sheets()[sheet].sheet.declarations.asSlice()[declaration] {
+          Declaration.Typed { property: found, .. } => found
+          Declaration.Pending { property: found, .. } => found
+          Declaration.ColorExpression { property: found, .. } => found
+          _ => Property.Color
+        }
+        if target == property { result = sheets.sheets()[sheet].id }
+      }
+    }
+    i = i + 1
+  }
+  return result
+}
+
+fn winningNumber(sheets: &StyleSheets, property: Property) -> f32 {
+  let mut result: f32 = 0.0
+  let items = sheets.candidates()
+  let mut i: usize = 0
+  while i < items.length {
+    if let Source.Sheet { sheet, declaration } = items[i].source {
+      if let Declaration.Typed { property: found, value, .. } = &sheets.sheets()[sheet].sheet.declarations.asSlice()[declaration] {
+        if found == property {
+          if let Value.Unit { value: number, .. } = &value { result = number }
+        }
+      }
+    }
+    i = i + 1
+  }
+  return result
+}
+
+effect fn layersBody() -> ()
+  ! AssertionError<'static> | AdoptionError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(10, run compiled(b"@layer base, utilities; @layer base {.button {width:1px!important;height:1px}} @layer utilities {.button{width:2px!important;height:2px}}"))
+  run sheets.adopt(20, run compiled(b"@layer utilities {.button{width:3px!important;height:3px}} @layer base {.button{width:4px!important;height:4px}}"))
+  let tree = Tree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  run Testing.expect(winner(&sheets, Property.Width) == 20 && winner(&sheets, Property.Height) == 20, "cross-sheet layers merge by name, with important layer order reversed")
+  run Testing.expect(winningNumber(&sheets, Property.Width) == 4.0 && winningNumber(&sheets, Property.Height) == 3.0, "the same named layers share precedence even when declared in different orders")
+  let last = sheets.candidates()[sheets.candidates().length - 1]
+  run Testing.expect(last.priority.important && last.priority.layer == 0, "the first important layer wins despite the second sheet's different local order")
+  run sheets.adopt(30, run compiled(b".button{width:5px!important;height:5px}"))
+  let mut inline = Priority.make(Origin.Author, 0)
+  inline.inline = true
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[inline], &mut context)
+  run Testing.expect(winner(&sheets, Property.Width) == 20 && winner(&sheets, Property.Height) == 999, "important sheet values beat normal inline values; inline beats normal unlayered rules")
+  inline.important = true
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[inline], &mut context)
+  run Testing.expect(winner(&sheets, Property.Width) == 999, "important inline declarations beat important stylesheet declarations")
+  run Testing.expect(sheets.matches().length == 5 && sheets.matches()[4].sheet == 30, "matched rules retain adoption ids for the inspector")
+  drop run sheets.remove(30)
+  drop run sheets.remove(10)
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  run Testing.expect(winningNumber(&sheets, Property.Width) == 3.0 && winningNumber(&sheets, Property.Height) == 4.0, "removing the first layer declaration rebuilds order from the surviving sheets")
+}
+
+test effect fn adoptedSheetsShareLayerOrderAndDeclarationImportance() -> ()
+  ! AssertionError<'static> | AdoptionError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run layersBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn replacementBody() -> ()
+  ! AssertionError<'static> | AdoptionError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(10, run compiled(b".button{height:1px}"))
+  run sheets.adopt(20, run compiled(b".button{height:2px}"))
+  run sheets.replace(10, run compiled(b".button{height:3px}"))
+  let tree = Tree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  run Testing.expect(winner(&sheets, Property.Height) == 20, "replacement retains adoption order")
+  let duplicate = run compiled(b".button{height:4px}")
+  let rejected = run Effect.result(sheets.adopt(20, move duplicate))
+  run Testing.expect(match &rejected {
+    Result<(), AdoptionError | OutOfMemoryError>.Failure { .. } => true
+    _ => false
+  }, "duplicate adoption is rejected")
+  run Testing.expect(sheets.length() == 2 && winner(&sheets, Property.Height) == 20, "rejected adoption preserves the registry and previous result")
+  run Testing.expect(run sheets.remove(20), "an adopted sheet is removed")
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  run Testing.expect(winner(&sheets, Property.Height) == 10, "the remaining sheet supplies the style")
+  run Testing.expect(!(run sheets.remove(20)), "removing an absent id is harmless")
+  context.remainingSteps = 0
+  let failed = run Effect.result(sheets.resolve(&tree, 0, &[], &mut context))
+  run Testing.expect(match &failed {
+    Result<(), ResolverError | CssError | OutOfMemoryError>.Failure { .. } => true _ => false
+  }, "match-budget exhaustion is reported")
+  run Testing.expect(sheets.candidates().length == 0 && sheets.matches().length == 0, "failed matching exposes no stale result")
+}
+
+test effect fn adoptionReplacementRemovalAndFailureKeepStableState() -> ()
+  ! AssertionError<'static> | AdoptionError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run replacementBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn conditionsBody() -> ()
+  ! AssertionError<'static> | AdoptionError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, run compiled(b".button{height:1px}"))
+  run sheets.adopt(2, run compiled(b"@media (width >= 600px) {.button:hover{height:2px}}"))
+  let tree = Tree { hovered: true }
+  drop run sheets.environment(&Environment.headless(400.0, 300.0), false, &Limits.make())
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  run Testing.expect(winner(&sheets, Property.Height) == 1, "false media conditions suppress candidates")
+  run Testing.expect(run sheets.environment(&Environment.headless(800.0, 300.0), false, &Limits.make()), "crossing a condition requests invalidation")
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  run Testing.expect(winner(&sheets, Property.Height) == 2, "the enabled state selector participates")
+  run Testing.expect(!(run sheets.environment(&Environment.headless(900.0, 300.0), false, &Limits.make())), "a resize that preserves condition results does not request invalidation")
+}
+
+test effect fn adoptedMediaConditionsInvalidateOnlyWhenResultsFlip() -> ()
+  ! AssertionError<'static> | AdoptionError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run conditionsBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
