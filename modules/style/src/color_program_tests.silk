@@ -53,3 +53,28 @@ test effect fn colorProgramsSurviveStoreSharingCopyAndParseRollback() -> ()
   run Testing.expect(store.colorPrograms.length() == 1, "rollback truncates color arena alongside value arena")
   run check(&mut store, id) |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+import colors { ColorProgram }
+import value_cursor { Cursor }
+import colors
+
+test effect fn systemColorsFreezeAtComputedTimeWhileCurrentColorRemainsDeferred() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let buffer = run lexer.tokenize(b"color-mix(in srgb, currentcolor, Canvas)", &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let source = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  let mut cursor = Cursor.make(&source)
+  let parsed = run colors.parseProgram(&source, &mut cursor) |> Effect.provideMut<Allocator>(&mut allocator)
+  if let Option<ColorProgram>.Some { value } = move parsed {
+    let red = Color.srgb(1.0, 0.0, 0.0, 1.0)
+    let computed = run value.resolveSystem(&ColorContext.make(Color.current(), [red; 19])) |> Effect.provideMut<Allocator>(&mut allocator)
+    if let Option<ColorProgram>.Some { value: program } = move computed {
+      let blue = Color.srgb(0.0, 0.0, 1.0, 1.0)
+      let used = program.evaluate(&ColorContext.make(blue, [blue; 19]))
+      run Testing.expect(match &used {
+        Option<Color>.Some { value: result } => result.channels[0] == 0.5 && result.channels[2] == 0.5
+        _ => false
+      }, "system red stays computed while currentcolor resolves against the element's blue")
+    } else { run Testing.expect(false, "system leaf produces computed program") }
+  } else { run Testing.expect(false, "valid color expression") }
+}

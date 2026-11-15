@@ -1908,31 +1908,38 @@ pub effect fn parse(
   }
 }
 
-fn computePaint(store: &Store<'_>, value: Paint, context: &colors.Context) -> Paint {
+effect fn computeColorMix(store: &mut Store<'_>, expression: ColorId, context: &colors.Context) -> Fallback
+  ! OutOfMemoryError ? &mut Allocator {
+  if let Option<Color>.Some { value } = store.colorProgram(expression).evaluate(context) {
+    return Fallback.Color { color: value }
+  }
+  let resolved = run store.colorProgram(expression).resolveSystem(context)
+  if let Option<ColorProgram>.Some { value } = move resolved {
+    let index = store.baseColors.length + store.colorPrograms.length()
+    run store.colorPrograms.append(move value)
+    return Fallback.ColorMix { expression: ColorId { index: index } }
+  }
+  return Fallback.ColorMix { expression: expression }
+}
+
+effect fn computePaint(store: &mut Store<'_>, value: Paint, context: &colors.Context) -> Paint
+  ! OutOfMemoryError ? &mut Allocator {
   return match &value {
-    Paint.ColorMix { expression } => match store.colorProgram(expression).evaluate(context) {
-      Option<Color>.Some { value: color } => Paint.Color { color: color }
+    Paint.ColorMix { expression } => match run computeColorMix(&mut store.*, expression, context) {
+      Fallback.Color { color } => Paint.Color { color: color }
+      Fallback.ColorMix { expression: result } => Paint.ColorMix { expression: result }
       _ => value
     }
     Paint.Color { color } => Paint.Color { color: colors.compute(color, context) }
-    Paint.IccColor { color, icc } => Paint.IccColor {
-      color: colors.compute(color, context),
-      icc: icc,
-    }
+    Paint.IccColor { color, icc } => Paint.IccColor { color: colors.compute(color, context), icc: icc }
     Paint.Server { url, fallback } => {
       let resolved = match &fallback {
-        Fallback.ColorMix { expression } => match store.colorProgram(expression).evaluate(context) {
-          Option<Color>.Some { value: color } => Fallback.Color { color: color }
-          _ => fallback
-        }
+        Fallback.ColorMix { expression } => run computeColorMix(&mut store.*, expression, context)
         Fallback.Color { color } => Fallback.Color { color: colors.compute(color, context) }
-        Fallback.IccColor { color, icc } => Fallback.IccColor {
-          color: colors.compute(color, context),
-          icc: icc,
-        }
+        Fallback.IccColor { color, icc } => Fallback.IccColor { color: colors.compute(color, context), icc: icc }
         _ => fallback
       }
-      return Paint.Server { url: url, fallback: resolved }
+      Paint.Server { url: url, fallback: resolved }
     }
     _ => value
   }
@@ -1941,6 +1948,26 @@ fn computePaint(store: &Store<'_>, value: Paint, context: &colors.Context) -> Pa
 pub effect fn compute(store: &mut Store<'_>, id: ValueId, context: &ComputeContext<'_>) -> ValueId
   ! OutOfMemoryError
   ? &mut Allocator {
+  let mixedExpression = match &store.get(id).* {
+    Value.ColorMix { expression } => Option<ColorId>.some(expression)
+    _ => Option<ColorId>.None
+  }
+  if let Option<ColorId>.Some { value } = mixedExpression {
+    let resolved = run computeColorMix(&mut store.*, value, context.colors)
+    return match &resolved {
+      Fallback.Color { color } => run store.add(Value.Color { color: color })
+      Fallback.ColorMix { expression: result } => {
+        if result.index == value.index { id }
+        else { run store.add(Value.ColorMix { expression: result }) }
+      }
+      _ => id
+    }
+  }
+  let paint = match &store.get(id).* { Value.Paint { paint } => Option<Paint>.some(paint) _ => Option<Paint>.None }
+  if let Option<Paint>.Some { value } = paint {
+    let resolved = run computePaint(&mut store.*, value, context.colors)
+    return run store.add(Value.Paint { paint: resolved })
+  }
   // Immutable nodes can share the specified-value handle. Only context-dependent nodes allocate.
   // The value is read through the arena fields so store.numerics stays free to borrow.
   let shared = store.base.length
@@ -1982,7 +2009,6 @@ pub effect fn compute(store: &mut Store<'_>, id: ValueId, context: &ComputeConte
       color: colors.compute(color, context.colors),
       icc: icc,
     }
-    Value.Paint { paint } => Value.Paint { paint: computePaint(&store.*, paint, context.colors) }
     Value.Dashes { expressions } => {
       let mut resolved = List<ExprId>.make()
       let mut i: usize = 0

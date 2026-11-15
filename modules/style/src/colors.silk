@@ -1808,6 +1808,33 @@ impl ColorProgram {
     }
   }
 
+  /// Resolves system leaves at computed-value time while retaining currentcolor for used values.
+  /// Returns no replacement when the program has no system leaves.
+  pub effect fn resolveSystem(self: &Self, context: &Context) -> Option<ColorProgram>
+    ! OutOfMemoryError ? &mut Allocator {
+    let mut found = false
+    let mut i: usize = 0
+    while i < self.nodes.length() {
+      if let ColorNode.Leaf { color } = self.nodes.asSlice()[i] {
+        if let Identity.System { .. } = color.identity { found = true }
+      }
+      i = i + 1
+    }
+    if !found { return Option<ColorProgram>.None }
+    let mut result = run self.copy()
+    i = 0
+    while i < result.nodes.length() {
+      if let ColorNode.Leaf { color } = result.nodes.asSlice()[i] {
+        if let Identity.System { .. } = color.identity {
+          let nodes = result.nodes.asMutSlice()
+          nodes[i] = ColorNode.Leaf { color: compute(color, context) }
+        }
+      }
+      i = i + 1
+    }
+    return Option<ColorProgram>.some(move result)
+  }
+
   pub effect fn copy(self: &Self) -> ColorProgram ! OutOfMemoryError ? &mut Allocator {
     let mut result = ColorProgram { nodes: List<ColorNode>.make() }
     let mut i: usize = 0
