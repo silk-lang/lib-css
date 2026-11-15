@@ -11,6 +11,9 @@ import css_properties.keywords as keywords
 import css_properties.keywords { Keyword }
 import css_properties.values as values
 import css_properties.values { Value, Declaration, Unit, MathOperator, Separator }
+import css_properties.shorthands
+import values as parsed_values
+import values { Store, ValueId, Mode }
 import colors
 import colors { Color, Identity }
 import cssom_declaration { StyleDeclaration }
@@ -110,6 +113,29 @@ pub effect fn fromStyle(style: &StyleDeclaration) -> List<Declaration>
     i = i + 1
   }
   return move out
+}
+
+/// Project a written shorthand to one longhand. Box values use their typed
+/// expansion; complex text/effect/animation values use the shared CSS grammars.
+/// None means this declaration has no valid value for the requested longhand.
+pub effect fn longhand(declaration: &Declaration, target: Property) -> Option<Value>
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  if declaration.property == target { return Option<Value>.some(run values.clone(&declaration.value)) }
+  let mut at: usize = 0
+  let count = catalog.longhandCount(declaration.property)
+  while at < count && catalog.longhandAt(declaration.property, at) != target { at = at + 1 }
+  if at == count { return Option<Value>.None }
+  let expanded = run shorthands.longhand(declaration.property, &declaration.value, target)
+  if let Option<Value>.Some { value: found } = move expanded { return Option<Value>.some(move found) }
+  let text = run values.cssText(&declaration.value)
+  let buffer = run lexer.tokenize(text.asSlice(), &Limits.make())
+  let input = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  let mut store = Store.make()
+  if let Option<ValueId>.Some { value: parsed } = &(run parsed_values.parse(&mut store, declaration.property, &input, Mode.Css)) {
+    let css = run cssom_value_serialization.value(&store, parsed, declaration.property, target)
+    if css.length() != 0 { return Option<Value>.some(run value(css.asSlice())) }
+  }
+  return Option<Value>.None
 }
 
 /// The computed value of `property` in a style the cascade built, as a written value ready

@@ -203,3 +203,26 @@ test effect fn cssomDeclarations() -> () ! AssertionError<'static> | CssError | 
   let mut allocator = Allocator.systemAllocatorProvider()
   run cssom() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+import css_properties.catalog { Property }
+
+effect fn projection(source: Property, css: &[u8], target: Property, expected: &[u8]) -> bool
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let declaration = Declaration { property: source, value: run written.value(css), important: false }
+  let result = run written.longhand(&declaration, target)
+  if let Option<Value>.Some { value } = move result {
+    let text = run values.cssText(&value)
+    return sameText(text.asSlice(), expected)
+  }
+  return false
+}
+
+test effect fn complexShorthandProjectionSharesValueGrammars() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run Testing.expect(run projection(Property.Margin, b"1px 2px", Property.MarginLeft, b"2px") |> Effect.provideMut<Allocator>(&mut allocator), "box shorthand typed projection")
+  run Testing.expect(run projection(Property.WhiteSpace, b"pre-wrap", Property.WhiteSpaceCollapse, b"preserve") |> Effect.provideMut<Allocator>(&mut allocator), "white-space expands its computed components")
+  run Testing.expect(run projection(Property.Font, b"italic 20px serif", Property.FontSize, b"20px") |> Effect.provideMut<Allocator>(&mut allocator), "font projects through the shared grammar")
+  run Testing.expect(run projection(Property.Animation, b"fade 2s linear", Property.AnimationDuration, b"2s") |> Effect.provideMut<Allocator>(&mut allocator), "animation selects its longhand list")
+  run Testing.expect(run projection(Property.All, b"unset", Property.Width, b"unset") |> Effect.provideMut<Allocator>(&mut allocator), "wide values project without parsing")
+}
