@@ -1,0 +1,37 @@
+import colors { Color, ColorProgram, ColorNode, Space, HueMethod }
+import sheet_colors
+import sheet_binary { Writer, Reader, DecodeError }
+import tokens { Limits }
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+test effect fn decoderRejectsColorCyclesSharedSubtreesAndDisconnectedPrograms() -> ()
+  ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut i: usize = 0
+  while i < 4 {
+    let mut program = ColorProgram { nodes: List<ColorNode>.make() }
+    run program.nodes.append(ColorNode.Leaf { color: Color.current() }) |> Effect.provideMut<Allocator>(&mut allocator)
+    run program.nodes.append(ColorNode.Leaf { color: Color.srgb(1.0, 0.0, 0.0, 1.0) }) |> Effect.provideMut<Allocator>(&mut allocator)
+    run program.nodes.append(ColorNode.Mix {
+      left: if i == 0 { 2 } else { 0 }, right: if i == 1 { 0 } else { 1 },
+      space: Space.Srgb, hue: HueMethod.Shorter, leftWeight: 0.5, alphaMultiplier: 1.0,
+    }) |> Effect.provideMut<Allocator>(&mut allocator)
+    if i == 2 {
+      run program.nodes.append(ColorNode.Leaf { color: Color.current() }) |> Effect.provideMut<Allocator>(&mut allocator)
+    }
+    if i == 3 {
+      run program.nodes.append(ColorNode.Mix { left: 2, right: 1, space: Space.Srgb, hue: HueMethod.Shorter, leftWeight: 0.5, alphaMultiplier: 1.0 })
+        |> Effect.provideMut<Allocator>(&mut allocator)
+    }
+    let mut writer = Writer.make()
+    run sheet_colors.encode(&program, &mut writer) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut reader = Reader.make(writer.bytes.asSlice())
+    let result = run Effect.result(sheet_colors.decode(&mut reader, &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(match &result { Result<ColorProgram, DecodeError | OutOfMemoryError>.Failure { .. } => true _ => false }, "program must be a bounded tree, avoiding cycles and exponential evaluation")
+    i = i + 1
+  }
+}

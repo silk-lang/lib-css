@@ -95,7 +95,7 @@ test effect fn sheetDecoderRejectsTruncationVersionCatalogAndTrailingData() -> (
     _ => false
   }, "format mismatch rejected")
   let catalogData = bytes.asMutSlice()
-  catalogData[8] = 2
+  catalogData[8] = 3
   catalogData[12] = catalogData[12] ^ 1
   let catalog = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &catalog {
@@ -211,3 +211,28 @@ test effect fn compiledRegistrationsKeepNamesGrammarDefaultsAndConditions() -> (
     i = i + 1
   }
 }
+
+import colors { Color, Context as ColorContext }
+
+test effect fn compiledColorMixKeepsDynamicLeavesWithoutRuntimeParsing() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(b".x { color: color-mix(in srgb, currentcolor 25%, white); background-color:color-mix(in oklab, red, blue) }", &Options.make())
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 0 && sheet.declarations.length() == 2, "absolute and contextual color mixes compile")
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  match &decoded.declarations.asSlice()[0] {
+    Declaration.ColorExpression { program, .. } => {
+      let red = Color.srgb(1.0, 0.0, 0.0, 1.0)
+      let result = program.evaluate(&ColorContext.make(red, [red; 19]))
+      run Testing.expect(match &result {
+        Option<Color>.Some { value } => value.channels[0] == 1.0 && value.channels[1] == 0.75 && value.channels[2] == 0.75
+        _ => false
+      }, "decoded program uses element currentcolor without reparsing")
+    }
+    _ => { run Testing.expect(false, "compiled color expression remains typed") }
+  }
+}
+
+import silk.core.option { Option }

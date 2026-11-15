@@ -1676,9 +1676,11 @@ effect fn computeValue(
     }
     Value.Paint { paint } => {
       let stable = match &paint {
+        Paint.ColorMix { .. } => false
         Paint.Color { color } => stableColor(color, property)
         Paint.IccColor { color, .. } => stableColor(color, property)
         Paint.Server { fallback, .. } => match &fallback {
+          Fallback.ColorMix { .. } => false
           Fallback.Color { color } => stableColor(color, property)
           Fallback.IccColor { color, .. } => stableColor(color, property)
           _ => true

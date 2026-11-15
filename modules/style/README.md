@@ -255,8 +255,14 @@ requires host integration.
 This foundation does not yet apply sheets to SilkUI. Hosts must resolve pending values and
 install active registrations, consume the animation/font metadata, and integrate invalidation
 with their tree. Container conditions remain disabled and produce an unsupported-feature
-diagnostic. Generated pseudo-elements and `color-mix()` are not implemented by this change.
+diagnostic. Generated pseudo-elements are not implemented by this change.
 Diagnostics aggregate dropped features; `Options.strict` rejects a sheet with diagnostics.
+
+`colors.parseProgram` handles nested `color-mix()` with deferred `currentcolor` and system colors.
+It supports the standard rectangular and polar spaces, normalized percentages, premultiplied
+alpha, hue interpolation methods, and missing components. Standalone sheet color expressions
+are encoded as bounded programs, and native color/paint values use the same evaluator.
+Contextual mixes inside compound text/effect values still need integration.
 
 The fixture tests cover Tailwind 4.3.5 and handwritten CSS, binary round trips, malformed data,
 state matching, layer precedence, nesting, and condition changes. They do not establish rendering

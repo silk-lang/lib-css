@@ -279,3 +279,16 @@ test effect fn cssomComputedNumericMathRemovesOnlyResolvedWrappers() -> ()
     "computed unit-interval values clamp after math",
   )
 }
+
+test effect fn contextualColorMixSerializesAndReparsesWithoutLosingItsExpression() -> ()
+  ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run Testing.expect(run roundtrip(Property.Color,
+    b"color-mix(in oklch longer hue, currentcolor 25%, red 25%)",
+    b"color-mix(in oklch longer hue, currentcolor 25%, rgb(255, 0, 0) 25%)") |> Effect.provideMut<Allocator>(&mut allocator),
+    "mix space, hue and alpha multiplier survive specified serialization")
+  run Testing.expect(run roundtrip(Property.Fill,
+    b"url(#paint) color-mix(in srgb, currentcolor, transparent)",
+    b"url(\"#paint\") color-mix(in srgb, currentcolor 50%, rgba(0, 0, 0, 0) 50%)") |> Effect.provideMut<Allocator>(&mut allocator),
+    "paint server fallback retains its dynamic color expression")
+}

@@ -8,7 +8,7 @@ import input { Input, TokenView }
 import tokens { Kind, Span }
 import dimensions { ExprId, Dimension, Unit, Expr, Store as NumericStore }
 import dimensions
-import colors { Color, Identity }
+import colors { Color, Identity, ColorProgram }
 import colors
 import text_values { TextValue, Item, PaletteNode, PaletteStop }
 import text_values
@@ -91,10 +91,14 @@ pub struct IccColor {
   pub channels: List<f64>
 }
 
+pub struct ColorId { pub index: usize }
+impl Copy for ColorId {}
+
 pub union Fallback {
   Missing,
   None,
   Color { pub color: Color },
+  ColorMix { pub expression: ColorId },
   IccColor { pub color: Color, pub icc: IccId }
 }
 
@@ -103,6 +107,7 @@ impl Copy for Fallback {}
 pub union Paint {
   None,
   Color { pub color: Color },
+  ColorMix { pub expression: ColorId },
   IccColor { pub color: Color, pub icc: IccId },
   ContextFill,
   ContextStroke,
@@ -125,6 +130,7 @@ pub union Value {
   Keyword { pub keyword: Keyword },
   Numeric { pub expression: ExprId, pub range: Range, pub basis: Basis },
   Color { pub color: Color },
+  ColorMix { pub expression: ColorId },
   IccColor { pub color: Color, pub icc: IccId },
   Paint { pub paint: Paint },
   Resource { pub url: Span },
@@ -155,6 +161,7 @@ pub struct StoreMark {
   strings: usize,
   paths: usize,
   iccColors: usize,
+  colorPrograms: usize,
 }
 
 impl Copy for StoreMark {}
@@ -166,6 +173,7 @@ fn simple(item: &Value) -> bool {
     Value.Keyword { .. } => true
     Value.Numeric { .. } => true
     Value.Color { .. } => true
+    Value.ColorMix { .. } => true
     Value.Paint { paint } => match &paint {
       Paint.IccColor { .. } => false
       Paint.Server { fallback, .. } => match &fallback {
@@ -208,6 +216,7 @@ effect fn copySimple(item: &Value) -> Value
       basis: basis,
     }
     Value.Color { color } => Value.Color { color: color }
+    Value.ColorMix { expression } => Value.ColorMix { expression: expression }
     Value.Paint { paint } => Value.Paint { paint: paint }
     Value.Resource { url } => Value.Resource { url: url }
     Value.Profile { name } => Value.Profile { name: name }
@@ -301,6 +310,8 @@ pub struct Store<'a> {
   strings: Bytes,
   pub paths: List<Path>,
   pub iccColors: List<IccColor>,
+  baseColors: &'a [ColorProgram],
+  pub colorPrograms: List<ColorProgram>,
 }
 
 impl<'a> Store<'a> {
@@ -313,6 +324,8 @@ impl<'a> Store<'a> {
       strings: Bytes.make(),
       paths: List<Path>.make(),
       iccColors: List<IccColor>.make(),
+      baseColors: &[],
+      colorPrograms: List<ColorProgram>.make(),
     }
   }
 
@@ -321,12 +334,12 @@ impl<'a> Store<'a> {
   /// itself reads from another store.
   /// Whether this store reads a base store in place (see [`over`]).
   pub fn layered(self: &Self) -> bool {
-    return self.base.length != 0
+    return self.base.length != 0 || self.baseColors.length != 0
   }
 
   pub fn over(base: &'a Store<'_>) -> Option<Store<'a>> {
     if base.paths.length() != 0 || base.iccColors.length() != 0 || base.base.length != 0
-      || base.baseStrings.length != 0 {
+      || base.baseStrings.length != 0 || base.baseColors.length != 0 {
       return Option<Store<'a>>.None
     }
     let numerics = match move NumericStore.over(&base.numerics) {
@@ -344,6 +357,8 @@ impl<'a> Store<'a> {
         strings: Bytes.make(),
         paths: List<Path>.make(),
         iccColors: List<IccColor>.make(),
+        baseColors: base.colorPrograms.asSlice(),
+        colorPrograms: List<ColorProgram>.make(),
       },
     )
   }
@@ -363,6 +378,11 @@ impl<'a> Store<'a> {
 
   pub fn icc(self: &Self, id: IccId) -> &IccColor {
     return &self.iccColors.asSlice()[id.index]
+  }
+
+  pub fn colorProgram(self: &Self, id: ColorId) -> &ColorProgram {
+    if id.index < self.baseColors.length { return &self.baseColors[id.index] }
+    return &self.colorPrograms.asSlice()[id.index - self.baseColors.length]
   }
 
   pub fn text(self: &Self, span: Span) -> &[u8] {
@@ -407,6 +427,7 @@ impl<'a> Store<'a> {
       strings: self.textLength(),
       paths: self.paths.length(),
       iccColors: self.iccColors.length(),
+      colorPrograms: self.baseColors.length + self.colorPrograms.length(),
     }
   }
 
@@ -417,6 +438,7 @@ impl<'a> Store<'a> {
     Bytes.truncate(&mut self.strings, localLength(mark.strings, self.baseStrings.length))
     self.paths.truncate(mark.paths)
     self.iccColors.truncate(mark.iccColors)
+    self.colorPrograms.truncate(localLength(mark.colorPrograms, self.baseColors.length))
   }
 
   /// Whether every value from `mark` on is one another engine can share, and no path or ICC
@@ -438,14 +460,14 @@ impl<'a> Store<'a> {
   /// Whether [`Store.over`] can share this store with another.
   pub fn shareable(self: &Self) -> bool {
     return self.paths.length() == 0 && self.iccColors.length() == 0 && self.base.length == 0
-      && self.baseStrings.length == 0
+      && self.baseStrings.length == 0 && self.baseColors.length == 0
       && self.numerics.unshared()
   }
 
   /// Whether [`Store.copy`] copies every value of this store.
   pub fn copyable(self: &Self) -> bool {
-    return self.base.length == 0 && self.baseStrings.length == 0
-      && self.simpleSince(StoreMark { numerics: 0, values: 0, strings: 0, paths: 0, iccColors: 0 })
+    return self.base.length == 0 && self.baseStrings.length == 0 && self.baseColors.length == 0
+      && self.simpleSince(StoreMark { numerics: 0, values: 0, strings: 0, paths: 0, iccColors: 0, colorPrograms: 0 })
   }
 
   /// An owned copy of a store that reads no base and whose values are all simple (see
@@ -460,6 +482,12 @@ impl<'a> Store<'a> {
       run values.append(run copySimple(&source[i]))
       i = i + 1
     }
+    let mut programs = List<ColorProgram>.make()
+    i = 0
+    while i < self.colorPrograms.length() {
+      run programs.append(run self.colorPrograms.asSlice()[i].copy())
+      i = i + 1
+    }
     return Store<'b> {
       numerics: run self.numerics.copy(),
       base: Slice.view<Value>(&NO_VALUES, 0, 0),
@@ -468,6 +496,8 @@ impl<'a> Store<'a> {
       strings: run Bytes.copy(Bytes.asSlice(&self.strings)),
       paths: List<Path>.make(),
       iccColors: List<IccColor>.make(),
+      baseColors: &[],
+      colorPrograms: move programs,
     }
   }
 
@@ -690,6 +720,16 @@ effect fn svgColor(
 ) -> Option<Fallback>
   ! OutOfMemoryError
   ? &mut Allocator {
+  let mut probe = cursor.*
+  if probe.function(source, b"color-mix") {
+    let program = run colors.parseProgram(source, &mut cursor.*)
+    if let Option<ColorProgram>.Some { value } = move program {
+      let id = ColorId { index: store.baseColors.length + store.colorPrograms.length() }
+      run store.colorPrograms.append(move value)
+      return Option<Fallback>.some(Fallback.ColorMix { expression: id })
+    }
+    return Option<Fallback>.None
+  }
   let parsed = run colors.parse(source, &mut cursor.*)
   let color = match &parsed {
     Option<Color>.Some { value } => value
@@ -758,6 +798,7 @@ effect fn paint(
   let color = run svgColor(&mut store.*, source, &mut cursor.*, allowIcc, mode)
   return match &color {
     Option<Fallback>.Some { value } => match &value {
+      Fallback.ColorMix { expression } => Option<Paint>.some(Paint.ColorMix { expression: expression })
       Fallback.Color { color: absolute } => Option<Paint>.some(Paint.Color { color: absolute })
       Fallback.IccColor { color: absolute, icc } => Option<Paint>.some(
         Paint.IccColor { color: absolute, icc: icc },
@@ -1744,6 +1785,7 @@ effect fn parseValue(
     let parsed = run svgColor(&mut store.*, source, &mut cursor.*, property != Property.Color, mode)
     return match &parsed {
       Option<Fallback>.Some { value } => match &value {
+        Fallback.ColorMix { expression } => Option<Value>.some(Value.ColorMix { expression: expression })
         Fallback.Color { color } => Option<Value>.some(Value.Color { color: color })
         Fallback.IccColor { color, icc } => Option<Value>.some(
           Value.IccColor { color: color, icc: icc },
@@ -1866,8 +1908,12 @@ pub effect fn parse(
   }
 }
 
-fn computePaint(value: Paint, context: &colors.Context) -> Paint {
+fn computePaint(store: &Store<'_>, value: Paint, context: &colors.Context) -> Paint {
   return match &value {
+    Paint.ColorMix { expression } => match store.colorProgram(expression).evaluate(context) {
+      Option<Color>.Some { value: color } => Paint.Color { color: color }
+      _ => value
+    }
     Paint.Color { color } => Paint.Color { color: colors.compute(color, context) }
     Paint.IccColor { color, icc } => Paint.IccColor {
       color: colors.compute(color, context),
@@ -1875,6 +1921,10 @@ fn computePaint(value: Paint, context: &colors.Context) -> Paint {
     }
     Paint.Server { url, fallback } => {
       let resolved = match &fallback {
+        Fallback.ColorMix { expression } => match store.colorProgram(expression).evaluate(context) {
+          Option<Color>.Some { value: color } => Fallback.Color { color: color }
+          _ => fallback
+        }
         Fallback.Color { color } => Fallback.Color { color: colors.compute(color, context) }
         Fallback.IccColor { color, icc } => Fallback.IccColor {
           color: colors.compute(color, context),
@@ -1923,12 +1973,16 @@ pub effect fn compute(store: &mut Store<'_>, id: ValueId, context: &ComputeConte
         flip: flip,
       }
     }
+    Value.ColorMix { expression } => match store.colorProgram(expression).evaluate(context.colors) {
+      Option<Color>.Some { value: color } => Value.Color { color: color }
+      _ => { return id }
+    }
     Value.Color { color } => Value.Color { color: colors.compute(color, context.colors) }
     Value.IccColor { color, icc } => Value.IccColor {
       color: colors.compute(color, context.colors),
       icc: icc,
     }
-    Value.Paint { paint } => Value.Paint { paint: computePaint(paint, context.colors) }
+    Value.Paint { paint } => Value.Paint { paint: computePaint(&store.*, paint, context.colors) }
     Value.Dashes { expressions } => {
       let mut resolved = List<ExprId>.make()
       let mut i: usize = 0

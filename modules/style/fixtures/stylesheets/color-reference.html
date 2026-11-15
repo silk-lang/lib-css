@@ -1,0 +1,29 @@
+<!doctype html><meta charset="utf-8"><title>CSS baseline</title>
+<style>
+@property --local { syntax: '<color>'; inherits: false; initial-value: red; }
+@property --inherited { syntax: '<color>'; inherits: true; initial-value: red; }
+@property --cycle { syntax: '<color>'; inherits: false; initial-value: green; }
+#parent { --local: blue; --inherited: blue }
+#invalid { --local: 2px; --inherited: var(--missing) }
+#cycle { --cycle:var(--peer); --peer:var(--cycle); color:var(--cycle,orange) }
+</style><div id="parent"><span id="absent"></span><span id="invalid"></span></div><div id="cycle"></div><pre id="results"></pre>
+<script>
+const inputs = [
+'color-mix(in srgb, red, blue)',
+'color-mix(in srgb, red 25%, blue)',
+'color-mix(in srgb, 25% red, blue 25%)',
+'color-mix(in srgb, red 80%, blue 80%)',
+'color-mix(in srgb, red, transparent)',
+'color-mix(in srgb, rgb(255 0 0 / .2), blue)',
+'color-mix(in srgb, red calc(20% + 5%), color-mix(in srgb, blue, white))',
+'color-mix(in lab, lab(20 30 40), lab(60 10 20))',
+'color-mix(in oklab, oklab(.2 .1 .2), oklab(.6 .3 0))',
+'color-mix(in oklch, oklch(.5 .2 350), oklch(.5 .2 10))',
+'color-mix(in oklch longer hue, oklch(.5 .2 350), oklch(.5 .2 10))',
+'color-mix(in oklab, oklab(none .2 none), oklab(.6 none none))',
+'color-mix(in oklch, oklch(.5 0 200), oklch(.5 .2 10))',
+];
+const rows = inputs.map(css => { const element = document.createElement('span'); element.style.color = css; document.body.append(element); return {css, value:getComputedStyle(element).color}; });
+const registrations = ['absent','invalid','cycle'].map(id => { const style = getComputedStyle(document.getElementById(id)); return {id, local:style.getPropertyValue('--local'), inherited:style.getPropertyValue('--inherited'), color:style.color}; });
+document.getElementById('results').textContent = JSON.stringify({rows, registrations},null,2);
+</script>

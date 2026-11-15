@@ -12,6 +12,8 @@ import values {
   Range
 }
 import values
+import colors
+import colors { ColorProgram, ColorNode, HueMethod }
 import properties { Property }
 import properties
 import cssom_shorthand
@@ -65,6 +67,7 @@ effect fn appendPaint(out: &mut Bytes, store: &Store<'_>, paint: &Paint) -> ()
     Paint.None => run Bytes.append(&mut out.*, b"none")
     Paint.ContextFill => run Bytes.append(&mut out.*, b"context-fill")
     Paint.ContextStroke => run Bytes.append(&mut out.*, b"context-stroke")
+    Paint.ColorMix { expression } => run appendColorProgram(&mut out.*, store.colorProgram(expression))
     Paint.Color { color } => run numeric.appendColor(&mut out.*, &color)
     Paint.IccColor { color, icc } => {
       run numeric.appendColor(&mut out.*, &color)
@@ -76,6 +79,10 @@ effect fn appendPaint(out: &mut Bytes, store: &Store<'_>, paint: &Paint) -> ()
       match &fallback {
         Fallback.Missing => {}
         Fallback.None => run Bytes.append(&mut out.*, b" none")
+        Fallback.ColorMix { expression } => {
+          run out.append(b" ")
+          run appendColorProgram(&mut out.*, store.colorProgram(expression))
+        }
         Fallback.Color { color } => {
           run Bytes.append(&mut out.*, b" ")
           run numeric.appendColor(&mut out.*, &color)
@@ -141,6 +148,7 @@ pub effect fn value(
     Value.Numeric { expression, .. } => {
       run numeric.appendExpression(&mut out, &store.numerics, expression)
     }
+    Value.ColorMix { expression } => run appendColorProgram(&mut out, store.colorProgram(expression))
     Value.Color { color } => run numeric.appendColor(&mut out, &color)
     Value.IccColor { color, icc } => {
       run numeric.appendColor(&mut out, &color)
@@ -383,4 +391,33 @@ pub effect fn computedValue(
     }
   }
   return move out
+}
+
+/// Writes a parsed color expression without returning to the original source tokens.
+pub effect fn appendColorProgram(out: &mut Bytes, program: &ColorProgram) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  if program.nodes.length() > 0 { run appendColorNode(&mut out.*, program, program.nodes.length() - 1) }
+}
+
+effect fn appendColorNode(out: &mut Bytes, program: &ColorProgram, index: usize) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  match &program.nodes.asSlice()[index] {
+    ColorNode.Leaf { color } => run numeric.appendColor(&mut out.*, &color)
+    ColorNode.Mix { left, right, space, hue, leftWeight, alphaMultiplier } => {
+      run out.append(b"color-mix(in ")
+      run out.append(colors.spaceName(space))
+      if hue != HueMethod.Shorter {
+        run out.append(match hue { HueMethod.Longer => b" longer hue" HueMethod.Increasing => b" increasing hue" _ => b" decreasing hue" })
+      }
+      run out.append(b", ")
+      run appendColorNode(&mut out.*, program, left)
+      run out.append(b" ")
+      run serialization.appendNumber(&mut out.*, leftWeight * alphaMultiplier * 100.0)
+      run out.append(b"%, ")
+      run appendColorNode(&mut out.*, program, right)
+      run out.append(b" ")
+      run serialization.appendNumber(&mut out.*, (1.0 - leftWeight) * alphaMultiplier * 100.0)
+      run out.append(b"%)")
+    }
+  }
 }

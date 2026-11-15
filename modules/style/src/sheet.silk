@@ -3,6 +3,8 @@ import tokens { TokenBuffer, TokenRange, Limits }
 import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
 import sheet_tokens
 import sheet_values
+import sheet_colors
+import colors { ColorProgram }
 import resolver { Resolver, Rule }
 import selectors { SelectorList }
 import cascade { Priority, Origin, Name }
@@ -23,10 +25,11 @@ import silk.num.u64
 import silk.num.u32
 import silk.text.string { String, InvalidUtf8 }
 
-pub const VERSION: u32 = 2
+pub const VERSION: u32 = 3
 pub const NONE: usize = UNLAYERED
 
 pub union Declaration {
+  ColorExpression { pub property: Property, pub program: ColorProgram, pub important: bool },
   Typed { pub property: Property, pub value: Value, pub important: bool },
   Pending { pub property: Property, pub buffer: usize, pub range: TokenRange, pub important: bool },
   Custom { pub name: Bytes, pub buffer: usize, pub range: TokenRange, pub important: bool },
@@ -147,6 +150,12 @@ impl Sheet {
     i = 0
     while i < self.declarations.length() {
       match &self.declarations.asSlice()[i] {
+        Declaration.ColorExpression { property, program, important } => {
+          run writer.byte(3)
+          run writer.index(catalog.index(property))
+          run writer.flag(important)
+          run sheet_colors.encode(&program, &mut writer)
+        }
         Declaration.Typed { property, value, important } => {
           run writer.byte(0)
           run writer.index(catalog.index(property))
@@ -278,6 +287,11 @@ impl Sheet {
         let buffer = run bufferIndex(&mut reader, &sheet)
         let range = run readRange(&mut reader, &sheet.buffers.asSlice()[buffer])
         run sheet.declarations.append(Declaration.Custom { name: move name, buffer: buffer, range: range, important: important })
+      } else if tag == 3 {
+        let prop = run property(&mut reader)
+        let important = run reader.flag()
+        let program = run sheet_colors.decode(&mut reader, limits)
+        run sheet.declarations.append(Declaration.ColorExpression { property: prop, program: move program, important: important })
       } else { run reader.invalid() }
       i = i + 1
     }

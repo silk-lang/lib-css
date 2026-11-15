@@ -1,0 +1,76 @@
+{
+  "rows": [
+    {
+      "css": "color-mix(in srgb, red, blue)",
+      "value": "color(srgb 0.5 0 0.5)"
+    },
+    {
+      "css": "color-mix(in srgb, red 25%, blue)",
+      "value": "color(srgb 0.25 0 0.75)"
+    },
+    {
+      "css": "color-mix(in srgb, 25% red, blue 25%)",
+      "value": "color(srgb 0.5 0 0.5 / 0.5)"
+    },
+    {
+      "css": "color-mix(in srgb, red 80%, blue 80%)",
+      "value": "color(srgb 0.5 0 0.5)"
+    },
+    {
+      "css": "color-mix(in srgb, red, transparent)",
+      "value": "color(srgb 1 0 0 / 0.5)"
+    },
+    {
+      "css": "color-mix(in srgb, rgb(255 0 0 / .2), blue)",
+      "value": "color(srgb 0.166667 0 0.833333 / 0.6)"
+    },
+    {
+      "css": "color-mix(in srgb, red calc(20% + 5%), color-mix(in srgb, blue, white))",
+      "value": "color(srgb 0.625 0.375 0.75)"
+    },
+    {
+      "css": "color-mix(in lab, lab(20 30 40), lab(60 10 20))",
+      "value": "lab(40 20 30)"
+    },
+    {
+      "css": "color-mix(in oklab, oklab(.2 .1 .2), oklab(.6 .3 0))",
+      "value": "oklab(0.4 0.2 0.1)"
+    },
+    {
+      "css": "color-mix(in oklch, oklch(.5 .2 350), oklch(.5 .2 10))",
+      "value": "oklch(0.5 0.2 0)"
+    },
+    {
+      "css": "color-mix(in oklch longer hue, oklch(.5 .2 350), oklch(.5 .2 10))",
+      "value": "oklch(0.5 0.2 180)"
+    },
+    {
+      "css": "color-mix(in oklab, oklab(none .2 none), oklab(.6 none none))",
+      "value": "oklab(0.6 0.2 none)"
+    },
+    {
+      "css": "color-mix(in oklch, oklch(.5 0 200), oklch(.5 .2 10))",
+      "value": "oklch(0.5 0.1 285)"
+    }
+  ],
+  "registrations": [
+    {
+      "id": "absent",
+      "local": "rgb(255, 0, 0)",
+      "inherited": "rgb(0, 0, 255)",
+      "color": "rgb(0, 0, 0)"
+    },
+    {
+      "id": "invalid",
+      "local": "rgb(255, 0, 0)",
+      "inherited": "rgb(0, 0, 255)",
+      "color": "rgb(0, 0, 0)"
+    },
+    {
+      "id": "cycle",
+      "local": "rgb(255, 0, 0)",
+      "inherited": "rgb(255, 0, 0)",
+      "color": "rgb(0, 128, 0)"
+    }
+  ]
+}

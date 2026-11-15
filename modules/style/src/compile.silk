@@ -11,6 +11,9 @@ import syntax
 import selectors { SelectorList }
 import selectors
 import input { Input }
+import value_cursor { Cursor }
+import colors { ColorProgram }
+import colors
 import supports
 import values { Store }
 import written
@@ -263,8 +266,20 @@ impl Compiler {
         if validation.hasVariables {
           run self.sheet.declarations.append(Declaration.Pending { property: property, buffer: 0, range: declaration.value, important: declaration.important })
         } else {
-          let value = run written.valueIn(source, declaration.value.start, declaration.value.end)
-          run self.sheet.declarations.append(Declaration.Typed { property: property, value: move value, important: declaration.important })
+          let mut cursor = Cursor.make(&input)
+          let colorMix = cursor.function(&input, b"color-mix")
+          cursor = Cursor.make(&input)
+          if colorMix {
+            let program = run colors.parseProgram(&input, &mut cursor)
+            if let Option<ColorProgram>.Some { value } = move program {
+              if cursor.done(&input) {
+                run self.sheet.declarations.append(Declaration.ColorExpression { property: property, program: move value, important: declaration.important })
+              } else { run self.report(DiagnosticKind.Value, name) }
+            } else { run self.report(DiagnosticKind.Value, name) }
+          } else {
+            let value = run written.valueIn(source, declaration.value.start, declaration.value.end)
+            run self.sheet.declarations.append(Declaration.Typed { property: property, value: move value, important: declaration.important })
+          }
         }
       } else { run self.report(DiagnosticKind.Property, name) }
       if self.sheet.declarations.length() > self.limits.maxDeclarations { fail CssError { kind: CssErrorKind.DeclarationLimit, offset: declaration.value.start } }

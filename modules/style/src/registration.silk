@@ -95,7 +95,7 @@ pub effect fn valid(syntax: Syntax, source: &Input<'_>, initial: bool, limits: &
   }
   let mut cursor = Cursor.make(source)
   if syntax == Syntax.Color {
-    let parsed = run colors.parse(source, &mut cursor)
+    let parsed = run colors.parseProgram(source, &mut cursor)
     return parsed.isSome() && cursor.done(source)
   }
   let dimension = match syntax {

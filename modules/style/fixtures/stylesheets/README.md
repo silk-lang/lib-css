@@ -18,3 +18,14 @@ combinators, attributes, `:has()`, and important declarations. No CSS processor 
 
 The compiler tests compile these files and decode their serialized form. Runtime rendering
 and Chromium parity are separate integration checks in SilkUI.
+
+`color-reference.html` covers the color-mix and registered-variable unit cases. Its recorded
+`color-reference.chromium.json` was captured with Chromium 151.0.7922.173 on Linux. Regenerate
+with Node 22+ and Chromium installed:
+
+```sh
+node modules/style/tools/chromium-reference.mjs
+```
+
+Set `CHROMIUM` to select an executable. This reference covers numeric interpolation and
+registration defaults/inheritance/cycles; it does not establish full UI fixture parity.

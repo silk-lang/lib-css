@@ -1,5 +1,6 @@
 //! CSS Color 4, pinned 43bfdad1d01d4ce47cbb350b5fdf058be5b63edc2f0416b6967de1d731ff7145.
 //! Specified coordinates and missing components survive until display conversion.
+import silk.collections.list { List }
 import input { Input, TokenView }
 import tokens { Kind, insensitive }
 import value_cursor { Cursor }
@@ -481,7 +482,17 @@ pub effect fn parse(source: &Input<'_>, cursor: &mut Cursor) -> Option<Color>
   ! OutOfMemoryError
   ? &mut Allocator {
   let mut trial = Cursor { position: cursor.position, end: cursor.end }
-  let result = run parseInner(source, &mut trial)
+  let mut probe = trial
+  let result = if probe.function(source, b"color-mix") {
+    let parsed = run parseProgram(source, &mut trial)
+    match &parsed {
+      Option<ColorProgram>.Some { value } => {
+        if value.contextual() { Option<Color>.None }
+        else { value.evaluate(&Context.make(Color.current(), [Color.current(); 19])) }
+      }
+      _ => Option<Color>.None
+    }
+  } else { run parseInner(source, &mut trial) }
   match &result {
     Option<Color>.Some { .. } => {
       cursor.position = trial.position
@@ -1676,4 +1687,228 @@ fn namedColor(data: &[u8]) -> Option<Color> {
     i = i + 1
   }
   return Option<Color>.None
+}
+
+// Color 5 expressions use an owned postorder program. Ordinary colors stay fixed-size;
+// currentcolor/system leaves are resolved only when the host provides its palette.
+pub enum HueMethod { Shorter, Longer, Increasing, Decreasing }
+pub union ColorNode {
+  Leaf { pub color: Color },
+  Mix { pub left: usize, pub right: usize, pub space: Space, pub hue: HueMethod,
+    pub leftWeight: f64, pub alphaMultiplier: f64 },
+}
+impl Copy for ColorNode {}
+
+pub struct ColorProgram { pub nodes: List<ColorNode> }
+
+fn polarSpace(space: Space) -> bool {
+  return space == Space.Hsl || space == Space.Hwb || space == Space.Lch || space == Space.Oklch
+}
+
+fn hueChannel(space: Space) -> usize { return if space == Space.Hsl || space == Space.Hwb { 0 } else { 2 } }
+
+fn powerless(color: Color) -> Color {
+  let mut result = color
+  if (color.space == Space.Hsl && color.channels[1] <= 0.001)
+    || (color.space == Space.Hwb && color.channels[1] + color.channels[2] >= 99.999) {
+    result.missing = result.missing | 1
+    if color.space == Space.Hsl && result.channels[1] > 0.0 { result.channels[1] = 0.0 }
+  } else if (color.space == Space.Oklch && f64.abs(color.channels[1]) <= 0.000004)
+    || (color.space == Space.Lch && f64.abs(color.channels[1]) <= 0.0015) {
+    result.missing = result.missing | 4
+    if result.channels[1] > 0.0 { result.channels[1] = 0.0 }
+  }
+  return result
+}
+
+fn interpolationColor(color: Color, space: Space) -> Option<Color> {
+  // Explicit powerless hues still interpolate normally when no color conversion is needed.
+  // Conversion makes powerless components missing (Color 4 sections 4.4 and 13.6).
+  if color.space == space {
+    return match &color.identity { Identity.Absolute => Option<Color>.some(color) _ => Option<Color>.None }
+  }
+  return match convert(powerless(color), space) {
+    Option<Color>.Some { value } => Option<Color>.some(powerless(value))
+    _ => Option<Color>.None
+  }
+}
+
+/// Interpolates already resolved colors, preserving analogous missing components and gamut.
+pub fn mix(left: Color, right: Color, space: Space, method: HueMethod, leftWeight: f64, alphaMultiplier: f64) -> Option<Color> {
+  let mut a = match interpolationColor(left, space) { Option<Color>.Some { value } => value _ => { return Option<Color>.None } }
+  let mut b = match interpolationColor(right, space) { Option<Color>.Some { value } => value _ => { return Option<Color>.None } }
+  let missing = a.missing & b.missing
+  let bits: [u8; 3] = [1, 2, 4]
+  let mut i: usize = 0
+  while i < 3 {
+    if a.missing & bits[i] != 0 { a.channels[i] = if b.missing & bits[i] == 0 { b.channels[i] } else { 0.0 } }
+    if b.missing & bits[i] != 0 { b.channels[i] = a.channels[i] }
+    i = i + 1
+  }
+  if a.missing & 8 != 0 { a.alpha = if b.missing & 8 == 0 { b.alpha } else { 0.0 } }
+  if b.missing & 8 != 0 { b.alpha = a.alpha }
+  let weight = clamp(leftWeight, 0.0, 1.0)
+  let otherWeight = 1.0 - weight
+  let alpha = a.alpha * weight + b.alpha * otherWeight
+  let mut result = Color { space: space, channels: [0.0; 3], alpha: alpha * alphaMultiplier, missing: missing, identity: Identity.Absolute }
+  i = 0
+  while i < 3 {
+    if polarSpace(space) && i == hueChannel(space) {
+      let mut first = hue(a.channels[i])
+      let mut second = hue(b.channels[i])
+      let difference = second - first
+      match method {
+        HueMethod.Shorter => {
+          if difference > 180.0 { first = first + 360.0 }
+          else if difference < -180.0 { second = second + 360.0 }
+        }
+        HueMethod.Longer => {
+          if difference > 0.0 && difference < 180.0 { first = first + 360.0 }
+          else if difference <= 0.0 && difference > -180.0 { second = second + 360.0 }
+        }
+        HueMethod.Increasing => { if second < first { second = second + 360.0 } }
+        HueMethod.Decreasing => { if first < second { first = first + 360.0 } }
+      }
+      result.channels[i] = hue(first * weight + second * otherWeight)
+    } else {
+      result.channels[i] = if alpha > 0.0 { (a.channels[i] * a.alpha * weight + b.channels[i] * b.alpha * otherWeight) / alpha } else { 0.0 }
+    }
+    i = i + 1
+  }
+  return Option<Color>.some(result)
+}
+
+impl ColorProgram {
+  pub fn contextual(self: &Self) -> bool {
+    let mut i: usize = 0
+    while i < self.nodes.length() {
+      if let ColorNode.Leaf { color } = self.nodes.asSlice()[i] {
+        match &color.identity { Identity.Absolute => {} _ => { return true } }
+      }
+      i = i + 1
+    }
+    return false
+  }
+
+  pub fn evaluate(self: &Self, context: &Context) -> Option<Color> {
+    if self.nodes.length() == 0 { return Option<Color>.None }
+    return self.evaluateNode(self.nodes.length() - 1, context, 0)
+  }
+
+  fn evaluateNode(self: &Self, index: usize, context: &Context, depth: usize) -> Option<Color> {
+    if index >= self.nodes.length() || depth >= 64 { return Option<Color>.None }
+    return match &self.nodes.asSlice()[index] {
+      ColorNode.Leaf { color } => Option<Color>.some(compute(color, context))
+      ColorNode.Mix { left, right, space, hue, leftWeight, alphaMultiplier } => {
+        if left >= index || right >= index { return Option<Color>.None }
+        let a = match self.evaluateNode(left, context, depth + 1) { Option<Color>.Some { value } => value _ => { return Option<Color>.None } }
+        let b = match self.evaluateNode(right, context, depth + 1) { Option<Color>.Some { value } => value _ => { return Option<Color>.None } }
+        mix(a, b, space, hue, leftWeight, alphaMultiplier)
+      }
+    }
+  }
+
+  pub effect fn copy(self: &Self) -> ColorProgram ! OutOfMemoryError ? &mut Allocator {
+    let mut result = ColorProgram { nodes: List<ColorNode>.make() }
+    let mut i: usize = 0
+    while i < self.nodes.length() { run result.nodes.append(self.nodes.asSlice()[i])
+      i = i + 1
+    }
+    return move result
+  }
+}
+
+fn mixSpace(source: &Input<'_>, cursor: &mut Cursor) -> Option<Space> {
+  let rectangular = predefined(source, &mut cursor.*)
+  if rectangular.isSome() { return rectangular }
+  if cursor.ident(source, b"lab") { return Option<Space>.some(Space.Lab) }
+  if cursor.ident(source, b"lch") { return Option<Space>.some(Space.Lch) }
+  if cursor.ident(source, b"oklab") { return Option<Space>.some(Space.Oklab) }
+  if cursor.ident(source, b"oklch") { return Option<Space>.some(Space.Oklch) }
+  if cursor.ident(source, b"hsl") { return Option<Space>.some(Space.Hsl) }
+  if cursor.ident(source, b"hwb") { return Option<Space>.some(Space.Hwb) }
+  return Option<Space>.None
+}
+
+effect fn mixWeight(source: &Input<'_>, cursor: &mut Cursor) -> Option<f64>
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut probe = cursor.*
+  probe.skip(source)
+  let literal = match &source.at(probe.position) {
+    Option<TokenView>.Some { value } => match &value.token.kind { Kind.Percentage { .. } => true _ => false }
+    _ => false
+  }
+  let mut numerics = Store.make()
+  let parsed = run dimensions.parse(&mut numerics, source, &mut cursor.*, Dimension.Percentage, false)
+  return match &parsed {
+    Option<ExprId>.Some { value } => {
+      let number = dimensions.evaluateUncensored(&numerics, value, 100.0)
+      Option<f64>.some(if literal { number } else { clamp(number, 0.0, 100.0) })
+    }
+    _ => Option<f64>.None
+  }
+}
+
+effect fn colorNode(out: &mut ColorProgram, source: &Input<'_>, cursor: &mut Cursor, depth: usize) -> Option<usize>
+  ! OutOfMemoryError ? &mut Allocator {
+  if depth >= 64 || out.nodes.length() >= 4096 { return Option<usize>.None }
+  if !cursor.function(source, b"color-mix") {
+    let color = match run parseInner(source, &mut cursor.*) {
+      Option<Color>.Some { value } => value _ => { return Option<usize>.None }
+    }
+    let index = out.nodes.length()
+    run out.nodes.append(ColorNode.Leaf { color: color })
+    return Option<usize>.some(index)
+  }
+  if !cursor.ident(source, b"in") { return Option<usize>.None }
+  let space = match mixSpace(source, &mut cursor.*) { Option<Space>.Some { value } => value _ => { return Option<usize>.None } }
+  let mut method = HueMethod.Shorter
+  let mut specifiedHue = false
+  if cursor.ident(source, b"shorter") { specifiedHue = true }
+  else if cursor.ident(source, b"longer") { method = HueMethod.Longer
+    specifiedHue = true
+  } else if cursor.ident(source, b"increasing") { method = HueMethod.Increasing
+    specifiedHue = true
+  } else if cursor.ident(source, b"decreasing") { method = HueMethod.Decreasing
+    specifiedHue = true
+  }
+  if specifiedHue && (!polarSpace(space) || !cursor.ident(source, b"hue")) { return Option<usize>.None }
+  if !cursor.comma(source) { return Option<usize>.None }
+  let mut firstWeight = run mixWeight(source, &mut cursor.*)
+  let left = match run colorNode(&mut out.*, source, &mut cursor.*, depth + 1) { Option<usize>.Some { value } => value _ => { return Option<usize>.None } }
+  if !firstWeight.isSome() { firstWeight = run mixWeight(source, &mut cursor.*) }
+  if !cursor.comma(source) { return Option<usize>.None }
+  let mut secondWeight = run mixWeight(source, &mut cursor.*)
+  let right = match run colorNode(&mut out.*, source, &mut cursor.*, depth + 1) { Option<usize>.Some { value } => value _ => { return Option<usize>.None } }
+  if !secondWeight.isSome() { secondWeight = run mixWeight(source, &mut cursor.*) }
+  if !cursor.close(source) { return Option<usize>.None }
+  let a = match firstWeight { Option<f64>.Some { value } => value _ => match secondWeight { Option<f64>.Some { value } => 100.0 - value _ => 50.0 } }
+  let b = match secondWeight { Option<f64>.Some { value } => value _ => 100.0 - a }
+  if !f64.isFinite(a) || !f64.isFinite(b) || a < 0.0 || b < 0.0 || a > 100.0 || b > 100.0 || a + b <= 0.0 { return Option<usize>.None }
+  let index = out.nodes.length()
+  run out.nodes.append(ColorNode.Mix { left: left, right: right, space: space, hue: method, leftWeight: a / (a + b), alphaMultiplier: f64.min(1.0, (a + b) / 100.0) })
+  return Option<usize>.some(index)
+}
+
+/// Parses a Color 5 expression transactionally; programs are bounded to 64 levels and 4096 nodes.
+pub effect fn parseProgram(source: &Input<'_>, cursor: &mut Cursor) -> Option<ColorProgram>
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut trial = cursor.*
+  let mut program = ColorProgram { nodes: List<ColorNode>.make() }
+  let root = run colorNode(&mut program, source, &mut trial, 0)
+  if !root.isSome() { return Option<ColorProgram>.None }
+  cursor.position = trial.position
+  return Option<ColorProgram>.some(move program)
+}
+
+/// CSS interpolation-space name, without functional notation.
+pub fn spaceName(space: Space) -> &'static [u8] {
+  return match space {
+    Space.Srgb => b"srgb" Space.SrgbLinear => b"srgb-linear"
+    Space.DisplayP3 => b"display-p3" Space.DisplayP3Linear => b"display-p3-linear"
+    Space.A98Rgb => b"a98-rgb" Space.ProphotoRgb => b"prophoto-rgb" Space.Rec2020 => b"rec2020"
+    Space.XyzD50 => b"xyz-d50" Space.XyzD65 => b"xyz-d65"
+    Space.Hsl => b"hsl" Space.Hwb => b"hwb" Space.Lab => b"lab" Space.Lch => b"lch"
+    Space.Oklab => b"oklab" Space.Oklch => b"oklch"
+  }
 }

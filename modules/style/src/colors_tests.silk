@@ -334,3 +334,71 @@ test effect fn modernComponentsRequireWhitespace() -> ()
     "adjacent functions need component whitespace",
   )
 }
+
+import colors { ColorProgram }
+
+test effect fn colorMixNormalizesWeightsPremultipliesAndPreservesColorSpace() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run rgb(b"color-mix(in srgb, red, blue)", 0.5, 0.0, 0.5, 1.0) |> Effect.provideMut<Allocator>(&mut allocator)
+  run rgb(b"color-mix(in srgb, red 25%, blue)", 0.25, 0.0, 0.75, 1.0) |> Effect.provideMut<Allocator>(&mut allocator)
+  run rgb(b"color-mix(in srgb, 25% red, blue 25%)", 0.5, 0.0, 0.5, 0.5) |> Effect.provideMut<Allocator>(&mut allocator)
+  run rgb(b"color-mix(in srgb, red 80%, blue 80%)", 0.5, 0.0, 0.5, 1.0) |> Effect.provideMut<Allocator>(&mut allocator)
+  run rgb(b"color-mix(in srgb, red, transparent)", 1.0, 0.0, 0.0, 0.5) |> Effect.provideMut<Allocator>(&mut allocator)
+  run rgb(b"color-mix(in srgb, rgb(255 0 0 / 0.2), blue)", 1.0 / 6.0, 0.0, 5.0 / 6.0, 0.6) |> Effect.provideMut<Allocator>(&mut allocator)
+  run rgb(b"color-mix(in srgb, red calc(20% + 5%), color-mix(in srgb, blue, white))", 0.625, 0.375, 0.75, 1.0) |> Effect.provideMut<Allocator>(&mut allocator)
+  run rgb(b"color-mix(in srgb, red calc(-10%), blue)", 0.0, 0.0, 1.0, 1.0) |> Effect.provideMut<Allocator>(&mut allocator)
+  let lab = run sample(b"color-mix(in lab, lab(20 30 40), lab(60 10 20))") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(lab.space == Space.Lab && near(lab.channels[0], 40.0) && near(lab.channels[1], 20.0) && near(lab.channels[2], 30.0), "Lab interpolation keeps specified space without gamut clipping")
+  let oklab = run sample(b"color-mix(in oklab, oklab(0.2 0.1 0.2), oklab(0.6 0.3 0))") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(oklab.space == Space.Oklab && near(oklab.channels[0], 0.4) && near(oklab.channels[1], 0.2) && near(oklab.channels[2], 0.1), "Oklab interpolates Cartesian channels")
+}
+
+test effect fn colorMixHueFixupMissingComponentsAndDeferredCurrentColor() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let short = run sample(b"color-mix(in oklch, oklch(0.5 0.2 350), oklch(0.5 0.2 10))") |> Effect.provideMut<Allocator>(&mut allocator)
+  let long = run sample(b"color-mix(in oklch longer hue, oklch(0.5 0.2 350), oklch(0.5 0.2 10))") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(near(short.channels[2], 0.0) && near(long.channels[2], 180.0), "polar hue takes the selected arc")
+  let missing = run sample(b"color-mix(in oklab, oklab(none 0.2 none), oklab(0.6 none none))") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(near(missing.channels[0], 0.6) && near(missing.channels[1], 0.2) && missing.missing & 4 != 0, "one missing component borrows its partner; two remain missing")
+  let powerless = run sample(b"color-mix(in oklch, oklch(0.5 0 200), oklch(0.5 0.2 10))") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(near(powerless.channels[2], 285.0), "explicit powerless hue still interpolates when its space is unchanged")
+  let converted = run sample(b"color-mix(in oklch, rgb(128 128 128), oklch(.5 .2 10))") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(near(converted.channels[2], 10.0), "conversion makes achromatic hue missing before interpolation")
+  let buffer = run lexer.tokenize(b"color-mix(in srgb, color-mix(in srgb, currentcolor, white), transparent)", &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let source = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  let mut cursor = Cursor.make(&source)
+  let parsed = run colors.parseProgram(&source, &mut cursor) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(cursor.done(&source), "color expression consumes the whole input")
+  match &parsed {
+    Option<ColorProgram>.Some { value } => {
+      run Testing.expect(value.contextual(), "currentcolor stays a contextual leaf")
+      let red = value.evaluate(&Context.make(Color.srgb(1.0, 0.0, 0.0, 1.0), [Color.srgb(0.0, 0.0, 0.0, 1.0); 19]))
+      let blue = value.evaluate(&Context.make(Color.srgb(0.0, 0.0, 1.0, 1.0), [Color.srgb(0.0, 0.0, 0.0, 1.0); 19]))
+      run Testing.expect(match &red { Option<Color>.Some { value: resolved } => near(resolved.channels[0], 1.0) && near(resolved.channels[2], 0.5) && near(resolved.alpha, 0.5) _ => false }, "same program resolves against red host color")
+      run Testing.expect(match &blue { Option<Color>.Some { value: resolved } => near(resolved.channels[0], 0.5) && near(resolved.channels[2], 1.0) && near(resolved.alpha, 0.5) _ => false }, "same program resolves against blue host color")
+    }
+    _ => { run Testing.expect(false, "valid contextual color-mix program") }
+  }
+}
+
+test effect fn invalidColorMixDoesNotConsumeInput() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let invalid = [
+    b"color-mix(in srgb, red 0%, blue 0%)", b"color-mix(in srgb, red -1%, blue)",
+    b"color-mix(in srgb, red 101%, blue)", b"color-mix(in srgb longer hue, red, blue)",
+    b"color-mix(in unknown, red, blue)", b"color-mix(in srgb, red, blue, green)",
+    b"color-mix(in srgb, red 25% 25%, blue)", b"color-mix(in srgb, red 25, blue)",
+  ]
+  let mut i: usize = 0
+  while i < invalid.length {
+    let buffer = run lexer.tokenize(invalid[i], &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let source = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+    let mut cursor = Cursor.make(&source)
+    let parsed = run colors.parseProgram(&source, &mut cursor) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(!parsed.isSome() && cursor.position == 0, "invalid mix rolls back cursor")
+    i = i + 1
+  }
+}
