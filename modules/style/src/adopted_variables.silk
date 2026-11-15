@@ -1,8 +1,9 @@
 //! Immutable token inputs shared by a root's variable scopes across adopted sheets.
 import adopted { AdoptedSheet, Candidate as MatchedCandidate, Source }
 import sheet { Declaration as SheetDeclaration }
-import cascade { Declaration, Candidate, Name, Target, Specified }
+import cascade { Declaration, Candidate, Name, Target, Specified, Priority }
 import cascade
+import declaration_values
 import variables { VariableStore, ScopeId, RegistrationError }
 import variables
 import values { Wide, Mode }
@@ -14,7 +15,15 @@ import silk.collections.list { List }
 import silk.core.option { Option }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 
+pub struct InlineCustom<'name, 'tokens> {
+  pub name: &'name [u8],
+  pub tokens: &'tokens TokenBuffer,
+  pub priority: Priority,
+}
+
 pub struct Inputs {
+  baseBuffers: usize,
+  baseCatalog: usize,
   pub buffers: Buffers<'static>,
   pub catalog: List<Declaration>,
   offsets: List<usize>,
@@ -93,11 +102,13 @@ impl Inputs {
       }
       i = i + 1
     }
-    return Inputs { buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
+    let baseBuffers = buffers.owned().length
+    let baseCatalog = catalog.length()
+    return Inputs { baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
   }
 
   /// Builds only the custom-property part of the cascade; ordinary declarations do not add work.
-  pub effect fn scope(self: &mut Self, matches: &[MatchedCandidate], parent: Option<ScopeId>, limits: &Limits) -> ScopeId
+  pub effect fn scope(self: &mut Self, matches: &[MatchedCandidate], inline: &[InlineCustom<'_, '_>], parent: Option<ScopeId>, limits: &Limits) -> ScopeId
     ! CssError | OutOfMemoryError ? &mut Allocator {
     let mut candidates = List<Candidate>.make()
     let mut i: usize = 0
@@ -110,7 +121,34 @@ impl Inputs {
       }
       i = i + 1
     }
+    i = 0
+    while i < inline.length {
+      let item = &inline[i]
+      if declaration_values.customName(item.name) {
+        let mut buffer = run item.tokens.copy()
+        let range = buffer.all()
+        let specified = match cascade.wide(&Input.Contiguous { buffer: &buffer, range: range }) {
+          Option<Wide>.Some { value } => Specified.Wide { keyword: value }
+          _ => Specified.Pending { range: range, mode: Mode.Css }
+        }
+        let start = buffer.data.length()
+        run buffer.data.append(item.name)
+        let name = Name { buffer: self.buffers.length(), span: Span { start: start, end: buffer.data.length() } }
+        let mut priority = item.priority
+        priority.inline = true
+        run candidates.append(Candidate { declaration: self.catalog.length(), priority: priority })
+        run self.catalog.append(Declaration { target: Target.Custom { name: name }, specified: specified, buffer: name.buffer, important: priority.important })
+        run self.buffers.append(move buffer)
+      }
+      i = i + 1
+    }
     return run self.variables.build(self.buffers.view(), self.catalog.asSlice(), candidates.asSlice(), parent, limits)
+  }
+
+  pub fn resetScopes(self: &mut Self) -> () {
+    self.variables.resetScopes()
+    self.buffers.truncateOwned(self.baseBuffers)
+    self.catalog.truncate(self.baseCatalog)
   }
 
   /// A pending declaration after substitution. None is invalid at computed-value time.

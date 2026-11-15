@@ -2,7 +2,7 @@
 //! This module consumes compiled data and never calls the stylesheet compiler or lexer.
 import sheet { Sheet, Declaration }
 import sheet_conditions
-import adopted_variables { Inputs }
+import adopted_variables { Inputs, InlineCustom }
 import variables { ScopeId, RegistrationError }
 import silk.core.option { Option }
 import silk.mem.box { Box }
@@ -18,7 +18,7 @@ import silk.core.ownership { Copy }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.usize
 
-pub enum AdoptionError { DuplicateId, UnknownId }
+pub enum AdoptionError { DuplicateId, UnknownId, InvalidOrder }
 pub union Source {
   Sheet { pub sheet: usize, pub declaration: usize },
   Inline { pub declaration: usize },
@@ -89,6 +89,31 @@ impl StyleSheets {
     run self.rebuildLayers()
   }
 
+  pub effect fn reorder(self: &mut Self, ids: &[u32]) -> ()
+    ! AdoptionError | OutOfMemoryError ? &mut Allocator {
+    if ids.length != self.entries.length() { fail AdoptionError.InvalidOrder }
+    let mut i: usize = 0
+    while i < ids.length {
+      if self.index(ids[i]) == usize.MAX { fail AdoptionError.UnknownId }
+      let mut before: usize = 0
+      while before < i {
+        if ids[before] == ids[i] { fail AdoptionError.DuplicateId }
+        before = before + 1
+      }
+      i = i + 1
+    }
+    let mut ordered = List<AdoptedSheet>.make()
+    run ordered.reserve(ids.length)
+    i = 0
+    while i < ids.length {
+      let at = self.index(ids[i])
+      run ordered.append(self.entries.remove(at))
+      i = i + 1
+    }
+    self.entries = move ordered
+    run self.rebuildLayers()
+  }
+
   /// Removing an absent id is a no-op.
   pub effect fn remove(self: &mut Self, id: u32) -> bool ! OutOfMemoryError ? &mut Allocator {
     let index = self.index(id)
@@ -155,12 +180,17 @@ impl StyleSheets {
   /// Builds the matched element's variable scope. Scope ids belong to this adoption/environment epoch.
   pub effect fn variableScope(self: &mut Self, parent: Option<ScopeId>, limits: &Limits) -> ScopeId
     ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
+    return run self.variableScopeWith(parent, &[], limits)
+  }
+
+  pub effect fn variableScopeWith(self: &mut Self, parent: Option<ScopeId>, inline: &[InlineCustom<'_, '_>], limits: &Limits) -> ScopeId
+    ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
     if self.variables.isNone() {
       self.variables = Option<Box<Inputs>>.some(run Box<Inputs>.make(run Inputs.make(self.entries.asSlice(), limits)))
     }
     match &mut self.variables {
       Option<Box<Inputs>>.Some { value } => { let inputs = value.getMut()
-        return run inputs[0].scope(self.output.asSlice(), parent, limits) }
+        return run inputs[0].scope(self.output.asSlice(), inline, parent, limits) }
       Option<Box<Inputs>>.None => Intrinsic.trap("variable inputs were initialized")
     }
   }
@@ -168,7 +198,7 @@ impl StyleSheets {
   pub fn resetScopes(self: &mut Self) -> () {
     if let Option<Box<Inputs>>.Some { value } = &mut self.variables {
       let inputs = value.getMut()
-      inputs[0].variables.resetScopes()
+      inputs[0].resetScopes()
     }
   }
 

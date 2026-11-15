@@ -115,6 +115,13 @@ effect fn replacementBody() -> ()
     _ => false
   }, "duplicate adoption is rejected")
   run Testing.expect(sheets.length() == 2 && winner(&sheets, Property.Height) == 20, "rejected adoption preserves the registry and previous result")
+  let badOrder = run Effect.result(sheets.reorder(&[20, 20]))
+  run Testing.expect(match &badOrder { Result<(), AdoptionError | OutOfMemoryError>.Failure { .. } => true _ => false }, "duplicate ordering is rejected before mutating the sheets")
+  run Testing.expect(sheets.sheets()[0].id == 10 && sheets.sheets()[1].id == 20, "invalid ordering preserves adoption order")
+  run sheets.reorder(&[20, 10])
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  run Testing.expect(winner(&sheets, Property.Height) == 10, "reordering changes equal-specificity source order without recompiling")
   run Testing.expect(run sheets.remove(20), "an adopted sheet is removed")
   context = MatchContext.make(0, NO_ELEMENT)
   run sheets.resolve(&tree, 0, &[], &mut context)
@@ -221,4 +228,45 @@ test effect fn adoptedVariablesInheritAcrossSheetsAndRefreshRegistrations() -> (
   ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run variablesBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+import adopted_variables { InlineCustom }
+import lexer
+
+effect fn inlineVariablesBody() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, run compiled(b".button{--gap:8px!important;--height:12px} .a{width:var(--gap);height:var(--height)}"))
+  let tree = Tree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  let gap = run lexer.tokenize(b"24px", &Limits.make())
+  let height = run lexer.tokenize(b"32px", &Limits.make())
+  let priority = Priority.make(Origin.Author, 0)
+  let inline = [InlineCustom<'_, '_> { name: b"--gap", tokens: &gap, priority: priority }, InlineCustom<'_, '_> { name: b"--height", tokens: &height, priority: priority }]
+  let parent = run sheets.variableScopeWith(Option<ScopeId>.None, &inline, &Limits.make())
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  let child = run sheets.variableScope(Option<ScopeId>.some(parent), &Limits.make())
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.Width)), b"8px"), "important sheet custom declarations beat normal inline values")
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.Height)), b"32px"), "inline custom properties inherit into sheet declarations")
+  let before = sheets.variableInputs()[0].buffers.length()
+  sheets.resetScopes()
+  run Testing.expect(sheets.variableInputs()[0].buffers.length() + 2 == before, "full restyles release copied inline tokens")
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  let mut important = priority
+  important.important = true
+  let parent2 = run sheets.variableScopeWith(Option<ScopeId>.None, &[InlineCustom<'_, '_> { name: b"--gap", tokens: &gap, priority: important }], &Limits.make())
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  let child2 = run sheets.variableScope(Option<ScopeId>.some(parent2), &Limits.make())
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child2, Property.Width)), b"24px"), "important inline custom properties win")
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child2, Property.Height)), b"12px"), "removed inline custom properties do not leak into a new restyle")
+}
+
+test effect fn adoptedInlineCustomPropertiesShareTheCascadeAndReclaimStorage() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run inlineVariablesBody() |> Effect.provideMut<Allocator>(&mut allocator)
 }
