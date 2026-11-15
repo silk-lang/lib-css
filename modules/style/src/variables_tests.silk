@@ -422,3 +422,89 @@ test effect fn variableResourceExhaustionIsTypedNotInvalidValue() -> ()
     "reference work exhaustion does not silently become guaranteed-invalid",
   )
 }
+
+import registration { Parsed }
+import registration
+import variables { RegistrationError }
+
+effect fn register(f: &mut Fixture, css: &[u8]) -> ()
+  ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
+  let buffer = run lexer.tokenize(css, &Limits.make())
+  let rules = run syntax.parseRules(&buffer, buffer.all(), true, &Limits.make())
+  let rule = rules.asSlice()[0]
+  let definition = run registration.parse(&buffer, f.buffers.length(), rule.prelude, rule.body, &Limits.make())
+  run f.buffers.append(move buffer)
+  match &definition {
+    Parsed.Valid { registration } => { run f.variables.register(f.buffers.view(), registration, &Limits.make()) }
+    _ => { fail RegistrationError.Invalid }
+  }
+}
+
+test effect fn registeredVariablesDefaultValidateAndRespectInheritance() -> ()
+  ! AssertionError<'static> | RegistrationError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let limits = Limits.make()
+  let mut f = run fixture(b"--local:blue;--inherited:blue;--plain:blue") |> Effect.provideMut<Allocator>(&mut allocator)
+  run register(&mut f, b"@property --local {syntax:'<color>';inherits:false;initial-value:red}") |> Effect.provideMut<Allocator>(&mut allocator)
+  run register(&mut f, b"@property --inherited {syntax:'<color>';inherits:true;initial-value:red}") |> Effect.provideMut<Allocator>(&mut allocator)
+  run register(&mut f, b"@property --default {syntax:'<color>';inherits:false;initial-value:green}") |> Effect.provideMut<Allocator>(&mut allocator)
+  let parent = run f.variables.build(f.buffers.view(), f.catalog.asSlice(), f.candidates.asSlice(), Option<ScopeId>.None, &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  f.candidates.truncate(0)
+  let child = run f.variables.build(f.buffers.view(), f.catalog.asSlice(), f.candidates.asSlice(), Option<ScopeId>.some(parent), &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(child.index != parent.index, "empty child keeps non-inheriting registrations isolated")
+  let local = run substitution(&mut f, child, b"var(--local,orange)") |> Effect.provideMut<Allocator>(&mut allocator)
+  let inherited = run substitution(&mut f, child, b"var(--inherited,orange)") |> Effect.provideMut<Allocator>(&mut allocator)
+  let initial = run substitution(&mut f, child, b"var(--default,orange)") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(isIdent(&f, &local, b"red"), "non-inherited property uses registered initial instead of parent or var fallback")
+  run Testing.expect(isIdent(&f, &inherited, b"blue"), "inherited registration uses parent")
+  run Testing.expect(isIdent(&f, &initial, b"green"), "absent declaration uses registered initial")
+  let entries = run f.variables.computedEntries(f.buffers.view(), child, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(entries.length() == 4, "computed enumeration includes absent registration defaults")
+  run addDeclarations(&mut f, b"--local:2px;--inherited:var(--missing);--plain:var(--missing)", Origin.Author)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let invalid = run f.variables.build(f.buffers.view(), f.catalog.asSlice(), f.candidates.asSlice(), Option<ScopeId>.some(parent), &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let badLocal = run substitution(&mut f, invalid, b"var(--local,orange)") |> Effect.provideMut<Allocator>(&mut allocator)
+  let badInherited = run substitution(&mut f, invalid, b"var(--inherited,orange)") |> Effect.provideMut<Allocator>(&mut allocator)
+  let badPlain = run substitution(&mut f, invalid, b"var(--plain,orange)") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(isIdent(&f, &badLocal, b"red"), "invalid registered syntax defaults to initial")
+  run Testing.expect(isIdent(&f, &badInherited, b"blue"), "failed substitution defaults using registered inheritance")
+  run Testing.expect(isIdent(&f, &badPlain, b"orange"), "unregistered invalid value remains guaranteed-invalid")
+  f.candidates.truncate(0)
+  run addDeclarations(&mut f, b"--local:inherit;--inherited:initial;--default:var(--missing,unset)", Origin.Author)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let explicit = run f.variables.build(f.buffers.view(), f.catalog.asSlice(), f.candidates.asSlice(), Option<ScopeId>.some(parent), &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let inherit = run substitution(&mut f, explicit, b"var(--local)") |> Effect.provideMut<Allocator>(&mut allocator)
+  let reset = run substitution(&mut f, explicit, b"var(--inherited)") |> Effect.provideMut<Allocator>(&mut allocator)
+  let unset = run substitution(&mut f, explicit, b"var(--default)") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(isIdent(&f, &inherit, b"blue"), "explicit inherit overrides non-inheriting registration")
+  run Testing.expect(isIdent(&f, &reset, b"red"), "initial resets inherited registration")
+  run Testing.expect(isIdent(&f, &unset, b"green"), "substituted unset respects registration")
+}
+
+test effect fn registrationReplacementCyclesAndUniversalFallbacks() -> ()
+  ! AssertionError<'static> | RegistrationError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut f = run fixture(b"--x:var(--y);--y:var(--x);--dependent:var(--x,orange)") |> Effect.provideMut<Allocator>(&mut allocator)
+  run register(&mut f, b"@property --x {syntax:'<color>';inherits:false;initial-value:red}") |> Effect.provideMut<Allocator>(&mut allocator)
+  run register(&mut f, b"@property --x {syntax:'<color>';inherits:false;initial-value:green}") |> Effect.provideMut<Allocator>(&mut allocator)
+  run register(&mut f, b"@property --free {syntax:'*';inherits:false}") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(!f.variables.fresh().isSome(), "a registered store cannot be shared as an unregistered engine")
+  let scope = run f.variables.build(f.buffers.view(), f.catalog.asSlice(), f.candidates.asSlice(), Option<ScopeId>.None, &Limits.make())
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let cycle = run substitution(&mut f, scope, b"var(--dependent)") |> Effect.provideMut<Allocator>(&mut allocator)
+  let free = run substitution(&mut f, scope, b"var(--free,orange)") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(isIdent(&f, &cycle, b"green"), "last registration supplies cycle recovery initial before dependent substitution")
+  run Testing.expect(isIdent(&f, &free, b"orange"), "universal absent initial remains guaranteed-invalid")
+  let late = run Effect.result(register(&mut f, b"@property --x {syntax:'*';inherits:true}")) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &late {
+    Result<(), RegistrationError | CssError | OutOfMemoryError>.Failure { error } => match &error {
+      RegistrationError value => value == RegistrationError.AlreadyBuilt
+      _ => false
+    }
+    _ => false
+  }, "registration changes require rebuilding scopes rather than mutating inherited computed values")
+}

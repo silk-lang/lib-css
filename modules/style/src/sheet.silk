@@ -5,7 +5,10 @@ import sheet_tokens
 import sheet_values
 import resolver { Resolver, Rule }
 import selectors { SelectorList }
-import cascade { Priority, Origin }
+import cascade { Priority, Origin, Name }
+import registration { Registration, Syntax }
+import declaration_values
+import silk.core.option { Option }
 import layers { Layers, UNLAYERED }
 import css_properties.values { Value }
 import css_properties.catalog { Property }
@@ -20,7 +23,7 @@ import silk.num.u64
 import silk.num.u32
 import silk.text.string { String, InvalidUtf8 }
 
-pub const VERSION: u32 = 1
+pub const VERSION: u32 = 2
 pub const NONE: usize = UNLAYERED
 
 pub union Declaration {
@@ -45,6 +48,13 @@ pub struct AtRule {
   pub body: TokenRange,
 }
 
+pub struct RegisteredProperty {
+  pub definition: Registration,
+  pub condition: usize,
+  pub enabled: bool,
+}
+impl Copy for RegisteredProperty {}
+
 pub enum DiagnosticKind { AtRule, Selector, Property, Value, Unsupported }
 pub struct Diagnostic { pub kind: DiagnosticKind, pub feature: Bytes, pub count: usize }
 
@@ -54,6 +64,7 @@ pub struct Sheet {
   pub conditions: List<Condition>,
   pub ruleConditions: List<usize>,
   pub metadata: List<AtRule>,
+  pub registrations: List<RegisteredProperty>,
   pub layers: Layers,
   pub resolver: Resolver,
   pub diagnostics: List<Diagnostic>,
@@ -107,7 +118,7 @@ impl Sheet {
     return Sheet {
       buffers: List<TokenBuffer>.make(), declarations: List<Declaration>.make(),
       conditions: List<Condition>.make(), ruleConditions: List<usize>.make(),
-      metadata: List<AtRule>.make(), layers: Layers.make(), resolver: Resolver.make(),
+      metadata: List<AtRule>.make(), registrations: List<RegisteredProperty>.make(), layers: Layers.make(), resolver: Resolver.make(),
       diagnostics: List<Diagnostic>.make(),
     }
   }
@@ -189,6 +200,23 @@ impl Sheet {
       run writer.index(rule.buffer)
       run writeRange(&mut writer, rule.prelude)
       run writeRange(&mut writer, rule.body)
+      i = i + 1
+    }
+    run writer.index(self.registrations.length())
+    i = 0
+    while i < self.registrations.length() {
+      let item = self.registrations.asSlice()[i]
+      let definition = item.definition
+      run writer.index(item.condition)
+      run writer.index(definition.name.buffer)
+      run writer.data(self.buffers.asSlice()[definition.name.buffer].text(definition.name.span))
+      run writer.byte(match definition.syntax {
+        Syntax.Universal => 0 Syntax.Length => 1 Syntax.LengthPercentage => 2 Syntax.Color => 3
+        Syntax.Number => 4 Syntax.Percentage => 5 Syntax.Angle => 6
+      })
+      run writer.flag(definition.inherits)
+      run writer.flag(definition.initial.isSome())
+      if let Option<TokenRange>.Some { value } = definition.initial { run writeRange(&mut writer, value) }
       i = i + 1
     }
     return move writer.bytes
@@ -299,6 +327,31 @@ impl Sheet {
       let prelude = run readRange(&mut reader, &sheet.buffers.asSlice()[buffer])
       let body = run readRange(&mut reader, &sheet.buffers.asSlice()[buffer])
       run sheet.metadata.append(AtRule { name: move name, buffer: buffer, prelude: prelude, body: body })
+      i = i + 1
+    }
+    let registrationCount = run reader.count(limits.maxDeclarations)
+    i = 0
+    while i < registrationCount {
+      let condition = run reader.index()
+      if condition != NONE && condition >= conditionCount { run reader.invalid() }
+      let buffer = run bufferIndex(&mut reader, &sheet)
+      let buffers = sheet.buffers.asMutSlice()
+      let span = run sheet_tokens.readText(&mut reader, &mut buffers[buffer])
+      if !declaration_values.customName(sheet.buffers.asSlice()[buffer].text(span)) { run reader.invalid() }
+      let syntax = match run reader.byte() {
+        0 => Syntax.Universal 1 => Syntax.Length 2 => Syntax.LengthPercentage 3 => Syntax.Color
+        4 => Syntax.Number 5 => Syntax.Percentage 6 => Syntax.Angle
+        _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+      }
+      let inherits = run reader.flag()
+      let initial = if run reader.flag() {
+        Option<TokenRange>.some(run readRange(&mut reader, &sheet.buffers.asSlice()[buffer]))
+      } else { Option<TokenRange>.None }
+      if syntax != Syntax.Universal && !initial.isSome() { run reader.invalid() }
+      run sheet.registrations.append(RegisteredProperty {
+        definition: Registration { name: Name { buffer: buffer, span: span }, syntax: syntax, inherits: inherits, initial: initial },
+        condition: condition, enabled: condition == NONE,
+      })
       i = i + 1
     }
     run reader.finish()

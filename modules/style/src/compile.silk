@@ -1,5 +1,7 @@
 //! Compiles CSS syntax to shared declarations, selector programs and retained conditions.
-import sheet { Sheet, Declaration, Condition, ConditionKind, AtRule, Diagnostic, DiagnosticKind, NONE }
+import sheet { Sheet, Declaration, Condition, ConditionKind, AtRule, RegisteredProperty, Diagnostic, DiagnosticKind, NONE }
+import registration { Parsed }
+import registration
 import resolver { Rule as MatchRule }
 import cascade { Priority, Origin }
 import tokens { TokenBuffer, TokenRange, Kind, Limits, CssError, CssErrorKind, equal, insensitive }
@@ -178,7 +180,25 @@ impl Compiler {
       run self.group(source, rule.body, parent, layer, index, depth + 1)
       return
     }
-    if (insensitive(name, b"property") || insensitive(name, b"keyframes") || insensitive(name, b"font-face"))
+    if insensitive(name, b"property") && rule.kind == RuleKind.AtBlock {
+      if parent.length != 0 {
+        run self.report(DiagnosticKind.AtRule, name)
+        return
+      }
+      let parsed = run registration.parse(source, 0, rule.prelude, rule.body, &self.limits)
+      match &parsed {
+        Parsed.Valid { registration } => {
+          if self.sheet.registrations.length() >= self.limits.maxDeclarations {
+            fail CssError { kind: CssErrorKind.DeclarationLimit, offset: rule.prelude.start }
+          }
+          run self.sheet.registrations.append(RegisteredProperty { definition: registration, condition: condition, enabled: condition == NONE })
+        }
+        Parsed.Unsupported => { run self.report(DiagnosticKind.Unsupported, b"property syntax") }
+        Parsed.Invalid => { run self.report(DiagnosticKind.AtRule, b"property") }
+      }
+      return
+    }
+    if (insensitive(name, b"keyframes") || insensitive(name, b"font-face"))
       && rule.kind == RuleKind.AtBlock {
       if self.sheet.metadata.length() >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: rule.prelude.start } }
       run self.sheet.metadata.append(AtRule { name: run Bytes.copy(name), buffer: 0, prelude: rule.prelude, body: rule.body })

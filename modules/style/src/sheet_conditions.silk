@@ -38,5 +38,14 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
     sheet.resolver.setEnabled(i, enabled)
     i = i + 1
   }
+  i = 0
+  while i < sheet.registrations.length() {
+    let item = sheet.registrations.asSlice()[i]
+    let enabled = item.condition == NONE || results.asSlice()[item.condition]
+    if item.enabled != enabled { changed = true }
+    let registrations = sheet.registrations.asMutSlice()
+    registrations[i].enabled = enabled
+    i = i + 1
+  }
   return changed
 }

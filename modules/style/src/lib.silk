@@ -39,3 +39,5 @@ import resolver
 import compile
 import sheet
 import sheet_conditions
+
+import registration

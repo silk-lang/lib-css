@@ -229,7 +229,7 @@ MIT or Apache-2.0.
 `compile.compile(css, options)` produces a `sheet.Sheet` from CSS bytes. It compiles selectors
 and shared typed declarations, preserves custom-property and variable token programs, resolves
 nesting, flattens layer order, evaluates `@supports`, and retains media/container/starting
-conditions and `@property`, `@font-face`, and `@keyframes` metadata. It does not run CSS processors.
+conditions, validated `@property` registrations, and `@font-face`/`@keyframes` metadata. It does not run CSS processors.
 
 `Sheet.encode()` writes the internal `SILKCSS` byte format. `Sheet.decode(bytes, limits)` reads
 parsed programs without invoking the CSS tokenizer or selector parser. The format is versioned
@@ -244,8 +244,16 @@ state, structural, descendant, sibling, and ancestor dependencies. Static hosts 
 state operation; its default returns no interactive states. `sheet_conditions.update` evaluates
 retained media conditions against a host environment and reports whether rule eligibility changed.
 
+`registration` validates the supported `@property` syntax: `*`, `<length>`, `<length-percentage>`,
+`<color>`, `<number>`, `<percentage>`, and `<angle>`. `VariableStore.register` installs definitions
+before scopes are built; later registrations replace earlier definitions with the same name.
+Scopes apply registered initial values, `inherits: false`, syntax checks after substitution,
+and invalid-value defaults. Changing registrations requires rebuilding the scopes. The variable
+store still retains token values; canonicalizing relative typed values at their defining element
+requires host integration.
+
 This foundation does not yet apply sheets to SilkUI. Hosts must resolve pending values and
-registered custom properties, consume the animation/font metadata, and integrate invalidation
+install active registrations, consume the animation/font metadata, and integrate invalidation
 with their tree. Container conditions remain disabled and produce an unsupported-feature
 diagnostic. Generated pseudo-elements and `color-mix()` are not implemented by this change.
 Diagnostics aggregate dropped features; `Options.strict` rejects a sheet with diagnostics.

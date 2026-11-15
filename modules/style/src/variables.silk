@@ -1,4 +1,6 @@
 //! Sparse inherited custom-property scopes and bounded token-reference substitution.
+import registration { Registration, Syntax }
+import registration
 import cascade { Name, Declaration, Candidate, Target, Specified, Origin }
 import cascade
 import values { Wide }
@@ -50,8 +52,18 @@ struct Scope {
 
 impl Copy for Scope {}
 
+pub enum RegistrationError { AlreadyBuilt, Invalid }
+
+struct Registered {
+  definition: Registration,
+  initial: Option<TokenRange>,
+}
+impl Copy for Registered {}
+
 pub struct VariableStore {
   closingBuffer: usize,
+  registrations: List<Registered>,
+  isolated: bool,
   scopes: List<Scope>,
   entries: List<Entry>,
   refs: List<TokenRef>,
@@ -79,7 +91,8 @@ struct Work {
   nodes: List<Node>,
   edges: List<usize>,
   parent: Option<ScopeId>,
-  retry: bool
+  retry: bool,
+  resolvedScope: bool,
 }
 
 struct Budget {
@@ -186,15 +199,111 @@ impl VariableStore {
   pub fn make(closingBuffer: usize) -> VariableStore {
     return VariableStore {
       closingBuffer: closingBuffer,
+      registrations: List<Registered>.make(),
+      isolated: false,
       scopes: List<Scope>.make(),
       entries: List<Entry>.make(),
       refs: List<TokenRef>.make(),
     }
   }
 
+  /// Adds or replaces a validated registration before the first scope is built.
+  /// Registrations share the caller's immutable buffers, as ordinary declarations do.
+  pub effect fn register(self: &mut Self, buffers: BufferView<'_>, definition: Registration, limits: &Limits) -> ()
+    ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
+    if self.scopes.length() != 0 { fail RegistrationError.AlreadyBuilt }
+    if definition.name.buffer >= buffers.length()
+      || !declaration_values.customName(buffers.one(definition.name.buffer)[0].text(definition.name.span)) {
+      fail RegistrationError.Invalid
+    }
+    let mut initial = Option<TokenRange>.None
+    if let Option<TokenRange>.Some { value: range } = definition.initial {
+      let buffer = &buffers.one(definition.name.buffer)[0]
+      if range.start > range.end || range.end > buffer.all().end { fail RegistrationError.Invalid }
+      if !run registration.valid(definition.syntax, &Input.Contiguous { buffer: buffer, range: range }, true, limits) {
+        fail RegistrationError.Invalid
+      }
+      let mut budget = Budget { remaining: limits.maxTokens }
+      let start = self.refs.length()
+      let mut i = range.start
+      while i < range.end {
+        run push(&mut self.refs, TokenRef { buffer: definition.name.buffer, token: i }, limits, &mut budget)
+        i = i + 1
+      }
+      initial = Option<TokenRange>.some(TokenRange { start: start, end: self.refs.length() })
+    } else if definition.syntax != Syntax.Universal { fail RegistrationError.Invalid }
+    let item = Registered { definition: definition, initial: initial }
+    let mut found = false
+    let mut i: usize = 0
+    while i < self.registrations.length() {
+      if cascade.sameName(buffers, definition.name, self.registrations.asSlice()[i].definition.name) {
+        let registrations = self.registrations.asMutSlice()
+        registrations[i] = item
+        found = true
+        break
+      }
+      i = i + 1
+    }
+    if !found {
+      if self.registrations.length() >= limits.maxDeclarations { fail CssError { kind: CssErrorKind.DeclarationLimit, offset: 0 } }
+      run self.registrations.append(item)
+    }
+    self.isolated = false
+    i = 0
+    while i < self.registrations.length() {
+      if !self.registrations.asSlice()[i].definition.inherits { self.isolated = true }
+      i = i + 1
+    }
+  }
+
+  fn registered(self: &Self, buffers: BufferView<'_>, name: Name) -> Option<Registered> {
+    let mut i: usize = 0
+    while i < self.registrations.length() {
+      let entry = self.registrations.asSlice()[i]
+      if cascade.sameName(buffers, name, entry.definition.name) { return Option<Registered>.some(entry) }
+      i = i + 1
+    }
+    return Option<Registered>.None
+  }
+
+  fn registeredText(self: &Self, buffers: BufferView<'_>, name: &[u8]) -> Option<Registered> {
+    let mut i: usize = 0
+    while i < self.registrations.length() {
+      let entry = self.registrations.asSlice()[i]
+      if tokens.equal(buffers.one(entry.definition.name.buffer)[0].text(entry.definition.name.span), name) {
+        return Option<Registered>.some(entry)
+      }
+      i = i + 1
+    }
+    return Option<Registered>.None
+  }
+
+  fn initial(self: &Self, buffers: BufferView<'_>, name: Name) -> Option<TokenRange> {
+    return match &self.registered(buffers, name) {
+      Option<Registered>.Some { value } => value.initial
+      _ => Option<TokenRange>.None
+    }
+  }
+
+  effect fn defaultValue(self: &Self, buffers: BufferView<'_>, parent: Option<ScopeId>, name: Name, budget: &mut Budget) -> Option<TokenRange>
+    ! CssError {
+    if let Option<Registered>.Some { value } = self.registered(buffers, name) {
+      if !value.definition.inherits { return value.initial }
+    }
+    return run self.inherited(buffers, parent, name, &mut budget.*)
+  }
+
+  effect fn invalidValue(self: &Self, buffers: BufferView<'_>, parent: Option<ScopeId>, name: Name, budget: &mut Budget) -> Option<TokenRange>
+    ! CssError {
+    if self.registered(buffers, name).isSome() {
+      return run self.defaultValue(buffers, parent, name, &mut budget.*)
+    }
+    return Option<TokenRange>.None
+  }
+
   /// A store with no scope yet, as make returns it, under its closing buffer.
   pub fn fresh(self: &VariableStore) -> Option<usize> {
-    if self.scopes.length() == 0 && self.entries.length() == 0 && self.refs.length() == 0 {
+    if self.registrations.length() == 0 && self.scopes.length() == 0 && self.entries.length() == 0 && self.refs.length() == 0 {
       return Option<usize>.some(self.closingBuffer)
     }
     return Option<usize>.None
@@ -210,6 +319,7 @@ impl VariableStore {
     scope: ScopeId,
     name: Name,
   ) -> Option<TokenRange> {
+    let registered = self.registered(buffers, name)
     let mut current = Option<ScopeId>.some(scope)
     while true {
       match &current {
@@ -226,10 +336,16 @@ impl VariableStore {
             }
             i = i + 1
           }
+          if let Option<Registered>.Some { value: registration } = registered {
+            if !registration.definition.inherits { return registration.initial }
+          }
           current = item.parent
         }
         _ => {
-          return Option<TokenRange>.None
+          return match &registered {
+            Option<Registered>.Some { value } => value.initial
+            _ => Option<TokenRange>.None
+          }
         }
       }
     }
@@ -242,6 +358,7 @@ impl VariableStore {
     scope: ScopeId,
     name: &[u8],
   ) -> Option<TokenRange> {
+    let registered = self.registeredText(buffers, name)
     let mut current = Option<ScopeId>.some(scope)
     while true {
       match &current {
@@ -259,16 +376,22 @@ impl VariableStore {
             }
             i = i + 1
           }
+          if let Option<Registered>.Some { value: registration } = registered {
+            if !registration.definition.inherits { return registration.initial }
+          }
           current = item.parent
         }
         _ => {
-          return Option<TokenRange>.None
+          return match &registered {
+            Option<Registered>.Some { value } => value.initial
+            _ => Option<TokenRange>.None
+          }
         }
       }
     }
   }
 
-  /// Enumerates inherited custom properties once, omitting guaranteed-invalid values.
+  /// Enumerates computed custom properties and registration defaults once, omitting guaranteed-invalid values.
   /// Invalid local declarations still shadow an ancestor's value of the same name.
   pub effect fn computedEntries(
     self: &VariableStore,
@@ -310,7 +433,7 @@ impl VariableStore {
                 fail CssError { kind: CssErrorKind.StorageLimit, offset: i }
               }
               run seen.append(entry.name)
-              match &entry.value {
+              match &self.lookup(buffers, scope, entry.name) {
                 Option<TokenRange>.Some { value: range } => {
                   run result.append(ComputedVariable { name: entry.name, value: range })
                 }
@@ -321,11 +444,33 @@ impl VariableStore {
           }
           current = item.parent
         }
-        _ => {
-          return move result
-        }
+        _ => { break }
       }
     }
+    let mut i: usize = 0
+    while i < self.registrations.length() {
+      let name = self.registrations.asSlice()[i].definition.name
+      let mut duplicate = false
+      let mut j: usize = 0
+      while j < seen.length() {
+        run budget.spend(1)
+        if cascade.sameName(buffers, name, seen.asSlice()[j]) {
+          duplicate = true
+          break
+        }
+        j = j + 1
+      }
+      if !duplicate {
+        if result.length() >= limits.maxDeclarations || result.length() >= limits.maxStorageBytes / 64 {
+          fail CssError { kind: CssErrorKind.StorageLimit, offset: i }
+        }
+        if let Option<TokenRange>.Some { value } = self.lookup(buffers, scope, name) {
+          run result.append(ComputedVariable { name: name, value: value })
+        }
+      }
+      i = i + 1
+    }
+    return move result
   }
 
   effect fn inherited(
@@ -336,6 +481,7 @@ impl VariableStore {
     budget: &mut Budget,
   ) -> Option<TokenRange>
     ! CssError {
+    let registered = self.registered(buffers, name)
     let mut current = parent
     while true {
       match &current {
@@ -354,10 +500,16 @@ impl VariableStore {
             }
             i = i + 1
           }
+          if let Option<Registered>.Some { value: registration } = registered {
+            if !registration.definition.inherits { return registration.initial }
+          }
           current = item.parent
         }
         _ => {
-          return Option<TokenRange>.None
+          return match &registered {
+            Option<Registered>.Some { value } => value.initial
+            _ => Option<TokenRange>.None
+          }
         }
       }
     }
@@ -379,6 +531,7 @@ impl VariableStore {
       edges: List<usize>.make(),
       parent: parent,
       retry: false,
+      resolvedScope: false,
     }
     let mut i: usize = 0
     while i < candidates.length {
@@ -423,7 +576,7 @@ impl VariableStore {
       }
       i = i + 1
     }
-    if work.nodes.length() == 0 {
+    if work.nodes.length() == 0 && !self.isolated {
       match &parent {
         Option<ScopeId>.Some { value } => {
           return value
@@ -446,7 +599,12 @@ impl VariableStore {
         node.visited = false
         node.stacked = false
         node.cyclic = false
-        let mut inherit = true
+        let inheritedByDefault = match &self.registered(buffers, node.name) {
+          Option<Registered>.Some { value } => value.definition.inherits
+          _ => true
+        }
+        let mut inherit = inheritedByDefault
+        let mut initial = !inherit
         match &winner {
           Option<Candidate>.Some { value } => {
             let declaration = &catalog[value.declaration]
@@ -457,9 +615,11 @@ impl VariableStore {
                 node.raw = range
                 node.resolved = false
                 inherit = false
+                initial = false
               }
               Specified.Wide { keyword } => {
-                inherit = keyword != Wide.Initial
+                inherit = keyword == Wide.Inherit || (keyword == Wide.Unset && inheritedByDefault)
+                initial = !inherit
               }
               _ => {
                 inherit = false
@@ -470,6 +630,8 @@ impl VariableStore {
         }
         if inherit {
           node.value = run self.inherited(buffers, parent, node.name, &mut budget)
+        } else if initial {
+          node.value = self.initial(buffers, node.name)
         }
         let mut nodes = work.nodes.asMutSlice()
         nodes[i] = node
@@ -580,7 +742,9 @@ impl VariableStore {
       fail CssError { kind: CssErrorKind.NestingLimit, offset: index }
     }
     if node.cyclic {
+      let fallback = run self.invalidValue(buffers, work.parent, node.name, &mut budget.*)
       let mut nodes = work.nodes.asMutSlice()
+      nodes[index].value = fallback
       nodes[index].resolved = true
       return
     }
@@ -614,16 +778,27 @@ impl VariableStore {
             let mut nodes = work.nodes.asMutSlice()
             nodes[index].excluded = node.excluded | cascade.revertMask(node.origin)
             work.retry = true
-          } else if value != Wide.Initial {
-            let inherited = run self.inherited(buffers, work.parent, node.name, &mut budget.*)
+          } else {
+            let fallback = if value == Wide.Initial { self.initial(buffers, node.name) }
+              else if value == Wide.Inherit { run self.inherited(buffers, work.parent, node.name, &mut budget.*) }
+              else { run self.defaultValue(buffers, work.parent, node.name, &mut budget.*) }
             let mut nodes = work.nodes.asMutSlice()
-            nodes[index].value = inherited
+            nodes[index].value = fallback
           }
           let mut nodes = work.nodes.asMutSlice()
           nodes[index].resolved = true
           return
         }
         _ => {}
+      }
+      if let Option<Registered>.Some { value: registered } = self.registered(buffers, node.name) {
+        if !run registration.valid(registered.definition.syntax, &expanded, false, limits) {
+          let fallback = run self.invalidValue(buffers, work.parent, node.name, &mut budget.*)
+          let nodes = work.nodes.asMutSlice()
+          nodes[index].value = fallback
+          nodes[index].resolved = true
+          return
+        }
       }
       if self.refs.length() > limits.maxStorageBytes / 16
         || out.length() > limits.maxStorageBytes / 16 - self.refs.length() {
@@ -639,6 +814,11 @@ impl VariableStore {
       nodes[index].value = Option<TokenRange>.some(
         TokenRange { start: start, end: self.refs.length() },
       )
+    }
+    if !valid {
+      let fallback = run self.invalidValue(buffers, work.parent, node.name, &mut budget.*)
+      let nodes = work.nodes.asMutSlice()
+      nodes[index].value = fallback
     }
     let mut nodes = work.nodes.asMutSlice()
     nodes[index].resolved = true
@@ -668,6 +848,7 @@ impl VariableStore {
       nodes: List<Node>.make(),
       edges: List<usize>.make(),
       parent: Option<ScopeId>.some(scope),
+      resolvedScope: true,
       retry: false,
     }
     let mut budget = Budget { remaining: limits.maxTokens }
@@ -811,7 +992,8 @@ effect fn expand(
           let target = local(work, buffers, name)
           let value = match &target {
             Option<usize>.Some { value } => work.nodes.asSlice()[value].value
-            _ => run store.inherited(buffers, work.parent, name, &mut budget.*)
+            _ => if work.resolvedScope { run store.inherited(buffers, work.parent, name, &mut budget.*) }
+              else { run store.defaultValue(buffers, work.parent, name, &mut budget.*) }
           }
           match &value {
             Option<TokenRange>.Some { value: resolved } => {

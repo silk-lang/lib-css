@@ -95,7 +95,7 @@ test effect fn sheetDecoderRejectsTruncationVersionCatalogAndTrailingData() -> (
     _ => false
   }, "format mismatch rejected")
   let catalogData = bytes.asMutSlice()
-  catalogData[8] = 1
+  catalogData[8] = 2
   catalogData[12] = catalogData[12] ^ 1
   let catalog = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &catalog {
@@ -174,4 +174,40 @@ test effect fn everyNestedSelectorListArmKeepsItsParentConstraintAndSpecificity(
   run Testing.expect(specificity.ids == 1 && specificity.classes == 1, "nesting uses maximum parent-list specificity")
   run sheet.resolver.resolve(BufferView.of(sheet.buffers.asSlice()), &tree, 2, &[], &mut context) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(sheet.resolver.matches().length == 0, "second selector-list arm cannot escape its parent")
+}
+
+import registration { Syntax }
+
+test effect fn compiledRegistrationsKeepNamesGrammarDefaultsAndConditions() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(
+    b"@property --size {syntax:'<length>';inherits:false;initial-value:4px} @media(width>600px){@property --size {syntax:'<length>';inherits:true;initial-value:8px}} @property --free {syntax:'*';inherits:false} @property --bad {syntax:'<length>';inherits:false;initial-value:red} @property --list {syntax:'<length>+';inherits:false;initial-value:4px}",
+    &Options.make(),
+  ) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.registrations.length() == 3, "invalid and unsupported registrations are excluded")
+  run Testing.expect(sheet.diagnostics.length() == 2, "invalid and unsupported descriptors have diagnostics")
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(decoded.registrations.length() == 3, "registrations survive byte decode")
+  let first = decoded.registrations.asSlice()[0]
+  let second = decoded.registrations.asSlice()[1]
+  let last = decoded.registrations.asSlice()[2]
+  run Testing.expect(equal(decoded.buffers.asSlice()[first.definition.name.buffer].text(first.definition.name.span), b"--size"), "registration name relocates into source-free buffer")
+  run Testing.expect(first.definition.syntax == Syntax.Length && !first.definition.inherits && first.definition.initial.isSome(), "typed grammar, inheritance and initial retained")
+  run Testing.expect(second.definition.inherits && !second.enabled, "conditional registration initially disabled")
+  run Testing.expect(last.definition.syntax == Syntax.Universal && !last.definition.initial.isSome(), "universal registration may have guaranteed-invalid initial")
+  let changed = run sheet_conditions.update(&mut decoded, &Environment.headless(800.0, 600.0), false, &Limits.make())
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(changed && decoded.registrations.asSlice()[1].enabled, "registration-only media change signals restyle")
+  let same = run sheet_conditions.update(&mut decoded, &Environment.headless(900.0, 600.0), false, &Limits.make())
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(!same, "stable registration condition avoids restyle")
+  let mut i = bytes.length() - 32
+  while i < bytes.length() {
+    let truncated = run Effect.result(Sheet.decode(Slice.view<u8>(bytes.asSlice(), 0, i), &Limits.make()))
+      |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(match &truncated { Result<Sheet, DecodeError | OutOfMemoryError>.Failure { .. } => true _ => false }, "truncated registration records fail decoding")
+    i = i + 1
+  }
 }
