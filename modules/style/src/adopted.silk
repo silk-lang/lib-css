@@ -2,6 +2,10 @@
 //! This module consumes compiled data and never calls the stylesheet compiler or lexer.
 import sheet { Sheet, Declaration }
 import sheet_conditions
+import adopted_variables { Inputs }
+import variables { ScopeId, RegistrationError }
+import silk.core.option { Option }
+import silk.mem.box { Box }
 import layers { Layers, UNLAYERED }
 import cascade { Priority }
 import cascade
@@ -37,6 +41,7 @@ pub struct StyleSheets {
   layers: Layers,
   output: List<Candidate>,
   matched: List<MatchedRule>,
+  variables: Option<Box<Inputs>>,
 }
 
 fn important(declaration: &Declaration) -> bool {
@@ -51,7 +56,7 @@ fn important(declaration: &Declaration) -> bool {
 impl StyleSheets {
   pub fn make() -> StyleSheets {
     return StyleSheets { entries: List<AdoptedSheet>.make(), layers: Layers.make(),
-      output: List<Candidate>.make(), matched: List<MatchedRule>.make() }
+      output: List<Candidate>.make(), matched: List<MatchedRule>.make(), variables: Option<Box<Inputs>>.None }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() }
   pub fn sheets(self: &Self) -> &[AdoptedSheet] { return self.entries.asSlice() }
@@ -94,6 +99,7 @@ impl StyleSheets {
   }
 
   effect fn rebuildLayers(self: &mut Self) -> () ! OutOfMemoryError ? &mut Allocator {
+    self.variables = Option<Box<Inputs>>.None
     self.layers = Layers.make()
     self.output.clear()
     self.matched.clear()
@@ -142,7 +148,28 @@ impl StyleSheets {
       changed = changed || flipped
       i = i + 1
     }
+    if changed { self.variables = Option<Box<Inputs>>.None }
     return changed
+  }
+
+  /// Builds the matched element's variable scope. Scope ids belong to this adoption/environment epoch.
+  pub effect fn variableScope(self: &mut Self, parent: Option<ScopeId>, limits: &Limits) -> ScopeId
+    ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
+    if self.variables.isNone() {
+      self.variables = Option<Box<Inputs>>.some(run Box<Inputs>.make(run Inputs.make(self.entries.asSlice(), limits)))
+    }
+    match &mut self.variables {
+      Option<Box<Inputs>>.Some { value } => { let inputs = value.getMut()
+        return run inputs[0].scope(self.output.asSlice(), parent, limits) }
+      Option<Box<Inputs>>.None => Intrinsic.trap("variable inputs were initialized")
+    }
+  }
+
+  pub fn variableInputs(self: &Self) -> &[Inputs] {
+    return match &self.variables {
+      Option<Box<Inputs>>.Some { value } => value.get()
+      Option<Box<Inputs>>.None => &[]
+    }
   }
 
   /// Matches one element, adding active style-object declarations with their inline priorities.

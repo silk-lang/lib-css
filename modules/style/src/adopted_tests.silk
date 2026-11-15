@@ -156,3 +156,66 @@ test effect fn adoptedMediaConditionsInvalidateOnlyWhenResultsFlip() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   run conditionsBody() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+import variables { ScopeId, RegistrationError }
+import silk.core.option { Option }
+import silk.collections.bytes { Bytes }
+import tokens { equal }
+
+effect fn pendingValue(sheets: &StyleSheets, scope: ScopeId, property: Property) -> Option<Bytes>
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let candidates = sheets.candidates()
+  let mut i = candidates.length
+  while i > 0 {
+    i = i - 1
+    if let Source.Sheet { sheet, declaration } = candidates[i].source {
+      if let Declaration.Pending { property: found, .. } = &sheets.sheets()[sheet].sheet.declarations.asSlice()[declaration] {
+        if found == property {
+          return run sheets.variableInputs()[0].substitute(scope, sheet, declaration, &Limits.make())
+        }
+      }
+    }
+  }
+  return Option<Bytes>.None
+}
+
+fn valueIs(value: &Option<Bytes>, expected: &[u8]) -> bool {
+  return match &value.* {
+    Option<Bytes>.Some { value: bytes } => equal(bytes.asSlice(), expected)
+    _ => false
+  }
+}
+
+effect fn variablesBody() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, run compiled(b"@layer base, utilities; @layer base {.button{--gap:8px!important}} @layer utilities {.button{--gap:4px!important}}"))
+  run sheets.adopt(2, run compiled(b"@property --size {syntax:'<length>';inherits:false;initial-value:3px} .button{--size:9px} .a{width:var(--gap);height:var(--size);margin-left:var(--missing)}"))
+  let tree = Tree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  let parent = run sheets.variableScope(Option<ScopeId>.None, &Limits.make())
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  let child = run sheets.variableScope(Option<ScopeId>.some(parent), &Limits.make())
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.Width)), b"8px"), "inherited custom properties use cross-sheet important layer order")
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.Height)), b"3px"), "registered non-inherited values use relocated initial tokens in another sheet")
+  run Testing.expect((run pendingValue(&sheets, child, Property.MarginLeft)).isNone(), "unresolved variables are invalid at computed-value time")
+  run sheets.adopt(3, run compiled(b"@property --size {syntax:'<length>';inherits:false;initial-value:5px} @media (width >= 600px) {@property --size {syntax:'<length>';inherits:false;initial-value:7px}}"))
+  drop run sheets.environment(&Environment.headless(400.0, 300.0), false, &Limits.make())
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  let narrow = run sheets.variableScope(Option<ScopeId>.None, &Limits.make())
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, narrow, Property.Height)), b"5px"), "the last enabled registration across adopted sheets wins")
+  drop run sheets.environment(&Environment.headless(800.0, 300.0), false, &Limits.make())
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  let wide = run sheets.variableScope(Option<ScopeId>.None, &Limits.make())
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, wide, Property.Height)), b"7px"), "a registration condition flip rebuilds the variable inputs")
+}
+
+test effect fn adoptedVariablesInheritAcrossSheetsAndRefreshRegistrations() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run variablesBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
