@@ -44,7 +44,7 @@ try {
   const { frameTree } = await send('Page.getFrameTree');
   await send('Page.setDocumentContent', {
     frameId: frameTree.frame.id,
-    html: readFileSync(new URL('../fixtures/stylesheets/color-reference.html', import.meta.url), 'utf8'),
+    html: readFileSync(process.argv[2] ?? new URL('../fixtures/stylesheets/color-reference.html', import.meta.url), 'utf8'),
   });
   const result = await send('Runtime.evaluate', {
     expression: "document.getElementById('results').textContent", returnByValue: true,

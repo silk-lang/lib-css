@@ -88,9 +88,14 @@ pub effect fn longhand(shorthand: Property, value: &Value, target: Property) -> 
   while index < count && !(catalog.longhandAt(shorthand, index) == target) {
     index = index + 1
   }
-  if index == count || !expands(shorthand) {
-    return Option<Value>.None
+  if index == count { return Option<Value>.None }
+  if let Value.Keyword { value: keyword } = &value.* {
+    if keyword == Keyword.Initial || keyword == Keyword.Inherit || keyword == Keyword.Unset
+      || keyword == Keyword.Revert || keyword == Keyword.RevertLayer {
+      return Option<Value>.some(values.keyword(keyword))
+    }
   }
+  if !expands(shorthand) { return Option<Value>.None }
   if shorthand == Property.BorderRadius {
     return run radius(value, index)
   }

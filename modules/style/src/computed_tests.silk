@@ -579,6 +579,13 @@ effect fn invalidAndRevert() -> bool
     Origin.Author,
   )
   let sourceId = buffers.length() - 1
+  run pending(&mut buffers, &mut declarations, &mut childCandidates, Property.StrokeMiterlimit, b"7", Origin.Author)
+  run pending(&mut buffers, &mut declarations, &mut childCandidates, Property.StrokeMiterlimit, b"9", Origin.Author)
+  run pending(&mut buffers, &mut declarations, &mut childCandidates, Property.StrokeMiterlimit, b"var(--missing,revert-layer)", Origin.Author)
+  let layered = childCandidates.asMutSlice()
+  layered[layered.length - 3].priority.layer = 0
+  layered[layered.length - 2].priority.layer = 1
+  layered[layered.length - 1].priority.layer = 1
   let child = run engine.build(
     buffers.view(),
     declarations.asSlice(),
@@ -619,7 +626,11 @@ effect fn invalidAndRevert() -> bool
     }
     _ => false
   }
-  return inherited && opacity && width && source && palette
+  let layer = match &engine.number(child, Property.StrokeMiterlimit, 0.0) {
+    Option<f64>.Some { value } => value == 7.0
+    _ => false
+  }
+  return inherited && opacity && width && source && palette && layer
 }
 
 test effect fn invalidComputedValuesDefaultWithoutEarlierFallback() -> ()

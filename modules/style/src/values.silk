@@ -43,7 +43,8 @@ pub enum Wide {
   Initial,
   Inherit,
   Unset,
-  Revert
+  Revert,
+  RevertLayer
 }
 
 pub enum Range {
@@ -541,6 +542,9 @@ fn wide(source: &Input<'_>, cursor: &mut Cursor) -> Option<Wide> {
   }
   if cursor.ident(source, b"unset") {
     return Option<Wide>.some(Wide.Unset)
+  }
+  if cursor.ident(source, b"revert-layer") {
+    return Option<Wide>.some(Wide.RevertLayer)
   }
   if cursor.ident(source, b"revert") {
     return Option<Wide>.some(Wide.Revert)

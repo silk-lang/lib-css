@@ -131,6 +131,7 @@ pub effect fn value(
           Wide.Inherit => b"inherit"
           Wide.Unset => b"unset"
           Wide.Revert => b"revert"
+          Wide.RevertLayer => b"revert-layer"
         },
       )
     }

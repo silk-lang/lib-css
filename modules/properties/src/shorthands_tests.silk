@@ -138,3 +138,19 @@ test effect fn boxShorthandsExpand() -> () ! AssertionError<'static> | OutOfMemo
   let mut allocator = Allocator.systemAllocatorProvider()
   run expansion() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+effect fn wideExpansion() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let inherit = values.keyword(Keyword.Inherit)
+  let rollback = values.keyword(Keyword.RevertLayer)
+  let initial = values.keyword(Keyword.Initial)
+  run expectLonghand(Property.Border, &inherit, Property.BorderLeftWidth, b"inherit", "wide border keyword reaches widths")
+  run expectLonghand(Property.Font, &initial, Property.FontSize, b"initial", "wide font does not need a font shorthand grammar")
+  run expectLonghand(Property.All, &rollback, Property.Color, b"revert-layer", "all propagates layer rollback")
+  run expectLonghand(Property.All, &rollback, Property.Direction, b"", "all still excludes direction")
+}
+
+test effect fn wideKeywordsExpandIndependentlyOfShorthandGrammar() -> ()
+  ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run wideExpansion() |> Effect.provideMut<Allocator>(&mut allocator)
+}

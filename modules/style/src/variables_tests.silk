@@ -511,3 +511,19 @@ test effect fn registrationReplacementCyclesAndUniversalFallbacks() -> ()
     _ => false
   }, "registration changes require rebuilding scopes rather than mutating inherited computed values")
 }
+
+test effect fn layerRollbackAfterSubstitutionRetainsDependencyOrder() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut f = run fixture(b"--x:red;--x:blue;--x:var(--missing,revert-layer);--y:var(--x,green)")
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let candidates = f.candidates.asMutSlice()
+  candidates[0].priority.layer = 0
+  candidates[1].priority.layer = 1
+  candidates[2].priority.layer = 1
+  let scope = run f.variables.build(f.buffers.view(), f.catalog.asSlice(), f.candidates.asSlice(), Option<ScopeId>.None, &Limits.make())
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let x = run substitution(&mut f, scope, b"var(--x)") |> Effect.provideMut<Allocator>(&mut allocator)
+  let y = run substitution(&mut f, scope, b"var(--y)") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(isIdent(&f, &x, b"red") && isIdent(&f, &y, b"red"), "substituted layer rollback skips its whole layer before resolving dependents")
+}

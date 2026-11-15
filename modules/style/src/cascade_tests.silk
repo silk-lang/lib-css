@@ -234,3 +234,54 @@ test effect fn layersPrecedeSpecificityAndReverseForImportant() -> ()
   late.specificity = early.specificity
   run Testing.expect(cascade.compare(early, late) > 0, "source order breaks ties in a layer")
 }
+
+// https://www.w3.org/TR/css-cascade-5/#revert-layer
+// Browser counterpart: fixtures/stylesheets/cascade-reference.html.
+test effect fn layerRollbackRemovesItsWholeCascadeInterval() -> ()
+  ! AssertionError<'static> {
+  let mut catalog = [
+    Declaration { target: Target.Property { property: Property.Fill }, specified: Specified.Wide { keyword: Wide.Initial }, buffer: 0, important: false },
+    Declaration { target: Target.Property { property: Property.Fill }, specified: Specified.Wide { keyword: Wide.Initial }, buffer: 0, important: false },
+    Declaration { target: Target.Property { property: Property.Fill }, specified: Specified.Wide { keyword: Wide.Initial }, buffer: 0, important: false },
+    Declaration { target: Target.Property { property: Property.All }, specified: Specified.Wide { keyword: Wide.RevertLayer }, buffer: 0, important: false },
+  ]
+  let mut a = Priority.make(Origin.Author, 0)
+  a.layer = 0
+  let mut b = Priority.make(Origin.Author, 1)
+  b.layer = 1
+  let mut revert = b
+  revert.order = 2
+  let mut candidates = [
+    Candidate { declaration: 0, priority: Priority.make(Origin.User, 0) },
+    Candidate { declaration: 1, priority: a },
+    Candidate { declaration: 2, priority: b },
+    Candidate { declaration: 3, priority: revert },
+  ]
+  run Testing.expect(match &cascade.select(&catalog, &candidates, Property.Fill, 0) {
+    Option<Candidate>.Some { value } => value.declaration == 1
+    _ => false
+  }, "normal rollback skips all declarations in its layer, including shorthand coverage")
+  catalog[3].important = true
+  run Testing.expect(match &cascade.select(&catalog, &candidates, Property.Fill, 0) {
+    Option<Candidate>.Some { value } => value.declaration == 1
+    _ => false
+  }, "important rollback also skips its normal layer")
+  candidates[3].priority.layer = 0
+  catalog[2].important = true
+  run Testing.expect(match &cascade.select(&catalog, &candidates, Property.Fill, 0) {
+    Option<Candidate>.Some { value } => value.declaration == 0
+    _ => false
+  }, "earliest important layer rollback removes intervening important and normal author layers")
+  candidates[3].priority.inline = true
+  run Testing.expect(match &cascade.select(&catalog, &candidates, Property.Fill, 0) {
+    Option<Candidate>.Some { value } => value.declaration == 2
+    _ => false
+  }, "important inline rollback preserves important author sheets")
+  catalog[2].important = false
+  candidates[2].priority.origin = Origin.Animation
+  candidates[1].priority.inline = true
+  run Testing.expect(match &cascade.select(&catalog, &candidates, Property.Fill, 0) {
+    Option<Candidate>.Some { value } => value.declaration == 0
+    _ => false
+  }, "important inline rollback removes normal inline styles and animations")
+}

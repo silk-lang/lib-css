@@ -1,7 +1,7 @@
 //! Sparse inherited custom-property scopes and bounded token-reference substitution.
 import registration { Registration, Syntax }
 import registration
-import cascade { Name, Declaration, Candidate, Target, Specified, Origin }
+import cascade { Name, Declaration, Candidate, Target, Specified, Origin, Priority, Rollback }
 import cascade
 import values { Wide }
 import tokens {
@@ -81,8 +81,8 @@ struct Node {
   low: usize,
   stacked: bool,
   cyclic: bool,
-  origin: Origin,
-  excluded: u8,
+  priority: Priority,
+  rollback: Rollback,
 }
 
 impl Copy for Node {}
@@ -578,10 +578,10 @@ impl VariableStore {
                 low: 0,
                 stacked: false,
                 cyclic: false,
-                origin: Origin.Author,
-                excluded: 0,
+                priority: Priority.make(Origin.Author, 0),
+                rollback: Rollback.make(0),
               }
-              if work.nodes.length() >= limits.maxStorageBytes / 128 {
+              if work.nodes.length() >= limits.maxStorageBytes / 256 {
                 fail CssError { kind: CssErrorKind.StorageLimit, offset: i }
               }
               run work.nodes.append(node)
@@ -609,7 +609,7 @@ impl VariableStore {
       while i < work.nodes.length() {
         let mut node = work.nodes.asSlice()[i]
         run budget.spend(candidates.length)
-        let winner = cascade.selectCustom(buffers, catalog, candidates, node.name, node.excluded)
+        let winner = cascade.selectCustomWith(buffers, catalog, candidates, node.name, &mut node.rollback)
         node.resolved = true
         node.value = Option<TokenRange>.None
         node.visited = false
@@ -625,7 +625,7 @@ impl VariableStore {
           Option<Candidate>.Some { value } => {
             let declaration = &catalog[value.declaration]
             node.buffer = declaration.buffer
-            node.origin = value.priority.origin
+            node.priority = value.priority
             match &declaration.specified {
               Specified.Pending { range, .. } => {
                 node.raw = range
@@ -790,9 +790,10 @@ impl VariableStore {
       let keyword = cascade.wide(&expanded)
       match &keyword {
         Option<Wide>.Some { value } => {
-          if value == Wide.Revert {
+          let mut rollback = node.rollback
+          if rollback.apply(value, node.priority) {
             let mut nodes = work.nodes.asMutSlice()
-            nodes[index].excluded = node.excluded | cascade.revertMask(node.origin)
+            nodes[index].rollback = rollback
             work.retry = true
           } else {
             let fallback = if value == Wide.Initial { self.initial(buffers, node.name) }
