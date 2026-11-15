@@ -34,3 +34,8 @@ import cssom_document
 import cssom_computed
 import cssom_inline
 import cssom_loading
+import layers
+import resolver
+import compile
+import sheet
+import sheet_conditions

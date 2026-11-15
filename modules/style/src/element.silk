@@ -1,9 +1,44 @@
-//! Static selector matching borrows a host tree; it does not duplicate XML nodes.
+//! Selector matching borrows a host tree instead of duplicating its nodes.
 import silk.num.usize
 import tokens { CssError, CssErrorKind }
 import silk.core.ownership { Copy }
 
 pub const NO_ELEMENT: usize = usize.MAX
+
+/// Host-reported selector states. Bits describe applicability as well as state:
+/// disabled/enabled and required/optional are independent, not complements.
+pub struct StateBits {
+  pub bits: u32,
+}
+
+impl Copy for StateBits {}
+
+impl StateBits {
+  pub fn empty() -> StateBits {
+    return StateBits { bits: 0 }
+  }
+
+  pub fn contains(self: &Self, mask: u32) -> bool {
+    return (self.bits & mask) == mask
+  }
+}
+
+pub const HOVER: u32 = 1
+pub const ACTIVE: u32 = 2
+pub const FOCUS: u32 = 4
+pub const FOCUS_VISIBLE: u32 = 8
+pub const FOCUS_WITHIN: u32 = 16
+pub const DISABLED: u32 = 32
+pub const ENABLED: u32 = 64
+pub const CHECKED: u32 = 128
+pub const INDETERMINATE: u32 = 256
+pub const PLACEHOLDER_SHOWN: u32 = 512
+pub const READ_ONLY: u32 = 1024
+pub const READ_WRITE: u32 = 2048
+pub const REQUIRED: u32 = 4096
+pub const OPTIONAL: u32 = 8192
+pub const OPEN: u32 = 16384
+pub const POPOVER_OPEN: u32 = 32768
 
 /// One attribute's namespace, local name and value, as ElementTree.attributeNamespace,
 /// attributeName and attributeValue give them, fetched together.
@@ -23,6 +58,12 @@ impl<'a> Copy for AttributeText<'a> {}
 /// language supplies the inherited document language, or empty when explicitly unknown.
 /// isLink reports document-language link semantics, not whether a URL was fetched or visited.
 pub interface ElementTree {
+  /// States applicable to this element, including host-computed focus-within.
+  /// Static hosts have no interactive states unless they override this operation.
+  fn state(self: &Self, node: usize) -> StateBits {
+    return StateBits.empty()
+  }
+
   fn parent(self: &Self, node: usize) -> usize
 
   /// Host of the node's own tree scope, or NO_ELEMENT in an ordinary tree.

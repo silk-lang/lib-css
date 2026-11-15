@@ -10,10 +10,10 @@ WebGPU, or a particular UI tree.
 - **Syntax:** decoding stylesheet bytes with the WHATWG encodings, the CSS Syntax 3 tokenizer,
   and rule and declaration parsing with error recovery.
 - **Selectors:** Selectors 4 with specificity. Matching runs against any tree that implements
-  `ElementTree`, including shadow trees. An optional index finds candidate rules by ID, class
-  and name.
-- **Cascade:** origins, `!important`, specificity and order, inheritance, and custom properties
-  with `var()` substitution (Cascade 4 and Variables 1).
+  `ElementTree`, including shadow trees and host-reported interactive states. An optional index
+  finds candidate rules by ID, class and name.
+- **Cascade:** origins, `!important`, nested layer order, specificity and order, inheritance, and
+  custom properties with `var()` substitution (Cascade 5 and Variables 1).
 - **Conditions:** `@media` (Media Queries 4, evaluated with three-valued logic), `@supports`,
   and import conditions.
 - **Values:** lengths and `calc()` expressions, colours (Color 4, including system colours),
@@ -223,3 +223,33 @@ SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" silk test --manifest-path module
 ## License
 
 MIT or Apache-2.0.
+
+## Compiled stylesheet foundation
+
+`compile.compile(css, options)` produces a `sheet.Sheet` from CSS bytes. It compiles selectors
+and shared typed declarations, preserves custom-property and variable token programs, resolves
+nesting, flattens layer order, evaluates `@supports`, and retains media/container/starting
+conditions and `@property`, `@font-face`, and `@keyframes` metadata. It does not run CSS processors.
+
+`Sheet.encode()` writes the internal `SILKCSS` byte format. `Sheet.decode(bytes, limits)` reads
+parsed programs without invoking the CSS tokenizer or selector parser. The format is versioned
+and checks the property-catalog fingerprint; it has no cross-version compatibility promise.
+Decoded buffers contain token text but no original stylesheet source. Written values without a
+shared typed shape still carry their value text. Subject indexes and conservative invalidation
+keys are rebuilt from the decoded selector programs.
+
+The per-element `Resolver` uses the subject index, reads current `ElementTree.state` bits, and
+returns cascade candidates and matched rule identities. `Resolver.invalidation` exposes name,
+state, structural, descendant, sibling, and ancestor dependencies. Static hosts can omit the
+state operation; its default returns no interactive states. `sheet_conditions.update` evaluates
+retained media conditions against a host environment and reports whether rule eligibility changed.
+
+This foundation does not yet apply sheets to SilkUI. Hosts must resolve pending values and
+registered custom properties, consume the animation/font metadata, and integrate invalidation
+with their tree. Container conditions remain disabled and produce an unsupported-feature
+diagnostic. Generated pseudo-elements and `color-mix()` are not implemented by this change.
+Diagnostics aggregate dropped features; `Options.strict` rejects a sheet with diagnostics.
+
+The fixture tests cover Tailwind 4.3.5 and handwritten CSS, binary round trips, malformed data,
+state matching, layer precedence, nesting, and condition changes. They do not establish rendering
+parity with Chromium.

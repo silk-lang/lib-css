@@ -139,7 +139,7 @@ pub effect fn computedValue(engine: &Engine<'_>, style: StyleId, property: Prope
 }
 
 /// The value in the tokens `start..end`: its shape, or the source text when it has none.
-effect fn valueIn(buffer: &TokenBuffer, start: usize, end: usize) -> Value
+pub effect fn valueIn(buffer: &TokenBuffer, start: usize, end: usize) -> Value
   ! OutOfMemoryError
   ? &mut Allocator {
   let first = skipSpace(buffer, start, end)

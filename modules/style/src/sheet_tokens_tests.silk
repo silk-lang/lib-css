@@ -1,0 +1,25 @@
+import sheet_binary { Writer, Reader, DecodeError }
+import sheet_tokens
+import tokens { Limits, CssError, equal }
+import lexer
+import cssom_serialization
+import silk.core.effect { Effect }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+test effect fn decodedTokensPreserveEscapesNumbersAndBlocksWithoutSourceText() -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(b".hover\\:p-2:hover { padding:calc(var(--gap, 2px) * 2); color:#1234; content:'x' }", &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut writer = Writer.make()
+  run sheet_tokens.encode(&buffer, &mut writer) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut reader = Reader.make(writer.bytes.asSlice())
+  let decoded = run sheet_tokens.decode(&mut reader, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  run reader.finish()
+  run Testing.expect(decoded.source().length == 0, "decoder retains no stylesheet source")
+  let before = run cssom_serialization.components(&buffer, buffer.all()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let after = run cssom_serialization.components(&decoded, decoded.all()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(equal(before.asSlice(), after.asSlice()), "token identity round trips")
+}

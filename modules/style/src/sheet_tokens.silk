@@ -1,0 +1,164 @@
+//! Token programs without stylesheet source text. Text spans are relocated on decode.
+import tokens { TokenBuffer, Token, Span, Kind, Limits }
+import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+
+pub effect fn readText(reader: &mut Reader<'_>, buffer: &mut TokenBuffer) -> Span
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  let bytes = run reader.data()
+  let start = buffer.data.length()
+  run buffer.data.append(bytes)
+  return Span { start: start, end: buffer.data.length() }
+}
+
+pub effect fn encode(buffer: &TokenBuffer, writer: &mut Writer) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.index(buffer.tokens.length())
+  let mut i: usize = 0
+  while i < buffer.tokens.length() {
+    let token = &buffer.tokens.asSlice()[i]
+    run writer.index(token.matching)
+    match &token.kind {
+      Kind.Whitespace => {
+        run writer.byte(0)
+      }
+      Kind.Ident { text } => {
+        run writer.byte(1)
+        run writer.data(buffer.text(text))
+      }
+      Kind.Function { name } => {
+        run writer.byte(2)
+        run writer.data(buffer.text(name))
+      }
+      Kind.AtKeyword { name } => {
+        run writer.byte(3)
+        run writer.data(buffer.text(name))
+      }
+      Kind.Hash { text, identifier } => {
+        run writer.byte(4)
+        run writer.data(buffer.text(text))
+        run writer.flag(identifier)
+      }
+      Kind.String { text } => {
+        run writer.byte(5)
+        run writer.data(buffer.text(text))
+      }
+      Kind.BadString => {
+        run writer.byte(6)
+      }
+      Kind.Url { text } => {
+        run writer.byte(7)
+        run writer.data(buffer.text(text))
+      }
+      Kind.BadUrl => {
+        run writer.byte(8)
+      }
+      Kind.Number { value, integer } => {
+        run writer.byte(9)
+        run writer.number(value)
+        run writer.flag(integer)
+      }
+      Kind.Percentage { value, integer } => {
+        run writer.byte(10)
+        run writer.number(value)
+        run writer.flag(integer)
+      }
+      Kind.Dimension { value, integer, unit } => {
+        run writer.byte(11)
+        run writer.number(value)
+        run writer.flag(integer)
+        run writer.data(buffer.text(unit))
+      }
+      Kind.Delim { scalar } => {
+        run writer.byte(12)
+        run writer.word(scalar)
+      }
+      Kind.Colon => {
+        run writer.byte(13)
+      }
+      Kind.Semicolon => {
+        run writer.byte(14)
+      }
+      Kind.Comma => {
+        run writer.byte(15)
+      }
+      Kind.OpenParen => {
+        run writer.byte(16)
+      }
+      Kind.CloseParen => {
+        run writer.byte(17)
+      }
+      Kind.OpenSquare => {
+        run writer.byte(18)
+      }
+      Kind.CloseSquare => {
+        run writer.byte(19)
+      }
+      Kind.OpenBrace => {
+        run writer.byte(20)
+      }
+      Kind.CloseBrace => {
+        run writer.byte(21)
+      }
+      Kind.Cdo => {
+        run writer.byte(22)
+      }
+      Kind.Cdc => {
+        run writer.byte(23)
+      }
+      Kind.Eof => {
+        run writer.byte(24)
+      }
+    }
+    i = i + 1
+  }
+}
+
+pub effect fn decode(reader: &mut Reader<'_>, limits: &Limits) -> TokenBuffer
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  let count = run reader.count(limits.maxTokens)
+  if count == 0 { run reader.invalid() }
+  let mut buffer = TokenBuffer.make()
+  let mut i: usize = 0
+  while i < count {
+    let matching = run reader.index()
+    if matching >= count { run reader.invalid() }
+    let kind = match run reader.byte() {
+      0 => Kind.Whitespace
+      1 => Kind.Ident { text: run readText(&mut reader.*, &mut buffer) }
+      2 => Kind.Function { name: run readText(&mut reader.*, &mut buffer) }
+      3 => Kind.AtKeyword { name: run readText(&mut reader.*, &mut buffer) }
+      4 => Kind.Hash { text: run readText(&mut reader.*, &mut buffer), identifier: run reader.flag() }
+      5 => Kind.String { text: run readText(&mut reader.*, &mut buffer) }
+      6 => Kind.BadString
+      7 => Kind.Url { text: run readText(&mut reader.*, &mut buffer) }
+      8 => Kind.BadUrl
+      9 => Kind.Number { value: run reader.number(), integer: run reader.flag() }
+      10 => Kind.Percentage { value: run reader.number(), integer: run reader.flag() }
+      11 => Kind.Dimension { value: run reader.number(), integer: run reader.flag(), unit: run readText(&mut reader.*, &mut buffer) }
+      12 => Kind.Delim { scalar: run reader.word() }
+      13 => Kind.Colon
+      14 => Kind.Semicolon
+      15 => Kind.Comma
+      16 => Kind.OpenParen
+      17 => Kind.CloseParen
+      18 => Kind.OpenSquare
+      19 => Kind.CloseSquare
+      20 => Kind.OpenBrace
+      21 => Kind.CloseBrace
+      22 => Kind.Cdo
+      23 => Kind.Cdc
+      24 => Kind.Eof
+      _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+    }
+    if buffer.data.length() > limits.maxStorageBytes {
+      fail DecodeError { reason: DecodeReason.Limit, offset: reader.at }
+    }
+    run buffer.tokens.append(Token { kind: kind, source: Span { start: 0, end: 0 }, matching: matching })
+    i = i + 1
+  }
+  if let Kind.Eof = buffer.tokens.asSlice()[count - 1].kind {
+    return move buffer
+  }
+  fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at }
+}

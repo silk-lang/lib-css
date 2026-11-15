@@ -1,0 +1,144 @@
+//! The shared written-value model in compiled stylesheets; decoding never parses CSS text.
+import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
+import css_properties.values { Value, Unit, MathOperator, Separator }
+import css_properties.values
+import css_properties.keywords
+import css_properties.keywords { Keyword }
+import tokens { Limits, equal }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.color.rgba { Rgba }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.f32
+import silk.num.f64
+
+pub effect fn encode(value: &Value, writer: &mut Writer) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  match &value.* {
+    Value.Keyword { value: keyword } => {
+      run writer.byte(0)
+      run writer.data(keywords.name(keyword))
+    }
+    Value.Unit { value: number, unit } => {
+      run writer.byte(1)
+      run writer.number(f32.toF64(number))
+      run writer.data(values.unitName(unit))
+    }
+    Value.Color { value: color } => {
+      run writer.byte(2)
+      run writer.number(f32.toF64(color.r))
+      run writer.number(f32.toF64(color.g))
+      run writer.number(f32.toF64(color.b))
+      run writer.number(f32.toF64(color.a))
+    }
+    Value.Math { operator, values: children } => {
+      run writer.byte(3)
+      run writer.byte(match operator {
+        MathOperator.Sum => 0
+        MathOperator.Product => 1
+        MathOperator.Negate => 2
+        MathOperator.Invert => 3
+        MathOperator.Min => 4
+        MathOperator.Max => 5
+        MathOperator.Clamp => 6
+      })
+      run encodeList(children.asSlice(), &mut writer.*)
+    }
+    Value.Function { name, values: children } => {
+      run writer.byte(4)
+      run writer.data(keywords.name(name))
+      run encodeList(children.asSlice(), &mut writer.*)
+    }
+    Value.Sequence { separator, values: children } => {
+      run writer.byte(5)
+      run writer.byte(match separator { Separator.Space => 0 Separator.Comma => 1 Separator.Slash => 2 })
+      run encodeList(children.asSlice(), &mut writer.*)
+    }
+    Value.Text { css } => {
+      run writer.byte(6)
+      run writer.data(css.asSlice())
+    }
+  }
+}
+
+effect fn encodeList(values: &[Value], writer: &mut Writer) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.index(values.length)
+  let mut i: usize = 0
+  while i < values.length {
+    run encode(&values[i], &mut writer.*)
+    i = i + 1
+  }
+}
+
+effect fn keyword(reader: &mut Reader<'_>) -> Keyword ! DecodeError {
+  return match &keywords.lookup(run reader.data()) {
+    Option<Keyword>.Some { value } => value
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+}
+
+effect fn decodeList(reader: &mut Reader<'_>, limits: &Limits, depth: usize) -> List<Value>
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  let count = run reader.count(limits.maxTokens)
+  let mut values = List<Value>.make()
+  let mut i: usize = 0
+  while i < count {
+    run values.append(run decode(&mut reader.*, limits, depth + 1))
+    i = i + 1
+  }
+  return move values
+}
+
+pub effect fn decode(reader: &mut Reader<'_>, limits: &Limits, depth: usize) -> Value
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  if depth >= limits.maxDepth { fail DecodeError { reason: DecodeReason.Limit, offset: reader.at } }
+  let tag = run reader.byte()
+  if tag == 0 { return Value.Keyword { value: run keyword(&mut reader.*) } }
+  if tag == 1 {
+    let number = f64.toF32(run reader.number())
+    let name = run reader.data()
+    let unit = if name.length == 0 { Unit.Number } else if equal(name, b"%") { Unit.Percent } else {
+      match &values.unitLookup(name) {
+        Option<Unit>.Some { value } => value
+        _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+      }
+    }
+    return Value.Unit { value: number, unit: unit }
+  }
+  if tag == 2 {
+    return Value.Color { value: Rgba<f32> {
+      r: f64.toF32(run reader.number()), g: f64.toF32(run reader.number()),
+      b: f64.toF32(run reader.number()), a: f64.toF32(run reader.number()),
+    } }
+  }
+  if tag == 3 {
+    let operator = match run reader.byte() {
+      0 => MathOperator.Sum
+      1 => MathOperator.Product
+      2 => MathOperator.Negate
+      3 => MathOperator.Invert
+      4 => MathOperator.Min
+      5 => MathOperator.Max
+      6 => MathOperator.Clamp
+      _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+    }
+    return Value.Math { operator: operator, values: run decodeList(&mut reader.*, limits, depth) }
+  }
+  if tag == 4 {
+    let name = run keyword(&mut reader.*)
+    return Value.Function { name: name, values: run decodeList(&mut reader.*, limits, depth) }
+  }
+  if tag == 5 {
+    let separator = match run reader.byte() {
+      0 => Separator.Space
+      1 => Separator.Comma
+      2 => Separator.Slash
+      _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+    }
+    return Value.Sequence { separator: separator, values: run decodeList(&mut reader.*, limits, depth) }
+  }
+  if tag == 6 { return Value.Text { css: run Bytes.copy(run reader.data()) } }
+  fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at }
+}

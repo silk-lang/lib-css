@@ -1,0 +1,308 @@
+//! Compiled stylesheet data and its versioned byte format. Decoding does not invoke CSS parsers.
+import tokens { TokenBuffer, TokenRange, Limits }
+import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
+import sheet_tokens
+import sheet_values
+import resolver { Resolver, Rule }
+import selectors { SelectorList }
+import cascade { Priority, Origin }
+import layers { Layers, UNLAYERED }
+import css_properties.values { Value }
+import css_properties.catalog { Property }
+import css_properties.catalog as catalog
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.ownership { Copy }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.u8
+import silk.num.u64
+import silk.num.u32
+import silk.text.string { String, InvalidUtf8 }
+
+pub const VERSION: u32 = 1
+pub const NONE: usize = UNLAYERED
+
+pub union Declaration {
+  Typed { pub property: Property, pub value: Value, pub important: bool },
+  Pending { pub property: Property, pub buffer: usize, pub range: TokenRange, pub important: bool },
+  Custom { pub name: Bytes, pub buffer: usize, pub range: TokenRange, pub important: bool },
+}
+
+pub enum ConditionKind { Media, Container, Starting }
+pub struct Condition {
+  pub kind: ConditionKind,
+  pub parent: usize,
+  pub buffer: usize,
+  pub range: TokenRange,
+}
+impl Copy for Condition {}
+
+pub struct AtRule {
+  pub name: Bytes,
+  pub buffer: usize,
+  pub prelude: TokenRange,
+  pub body: TokenRange,
+}
+
+pub enum DiagnosticKind { AtRule, Selector, Property, Value, Unsupported }
+pub struct Diagnostic { pub kind: DiagnosticKind, pub feature: Bytes, pub count: usize }
+
+pub struct Sheet {
+  pub buffers: List<TokenBuffer>,
+  pub declarations: List<Declaration>,
+  pub conditions: List<Condition>,
+  pub ruleConditions: List<usize>,
+  pub metadata: List<AtRule>,
+  pub layers: Layers,
+  pub resolver: Resolver,
+  pub diagnostics: List<Diagnostic>,
+}
+
+pub fn catalogFingerprint() -> u64 {
+  let mut hash: u64 = 14695981039346656037
+  let properties = catalog.all()
+  let mut i: usize = 0
+  while i < properties.length {
+    let name = catalog.name(properties[i])
+    let mut n: usize = 0
+    while n < name.length {
+      hash = u64.wrappingMultiply(u64.bitXor(hash, u8.toU64(name[n])), 1099511628211)
+      n = n + 1
+    }
+    hash = u64.wrappingMultiply(hash, 1099511628211)
+    i = i + 1
+  }
+  return hash
+}
+
+effect fn writeRange(writer: &mut Writer, range: TokenRange) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.index(range.start)
+  run writer.index(range.end)
+}
+
+effect fn readRange(reader: &mut Reader<'_>, buffer: &TokenBuffer) -> TokenRange ! DecodeError {
+  let start = run reader.index()
+  let end = run reader.index()
+  if start > end || end > buffer.all().end { run reader.invalid() }
+  return TokenRange { start: start, end: end }
+}
+
+effect fn bufferIndex(reader: &mut Reader<'_>, sheet: &Sheet) -> usize ! DecodeError {
+  let index = run reader.index()
+  if index >= sheet.buffers.length() { run reader.invalid() }
+  return index
+}
+
+effect fn property(reader: &mut Reader<'_>) -> Property ! DecodeError {
+  let index = run reader.index()
+  if index >= catalog.COUNT { run reader.invalid() }
+  let properties = catalog.all()
+  return properties[index]
+}
+
+impl Sheet {
+  pub fn make() -> Sheet {
+    return Sheet {
+      buffers: List<TokenBuffer>.make(), declarations: List<Declaration>.make(),
+      conditions: List<Condition>.make(), ruleConditions: List<usize>.make(),
+      metadata: List<AtRule>.make(), layers: Layers.make(), resolver: Resolver.make(),
+      diagnostics: List<Diagnostic>.make(),
+    }
+  }
+
+  pub effect fn encode(self: &Self) -> Bytes ! OutOfMemoryError ? &mut Allocator {
+    let mut writer = Writer.make()
+    run writer.bytes.append(b"SILKCSS\0")
+    run writer.word(VERSION)
+    let fingerprint = catalogFingerprint()
+    run writer.word(u64.toU32(fingerprint & 4294967295))
+    run writer.word(u64.toU32(u64.shiftRight(fingerprint, 32)))
+    run writer.index(self.buffers.length())
+    let mut i: usize = 0
+    while i < self.buffers.length() {
+      run sheet_tokens.encode(&self.buffers.asSlice()[i], &mut writer)
+      i = i + 1
+    }
+    run writer.index(self.layers.length())
+    i = 0
+    while i < self.layers.length() {
+      run writer.index(self.layers.parent(i))
+      run writer.data(String.utf8Bytes(self.layers.name(i)))
+      i = i + 1
+    }
+    run writer.index(self.declarations.length())
+    i = 0
+    while i < self.declarations.length() {
+      match &self.declarations.asSlice()[i] {
+        Declaration.Typed { property, value, important } => {
+          run writer.byte(0)
+          run writer.index(catalog.index(property))
+          run writer.flag(important)
+          run sheet_values.encode(&value, &mut writer)
+        }
+        Declaration.Pending { property, buffer, range, important } => {
+          run writer.byte(1)
+          run writer.index(catalog.index(property))
+          run writer.flag(important)
+          run writer.index(buffer)
+          run writeRange(&mut writer, range)
+        }
+        Declaration.Custom { name, buffer, range, important } => {
+          run writer.byte(2)
+          run writer.data(name.asSlice())
+          run writer.flag(important)
+          run writer.index(buffer)
+          run writeRange(&mut writer, range)
+        }
+      }
+      i = i + 1
+    }
+    run writer.index(self.conditions.length())
+    i = 0
+    while i < self.conditions.length() {
+      let condition = self.conditions.asSlice()[i]
+      run writer.byte(match condition.kind { ConditionKind.Media => 0 ConditionKind.Container => 1 ConditionKind.Starting => 2 })
+      run writer.index(condition.parent)
+      run writer.index(condition.buffer)
+      run writeRange(&mut writer, condition.range)
+      i = i + 1
+    }
+    let rules = self.resolver.rules()
+    run writer.index(rules.length)
+    i = 0
+    while i < rules.length {
+      let rule = &rules[i]
+      run writer.index(rule.buffer)
+      run writer.index(rule.priority.layer)
+      run writer.index(self.ruleConditions.asSlice()[i])
+      run writeRange(&mut writer, rule.declarations)
+      run rule.selectors.encodeProgram(&self.buffers.asSlice()[rule.buffer], &mut writer)
+      i = i + 1
+    }
+    run writer.index(self.metadata.length())
+    i = 0
+    while i < self.metadata.length() {
+      let rule = &self.metadata.asSlice()[i]
+      run writer.data(rule.name.asSlice())
+      run writer.index(rule.buffer)
+      run writeRange(&mut writer, rule.prelude)
+      run writeRange(&mut writer, rule.body)
+      i = i + 1
+    }
+    return move writer.bytes
+  }
+
+  pub effect fn decode(bytes: &[u8], limits: &Limits) -> Sheet
+    ! DecodeError | OutOfMemoryError ? &mut Allocator {
+    if bytes.length > limits.maxInputBytes { fail DecodeError { reason: DecodeReason.Limit, offset: 0 } }
+    let mut reader = Reader.make(bytes)
+    let magic = b"SILKCSS\0"
+    let mut i: usize = 0
+    while i < magic.length {
+      if (run reader.byte()) != magic[i] { run reader.invalid() }
+      i = i + 1
+    }
+    if (run reader.word()) != VERSION { fail DecodeError { reason: DecodeReason.Version, offset: reader.at } }
+    let low = u32.toU64(run reader.word())
+    let high = u32.toU64(run reader.word())
+    if (low | u64.shiftLeft(high, 32)) != catalogFingerprint() { fail DecodeError { reason: DecodeReason.Catalog, offset: reader.at } }
+    let mut sheet = Sheet.make()
+    let count = run reader.count(limits.maxRules)
+    i = 0
+    while i < count {
+      run sheet.buffers.append(run sheet_tokens.decode(&mut reader, limits))
+      i = i + 1
+    }
+    let layerCount = run reader.count(limits.maxRules)
+    i = 0
+    while i < layerCount {
+      let parent = run reader.index()
+      if parent != NONE && parent >= i { run reader.invalid() }
+      let name = run reader.data()
+      let text = match String.fromUtf8(name) {
+        Result<string, InvalidUtf8>.Success { value } => value
+        _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+      }
+      if (run sheet.layers.register(parent, text)) != i { run reader.invalid() }
+      i = i + 1
+    }
+    let declarationCount = run reader.count(limits.maxDeclarations)
+    i = 0
+    while i < declarationCount {
+      let tag = run reader.byte()
+      if tag == 0 {
+        let prop = run property(&mut reader)
+        let important = run reader.flag()
+        let value = run sheet_values.decode(&mut reader, limits, 0)
+        run sheet.declarations.append(Declaration.Typed { property: prop, value: move value, important: important })
+      } else if tag == 1 {
+        let prop = run property(&mut reader)
+        let important = run reader.flag()
+        let buffer = run bufferIndex(&mut reader, &sheet)
+        let range = run readRange(&mut reader, &sheet.buffers.asSlice()[buffer])
+        run sheet.declarations.append(Declaration.Pending { property: prop, buffer: buffer, range: range, important: important })
+      } else if tag == 2 {
+        let name = run Bytes.copy(run reader.data())
+        if name.length() < 3 || name.asSlice()[0] != 45 || name.asSlice()[1] != 45 { run reader.invalid() }
+        let important = run reader.flag()
+        let buffer = run bufferIndex(&mut reader, &sheet)
+        let range = run readRange(&mut reader, &sheet.buffers.asSlice()[buffer])
+        run sheet.declarations.append(Declaration.Custom { name: move name, buffer: buffer, range: range, important: important })
+      } else { run reader.invalid() }
+      i = i + 1
+    }
+    let conditionCount = run reader.count(limits.maxRules)
+    i = 0
+    while i < conditionCount {
+      let kind = match run reader.byte() {
+        0 => ConditionKind.Media
+        1 => ConditionKind.Container
+        2 => ConditionKind.Starting
+        _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+      }
+      let parent = run reader.index()
+      if parent != NONE && parent >= i { run reader.invalid() }
+      let buffer = run bufferIndex(&mut reader, &sheet)
+      let range = run readRange(&mut reader, &sheet.buffers.asSlice()[buffer])
+      run sheet.conditions.append(Condition { kind: kind, parent: parent, buffer: buffer, range: range })
+      i = i + 1
+    }
+    let ruleCount = run reader.count(limits.maxRules)
+    i = 0
+    while i < ruleCount {
+      let buffer = run bufferIndex(&mut reader, &sheet)
+      let layer = run reader.index()
+      if layer != NONE && layer >= layerCount { run reader.invalid() }
+      let condition = run reader.index()
+      if condition != NONE && condition >= conditionCount { run reader.invalid() }
+      let start = run reader.index()
+      let end = run reader.index()
+      if start > end || end > declarationCount { run reader.invalid() }
+      let buffers = sheet.buffers.asMutSlice()
+      let selectors = run SelectorList.decodeProgram(&mut reader, &mut buffers[buffer], limits)
+      let mut priority = Priority.make(Origin.Author, i)
+      priority.layer = layer
+      run sheet.resolver.add(Rule {
+        sheet: 0, index: i, selectors: move selectors, buffer: buffer,
+        declarations: TokenRange { start: start, end: end }, priority: priority, enabled: condition == NONE,
+      }, &sheet.buffers.asSlice()[buffer])
+      run sheet.ruleConditions.append(condition)
+      i = i + 1
+    }
+    let metadataCount = run reader.count(limits.maxRules)
+    i = 0
+    while i < metadataCount {
+      let name = run Bytes.copy(run reader.data())
+      let buffer = run bufferIndex(&mut reader, &sheet)
+      let prelude = run readRange(&mut reader, &sheet.buffers.asSlice()[buffer])
+      let body = run readRange(&mut reader, &sheet.buffers.asSlice()[buffer])
+      run sheet.metadata.append(AtRule { name: move name, buffer: buffer, prelude: prelude, body: body })
+      i = i + 1
+    }
+    run reader.finish()
+    run sheet.resolver.finish()
+    return move sheet
+  }
+}

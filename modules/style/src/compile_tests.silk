@@ -1,0 +1,161 @@
+import compile { Options, CompileError }
+import compile
+import sheet { Sheet, Declaration, DiagnosticKind }
+import sheet_binary { DecodeError, DecodeReason }
+import resolver { ResolverError }
+import resolver_tests { Tree }
+import tokens { Limits, CssError, BufferView, equal }
+import element { MatchContext, NO_ELEMENT }
+import css_properties.catalog { Property }
+import css_properties.values { Value }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+effect fn checkSheet(sheet: &mut Sheet) -> ()
+  ! AssertionError<'static> | ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+  run Testing.expect(sheet.layers.length() == 2, "layer statements and blocks share identities")
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  let tree = Tree { hovered: true }
+  run sheet.resolver.resolve(BufferView.of(sheet.buffers.asSlice()), &tree, 0, &[], &mut context)
+  run Testing.expect(sheet.resolver.matches().length == 3, "nested and ordinary selectors match the same node")
+  run Testing.expect(sheet.conditions.length() == 1, "media condition retained")
+  let mut custom = false
+  let mut pending = false
+  let mut typed = false
+  let mut i: usize = 0
+  while i < sheet.declarations.length() {
+    match &sheet.declarations.asSlice()[i] {
+      Declaration.Custom { name, .. } => { custom = equal(name.asSlice(), b"--gap") }
+      Declaration.Pending { property, .. } => { pending = property == Property.Padding }
+      Declaration.Typed { property: Property.Width, value: Value.Unit { value, .. }, .. } => { typed = typed || value == 12.0 }
+      _ => {}
+    }
+    i = i + 1
+  }
+  run Testing.expect(custom && pending && typed, "custom tokens, pending variables and typed values retained")
+}
+
+test effect fn compiledSheetRoundTripPreservesLayersNestingAndDeclarations() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | ResolverError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut sheet = run compile.compile(
+    b"@layer base, utilities; @layer base { .button { --gap: 8px; width:12px; &:hover { padding:var(--gap); } } } @layer utilities { .hot { opacity:.5!important } } @media(width>600px) { .button { width:24px } }",
+    &Options.make(),
+  ) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 0, "supported sheet has no diagnostics")
+  run checkSheet(&mut sheet) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run checkSheet(&mut decoded) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut i: usize = 0
+  while i < decoded.buffers.length() {
+    run Testing.expect(decoded.buffers.asSlice()[i].source().length == 0, "compiled buffers have no source CSS")
+    i = i + 1
+  }
+}
+
+test effect fn droppedFeaturesAreCountedAndStrictCompilationFails() -> ()
+  ! AssertionError<'static> | CompileError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let css = b".x { made-up:1; made-up:2; width:var(bad) } @unknown {} @container (width>10px) { .x{width:20px} }"
+  let sheet = run compile.compile(css, &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 4, "distinct dropped features reported")
+  run Testing.expect(sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Property && sheet.diagnostics.asSlice()[0].count == 2, "repeated feature aggregated")
+  let mut strict = Options.make()
+  strict.strict = true
+  let failed = run Effect.result(compile.compile(css, &strict)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &failed {
+    Result<Sheet, CompileError | CssError | OutOfMemoryError>.Failure { .. } => true
+    _ => false
+  }, "strict mode rejects unsupported input")
+}
+
+test effect fn sheetDecoderRejectsTruncationVersionCatalogAndTrailingData() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(b".x { width: 1px }", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut i: usize = 0
+  while i < bytes.length() {
+    let result = run Effect.result(Sheet.decode(Slice.view<u8>(bytes.asSlice(), 0, i), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(match &result {
+      Result<Sheet, DecodeError | OutOfMemoryError>.Failure { .. } => true
+      _ => false
+    }, "every truncated prefix fails")
+    i = i + 1
+  }
+  let data = bytes.asMutSlice()
+  data[8] = 255
+  let version = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &version {
+    Result<Sheet, DecodeError | OutOfMemoryError>.Failure { error: DecodeError { reason: DecodeReason.Version, .. } } => true
+    _ => false
+  }, "format mismatch rejected")
+  let catalogData = bytes.asMutSlice()
+  catalogData[8] = 1
+  catalogData[12] = catalogData[12] ^ 1
+  let catalog = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &catalog {
+    Result<Sheet, DecodeError | OutOfMemoryError>.Failure { error: DecodeError { reason: DecodeReason.Catalog, .. } } => true
+    _ => false
+  }, "catalog mismatch rejected")
+  let restored = bytes.asMutSlice()
+  restored[12] = restored[12] ^ 1
+  run bytes.append(b"\0") |> Effect.provideMut<Allocator>(&mut allocator)
+  let trailing = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &trailing {
+    Result<Sheet, DecodeError | OutOfMemoryError>.Failure { error: DecodeError { reason: DecodeReason.Invalid, .. } } => true
+    _ => false
+  }, "trailing data rejected")
+}
+
+import silk.build.source { Source }
+
+test effect fn tailwindAndPlainCssFixturesCompileWithoutUnknownAtRules() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let fixtures = [
+    Source.read("fixtures/stylesheets/tailwind-app.css"),
+    Source.read("fixtures/stylesheets/tailwind-small.css"),
+    Source.read("fixtures/stylesheets/plain.css"),
+  ]
+  let mut i: usize = 0
+  while i < fixtures.length {
+    let sheet = run compile.compile(fixtures[i], &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut n: usize = 0
+    while n < sheet.diagnostics.length() {
+      run Testing.expect(sheet.diagnostics.asSlice()[n].kind != DiagnosticKind.AtRule, "fixture has no unknown at-rules")
+      n = n + 1
+    }
+    let encoded = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+    let decoded = run Sheet.decode(encoded.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(sheet.resolver.rules().length == decoded.resolver.rules().length, "fixture rules round trip")
+    run Testing.expect(sheet.declarations.length() == decoded.declarations.length(), "fixture declarations round trip")
+    i = i + 1
+  }
+}
+
+import sheet_conditions
+import media_features { Environment }
+
+test effect fn mediaAndStartingConditionsChangeEligibilityOnlyWhenResultsFlip() -> ()
+  ! AssertionError<'static> | CompileError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut sheet = run compile.compile(b"@media(width>600px){.x{width:1px}@starting-style{.x{opacity:0}}}", &Options.make())
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let small = Environment.headless(400.0, 300.0)
+  let large = Environment.headless(800.0, 300.0)
+  let first = run sheet_conditions.update(&mut sheet, &small, false, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(!first, "false conditions stay disabled")
+  let resized = run sheet_conditions.update(&mut sheet, &large, false, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(resized && sheet.resolver.rules()[0].enabled && !sheet.resolver.rules()[1].enabled, "resize activates media but not starting rules")
+  let unchanged = run sheet_conditions.update(&mut sheet, &large, false, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(!unchanged, "unchanged query results do not request restyle")
+  let starting = run sheet_conditions.update(&mut sheet, &large, true, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(starting && sheet.resolver.rules()[1].enabled, "starting rules combine with parent media")
+  let reduced = run sheet_conditions.update(&mut sheet, &small, true, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(reduced && !sheet.resolver.rules()[1].enabled, "false parent condition disables nested starting rules")
+}

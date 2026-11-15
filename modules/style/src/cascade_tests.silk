@@ -209,3 +209,28 @@ test effect fn shorthandAndLonghandCompeteByPriorityNotExpansionOrder() -> ()
     "other shorthand longhands remain selected",
   )
 }
+
+test effect fn layersPrecedeSpecificityAndReverseForImportant() -> ()
+  ! AssertionError<'static> {
+  let mut early = Priority.make(Origin.Author, 9)
+  early.layer = 0
+  early.specificity = Specificity { ids: 1, classes: 0, types: 0 }
+  let mut late = Priority.make(Origin.Author, 0)
+  late.layer = 1
+  let mut unlayered = Priority.make(Origin.Author, 0)
+  run Testing.expect(cascade.compare(late, early) > 0, "layer precedes specificity and source order")
+  run Testing.expect(cascade.compare(unlayered, late) > 0, "unlayered normal wins")
+  early.important = true
+  late.important = true
+  unlayered.important = true
+  run Testing.expect(cascade.compare(early, late) > 0, "important reverses layer order")
+  run Testing.expect(cascade.compare(late, unlayered) > 0, "layered important beats unlayered")
+  unlayered.inline = true
+  run Testing.expect(cascade.compare(unlayered, early) > 0, "important inline precedes layers")
+  unlayered.important = false
+  run Testing.expect(cascade.compare(early, unlayered) > 0, "important sheet beats normal inline")
+  late.layer = early.layer
+  run Testing.expect(cascade.compare(early, late) > 0, "specificity orders declarations in a layer")
+  late.specificity = early.specificity
+  run Testing.expect(cascade.compare(early, late) > 0, "source order breaks ties in a layer")
+}

@@ -1,0 +1,110 @@
+import resolver { Resolver, Rule, ResolverError }
+import cascade { Priority, Origin, Candidate, Declaration, Target, Specified }
+import cascade
+import properties { Property }
+import values { Wide }
+import element { ElementTree, MatchContext, StateBits, AttributeText, NO_ELEMENT, HOVER }
+import selectors { SelectorList }
+import selectors
+import lexer
+import tokens { Limits, TokenRange, TokenBuffer, BufferView, CssError }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+pub struct Tree { pub hovered: bool }
+impl ElementTree for Tree {
+  fn state(self: &Self, node: usize) -> StateBits { return StateBits { bits: if self.hovered { HOVER } else { 0 } } }
+  fn parent(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn containingHost(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn firstChild(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn nextSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn previousSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn localName(self: &Self, node: usize) -> &[u8] { return b"button" }
+  fn namespaceUri(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn attributeCount(self: &Self, node: usize) -> usize { return 1 }
+  fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"class" }
+  fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"button hot" }
+  fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
+  fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
+    return AttributeText { namespace: b"", name: b"class", value: b"button hot" }
+  }
+  fn language(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn isRoot(self: &Self, node: usize) -> bool { return true }
+  fn isEmpty(self: &Self, node: usize) -> bool { return true }
+  fn isLink(self: &Self, node: usize) -> bool { return false }
+}
+
+effect fn add(resolver: &mut Resolver, buffer: &TokenBuffer, index: usize, layer: usize) -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let parsed = run selectors.parse(buffer, buffer.all(), &[], &Limits.make())
+  match move parsed {
+    Option<SelectorList>.Some { value } => {
+      let mut priority = Priority.make(Origin.Author, index)
+      priority.layer = layer
+      run resolver.add(Rule {
+        sheet: 42, index: index, selectors: move value, buffer: index,
+        declarations: TokenRange { start: index, end: index + 1 }, priority: priority, enabled: true,
+      }, buffer)
+    }
+    _ => run Testing.expect(false, "fixture selectors parse")
+  }
+}
+
+fn winner(resolver: &Resolver, declarations: &[Declaration]) -> usize {
+  return match &cascade.select(declarations, resolver.declarations(), Property.Color, 0) {
+    Option<Candidate>.Some { value } => value.declaration
+    _ => 99
+  }
+}
+
+effect fn exercise() -> ()
+  ! AssertionError<'static> | ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+  let buffers = [
+    run lexer.tokenize(b"button.button.hot", &Limits.make()),
+    run lexer.tokenize(b".hot:hover", &Limits.make()),
+  ]
+  let mut resolver = Resolver.make()
+  run add(&mut resolver, &buffers[0], 0, 0)
+  run add(&mut resolver, &buffers[1], 1, 1)
+  run resolver.finish()
+  let catalog = [
+    Declaration { target: Target.Property { property: Property.Color }, specified: Specified.Wide { keyword: Wide.Initial }, buffer: 0, important: false },
+    Declaration { target: Target.Property { property: Property.Color }, specified: Specified.Wide { keyword: Wide.Inherit }, buffer: 1, important: false },
+  ]
+  let mut tree = Tree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run resolver.resolve(BufferView.of(&buffers), &tree, 0, &[], &mut context)
+  run Testing.expect(winner(&resolver, &catalog) == 0, "inactive state has no candidate")
+  tree.hovered = true
+  run resolver.resolve(BufferView.of(&buffers), &tree, 0, &[], &mut context)
+  run Testing.expect(winner(&resolver, &catalog) == 1, "later layer wins despite lower specificity")
+  run Testing.expect(resolver.matches().length == 2 && resolver.matches()[1].sheet == 42, "matched rule identity survives resolution")
+  resolver.setEnabled(1, false)
+  run resolver.resolve(BufferView.of(&buffers), &tree, 0, &[], &mut context)
+  run Testing.expect(winner(&resolver, &catalog) == 0, "condition change needs no index rebuild")
+  let mut priority = Priority.make(Origin.Author, 2)
+  priority.inline = true
+  let inline = [Candidate { declaration: 1, priority: priority }]
+  run resolver.resolve(BufferView.of(&buffers), &tree, 0, &inline, &mut context)
+  run Testing.expect(winner(&resolver, &catalog) == 1, "inline candidates use the same cascade")
+  context.remainingSteps = 0
+  let failed = run Effect.result(resolver.resolve(BufferView.of(&buffers), &tree, 0, &[], &mut context))
+  run Testing.expect(match &failed {
+    Result<(), ResolverError | CssError | OutOfMemoryError>.Failure { .. } => true
+    _ => false
+  }, "exhausted match budget fails")
+  run Testing.expect(resolver.declarations().length == 0 && resolver.matches().length == 0, "failure exposes no stale or partial style")
+  context = MatchContext.make(0, NO_ELEMENT)
+  run resolver.resolve(BufferView.of(&buffers), &tree, 0, &[], &mut context)
+  run Testing.expect(winner(&resolver, &catalog) == 0, "resolution retries after exhaustion")
+}
+
+test effect fn indexedResolutionTracksStateConditionsAndInlineCascade() -> ()
+  ! AssertionError<'static> | ResolverError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run exercise() |> Effect.provideMut<Allocator>(&mut allocator)
+}

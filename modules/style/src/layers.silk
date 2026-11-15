@@ -1,0 +1,87 @@
+//! Cascade layer identities in first-appearance order, including nested and anonymous layers.
+import silk.collections.list { List }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.usize
+import silk.text.string { String }
+
+pub const UNLAYERED: usize = usize.MAX
+
+struct Layer {
+  name: String,
+  parent: usize,
+}
+
+pub struct Layers {
+  entries: List<Layer>,
+}
+
+impl Layers {
+  pub fn make() -> Layers {
+    return Layers { entries: List<Layer>.make() }
+  }
+
+  /// Registers one component below `parent`. Empty names always create a new anonymous layer.
+  /// Pass UNLAYERED for a top-level layer. Dotted paths are registered one component at a time.
+  pub effect fn register(self: &mut Self, parent: usize, name: string) -> usize
+    ! OutOfMemoryError ? &mut Allocator {
+    if name != "" {
+      let mut i: usize = 0
+      while i < self.entries.length() {
+        let layer = &self.entries.asSlice()[i]
+        if layer.parent == parent && String.view(&layer.name) == name {
+          return i
+        }
+        i = i + 1
+      }
+    }
+    let index = self.entries.length()
+    run self.entries.append(Layer { name: run String.copy(name), parent: parent })
+    return index
+  }
+
+  pub fn length(self: &Self) -> usize {
+    return self.entries.length()
+  }
+
+  pub fn name(self: &Self, layer: usize) -> string { return String.view(&self.entries.asSlice()[layer].name) }
+
+  pub fn parent(self: &Self, layer: usize) -> usize { return self.entries.asSlice()[layer].parent }
+
+  fn above(self: &Self, ancestor: usize, descendant: usize) -> bool {
+    let mut at = descendant
+    while at < self.entries.length() {
+      if at == ancestor { return true }
+      at = self.entries.asSlice()[at].parent
+    }
+    return false
+  }
+
+  fn before(self: &Self, a: usize, b: usize) -> bool {
+    if a == b { return false }
+    if self.above(a, b) { return false }
+    if self.above(b, a) { return true }
+    let mut left = a
+    let mut right = b
+    while self.entries.asSlice()[left].parent != UNLAYERED
+      && !self.above(self.entries.asSlice()[left].parent, right) {
+      left = self.entries.asSlice()[left].parent
+    }
+    while self.entries.asSlice()[right].parent != self.entries.asSlice()[left].parent {
+      right = self.entries.asSlice()[right].parent
+    }
+    return left < right
+  }
+
+  /// Flattens nested layers after registration. A parent's own rules follow its sublayers.
+  /// Registering another layer can change existing ranks, so rules retain identities until then.
+  pub fn rank(self: &Self, layer: usize) -> usize {
+    if layer >= self.entries.length() { return UNLAYERED }
+    let mut result: usize = 0
+    let mut i: usize = 0
+    while i < self.entries.length() {
+      if self.before(i, layer) { result = result + 1 }
+      i = i + 1
+    }
+    return result
+  }
+}

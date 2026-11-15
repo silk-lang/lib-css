@@ -1,4 +1,5 @@
-//! Cascade4 declaration compilation and origin-aware winner selection.
+//! Cascade5 declaration compilation and origin-aware winner selection.
+import silk.num.usize
 import tokens { TokenRange, Span, Limits, CssError, BufferView, Kind }
 import tokens
 import syntax
@@ -27,6 +28,8 @@ pub struct Priority {
   pub origin: Origin,
   pub important: bool,
   pub encapsulationDepth: usize,
+  /// Flattened first-appearance layer order; usize.MAX denotes unlayered rules.
+  pub layer: usize,
   pub specificity: Specificity,
   pub inline: bool,
   pub order: usize,
@@ -40,6 +43,7 @@ impl Priority {
       origin: origin,
       important: false,
       encapsulationDepth: 0,
+      layer: usize.MAX,
       specificity: Specificity { ids: 0, classes: 0, types: 0 },
       inline: false,
       order: order,
@@ -107,7 +111,7 @@ fn rank(priority: Priority) -> u8 {
   }
 }
 
-// https://www.w3.org/TR/css-cascade-4/#cascade-sort
+// https://www.w3.org/TR/css-cascade-5/#cascade-sort
 pub fn compare(a: Priority, b: Priority) -> i32 {
   let x = rank(a)
   let y = rank(b)
@@ -136,6 +140,10 @@ pub fn compare(a: Priority, b: Priority) -> i32 {
     } else {
       -1
     }
+  }
+  if a.layer != b.layer {
+    let greater = if a.important { a.layer < b.layer } else { a.layer > b.layer }
+    return if greater { 1 } else { -1 }
   }
   let specificity = selectors.compare(a.specificity, b.specificity)
   if specificity != 0 {
