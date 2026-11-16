@@ -18,8 +18,29 @@ import silk.system.system_clock { Instant, SystemClock }
 import silk.io.writer { Writer, WriterError }
 import silk.num.i32
 import layout.lib as Engine
-import layout.lib { OptionalSize, NaturalDimensions, Point, ScrollbarMetrics, Tree, NodeId, LayoutTree, InvalidNode }
-import layout.lib { Layout, Rect, Size, ResolvedEdges, BoxKind, FragmentKind, FontMetrics, Measurement, BaselineSet, WritingMode, TextOrientation }
+import layout.lib {
+  OptionalSize,
+  NaturalDimensions,
+  Point,
+  ScrollbarMetrics,
+  Tree,
+  NodeId,
+  LayoutTree,
+  InvalidNode
+}
+import layout.lib {
+  Layout,
+  Rect,
+  Size,
+  ResolvedEdges,
+  BoxKind,
+  FragmentKind,
+  FontMetrics,
+  Measurement,
+  BaselineSet,
+  WritingMode,
+  TextOrientation
+}
 import layout.lib { TextError, TextFragmentKind }
 import silk.num.usize
 import protocol as P
@@ -42,13 +63,16 @@ effect fn readDocument() -> Bytes
     let outcome = run StandardInput.receive(&mut buffer)
     let count = StandardInput.count(&outcome)
     run bytes.append(Slice.view<u8>(&buffer, 0, count))
-    if StandardInput.isEndOfInput(&outcome) { return move bytes }
+    if StandardInput.isEndOfInput(&outcome) {
+      return move bytes
+    }
   }
   return move bytes
 }
 
 effect fn field<T: Serialize>(name: string, value: &T)
-  ! JsonError | WriterError ? &mut Writer {
+  ! JsonError | WriterError
+  ? &mut Writer {
   let options = JsonOptions.compact()
   run Writer.writeString(",\"")
   run Writer.writeString(name)
@@ -57,18 +81,22 @@ effect fn field<T: Serialize>(name: string, value: &T)
 }
 
 effect fn indexField(name: string, value: usize)
-  ! JsonError | WriterError ? &mut Writer {
+  ! JsonError | WriterError
+  ? &mut Writer {
   run Writer.writeString(",\"")
   run Writer.writeString(name)
   run Writer.writeString("\":")
-  if value == usize.MAX { run Writer.writeString("null") }
-  else {
+  if value == usize.MAX {
+    run Writer.writeString("null")
+  } else {
     let options = JsonOptions.compact()
     run Json.serialize(&value, &options)
   }
 }
 
-effect fn writeRect(rect: Rect) ! JsonError | WriterError ? &mut Writer {
+effect fn writeRect(rect: Rect)
+  ! JsonError | WriterError
+  ? &mut Writer {
   let options = JsonOptions.compact()
   run Writer.writeString("{\"x\":")
   run Json.serialize(&rect.x, &options)
@@ -78,30 +106,44 @@ effect fn writeRect(rect: Rect) ! JsonError | WriterError ? &mut Writer {
   run Writer.writeString("}")
 }
 
-effect fn geometryKey(name: string) ! WriterError ? &mut Writer {
+effect fn geometryKey(name: string)
+  ! WriterError
+  ? &mut Writer {
   run Writer.writeString(",\"")
   run Writer.writeString(name)
   run Writer.writeString("\":")
 }
-effect fn rectField(name: string, rect: Rect) ! JsonError | WriterError ? &mut Writer {
+
+effect fn rectField(name: string, rect: Rect)
+  ! JsonError | WriterError
+  ? &mut Writer {
   run geometryKey(name)
   run writeRect(rect)
 }
-effect fn pointField(name: string, point: Point) ! JsonError | WriterError ? &mut Writer {
+
+effect fn pointField(name: string, point: Point)
+  ! JsonError | WriterError
+  ? &mut Writer {
   run geometryKey(name)
   run Writer.writeString("{\"x\":")
   run Json.serialize(&point.x, &JsonOptions.compact())
   run field("y", &point.y)
   run Writer.writeString("}")
 }
-effect fn sizeField(name: string, size: Size) ! JsonError | WriterError ? &mut Writer {
+
+effect fn sizeField(name: string, size: Size)
+  ! JsonError | WriterError
+  ? &mut Writer {
   run geometryKey(name)
   run Writer.writeString("{\"width\":")
   run Json.serialize(&size.width, &JsonOptions.compact())
   run field("height", &size.height)
   run Writer.writeString("}")
 }
-effect fn edgesField(name: string, edges: ResolvedEdges) ! JsonError | WriterError ? &mut Writer {
+
+effect fn edgesField(name: string, edges: ResolvedEdges)
+  ! JsonError | WriterError
+  ? &mut Writer {
   run geometryKey(name)
   run Writer.writeString("{\"top\":")
   run Json.serialize(&edges.top, &JsonOptions.compact())
@@ -110,7 +152,10 @@ effect fn edgesField(name: string, edges: ResolvedEdges) ! JsonError | WriterErr
   run field("left", &edges.left)
   run Writer.writeString("}")
 }
-effect fn baselinesField(name: string, baselines: BaselineSet) ! JsonError | WriterError ? &mut Writer {
+
+effect fn baselinesField(name: string, baselines: BaselineSet)
+  ! JsonError | WriterError
+  ? &mut Writer {
   run geometryKey(name)
   run Writer.writeString("{\"alphabetic\":")
   run Json.serialize(&baselines.alphabetic, &JsonOptions.compact())
@@ -122,7 +167,10 @@ effect fn baselinesField(name: string, baselines: BaselineSet) ! JsonError | Wri
   run field("textUnder", &baselines.textUnder)
   run Writer.writeString("}")
 }
-effect fn scrollbarField(metrics: ScrollbarMetrics) ! JsonError | WriterError ? &mut Writer {
+
+effect fn scrollbarField(metrics: ScrollbarMetrics)
+  ! JsonError | WriterError
+  ? &mut Writer {
   run geometryKey("scrollbarMetrics")
   run Writer.writeString("{\"horizontal\":")
   run Json.serialize(&metrics.horizontal, &JsonOptions.compact())
@@ -133,7 +181,9 @@ effect fn scrollbarField(metrics: ScrollbarMetrics) ! JsonError | WriterError ? 
   run Writer.writeString("}")
 }
 
-effect fn writeUsed(box: &Layout) ! JsonError | WriterError ? &mut Writer {
+effect fn writeUsed(box: &Layout)
+  ! JsonError | WriterError
+  ? &mut Writer {
   run field("contentWidth", &box.contentSize.width)
   run field("contentHeight", &box.contentSize.height)
   run field("scrollbarGutterTop", &box.scrollbarGutter.top)
@@ -152,36 +202,59 @@ effect fn writeUsed(box: &Layout) ! JsonError | WriterError ? &mut Writer {
   run field("hasLastBaseline", &box.hasLastBaseline)
 }
 
-effect fn writeSourceUsed(box: &Layout, mode: WritingMode, orientation: TextOrientation) ! JsonError | WriterError ? &mut Writer {
+effect fn writeSourceUsed(box: &Layout, mode: WritingMode, orientation: TextOrientation)
+  ! JsonError | WriterError
+  ? &mut Writer {
   run writeUsed(box)
   run field("firstBaseline", &box.firstBaselines.forContext(mode, orientation))
   run field("lastBaseline", &box.lastBaselines.forContext(mode, orientation))
 }
 
 fn boxKind(kind: BoxKind) -> string<'static> {
-  if kind == BoxKind.Block { return "block" }
-  if kind == BoxKind.Flex { return "flex" }
-  if kind == BoxKind.Grid { return "grid" }
-  if kind == BoxKind.Inline { return "inline" }
-  if kind == BoxKind.Text { return "text" }
+  if kind == BoxKind.Block {
+    return "block"
+  }
+  if kind == BoxKind.Flex {
+    return "flex"
+  }
+  if kind == BoxKind.Grid {
+    return "grid"
+  }
+  if kind == BoxKind.Inline {
+    return "inline"
+  }
+  if kind == BoxKind.Text {
+    return "text"
+  }
   return "inline-formatting"
 }
 
 fn measurementKind(kind: Measurement) -> string<'static> {
-  if kind == Measurement.Content { return "content" }
-  if kind == Measurement.Natural { return "natural" }
+  if kind == Measurement.Content {
+    return "content"
+  }
+  if kind == Measurement.Natural {
+    return "natural"
+  }
   return "none"
 }
 
 fn fragmentKind(kind: FragmentKind) -> string<'static> {
-  if kind == FragmentKind.Box { return "box" }
-  if kind == FragmentKind.Inline { return "inline" }
-  if kind == FragmentKind.Text { return "text" }
+  if kind == FragmentKind.Box {
+    return "box"
+  }
+  if kind == FragmentKind.Inline {
+    return "inline"
+  }
+  if kind == FragmentKind.Text {
+    return "text"
+  }
   return "line"
 }
 
 effect fn writeOutput(tree: &Tree, output: &LayoutTree)
-  ! InvalidNode | JsonError | WriterError ? &mut Writer {
+  ! InvalidNode | JsonError | WriterError
+  ? &mut Writer {
   let options = JsonOptions.compact()
   let fragments = output.fragments.values.asSlice()
   let nodes = output.boxNodes.asSlice()
@@ -189,7 +262,9 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
   run Writer.writeString("{\"schemaVersion\":3,\"sources\":[")
   let mut source: usize = 0
   while source < tree.nodes.length() {
-    if source != 0 { run Writer.writeString(",") }
+    if source != 0 {
+      run Writer.writeString(",")
+    }
     let first = output.firstBySource.get(source)
     let mut bounds = run output.sourceBounds(NodeId { index: source })
     let mut parent = tree.nodes.asSlice()[source].parent
@@ -209,8 +284,10 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
     let sourceNode = &tree.nodes.asSlice()[source]
     let mut kind = "element"
     match move sourceNode.text() {
-      Option<string>.Some { value } => { kind = "text"
-        run field("text", &value) }
+      Option<string>.Some { value } => {
+        kind = "text"
+        run field("text", &value)
+      }
       Option<string>.None => {}
     }
     run field("kind", &kind)
@@ -221,9 +298,13 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
     while true {
       let rect = match move rects.next() {
         Option<Rect>.Some { value } => value
-        Option<Rect>.None => { break }
+        Option<Rect>.None => {
+          break
+        }
       }
-      if count != 0 { run Writer.writeString(",") }
+      if count != 0 {
+        run Writer.writeString(",")
+      }
       run writeRect(rect)
       count = count + 1
     }
@@ -233,7 +314,8 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
       let style = &tree.styles.asSlice()[sourceNode.styleIndex]
       run writeSourceUsed(&empty, style.writingMode, style.textOrientation)
     } else if nodes[first].nextContinuation == usize.MAX && count == 1
-      && (nodes[first].kind == BoxKind.Block || nodes[first].kind == BoxKind.Flex || nodes[first].kind == BoxKind.Grid) {
+      && (nodes[first].kind == BoxKind.Block || nodes[first].kind == BoxKind.Flex
+        || nodes[first].kind == BoxKind.Grid) {
       let node = &nodes[first]
       let style = &tree.styles.asSlice()[tree.nodes.asSlice()[node.styleOwner].styleIndex]
       let mut mode = style.writingMode
@@ -250,7 +332,9 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
   run Writer.writeString("],\"boxes\":[")
   let mut index: usize = 0
   while index < boxes.length {
-    if index != 0 { run Writer.writeString(",") }
+    if index != 0 {
+      run Writer.writeString(",")
+    }
     let box = &boxes[index]
     let node = &nodes[index]
     run Writer.writeString("{\"x\":")
@@ -304,7 +388,9 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
   run Writer.writeString("],\"fragments\":[")
   index = 0
   while index < fragments.length {
-    if index != 0 { run Writer.writeString(",") }
+    if index != 0 {
+      run Writer.writeString(",")
+    }
     let fragment = &fragments[index]
     run Writer.writeString("{\"kind\":")
     run Json.serialize(&fragmentKind(fragment.kind), &options)
@@ -346,7 +432,9 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
   run Writer.writeString("],\"texts\":[")
   index = 0
   while index < output.fragments.texts.length() {
-    if index != 0 { run Writer.writeString(",") }
+    if index != 0 {
+      run Writer.writeString(",")
+    }
     let text = output.fragments.texts.get(index)
     run Writer.writeString("{\"sourceStart\":")
     run Json.serialize(&text.sourceStart, &options)
@@ -369,22 +457,31 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
   run Writer.flush()
 }
 
-effect fn parseScrollOffset(value: &Value) -> Point ! ProtocolError {
+effect fn parseScrollOffset(value: &Value) -> Point
+  ! ProtocolError {
   run P.fields(value, &["x", "y"])
   let x = run P.number(run P.required(value, "x"))
   let y = run P.number(run P.required(value, "y"))
-  if x - x != 0.0 || y - y != 0.0 { fail P.invalid("expected finite scroll offsets") }
+  if x - x != 0.0 || y - y != 0.0 {
+    fail P.invalid("expected finite scroll offsets")
+  }
   return Point { x: x, y: y }
 }
 
 fn elapsed(start: &Instant, end: &Instant) -> i64 {
   return (SystemClock.seconds(end) - SystemClock.seconds(start)) * 1000000000
-    + SystemClock.nanoseconds(end) - SystemClock.nanoseconds(start)
+    + SystemClock.nanoseconds(end)
+    - SystemClock.nanoseconds(start)
 }
 
 // Work summed over the timed computes of a benchmark run.
 struct Work {
-  computes: usize, passes: usize, fullLayouts: usize, sizeProbes: usize, cacheHits: usize, reused: usize,
+  computes: usize,
+  passes: usize,
+  fullLayouts: usize,
+  sizeProbes: usize,
+  cacheHits: usize,
+  reused: usize,
 }
 
 fn addWork(work: &mut Work, output: &LayoutTree) {
@@ -398,12 +495,15 @@ fn addWork(work: &mut Work, output: &LayoutTree) {
 
 // Benchmark mode: one line on stderr with every compute duration in
 // nanoseconds and the average work per timed compute.
-effect fn reportSamples(samples: &List<i64>, work: &Work, fixtures: &Fixtures) ! JsonError | WriterError {
+effect fn reportSamples(samples: &List<i64>, work: &Work, fixtures: &Fixtures)
+  ! JsonError | WriterError {
   let mut stderr = StderrWriter.make()
   run writeSamples(samples, work, fixtures) |> Effect.provideMut<Writer>(&mut stderr)
 }
 
-effect fn writeSamples(samples: &List<i64>, work: &Work, fixtures: &Fixtures) ! JsonError | WriterError ? &mut Writer {
+effect fn writeSamples(samples: &List<i64>, work: &Work, fixtures: &Fixtures)
+  ! JsonError | WriterError
+  ? &mut Writer {
   let computes = work.computes
   let passes = work.passes / computes
   let fullLayouts = work.fullLayouts / computes
@@ -425,7 +525,9 @@ effect fn writeSamples(samples: &List<i64>, work: &Work, fixtures: &Fixtures) ! 
   run Writer.writeString(",\"layoutNs\":[")
   let mut index: usize = 0
   while index < samples.length() {
-    if index > 0 { run Writer.writeString(",") }
+    if index > 0 {
+      run Writer.writeString(",")
+    }
     run Json.serialize(&samples.asSlice()[index], &JsonOptions.compact())
     index = index + 1
   }
@@ -438,13 +540,20 @@ fn resetCounters(fixtures: &mut Fixtures) {
   fixtures.shapeCalls = 0
 }
 
-effect fn nodeField(value: &Value, key: string) -> NodeId ! ProtocolError {
+effect fn nodeField(value: &Value, key: string) -> NodeId
+  ! ProtocolError {
   let index = run P.integer(run P.required(value, key))
-  if index < 0 { fail P.invalidField("must be a node index", key) }
+  if index < 0 {
+    fail P.invalidField("must be a node index", key)
+  }
   return NodeId { index: i32.toUsize(index) }
 }
-effect fn beforeField(value: &Value) -> Option<NodeId> ! ProtocolError {
-  if !P.has(value, "before") || P.isNull(run P.required(value, "before")) { return Option<NodeId>.None }
+
+effect fn beforeField(value: &Value) -> Option<NodeId>
+  ! ProtocolError {
+  if !P.has(value, "before") || P.isNull(run P.required(value, "before")) {
+    return Option<NodeId>.None
+  }
   return Option<NodeId>.Some { value: run nodeField(value, "before") }
 }
 
@@ -454,7 +563,8 @@ effect fn beforeField(value: &Value) -> Option<NodeId> ! ProtocolError {
 // attaches an existing `node` the same way; `remove` detaches `node`, which
 // a later `move` may attach again; `destroy` frees `node` with its subtree.
 effect fn applyOps(ops: &[Value], tree: &mut Tree, fonts: usize)
-  ! ProtocolError | GridError | OutOfMemoryError | InvalidNode ? &mut Allocator {
+  ! ProtocolError | GridError | OutOfMemoryError | InvalidNode
+  ? &mut Allocator {
   let mut index: usize = 0
   while index < ops.length {
     let op = &ops[index]
@@ -466,14 +576,22 @@ effect fn applyOps(ops: &[Value], tree: &mut Tree, fonts: usize)
         id = run tree.createText(run String.copy(run P.text(run P.required(op, "text"))))
       } else {
         let style = run Styles.parse(run P.required(op, "style"))
-        if style.fontKey >= fonts { fail P.invalid("fontKey does not identify a supplied font") }
+        if style.fontKey >= fonts {
+          fail P.invalid("fontKey does not identify a supplied font")
+        }
         id = run tree.create(move style)
         run GridStyles.apply(run P.required(op, "style"), &mut tree, id)
       }
-      if P.has(op, "parent") { run tree.insertBefore(run nodeField(op, "parent"), id, run beforeField(op)) }
+      if P.has(op, "parent") {
+        run tree.insertBefore(run nodeField(op, "parent"), id, run beforeField(op))
+      }
     } else if kind == "move" {
       run P.fields(op, &["op", "node", "parent", "before"])
-      run tree.insertBefore(run nodeField(op, "parent"), run nodeField(op, "node"), run beforeField(op))
+      run tree.insertBefore(
+        run nodeField(op, "parent"),
+        run nodeField(op, "node"),
+        run beforeField(op),
+      )
     } else if kind == "remove" {
       run P.fields(op, &["op", "node"])
       run tree.remove(run nodeField(op, "node"))
@@ -490,30 +608,45 @@ effect fn applyOps(ops: &[Value], tree: &mut Tree, fonts: usize)
 // One step of an update benchmark: `viewport` replaces the viewport, `ops`
 // edits the tree's structure (see applyOps), and each `set` entry replaces
 // a node's whole style, a text node's text, or an element's scroll offset.
-effect fn applyStep(step: &Value, tree: &mut Tree, current: OptionalSize, fonts: usize) -> OptionalSize
-  ! ProtocolError | GridError | OutOfMemoryError | InvalidNode ? &mut Allocator {
+effect fn applyStep(
+  step: &Value,
+  tree: &mut Tree,
+  current: OptionalSize,
+  fonts: usize,
+) -> OptionalSize
+  ! ProtocolError | GridError | OutOfMemoryError | InvalidNode
+  ? &mut Allocator {
   let mut viewport = current
   run P.fields(step, &["viewport", "ops", "set"])
-  if P.has(step, "ops") { run applyOps(run P.array(run P.required(step, "ops")), &mut tree, fonts) }
+  if P.has(step, "ops") {
+    run applyOps(run P.array(run P.required(step, "ops")), &mut tree, fonts)
+  }
   if P.has(step, "viewport") {
     let value = run P.required(step, "viewport")
     run P.fields(value, &["width", "height"])
     viewport = OptionalSize.definite(
       run P.number(run P.required(value, "width")),
-      run P.number(run P.required(value, "height")))
+      run P.number(run P.required(value, "height")),
+    )
   }
-  if !P.has(step, "set") { return viewport }
+  if !P.has(step, "set") {
+    return viewport
+  }
   let changes = run P.array(run P.required(step, "set"))
   let mut index: usize = 0
   while index < changes.length {
     let change = &changes[index]
     run P.fields(change, &["node", "style", "text", "scrollOffset"])
     let node = run P.integer(run P.required(change, "node"))
-    if node < 0 { fail P.invalid("set.node must be a node index") }
+    if node < 0 {
+      fail P.invalid("set.node must be a node index")
+    }
     let id = NodeId { index: i32.toUsize(node) }
     if P.has(change, "style") {
       let style = run Styles.parse(run P.required(change, "style"))
-      if style.fontKey >= fonts { fail P.invalid("fontKey does not identify a supplied font") }
+      if style.fontKey >= fonts {
+        fail P.invalid("fontKey does not identify a supplied font")
+      }
       run tree.setStyle(id, move style)
       run GridStyles.apply(run P.required(change, "style"), &mut tree, id)
     }
@@ -530,30 +663,59 @@ effect fn applyStep(step: &Value, tree: &mut Tree, current: OptionalSize, fonts:
 }
 
 effect fn execute(document: &Value)
-  ! ProtocolError | GridError | OutOfMemoryError | InvalidNode | JsonError | WriterError | TextError | FragmentationError
+  ! ProtocolError
+    | GridError
+    | OutOfMemoryError
+    | InvalidNode
+    | JsonError
+    | WriterError
+    | TextError
+    | FragmentationError
   ? &mut Allocator | &mut Writer {
-  run P.fields(document, &["viewport", "viewportScrollOffset", "scrollbars", "fonts", "nodes", "fragmentation", "benchmark", "updates"])
+  run P.fields(
+    document,
+    &[
+      "viewport",
+      "viewportScrollOffset",
+      "scrollbars",
+      "fonts",
+      "nodes",
+      "fragmentation",
+      "benchmark",
+      "updates",
+    ],
+  )
   let viewportValue = run P.required(document, "viewport")
   run P.fields(viewportValue, &["width", "height"])
   let mut viewport = OptionalSize.definite(
     run P.nonnegative(run P.required(viewportValue, "width")),
-    run P.nonnegative(run P.required(viewportValue, "height"))
+    run P.nonnegative(run P.required(viewportValue, "height")),
   )
   let nodes = run P.array(run P.required(document, "nodes"))
-  if nodes.length == 0 { fail P.invalid("nodes must contain a root node") }
+  if nodes.length == 0 {
+    fail P.invalid("nodes must contain a root node")
+  }
   let root = &nodes[0]
   run P.fields(root, &["parent", "style", "measure", "natural", "scrollOffset"])
-  if !P.isNull(run P.required(root, "parent")) { fail P.invalid("nodes[0].parent must be null") }
+  if !P.isNull(run P.required(root, "parent")) {
+    fail P.invalid("nodes[0].parent must be null")
+  }
   let rootStyle = run Styles.parse(run P.required(root, "style"))
   let mut tree = run Tree.make(move rootStyle)
   if P.has(document, "viewportScrollOffset") {
-    tree.viewportScrollOffset = run parseScrollOffset(run P.required(document, "viewportScrollOffset"))
+    tree.viewportScrollOffset = run parseScrollOffset(
+      run P.required(document, "viewportScrollOffset"),
+    )
   }
   let mut fixtures = Fixtures {
-    values: List<Fixture>.make(), objects: List<NaturalDimensions>.make(),
+    values: List<Fixture>.make(),
+    objects: List<NaturalDimensions>.make(),
     fonts: List<FontMetrics>.make(),
-    autoScrollbars: ScrollbarMetrics.zero(), thinScrollbars: ScrollbarMetrics.zero(),
-    measureCalls: 0, analyzeCalls: 0, shapeCalls: 0,
+    autoScrollbars: ScrollbarMetrics.zero(),
+    thinScrollbars: ScrollbarMetrics.zero(),
+    measureCalls: 0,
+    analyzeCalls: 0,
+    shapeCalls: 0,
   }
   run fixtures.fonts.append(FontMetrics.zero())
   if P.has(document, "fonts") {
@@ -567,8 +729,12 @@ effect fn execute(document: &Value)
   if P.has(document, "scrollbars") {
     let scrollbars = run P.required(document, "scrollbars")
     run P.fields(scrollbars, &["auto", "thin"])
-    fixtures.autoScrollbars = run FixtureMeasurement.parseScrollbars(run P.required(scrollbars, "auto"))
-    fixtures.thinScrollbars = run FixtureMeasurement.parseScrollbars(run P.required(scrollbars, "thin"))
+    fixtures.autoScrollbars = run FixtureMeasurement.parseScrollbars(
+      run P.required(scrollbars, "auto"),
+    )
+    fixtures.thinScrollbars = run FixtureMeasurement.parseScrollbars(
+      run P.required(scrollbars, "thin"),
+    )
   }
   let mut index: usize = 0
   while index < nodes.length {
@@ -576,16 +742,24 @@ effect fn execute(document: &Value)
     let isText = P.has(node, "text")
     if isText {
       run P.fields(node, &["parent", "text"])
-      if index == 0 { fail P.invalid("root must be an element") }
+      if index == 0 {
+        fail P.invalid("root must be an element")
+      }
     } else {
       run P.fields(node, &["parent", "style", "measure", "natural", "scrollOffset"])
-      if P.has(node, "measure") && P.has(node, "natural") { fail P.invalid("measure and natural are mutually exclusive") }
+      if P.has(node, "measure") && P.has(node, "natural") {
+        fail P.invalid("measure and natural are mutually exclusive")
+      }
     }
     if index > 0 {
       let parentIndex = run P.integer(run P.required(node, "parent"))
-      if parentIndex < 0 { fail P.invalid("parent must be a preceding node index") }
+      if parentIndex < 0 {
+        fail P.invalid("parent must be a preceding node index")
+      }
       let parent = i32.toUsize(parentIndex)
-      if parent >= index { fail P.invalid("parent must be a preceding node index") }
+      if parent >= index {
+        fail P.invalid("parent must be a preceding node index")
+      }
       if isText {
         let text = run String.copy(run P.text(run P.required(node, "text")))
         let id = run tree.appendText(NodeId { index: parent }, move text)
@@ -596,12 +770,18 @@ effect fn execute(document: &Value)
         drop id
       }
     }
-    if !isText { run GridStyles.apply(run P.required(node, "style"), &mut tree, NodeId { index: index }) }
-    if tree.styles.asSlice()[tree.nodes.asSlice()[index].styleIndex].fontKey >= fixtures.fonts.length() {
+    if !isText {
+      run GridStyles.apply(run P.required(node, "style"), &mut tree, NodeId { index: index })
+    }
+    if tree.styles.asSlice()[tree.nodes.asSlice()[index].styleIndex].fontKey
+      >= fixtures.fonts.length() {
       fail P.invalid("fontKey does not identify a supplied font")
     }
     if P.has(node, "scrollOffset") {
-      run tree.setScrollOffset(NodeId { index: index }, run parseScrollOffset(run P.required(node, "scrollOffset")))
+      run tree.setScrollOffset(
+        NodeId { index: index },
+        run parseScrollOffset(run P.required(node, "scrollOffset")),
+      )
     }
     if P.has(node, "measure") {
       let fixture = run FixtureMeasurement.parse(run P.required(node, "measure"))
@@ -620,7 +800,13 @@ effect fn execute(document: &Value)
   let mut output = LayoutTree.make()
   if P.has(document, "fragmentation") {
     let request = run FragmentInput.parse(run P.required(document, "fragmentation"))
-    run Engine.computeFragmented<Fixtures>(&tree, &mut output, &mut fixtures, viewport, request.view())
+    run Engine.computeFragmented<Fixtures>(
+      &tree,
+      &mut output,
+      &mut fixtures,
+      viewport,
+      request.view(),
+    )
   } else {
     run Engine.compute<Fixtures>(&tree, &mut output, &mut fixtures, viewport)
   }
@@ -628,9 +814,18 @@ effect fn execute(document: &Value)
     let benchmark = run P.required(document, "benchmark")
     run P.fields(benchmark, &["iterations"])
     let iterations = run P.integer(run P.required(benchmark, "iterations"))
-    if iterations < 1 { fail P.invalid("benchmark.iterations must be positive") }
+    if iterations < 1 {
+      fail P.invalid("benchmark.iterations must be positive")
+    }
     let mut samples = List<i64>.make()
-    let mut work = Work { computes: 0, passes: 0, fullLayouts: 0, sizeProbes: 0, cacheHits: 0, reused: 0 }
+    let mut work = Work {
+      computes: 0,
+      passes: 0,
+      fullLayouts: 0,
+      sizeProbes: 0,
+      cacheHits: 0,
+      reused: 0,
+    }
     resetCounters(&mut fixtures)
     let mut clock = OsMonotonicClock.make()
     let mut iteration: i32 = 0
@@ -646,22 +841,39 @@ effect fn execute(document: &Value)
     }
     run reportSamples(&samples, &work, &fixtures)
   }
+
   // Update benchmark: apply cycle steps in turn, timing only each compute.
   // The final output is the geometry after the last step.
   if P.has(document, "updates") {
     let updates = run P.required(document, "updates")
     run P.fields(updates, &["iterations", "cycle"])
     let iterations = run P.integer(run P.required(updates, "iterations"))
-    if iterations < 1 { fail P.invalid("updates.iterations must be positive") }
+    if iterations < 1 {
+      fail P.invalid("updates.iterations must be positive")
+    }
     let cycle = run P.array(run P.required(updates, "cycle"))
-    if cycle.length == 0 { fail P.invalid("updates.cycle must not be empty") }
+    if cycle.length == 0 {
+      fail P.invalid("updates.cycle must not be empty")
+    }
     let mut samples = List<i64>.make()
-    let mut work = Work { computes: 0, passes: 0, fullLayouts: 0, sizeProbes: 0, cacheHits: 0, reused: 0 }
+    let mut work = Work {
+      computes: 0,
+      passes: 0,
+      fullLayouts: 0,
+      sizeProbes: 0,
+      cacheHits: 0,
+      reused: 0,
+    }
     resetCounters(&mut fixtures)
     let mut clock = OsMonotonicClock.make()
     let mut iteration: usize = 0
     while iteration < i32.toUsize(iterations) {
-      viewport = run applyStep(&cycle[iteration % cycle.length], &mut tree, viewport, fixtures.fonts.length())
+      viewport = run applyStep(
+        &cycle[iteration % cycle.length],
+        &mut tree,
+        viewport,
+        fixtures.fonts.length(),
+      )
       let start = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
       run Engine.compute<Fixtures>(&tree, &mut output, &mut fixtures, viewport)
       let end = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
@@ -682,19 +894,28 @@ struct BufferedStdout {
   bytes: [u8; 65536],
   length: usize,
 }
+
 impl BufferedStdout {
   fn make() -> BufferedStdout {
     return BufferedStdout { inner: StdoutWriter.make(), bytes: [0; 65536], length: 0 }
   }
-  effect fn drain(self: &mut Self) -> () ! WriterError {
-    if self.length == 0 { return () }
-    run Writer.writeAll(Slice.view<u8>(&self.bytes, 0, self.length)) |> Effect.provideMut<Writer>(&mut self.inner)
+
+  effect fn drain(self: &mut Self) -> ()
+    ! WriterError {
+    if self.length == 0 {
+      return ()
+    }
+    run Writer.writeAll(Slice.view<u8>(&self.bytes, 0, self.length))
+      |> Effect.provideMut<Writer>(&mut self.inner)
     self.length = 0
     return ()
   }
 }
+
 impl Writer for BufferedStdout {
-  effect fn writeAll(self: &mut Self, val: &[u8]) -> () ! WriterError ? &mut Writer {
+  effect fn writeAll(self: &mut Self, val: &[u8]) -> ()
+    ! WriterError
+    ? &mut Writer {
     if val.length > 65536 - self.length {
       run self.drain()
       if val.length > 65536 {
@@ -706,22 +927,32 @@ impl Writer for BufferedStdout {
     self.length = self.length + val.length
     return ()
   }
-  effect fn flush(self: &mut Self) -> () ! WriterError ? &mut Writer {
+
+  effect fn flush(self: &mut Self) -> ()
+    ! WriterError
+    ? &mut Writer {
     run self.drain()
     return ()
   }
 }
 
 effect fn application() -> i32
-  ! StreamReadError | OutOfMemoryError | JsonError | WriterError | ProtocolError | GridError | InvalidNode | TextError | FragmentationError {
+  ! StreamReadError
+    | OutOfMemoryError
+    | JsonError
+    | WriterError
+    | ProtocolError
+    | GridError
+    | InvalidNode
+    | TextError
+    | FragmentationError {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut input = OsStandardInput.make()
   let mut output = BufferedStdout.make()
   let bytes = run readDocument()
     |> Effect.provideMut<StandardInput>(&mut input)
     |> Effect.provideMut<Allocator>(&mut allocator)
-  let document = run Json.parse(bytes.asSlice())
-    |> Effect.provideMut<Allocator>(&mut allocator)
+  let document = run Json.parse(bytes.asSlice()) |> Effect.provideMut<Allocator>(&mut allocator)
   run execute(&document)
     |> Effect.provideMut<Allocator>(&mut allocator)
     |> Effect.provideMut<Writer>(&mut output)
@@ -729,7 +960,9 @@ effect fn application() -> i32
   return 0
 }
 
-effect fn reportFragmentation(error: FragmentationError) ! WriterError | JsonError ? &mut Writer {
+effect fn reportFragmentation(error: FragmentationError)
+  ! WriterError | JsonError
+  ? &mut Writer {
   run Writer.writeString("silk-layout: FragmentationError at frame ")
   run Json.serialize(&error.frame, &JsonOptions.compact())
   run Writer.writeString(": ")
@@ -740,17 +973,35 @@ effect fn reportFragmentation(error: FragmentationError) ! WriterError | JsonErr
 effect fn fragmentationFailed(error: FragmentationError) -> i32 {
   let mut stderr = StderrWriter.make()
   let reported = run reportFragmentation(error)
-    |> Effect.provideMut<Writer>(&mut stderr) |> Effect.result
+    |> Effect.provideMut<Writer>(&mut stderr)
+    |> Effect.result
   drop reported
   return 1
 }
 
-effect fn failed(error: StreamReadError | OutOfMemoryError | JsonError | WriterError | ProtocolError | GridError | InvalidNode | TextError) -> i32 {
+effect fn failed(
+  error: StreamReadError
+    | OutOfMemoryError
+    | JsonError
+    | WriterError
+    | ProtocolError
+    | GridError
+    | InvalidNode
+    | TextError,
+) -> i32 {
   drop error
-  drop P.invalid("request failed: malformed JSON, invalid protocol, unsupported text, allocation, or I/O failure")
+  drop P.invalid(
+    "request failed: malformed JSON, invalid protocol, unsupported text, allocation, or I/O failure",
+  )
   return 1
 }
 
 pub fn main() -> i32 {
-  return run application() |> Effect.catch<FragmentationError>(effect fn(error: FragmentationError) -> i32 { return run fragmentationFailed(error) }) |> Effect.catchAll(failed)
+  return run application()
+    |> Effect.catch<FragmentationError>(
+      effect |error: FragmentationError| -> i32 {
+        return run fragmentationFailed(error)
+      },
+    )
+    |> Effect.catchAll(failed)
 }
