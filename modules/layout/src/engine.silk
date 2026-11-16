@@ -1,12 +1,12 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.usize
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
-import style { Style, Display, Dimension, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
+import style { SizeContainment, Style, Display, Dimension, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
 import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
 import flex { layoutFlex, emptyFlexSize, FlexScratch }
-import grid { layoutGrid }
+import grid { layoutGrid, layoutEmptyGrid }
 import grid_subgrid as Subgrid
 import grid_style { GridTrack, GridTrackKind, GridBreadthKind }
 import grid_placement { GridBounds }
@@ -148,8 +148,37 @@ effect fn firstContents<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
 }
 
 effect fn contents<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, natural: NaturalDimensions, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
-  if !(input.performLayout && input.fragmentation.active) { return run contentAlgorithm(nodes, &mut output, &mut measurer, id, &input, &box, natural, &mut bfc) }
-  return run fragmentedContents(nodes, &mut output, &mut measurer, id, &input, &box, natural, &mut bfc)
+  let mut contained = box.*
+  run containSize(nodes, &mut output, &mut measurer, id, input, &mut contained)
+  if !(input.performLayout && input.fragmentation.active) { return run contentAlgorithm(nodes, &mut output, &mut measurer, id, &input, &contained, natural, &mut bfc) }
+  return run fragmentedContents(nodes, &mut output, &mut measurer, id, &input, &contained, natural, &mut bfc)
+}
+
+// Contained automatic sizes behave as an empty box. Explicit sizes and
+// available inline space have already been resolved; descendants still lay out
+// and contribute overflow inside these definite content-box dimensions.
+effect fn containSize<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &mut ResolvedBox) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let style = nodes.style(id)
+  let width = style.containsSize(true) && !box.size.widthDefinite
+  let height = style.containsSize(false) && !box.size.heightDefinite
+  if !width && !height { return }
+  let mut empty = Size { width: box.inset.horizontal(), height: box.inset.vertical() }
+  if isGrid(style) {
+    let mut probe = input.*
+    probe.performLayout = false
+    probe.baselines = false
+    probe.fragmentation.active = false
+    let result = run layoutEmptyGrid(nodes, &mut output, &mut measurer, id, &probe, &box)
+    empty = result.size
+  }
+  if width {
+    box.size.width = clamp(empty.width, box.min.width, box.max.width)
+    box.size.widthDefinite = true
+  }
+  if height {
+    box.size.height = clamp(empty.height, box.min.height, box.max.height)
+    box.size.heightDefinite = true
+  }
 }
 
 // contents in a fragmented pass, kept out of line so the common path's code stays small.
@@ -237,6 +266,16 @@ effect fn intrinsic<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
     if minimum { request.availableHeight = AvailableSpace.minContent() }
   }
   request.bfcContentOrigin = Point { x: 0.0, y: 0.0 }
+  if nodes.style(id).containsSize(horizontal) {
+    let box = resolveBox(nodes.style(id), &request)
+    if isGrid(nodes.style(id)) {
+      let empty = run layoutEmptyGrid(nodes, &mut output, &mut measurer, id, &request, &box)
+      if horizontal { return empty.size.width }
+      return empty.size.height
+    }
+    if horizontal { return box.inset.horizontal() }
+    return box.inset.vertical()
+  }
   // A childless box without content measurement has no content to size: its
   // intrinsic width is its padding and border, with no cache entry needed.
   if horizontal && emptyContentWidth(nodes, id) { return resolveBox(nodes.style(id), &request).inset.horizontal() }
@@ -617,7 +656,7 @@ fn keyShape(nodes: &BoxTree<'_>, id: usize) -> u16 {
   if percentLike(style.height) || percentLike(style.minHeight) || percentLike(style.maxHeight) { shape = shape | KEY_PERCENT | KEY_PERCENT_HEIGHT }
   if percentEdges(&style.padding) || percentEdges(&style.margin) || percentEdges(&style.inset) { shape = shape | KEY_PERCENT | KEY_PERCENT_EDGES }
   let columnWrap = isFlex(style) && style.flexWrap != FlexWrap.NoWrap && (style.flexDirection == FlexDirection.Column || style.flexDirection == FlexDirection.ColumnReverse)
-  if (node.kind == BoxKind.Block || node.kind == BoxKind.Flex) && node.measurement == Measurement.None && style.writingMode == WritingMode.HorizontalTb && style.aspectRatio <= 0.0 && style.overflowX == Overflow.Visible && style.overflowY == Overflow.Visible && style.float == Float.None && !columnWrap {
+  if style.sizeContainment == SizeContainment.None && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex) && node.measurement == Measurement.None && style.writingMode == WritingMode.HorizontalTb && style.aspectRatio <= 0.0 && style.overflowX == Overflow.Visible && style.overflowY == Overflow.Visible && style.float == Float.None && !columnWrap {
     shape = shape | KEY_WIDTH_FREE
     if !isFlex(style) || style.flexWrap == FlexWrap.NoWrap { shape = shape | KEY_CONTENT_FREE }
   }
@@ -974,7 +1013,7 @@ fn plainLeafShape(style: &Style, node: &BoxNode) -> bool {
 }
 @inlineAlways
 fn plainLeafStyle(style: &Style) -> bool {
-  return !isGrid(style) && !style.replaced && style.aspectRatio <= 0.0 && style.writingMode == WritingMode.HorizontalTb && style.float == Float.None
+  return style.sizeContainment == SizeContainment.None && !isGrid(style) && !style.replaced && style.aspectRatio <= 0.0 && style.writingMode == WritingMode.HorizontalTb && style.float == Float.None
     && style.overflowX == Overflow.Visible && style.overflowY == Overflow.Visible
     && !keywordSize(style.width.kind) && !keywordSize(style.height.kind) && !keywordSize(style.minWidth.kind)
     && !keywordSize(style.minHeight.kind) && !keywordSize(style.maxWidth.kind) && !keywordSize(style.maxHeight.kind)
@@ -1471,7 +1510,7 @@ struct BoxSizing {
 // Whether prepareSizing's general path reduces to its plain branch for this box.
 @inlineAlways
 fn plainSizing(style: &Style, node: &BoxNode, input: &Input, fragmented: bool, display: &Display) -> bool {
-  return !fragmented && !style.replaced && node.measurement != Measurement.Natural && style.aspectRatio <= 0.0
+  return style.sizeContainment == SizeContainment.None && !fragmented && !style.replaced && node.measurement != Measurement.Natural && style.aspectRatio <= 0.0
     && style.writingMode == WritingMode.HorizontalTb && input.parentWritingMode == WritingMode.HorizontalTb
     && style.float == Float.None && display.outsideIs(DisplayOutside.Block)
     && style.overflowX == Overflow.Visible && style.overflowY == Overflow.Visible
@@ -1519,6 +1558,13 @@ effect fn prepareSizing<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
   }
   let mut natural = NaturalDimensions.none()
   if node.measurement == Measurement.Natural { natural = Measure.natural(&mut measurer, node.measureKey) }
+  if style.sizeContainment != SizeContainment.None {
+    natural.aspectRatio = 0.0
+    if style.containsSize(true) { natural.size.width = 0.0
+      natural.size.widthDefinite = true }
+    if style.containsSize(false) { natural.size.height = 0.0
+      natural.size.heightDefinite = true }
+  }
   sizing.natural = natural
   if inherited & 1 == 0 && !input.known.widthDefinite && !input.intrinsicWidth {
     if style.width.kind == DimensionKind.MinContent { sizing.request.availableWidth = AvailableSpace.minContent() }
@@ -1652,6 +1698,7 @@ effect fn prepareSizing<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
       sizing.box.size.height = clamp(sizing.box.size.height, sizing.box.min.height, sizing.box.max.height)
     }
   }
+  run containSize(nodes, &mut output, &mut measurer, id, &sizing.request, &mut sizing.box)
   configureScrollbars(style, &mut output, &mut measurer, id, &sizing.request, &mut sizing.box)
   sizing.ratio = ratio
   sizing.ratioBorder = ratioBorder

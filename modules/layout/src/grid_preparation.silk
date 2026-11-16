@@ -10,7 +10,7 @@ import style { Style, DimensionKind, DisplayOutside, Float, Align, WritingMode }
 import grid_style { GridTemplate }
 import grid_lines { prepareLineNamesMasked }
 import grid_template { RepeatSizing, repeatCount, expandAxis, expandSubgridAxis, expandedLines }
-import grid_placement { GridItem, collectSubgridItems }
+import grid_placement { GridItem, GridBounds, collectSubgridItems }
 import grid_scratch { GridScratch, GridTemplateScratch }
 import grid_subgrid { SubgridContext }
 
@@ -165,6 +165,7 @@ pub effect fn prepareTemplate<'source>(
   rowOverride: usize,
   scratch: &mut GridScratch,
   inherited: &SubgridContext,
+  empty: bool,
 )
   ! OutOfMemoryError
   ? &mut Allocator {
@@ -254,18 +255,22 @@ pub effect fn prepareTemplate<'source>(
     false,
     &mut prepared.rowNames,
   )
-  scratch.bounds = run collectSubgridItems(
-    nodes,
-    id,
-    prepared.rows.explicitTracks,
-    prepared.columns.explicitTracks,
-    &prepared.rowNames,
-    &prepared.columnNames,
-    inherited.rows.active,
-    inherited.columns.active,
-    &mut scratch.items,
-    &mut scratch.placement,
-  )
+  if empty {
+    scratch.bounds = GridBounds { rowOrigin: 0, columnOrigin: 0, rows: prepared.rows.explicitTracks, columns: prepared.columns.explicitTracks }
+  } else {
+    scratch.bounds = run collectSubgridItems(
+      nodes,
+      id,
+      prepared.rows.explicitTracks,
+      prepared.columns.explicitTracks,
+      &prepared.rowNames,
+      &prepared.columnNames,
+      inherited.rows.active,
+      inherited.columns.active,
+      &mut scratch.items,
+      &mut scratch.placement,
+    )
+  }
   run collectCollapsed(
     scratch.items.asSlice(),
     true,

@@ -11,6 +11,18 @@ import silk.core.option { Option }
 import silk.core.ownership { Copy }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 
+/// Per-element conditions supplement globally enabled rules without mutating their
+/// eligibility. State dependencies are recorded even when this filter returns false.
+pub interface RuleFilter {
+  effect fn accepts(self: &Self, rule: usize, context: &mut MatchContext) -> bool
+    ! CssError | OutOfMemoryError ? &mut Allocator
+}
+struct AllRules {}
+impl RuleFilter for AllRules {
+  effect fn accepts(self: &Self, rule: usize, context: &mut MatchContext) -> bool
+    ! CssError | OutOfMemoryError ? &mut Allocator { return true }
+}
+
 /// One rule in adoption/source order. Declaration ranges refer to the host's shared catalog.
 pub struct Rule {
   pub sheet: usize,
@@ -127,6 +139,12 @@ impl Resolver {
   pub effect fn resolveWith<T: ElementTree>(self: &mut Self, buffers: BufferView<'_>, tree: &T,
     node: usize, inline: &[Candidate], context: &mut MatchContext, starting: bool) -> ()
     ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+    run self.resolveFiltered(buffers, tree, node, inline, &mut context, starting, &AllRules {})
+  }
+
+  pub effect fn resolveFiltered<T: ElementTree, F: RuleFilter>(self: &mut Self, buffers: BufferView<'_>, tree: &T,
+    node: usize, inline: &[Candidate], context: &mut MatchContext, starting: bool, filter: &F) -> ()
+    ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
     self.candidates.truncate(0)
     self.matched.truncate(0)
     self.selectedStates = 0
@@ -150,15 +168,17 @@ impl Resolver {
           &rule.selectors, &buffers.one(rule.buffer)[0], tree, node, &mut context.*,
         )
         if let Option<Specificity>.Some { value } = specificity {
-          run matched.append(Match { sheet: rule.sheet, rule: rule.index, specificity: value })
-          let mut declaration = rule.declarations.start
-          while declaration < rule.declarations.end {
-            run context.spend(1)
-            let mut priority = rule.priority
-            priority.specificity = value
-            priority.order = declaration
-            run candidates.append(Candidate { declaration: declaration, priority: priority })
-            declaration = declaration + 1
+          if run filter.accepts(selected[i], &mut context) {
+            run matched.append(Match { sheet: rule.sheet, rule: rule.index, specificity: value })
+            let mut declaration = rule.declarations.start
+            while declaration < rule.declarations.end {
+              run context.spend(1)
+              let mut priority = rule.priority
+              priority.specificity = value
+              priority.order = declaration
+              run candidates.append(Candidate { declaration: declaration, priority: priority })
+              declaration = declaration + 1
+            }
           }
         }
       }

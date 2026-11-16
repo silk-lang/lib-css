@@ -143,7 +143,7 @@ pub effect fn collect<'pass, 'source, M: Measure + TextMeasure>(
   let scratch = &mut lease.value.getMut()[0]
   let inherited = output.cache.subgrids.get(request.gridContext)
   run prepareTemplate(nodes, item.id, leaseFresh, &request, &logical, &logical,
-    &childAxis, usize.MAX, usize.MAX, &mut scratch, inherited)
+    &childAxis, usize.MAX, usize.MAX, &mut scratch, inherited, false)
   let bounds = scratch.bounds
   let prepared = &scratch.template.asSlice()[0]
   let localSource = GridSource {

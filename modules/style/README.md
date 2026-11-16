@@ -269,8 +269,15 @@ store still retains token values; canonicalizing relative typed values at their 
 requires host integration.
 
 Hosts resolve pending values, install active registrations, consume animation/font metadata,
-and integrate invalidation with their tree. Container conditions remain disabled and produce
-an unsupported-feature diagnostic.
+and integrate invalidation with their tree. Size container conditions have an opt-in host contract:
+`ElementTree.container(node, name, axes, pseudo)` selects the nearest eligible ancestor and
+supplies its content-box size and font/writing metrics in `Environment.querySize`/`initial`.
+`StyleSheets.resolve` applies those conditions per element; direct resolver users must use
+`resolveFiltered` with `sheet_conditions.Filter`. Global condition updates deliberately ignore
+container conditions for name-defining rules such as `@keyframes`. Query lists select ancestors
+independently, nested conditions must all match, and a missing container never matches `not`.
+Hosts that omit the operation have no eligible containers. The compiler still reports container
+rules as unsupported until the UI host's containment, query invalidation and relayout are connected.
 Diagnostics aggregate dropped features; `Options.strict` rejects a sheet with diagnostics.
 
 `colors.parseProgram` handles nested `color-mix()` with deferred `currentcolor` and system colors.

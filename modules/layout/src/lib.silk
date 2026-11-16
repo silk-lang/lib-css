@@ -1,5 +1,6 @@
 pub import style {
   Style,
+  SizeContainment,
   Dimension,
   DimensionKind,
   Edges,

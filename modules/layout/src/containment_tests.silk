@@ -1,0 +1,334 @@
+import fragmentation { FragmentationError }
+import grid_style { GridTemplate, GridTrack, GridBreadth, GridError, GridLine, GridLineKind }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.collections.list { List }
+import silk.num.usize
+import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
+import silk.core.effect { Effect }
+import silk.testing.testing { Testing, AssertionError }
+import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableSpace, AvailableKind, max }
+import style { SizeContainment, Edges, Style, Display, DisplayOutside, DisplayInside, Dimension, DimensionKind, Direction, WritingMode, Position, Float }
+import tree { Tree, LayoutTree, InvalidNode }
+import context { Input }
+import engine { compute, layoutNode }
+import layout_pass { LayoutPass, PassState }
+import box_tree as Boxes
+
+struct FixedMeasure {}
+impl Measure for FixedMeasure {
+  fn font(provider: &mut Self, request: FontRequest) -> FontMetrics {
+    drop provider
+    drop request
+    return FontMetrics.zero()
+  }
+  fn scrollbars(provider: &mut Self, request: ScrollbarRequest) -> ScrollbarMetrics {
+    drop provider
+    drop request
+    return ScrollbarMetrics.zero()
+  }
+  fn natural(provider: &mut Self, key: usize) -> NaturalDimensions {
+    drop provider
+    drop key
+    return NaturalDimensions { size: OptionalSize.definite(120.0, 80.0), aspectRatio: 1.5 }
+  }
+  fn measure(provider: &mut Self, key: usize, request: MeasureRequest<'_>) -> Measured {
+    drop provider
+    drop key
+    let mut width: f32 = 80.0
+    if request.width.kind == AvailableKind.MinContent { width = 20.0 }
+    if request.known.widthDefinite { width = request.known.width }
+    let mut height: f32 = 12.0
+    if request.known.heightDefinite { height = request.known.height }
+    return Measured { size: Size { width: width, height: height }, scrollableOverflow: Rect { x: 0.0, y: 0.0, width: max(20.0, width), height: 12.0 }, contentBlockSize: 12.0, firstBaselines: BaselineSet.uniform(9.0), lastBaselines: BaselineSet.uniform(9.0), hasBaseline: true, hasLineBoxes: true }
+  }
+}
+impl TextMeasure for FixedMeasure {
+  fn beginTextLayout(provider: &mut Self) { drop provider }
+  effect fn analyze(provider: &mut Self, context: TextContext<'_, '_>, output: &mut List<TextBreak>) -> TextAnalysis ! OutOfMemoryError | TextError ? &mut Allocator {
+    drop provider
+    drop output
+    let mut source = usize.MAX
+    if context.tokens.length > 0 { source = context.tokens[0].source }
+    fail TextError { source: source, message: "box-only fixture does not support text" }
+  }
+  effect fn shape(provider: &mut Self, request: TextShapeRequest<'_, '_>, output: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator {
+    drop provider
+    drop output
+    let mut source = usize.MAX
+    if request.start.unit < request.context.tokens.length { source = request.context.tokens[request.start.unit].source }
+    fail TextError { source: source, message: "box-only fixture does not support text" }
+  }
+}
+fn sized(width: f32, height: f32) -> Style {
+  let mut style = Style.make()
+  style.width = Dimension.px(width)
+  style.height = Dimension.px(height)
+  return move style
+}
+effect fn arrange(tree: &Tree, width: f32) -> LayoutTree ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let mut layouts = LayoutTree.make()
+  let constructed = run Boxes.build(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), WritingMode.HorizontalTb, Direction.Ltr)
+  let rootBox = constructed.firstBySource.get(tree.root().index)
+  run layouts.prepare(constructed.boxes.length())
+  let mut measure = FixedMeasure {}
+  let mut input = Input.make(OptionalSize.none())
+  input.known.width = width
+  input.known.widthDefinite = true
+  input.availableWidth = AvailableSpace.definite(width)
+  input.blockRoot = true
+  let mut passState = PassState.make()
+  let mut pass = run LayoutPass.make(layouts.boxes.asMutSlice(), &mut layouts.fragments, constructed.sources, &mut passState)
+  let result = run layoutNode(&constructed, &mut pass, &mut measure, rootBox, &input)
+  drop result
+  drop pass
+  layouts.fragments.resolveLocations()
+  layouts.adopt(move constructed)
+  return move layouts
+}
+
+// Reference dimensions are checked against Chromium by the handoff fixture.
+effect fn containmentCase(style: Style, childStyle: Style, expected: Size, childHeight: f32) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let id = run tree.append(root, style)
+  let child = run tree.append(id, childStyle)
+  let layouts = run arrange(&tree, 300.0)
+  let box = layouts.boxes.get(layouts.firstBySource.get(id.index))
+  let item = layouts.boxes.get(layouts.firstBySource.get(child.index))
+  run Testing.expect(box.size.width == expected.width, "contained width matches Chromium")
+  run Testing.expect(box.size.height == expected.height, "contained height matches Chromium")
+  run Testing.expect(item.size.width == 120.0 && item.size.height == childHeight, "overflowing descendants still lay out; percentages use the contained size")
+}
+fn container() -> Style {
+  let mut style = Style.make()
+  style.sizeContainment = SizeContainment.Size
+  style.padding = Edges.all(Dimension.px(5.0))
+  style.border = Edges.all(Dimension.px(2.0))
+  return style
+}
+effect fn containmentCases() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut style = container()
+  run containmentCase(style, sized(120.0, 80.0), Size { width: 300.0, height: 14.0 }, 80.0)
+  style.sizeContainment = SizeContainment.InlineSize
+  run containmentCase(style, sized(120.0, 80.0), Size { width: 300.0, height: 94.0 }, 80.0)
+  style.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.FlowRoot }
+  run containmentCase(style, sized(120.0, 80.0), Size { width: 14.0, height: 94.0 }, 80.0)
+  style.sizeContainment = SizeContainment.Size
+  run containmentCase(style, sized(120.0, 80.0), Size { width: 14.0, height: 14.0 }, 80.0)
+  style.minWidth = Dimension.px(40.0)
+  style.minHeight = Dimension.px(30.0)
+  run containmentCase(style, sized(120.0, 80.0), Size { width: 54.0, height: 44.0 }, 80.0)
+  style = container()
+  let mut child = sized(120.0, 80.0)
+  child.height = Dimension.pct(0.5)
+  run containmentCase(style, child, Size { width: 300.0, height: 14.0 }, 0.0)
+  style.aspectRatio = 2.0
+  run containmentCase(style, sized(120.0, 80.0), Size { width: 300.0, height: 157.0 }, 80.0)
+  style.sizeContainment = SizeContainment.InlineSize
+  run containmentCase(style, sized(120.0, 80.0), Size { width: 300.0, height: 157.0 }, 80.0)
+  style = container()
+  style.sizeContainment = SizeContainment.InlineSize
+  style.writingMode = WritingMode.VerticalRl
+  style.height = Dimension.px(150.0)
+  child = sized(120.0, 80.0)
+  child.writingMode = WritingMode.VerticalRl
+  run containmentCase(style, child, Size { width: 134.0, height: 164.0 }, 80.0)
+  style.height = Dimension.auto()
+  style.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.FlowRoot }
+  run containmentCase(style, child, Size { width: 134.0, height: 14.0 }, 80.0)
+  let insides = [DisplayInside.Flex, DisplayInside.Grid]
+  let mut index: usize = 0
+  while index < 2 {
+    let inside = insides[index]
+    style = container()
+    style.display = Display.Box { outside: DisplayOutside.Block, inside: inside }
+    run containmentCase(style, sized(120.0, 80.0), Size { width: 300.0, height: 14.0 }, 80.0)
+    style.sizeContainment = SizeContainment.InlineSize
+    run containmentCase(style, sized(120.0, 80.0), Size { width: 300.0, height: 94.0 }, 80.0)
+    index = index + 1
+  }
+}
+test effect fn sizeContainmentGeometry() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run containmentCases() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn containmentContributions() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let insides = [DisplayInside.Flex, DisplayInside.Grid]
+  let mut index: usize = 0
+  while index < 2 {
+    let mut parent = Style.make()
+    parent.display = Display.Box { outside: DisplayOutside.Block, inside: insides[index] }
+    // Auto grid tracks stretch; a min-content parent exposes the contribution.
+    if index == 1 { parent.width = Dimension.keyword(DimensionKind.MinContent) }
+    let mut tree = run Tree.make(Style.make())
+    let root = tree.root()
+    let parentId = run tree.append(root, parent)
+    let id = run tree.append(parentId, container())
+    let child = run tree.append(id, sized(120.0, 80.0))
+    let layouts = run arrange(&tree, 300.0)
+    let box = layouts.boxes.get(layouts.firstBySource.get(id.index))
+    let item = layouts.boxes.get(layouts.firstBySource.get(child.index))
+    run Testing.expect(box.size.width == 14.0 && box.size.height == 14.0, "flex and grid intrinsic contributions ignore size-contained descendants")
+    run Testing.expect(item.size.width == 120.0 && item.size.height == 80.0, "contained flex/grid item contents still overflow")
+    index = index + 1
+  }
+}
+test effect fn sizeContainmentFlexAndGridContributions() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run containmentContributions() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn containmentUpdates() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut rootStyle = Style.make()
+  rootStyle.position = Position.Relative
+  let mut tree = run Tree.make(rootStyle)
+  let root = tree.root()
+  let mut style = Style.make()
+  style.sizeContainment = SizeContainment.Size
+  style.margin.left = Dimension.px(40.0)
+  style.margin.top = Dimension.px(30.0)
+  let id = run tree.append(root, style)
+  let mut normal = sized(120.0, 80.0)
+  normal.margin.top = Dimension.px(15.0)
+  let child = run tree.append(id, normal)
+  let mut absolute = sized(10.0, 10.0)
+  absolute.position = Position.Absolute
+  absolute.inset.left = Dimension.px(0.0)
+  absolute.inset.top = Dimension.px(0.0)
+  absolute.width = Dimension.pct(0.5)
+  let abs = run tree.append(id, absolute)
+  let mut output = LayoutTree.make()
+  let mut host = FixedMeasure {}
+  let viewport = OptionalSize.definite(300.0, 200.0)
+  run compute(&tree, &mut output, &mut host, viewport)
+  let bounds = run output.sourceBounds(id)
+  let descendant = run output.sourceBounds(child)
+  let positioned = run output.sourceBounds(abs)
+  run Testing.expect(bounds.x == 40.0 && bounds.y == 30.0 && bounds.width == 260.0 && bounds.height == 0.0, "size container uses available inline space and an empty block size")
+  run Testing.expect(descendant.y == 45.0, "container formatting context prevents child margins collapsing out")
+  run Testing.expect(positioned.x == 0.0 && positioned.y == 0.0 && positioned.width == 150.0, "size containment does not establish an absolute containing block")
+  style.sizeContainment = SizeContainment.InlineSize
+  run tree.setStyle(id, style)
+  run compute(&tree, &mut output, &mut host, viewport)
+  let inlineBounds = run output.sourceBounds(id)
+  run Testing.expect(inlineBounds.height == 95.0, "changing containment restores the descendant block contribution")
+  normal.float = Float.Left
+  run tree.setStyle(child, normal)
+  run compute(&tree, &mut output, &mut host, viewport)
+  let floatingBounds = run output.sourceBounds(id)
+  run Testing.expect(floatingBounds.height == 95.0, "inline-size container encloses its floats")
+  style.sizeContainment = SizeContainment.None
+  run tree.setStyle(id, style)
+  run compute(&tree, &mut output, &mut host, viewport)
+  let ordinary = run output.sourceBounds(id)
+  run Testing.expect(ordinary.height == 0.0, "removing containment removes the independent formatting context")
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut host, viewport)
+  let expected = run fresh.sourceBounds(id)
+  run Testing.expect(ordinary.x == expected.x && ordinary.y == expected.y && ordinary.width == expected.width && ordinary.height == expected.height, "retained layout matches fresh construction after changing containment")
+}
+test effect fn sizeContainmentFormattingContextAndUpdates() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run containmentUpdates() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn containmentGridTracks() ! GridError | OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut style = container()
+  style.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Grid }
+  style.columnGap = Dimension.px(8.0)
+  style.rowGap = Dimension.px(10.0)
+  let id = run tree.append(root, style)
+  let mut grid = GridTemplate.make()
+  run grid.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(50.0)))
+  run grid.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(60.0)))
+  run grid.rows.tracks.append(GridTrack.breadth(GridBreadth.fixed(30.0)))
+  run grid.rows.tracks.append(GridTrack.breadth(GridBreadth.fixed(40.0)))
+  run tree.setGrid(id, move grid)
+  let child = run tree.append(id, sized(120.0, 80.0))
+  let layouts = run arrange(&tree, 300.0)
+  let box = layouts.boxes.get(layouts.firstBySource.get(id.index))
+  let item = layouts.boxes.get(layouts.firstBySource.get(child.index))
+  run Testing.expect(box.size.width == 132.0 && box.size.height == 94.0, "size containment retains explicit grid tracks and gaps")
+  run Testing.expect(item.size.width == 120.0 && item.size.height == 80.0, "explicit grid children still overflow their tracks")
+}
+test effect fn sizeContainmentRetainsExplicitGridTracks() ! GridError | OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run containmentGridTracks() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn containedImage(style: Style, width: f32, height: f32) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let id = run tree.append(root, style)
+  run tree.setNaturalMeasurement(id, 0)
+  let layouts = run arrange(&tree, 300.0)
+  let box = layouts.boxes.get(layouts.firstBySource.get(id.index))
+  run Testing.expect(box.size.width == width && box.size.height == height, "contained replaced element matches Chromium natural-size suppression")
+}
+effect fn containmentImages() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut style = Style.make()
+  style.sizeContainment = SizeContainment.Size
+  run containedImage(style, 0.0, 0.0)
+  style.width = Dimension.px(60.0)
+  run containedImage(style, 60.0, 0.0)
+  style.aspectRatio = 2.0
+  run containedImage(style, 60.0, 30.0)
+  style.sizeContainment = SizeContainment.InlineSize
+  run containedImage(style, 60.0, 30.0)
+  style.aspectRatio = 0.0
+  run containedImage(style, 60.0, 80.0)
+  style.width = Dimension.auto()
+  run containedImage(style, 0.0, 80.0)
+  style.height = Dimension.px(30.0)
+  run containedImage(style, 0.0, 30.0)
+  style.height = Dimension.auto()
+  style.writingMode = WritingMode.VerticalRl
+  run containedImage(style, 120.0, 0.0)
+}
+test effect fn sizeContainmentReplacedNaturalDimensions() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run containmentImages() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn containmentSubgrids() ! GridError | OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut rootStyle = sized(200.0, 100.0)
+  rootStyle.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Grid }
+  let mut tree = run Tree.make(rootStyle)
+  let root = tree.root()
+  let mut tracks = GridTemplate.make()
+  run tracks.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(10.0)))
+  run tracks.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(190.0)))
+  run tree.setGrid(root, move tracks)
+  let mut style = Style.make()
+  style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Grid }
+  let id = run tree.append(root, style)
+  let mut subgrid = GridTemplate.make()
+  subgrid.columns.subgrid = true
+  subgrid.placement.columnStart = GridLine { kind: GridLineKind.Span, number: 2, name: 0 }
+  run tree.setGrid(id, move subgrid)
+  let child = run tree.append(id, sized(10.0, 10.0))
+  let mut placement = GridTemplate.make()
+  placement.placement.columnStart = GridLine { kind: GridLineKind.Line, number: 2, name: 0 }
+  run tree.setGrid(child, move placement)
+  let types = [SizeContainment.None, SizeContainment.Size, SizeContainment.InlineSize, SizeContainment.None]
+  let offsets: [f32; 4] = [10.0, 95.0, 95.0, 10.0]
+  let mut output = LayoutTree.make()
+  let mut host = FixedMeasure {}
+  let mut at: usize = 0
+  while at < types.length {
+    style.sizeContainment = types[at]
+    run tree.setStyle(id, style)
+    run compute(&tree, &mut output, &mut host, OptionalSize.definite(200.0, 100.0))
+    let box = run output.sourceBounds(id)
+    let item = run output.sourceBounds(child)
+    run Testing.expect(item.x - box.x == offsets[at], "container independent formatting context disables subgrid inheritance, including retained layout after removal")
+    at = at + 1
+  }
+}
+test effect fn sizeContainmentDisablesSubgridInheritance() ! GridError | OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run containmentSubgrids() |> Effect.provideMut<Allocator>(&mut allocator)
+}

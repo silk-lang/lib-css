@@ -62,7 +62,13 @@ pub enum ColorScheme {
   Dark
 }
 
+/// The content-box dimensions queried by a size container condition. Relative units
+/// still use Environment.initial's host viewport and the selected container's font metrics.
+pub struct QuerySize { pub width: f64, pub height: f64 }
+impl Copy for QuerySize {}
+
 pub struct Environment {
+  pub querySize: Option<QuerySize>,
   pub mediaType: MediaType,
   // All font/root metrics and writing orientation are INITIAL host values,
   // independent of declarations; viewport dimensions include rendered scrollbars.
@@ -102,6 +108,7 @@ impl Environment {
   // Override fields with the host's actual capabilities and initial font metrics.
   pub fn headless(width: f64, height: f64) -> Environment {
     return Environment {
+      querySize: Option<QuerySize>.None,
       mediaType: MediaType.Screen,
       initial: Context.make(width, height, 16.0),
       deviceWidth: width,
@@ -133,6 +140,8 @@ enum Feature {
   Unknown,
   Width,
   Height,
+  InlineSize,
+  BlockSize,
   DeviceWidth,
   DeviceHeight,
   AspectRatio,
@@ -197,6 +206,8 @@ fn lookup(text: &[u8]) -> Feature {
   if insensitive(text, b"height") {
     return Feature.Height
   }
+  if insensitive(text, b"inline-size") { return Feature.InlineSize }
+  if insensitive(text, b"block-size") { return Feature.BlockSize }
   if insensitive(text, b"device-width") {
     return Feature.DeviceWidth
   }
@@ -267,6 +278,8 @@ fn ranged(feature: Feature) -> bool {
   return match feature {
     Feature.Width => true
     Feature.Height => true
+    Feature.InlineSize => true
+    Feature.BlockSize => true
     Feature.DeviceWidth => true
     Feature.DeviceHeight => true
     Feature.AspectRatio => true
@@ -330,6 +343,7 @@ fn name(source: &Input<'_>, start: usize, end: usize) -> Name {
 }
 
 fn applicable(feature: Feature, environment: &Environment) -> bool {
+  if environment.querySize.isSome() { return true }
   return match feature {
     Feature.Pointer => true
     Feature.Hover => true
@@ -342,7 +356,43 @@ fn applicable(feature: Feature, environment: &Environment) -> bool {
   }
 }
 
+fn supported(feature: Feature, environment: &Environment) -> bool {
+  if environment.querySize.isSome() {
+    return feature == Feature.Width || feature == Feature.Height || feature == Feature.InlineSize
+      || feature == Feature.BlockSize || feature == Feature.AspectRatio || feature == Feature.Orientation
+  }
+  return feature != Feature.Unknown && feature != Feature.InlineSize && feature != Feature.BlockSize
+}
+
+/// Axes a size feature requires: physical width/height (1/2), logical inline/block (4/8).
+/// Prefix forms require the same axis; unknown and non-size features return zero.
+pub fn sizeAxes(text: &[u8]) -> u32 {
+  let mut word = text
+  if text.length > 4 && (insensitive(Slice.view<u8>(text, 0, 4), b"min-") || insensitive(Slice.view<u8>(text, 0, 4), b"max-")) {
+    word = Slice.view<u8>(text, 4, text.length - 4)
+  }
+  return match lookup(word) {
+    Feature.Width => 1
+    Feature.Height => 2
+    Feature.InlineSize => 4
+    Feature.BlockSize => 8
+    Feature.AspectRatio => 3
+    Feature.Orientation => 3
+    _ => 0
+  }
+}
+
 fn actual(feature: Feature, environment: &Environment) -> f64 {
+  if let Option<QuerySize>.Some { value } = environment.querySize {
+    return match feature {
+      Feature.Width => value.width
+      Feature.Height => value.height
+      Feature.InlineSize => if environment.initial.vertical { value.height } else { value.width }
+      Feature.BlockSize => if environment.initial.vertical { value.width } else { value.height }
+      Feature.AspectRatio => value.width / value.height
+      _ => 0.0
+    }
+  }
   return match feature {
     Feature.Width => environment.initial.viewportWidth
     Feature.Height => environment.initial.viewportHeight
@@ -363,7 +413,7 @@ fn actual(feature: Feature, environment: &Environment) -> f64 {
 }
 
 fn boolean(feature: Feature, environment: &Environment) -> Truth {
-  if feature == Feature.Unknown {
+  if !supported(feature, environment) {
     return Truth.Unknown
   }
   if !applicable(feature, environment) {
@@ -583,10 +633,10 @@ fn discrete(feature: Feature, text: &[u8], environment: &Environment) -> Truth {
   match feature {
     Feature.Orientation => {
       if insensitive(text, b"portrait") {
-        return truth(environment.initial.viewportHeight >= environment.initial.viewportWidth)
+        return truth(actual(Feature.Height, environment) >= actual(Feature.Width, environment))
       }
       if insensitive(text, b"landscape") {
-        return truth(environment.initial.viewportWidth > environment.initial.viewportHeight)
+        return truth(actual(Feature.Width, environment) > actual(Feature.Height, environment))
       }
     }
     Feature.ColorGamut => {
@@ -714,7 +764,7 @@ effect fn testValue(
 ) -> Truth
   ! OutOfMemoryError
   ? &mut Allocator {
-  if feature == Feature.Unknown {
+  if !supported(feature, environment) {
     return Truth.Unknown
   }
   let mut result = Truth.Unknown

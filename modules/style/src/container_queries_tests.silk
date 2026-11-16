@@ -1,0 +1,162 @@
+import container_queries
+import media_queries
+import media_features { Environment, QuerySize }
+import lexer
+import input { Input }
+import tokens { Limits, CssError, equal }
+import silk.core.option { Option }
+import silk.core.effect { Effect }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+effect fn cases() -> () ! CssError | OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
+  let limits = Limits.make()
+  let mut env = Environment.headless(800.0, 600.0)
+  env.querySize = Option<QuerySize>.some(QuerySize { width: 240.0, height: 120.0 })
+  env.initial.fontSize = 20.0
+  let good = [b"(width >= 200px)", b"card (10em <= width < 15em)", b"(width < 50vw)", b"(height:120px)", b"(orientation:landscape)", b"(aspect-ratio:2/1)", b"not (width > 300px)", b"(inline-size = 240px) and (block-size = 120px)", b"(min-width:200px)"]
+  let mut i: usize = 0
+  while i < good.length {
+    let buffer = run lexer.tokenize(good[i], &limits)
+    let query = run container_queries.inspect(&buffer, buffer.all(), &limits)
+    run Testing.expect(query.valid && !query.unsupported && (run container_queries.matches(&buffer, &query, &env, &limits)), "size conditions use the container's content box and fonts, but the host viewport for vw")
+    i = i + 1
+  }
+  let names = run lexer.tokenize(b"ca\\72 d (width > 1px) or (block-size > 1px)", &limits)
+  let named = run container_queries.inspect(&names, names.all(), &limits)
+  run Testing.expect(named.valid && named.axes == 9 && equal(named.name.asSlice(), b"card"), "escaped names and the union of required axes survive parsing")
+  let values = [b"(width > 1px) or (unknown:height)", b"(width > 1px) or (unknown > height)", b"(width > 1px) or (garbage height)", b"(width > 1px) or unknown(height)"]
+  i = 0
+  while i < values.length {
+    let buffer = run lexer.tokenize(values[i], &limits)
+    let query = run container_queries.inspect(&buffer, buffer.all(), &limits)
+    run Testing.expect(query.valid && query.axes == 1 && (run container_queries.matches(&buffer, &query, &env, &limits)), "identifiers inside unknown feature values do not require an unrelated container axis")
+    i = i + 1
+  }
+  let invalid = [b"", b"none (width)", b"screen and (width)", b"(width) and (height) or (width)", b"(width), (height)"]
+  i = 0
+  while i < invalid.length {
+    let buffer = run lexer.tokenize(invalid[i], &limits)
+    let query = run container_queries.inspect(&buffer, buffer.all(), &limits)
+    run Testing.expect(!query.valid, "container conditions do not accept media types, reserved names or mixed boolean operators")
+    i = i + 1
+  }
+  let logical = run lexer.tokenize(b"(inline-size:120px) and (block-size:240px)", &limits)
+  let vertical = run container_queries.inspect(&logical, logical.all(), &limits)
+  env.initial.vertical = true
+  run Testing.expect(run container_queries.matches(&logical, &vertical, &env, &limits), "logical size features use container writing mode")
+  let missing = run lexer.tokenize(b"not (width > 1000px)", &limits)
+  let absent = run container_queries.inspect(&missing, missing.all(), &limits)
+  env.querySize = Option<QuerySize>.None
+  run Testing.expect(!(run container_queries.matches(&missing, &absent, &env, &limits)), "not does not match without an eligible container")
+  run Testing.expect(!(run media_queries.matches(&Input.Contiguous { buffer: &logical, range: logical.all() }, &env, &limits)), "logical container features do not accidentally become viewport media features")
+  let listBuffer = run lexer.tokenize(b"card (width > 400px), sidebar (inline-size <= 15em), named", &limits)
+  let list = run container_queries.parse(&listBuffer, listBuffer.all(), &limits)
+  run Testing.expect(list.valid && !list.unsupported && list.arms.length() == 3 && list.arms.asSlice()[0].axes == 1 && list.arms.asSlice()[1].axes == 4 && list.arms.asSlice()[2].axes == 0, "query lists preserve independent names and required axes, including a name-only condition")
+  env.querySize = Option<QuerySize>.some(QuerySize { width: 240.0, height: 120.0 })
+  run Testing.expect(run container_queries.matches(&listBuffer, &list.arms.asSlice()[2], &env, &limits), "a name-only condition matches a selected named container")
+  let badListBuffer = run lexer.tokenize(b"(width > 1px), and (height)", &limits)
+  let badList = run container_queries.parse(&badListBuffer, badListBuffer.all(), &limits)
+  run Testing.expect(!badList.valid, "invalid arms invalidate the complete container query list")
+  let unsupported = run lexer.tokenize(b"style(--size: width)", &limits)
+  let style = run container_queries.inspect(&unsupported, unsupported.all(), &limits)
+  run Testing.expect(style.valid && style.unsupported && style.axes == 0, "style queries stay recognizable and do not invent size axes from their values")
+  env.querySize = Option<QuerySize>.some(QuerySize { width: 240.0, height: 120.0 })
+  let preference = run lexer.tokenize(b"not (prefers-color-scheme:dark)", &limits)
+  let unknown = run container_queries.inspect(&preference, preference.all(), &limits)
+  run Testing.expect(!(run container_queries.matches(&preference, &unknown, &env, &limits)), "non-size media features stay unknown in a size container query")
+}
+
+test effect fn sizeContainerQueryNamesAxesUnitsAndUnknowns() -> ()
+  ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run cases() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+import element { ElementTree, MatchContext, StateBits, AttributeText, PseudoTarget, NO_ELEMENT, HOVER }
+import adopted { StyleSheets, AdoptionError, Source }
+import compile { Options, CompileError }
+import compile
+import sheet { Sheet, Declaration }
+import sheet_binary { DecodeError }
+import resolver { ResolverError }
+import css_properties.catalog { Property }
+import css_properties.values { Value }
+
+struct ContainerTree { pub hovered: bool }
+impl ElementTree for ContainerTree {
+  fn container(self: &Self, node: usize, name: &[u8], axes: u32, pseudo: PseudoTarget) -> Option<Environment> {
+    if node == 0 && pseudo == PseudoTarget.None { return Option<Environment>.None }
+    if name.length != 0 && !equal(name, b"card") { return Option<Environment>.None }
+    if node == 1 && (axes & 10) != 0 { return Option<Environment>.None }
+    let mut env = Environment.headless(800.0, 600.0)
+    env.initial.fontSize = 20.0
+    env.querySize = Option<QuerySize>.some(QuerySize { width: if node == 1 { 180.0 } else if node == 2 { 360.0 } else { 500.0 }, height: 100.0 })
+    return Option<Environment>.some(env)
+  }
+
+  fn state(self: &Self, node: usize) -> StateBits { return StateBits { bits: if self.hovered { HOVER } else { 0 } } }
+  fn parent(self: &Self, node: usize) -> usize { return if node == 1 { 0 } else { NO_ELEMENT } }
+  fn containingHost(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn firstChild(self: &Self, node: usize) -> usize { return if node == 0 { 1 } else { NO_ELEMENT } }
+  fn nextSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn previousSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn localName(self: &Self, node: usize) -> &[u8] { return b"button" }
+  fn namespaceUri(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn attributeCount(self: &Self, node: usize) -> usize { return 1 }
+  fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"class" }
+  fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return if node == 1 { b"a" } else if node == 2 { b"b" } else { b"button hot" } }
+  fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
+  fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
+    return AttributeText { namespace: b"", name: b"class", value: if node == 1 { b"a" } else if node == 2 { b"b" } else { b"button hot" } }
+  }
+  fn language(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn isRoot(self: &Self, node: usize) -> bool { return true }
+  fn isEmpty(self: &Self, node: usize) -> bool { return node != 0 }
+  fn isLink(self: &Self, node: usize) -> bool { return false }
+}
+
+fn amount(sheets: &StyleSheets, property: Property) -> f32 {
+  let mut result: f32 = -1.0
+  let mut i: usize = 0
+  while i < sheets.candidates().length {
+    if let Source.Sheet { sheet, declaration } = sheets.candidates()[i].source {
+      if let Declaration.Typed { property: found, value: Value.Unit { value, .. }, .. } = &sheets.sheets()[sheet].sheet.declarations.asSlice()[declaration] {
+        if found == property { result = value }
+      }
+    }
+    i = i + 1
+  }
+  return result
+}
+
+effect fn perElement() -> ()
+  ! CssError | CompileError | DecodeError | AdoptionError | ResolverError | OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
+  let source = b"button{width:1px}@container card (width>200px){button{width:2px}button:hover{opacity:.5}}@container card (inline-size<=200px){button{height:3px}}@container missing (width>0px),card (width>300px){button{padding-top:4px}}@container card (width>100px){@container card (height>0px){button{margin-top:5px}}}@container missing (width>0px){@keyframes global{to{opacity:0}}}@media(width<100px){@container card (width>0px){button{width:99px}}}@container card (width>400px){button::before{content:'';width:17px}}"
+  let compiled = run compile.compile(source, &Options.make())
+  let bytes = run compiled.encode()
+  let sheet = run Sheet.decode(bytes.asSlice(), &Limits.make())
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, move sheet)
+  drop run sheets.environment(&Environment.headless(800.0, 600.0), false, &Limits.make())
+  let tree = ContainerTree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  run Testing.expect(amount(&sheets, Property.Width) == 1.0 && amount(&sheets, Property.Height) == 3.0 && amount(&sheets, Property.PaddingTop) == -1.0 && amount(&sheets, Property.MarginTop) == -1.0, "a narrow inline container matches its own conditions and cannot answer height queries")
+  run Testing.expect((sheets.stateDependencies() & HOVER) != 0, "conditions currently false still retain candidate state dependencies")
+  run sheets.resolve(&tree, 2, &[], &mut context)
+  run Testing.expect(amount(&sheets, Property.Width) == 2.0 && amount(&sheets, Property.Height) == -1.0 && amount(&sheets, Property.PaddingTop) == 4.0 && amount(&sheets, Property.MarginTop) == 5.0, "another element selects different containers without changing global rule eligibility")
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  run Testing.expect(amount(&sheets, Property.Width) == 1.0, "interleaved element resolution does not leak query results")
+  run Testing.expect(sheets.keyframes(b"global").isSome(), "name-defining at-rules inside container queries are global")
+  context.pseudo = PseudoTarget.Before
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  run Testing.expect(amount(&sheets, Property.Width) == 17.0, "pseudo queries may select their originating element as a container")
+}
+
+test effect fn sizeContainerConditionsArePerElementAndGlobalDefinitionsStayGlobal() -> ()
+  ! CssError | CompileError | DecodeError | AdoptionError | ResolverError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run perElement() |> Effect.provideMut<Allocator>(&mut allocator)
+}

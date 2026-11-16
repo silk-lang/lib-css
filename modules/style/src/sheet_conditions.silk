@@ -1,14 +1,18 @@
 //! Evaluates retained stylesheet conditions once per host-environment change.
-import sheet { Sheet, ConditionKind, NONE }
+import sheet { Sheet, Condition, ConditionKind, NONE }
+import element { ElementTree, MatchContext }
+import resolver { RuleFilter }
+import container_queries
+import silk.core.option { Option }
 import media_features { Environment }
 import media_queries
 import input { Input }
-import tokens { Limits, CssError }
+import tokens { Limits, CssError, TokenBuffer }
 import silk.collections.list { List }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 
-/// Updates rule eligibility and returns whether any result changed. Container conditions stay
-/// disabled until the host supplies container-query evaluation. Starting rules are enabled only
+/// Updates global eligibility. Container rules are filtered separately for each element;
+/// name-defining at-rules ignore container conditions. Starting rules are enabled only
 /// while computing a node's starting style.
 pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: bool, limits: &Limits) -> bool
   ! CssError | OutOfMemoryError ? &mut Allocator {
@@ -22,7 +26,7 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
         &Input.Contiguous { buffer: &sheet.buffers.asSlice()[condition.buffer], range: condition.range }, environment, limits,
       )
       ConditionKind.Starting => true
-      ConditionKind.Container => false
+      ConditionKind.Container => true
     }
     let parent = condition.parent == NONE || results.asSlice()[condition.parent]
     let startParent = condition.parent == NONE || starts.asSlice()[condition.parent]
@@ -59,4 +63,42 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
     i = i + 1
   }
   return changed
+}
+
+/// Borrowed per-sheet query filter; ordinary and media-only rules need no allocation.
+pub struct Filter<'a, T: ElementTree> {
+  pub tree: &'a T,
+  pub node: usize,
+  pub buffers: &'a [TokenBuffer],
+  pub conditions: &'a [Condition],
+  pub rules: &'a [usize],
+}
+impl<'a, T: ElementTree> RuleFilter for Filter<'a, T> {
+  effect fn accepts(self: &Self, rule: usize, context: &mut MatchContext) -> bool
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    if rule >= self.rules.length { return false }
+    let mut at = self.rules[rule]
+    while at != NONE {
+      let condition = self.conditions[at]
+      run context.spend(1)
+      if condition.kind == ConditionKind.Container {
+        run context.spend(condition.range.end - condition.range.start)
+        let buffer = &self.buffers[condition.buffer]
+        let queries = run container_queries.parse(buffer, condition.range, &Limits.make())
+        if !queries.valid { return false }
+        let mut matched = false
+        let mut i: usize = 0
+        while !matched && i < queries.arms.length() {
+          let query = &queries.arms.asSlice()[i]
+          if let Option<Environment>.Some { value } = self.tree.container(self.node, query.name.asSlice(), query.axes, context.pseudo) {
+            matched = run container_queries.matches(buffer, query, &value, &Limits.make())
+          }
+          i = i + 1
+        }
+        if !matched { return false }
+      }
+      at = condition.parent
+    }
+    return true
+  }
 }

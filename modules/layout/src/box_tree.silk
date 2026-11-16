@@ -4,7 +4,7 @@ import silk.core.ownership { Copy }
 import silk.core.option { Option }
 import silk.text.string { String }
 import geometry { Point }
-import style { Style, Display, DisplayOutside, DisplayInside, WritingMode, Direction, Align, Float, Position, BreakBetween, Visibility, DimensionKind, Overflow }
+import style { SizeContainment, Style, Display, DisplayOutside, DisplayInside, WritingMode, Direction, Align, Float, Position, BreakBetween, Visibility, DimensionKind, Overflow }
 import tree { Node, Measurement, NO_NODE }
 import context { outOfFlow, scrollable, overflowForAxis }
 import grid_style { GridTemplate }
@@ -117,7 +117,7 @@ impl<'tree> BoxTree<'tree> {
         overflow = x }
       let scrolling = x == Overflow.Auto || x == Overflow.Scroll || y == Overflow.Auto || y == Overflow.Scroll
       let clipped = overflow == Overflow.Hidden && dimension.kind != DimensionKind.Auto && maximum.kind == DimensionKind.None
-      let monolithic = style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
+      let monolithic = style.sizeContainment == SizeContainment.Size || style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
       let applicable = !outOfFlow(style) && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex || node.kind == BoxKind.Grid)
       let mut before = applicable && style.breakBefore != BreakBetween.Auto
       let mut dynamicBefore = false
@@ -344,7 +344,7 @@ impl<'tree> BoxTree<'tree> {
     }
     // Writing Modes 4 3.2 compares against the nearest box-generating parent;
     // contents and generated wrappers do not substitute a source parent here.
-    let independent = kind != BoxKind.Inline && (replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
+    let independent = kind != BoxKind.Inline && (style.sizeContainment != SizeContainment.None || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
     let node = BoxNode {
       source: source, styleOwner: source, anonymousStyle: NO_NODE, styleIndex: self.sources[source].styleIndex, kind: kind,
       parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE,

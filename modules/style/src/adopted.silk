@@ -278,7 +278,9 @@ impl StyleSheets {
     let mut i: usize = 0
     while i < entries.length {
       let entry = &mut entries[i]
-      run entry.sheet.resolver.resolveWith(BufferView.of(entry.sheet.buffers.asSlice()), tree, node, &[], &mut context, starting)
+      let filter = sheet_conditions.Filter { tree: tree, node: node, buffers: entry.sheet.buffers.asSlice(),
+        conditions: entry.sheet.conditions.asSlice(), rules: entry.sheet.ruleConditions.asSlice() }
+      run entry.sheet.resolver.resolveFiltered(BufferView.of(entry.sheet.buffers.asSlice()), tree, node, &[], &mut context, starting, &filter)
       states = u32.bitOr(states, entry.sheet.resolver.stateDependencies())
       let found = entry.sheet.resolver.declarations()
       let mut at: usize = 0

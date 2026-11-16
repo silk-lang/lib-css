@@ -9,7 +9,7 @@ exports = [
   "tokens", "input", "element", "lexer", "syntax", "selectors", "selector_index",
   "properties", "values", "value_cursor", "value_keywords", "dimensions",
   "colors", "text_values", "effect_values", "transform_values",
-  "media_queries", "media_features", "supports", "declaration_values", "encoding",
+  "media_queries", "media_features", "container_queries", "supports", "declaration_values", "encoding",
   "cascade", "layers", "resolver", "adopted", "adopted_variables", "compile", "sheet", "sheet_conditions", "sheet_binary", "variables", "registration", "computed", "computed_projection", "computed_queries", "key_index",
   "cssom_error", "cssom_serialization", "cssom_declaration", "cssom_descriptors",
   "cssom_stylesheet", "cssom_media", "cssom_document", "cssom_computed",

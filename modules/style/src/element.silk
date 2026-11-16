@@ -1,4 +1,6 @@
 //! Selector matching borrows a host tree instead of duplicating its nodes.
+import silk.core.option { Option }
+import media_features { Environment }
 import silk.num.usize
 import tokens { CssError, CssErrorKind }
 import silk.core.ownership { Copy }
@@ -60,6 +62,15 @@ impl<'a> Copy for AttributeText<'a> {}
 /// language supplies the inherited document language, or empty when explicitly unknown.
 /// isLink reports document-language link semantics, not whether a URL was fetched or visited.
 pub interface ElementTree {
+  /// Nearest eligible ancestor for all required query axes (width/height/inline/block
+  /// bits 1/2/4/8), restricted by a case-sensitive name when nonempty. For a pseudo
+  /// target the originating element is an ancestor too. Named-only queries use axes 0.
+  /// Return querySize plus the selected container's font/writing metrics in initial;
+  /// viewport metrics remain those of the host. Static hosts may expose no containers.
+  fn container(self: &Self, node: usize, name: &[u8], axes: u32, pseudo: PseudoTarget) -> Option<Environment> {
+    return Option<Environment>.None
+  }
+
   /// States applicable to this element, including host-computed focus-within.
   /// Static hosts have no interactive states unless they override this operation.
   fn state(self: &Self, node: usize) -> StateBits {

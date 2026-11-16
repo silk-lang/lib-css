@@ -1,0 +1,181 @@
+//! Size container query names, required axes, and MQ4 condition evaluation.
+//! Style/scroll-state queries retain Unknown truth and are reported separately by hosts.
+import input { Input }
+import tokens { TokenBuffer, TokenRange, Limits, CssError, Kind, insensitive }
+import condition_cursor
+import condition_cursor { Structure }
+import media_queries
+import media_features { Environment, QuerySize, Truth }
+import media_features
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.u32
+
+pub struct Query {
+  pub valid: bool,
+  pub name: Bytes,
+  pub axes: u32,
+  pub condition: TokenRange,
+  pub unsupported: bool,
+}
+
+fn reserved(name: &[u8]) -> bool {
+  return insensitive(name, b"none") || insensitive(name, b"and") || insensitive(name, b"or")
+    || insensitive(name, b"not") || insensitive(name, b"initial") || insensitive(name, b"inherit")
+    || insensitive(name, b"unset") || insensitive(name, b"revert") || insensitive(name, b"revert-layer")
+    || insensitive(name, b"default")
+}
+
+// Feature names, not identifiers in their values, determine eligibility.
+fn namedAxes(source: &Input<'_>, start: usize, end: usize) -> Option<u32> {
+  let at = condition_cursor.skip(source, start, end)
+  if at >= end || condition_cursor.skip(source, at + 1, end) != end { return Option<u32>.None }
+  if let Option.Some { value } = source.at(at) {
+    if let Kind.Ident { text } = value.token.kind { return Option<u32>.some(media_features.sizeAxes(value.text(text))) }
+  }
+  return Option<u32>.None
+}
+fn axesOrZero(axes: Option<u32>) -> u32 {
+  if let Option<u32>.Some { value } = axes { return value }
+  return 0
+}
+fn featureAxes(source: &Input<'_>, start: usize, end: usize, structure: &Structure) -> u32 {
+  let mut starts = [end, end]
+  let mut ends = [end, end]
+  let mut count: usize = 0
+  let mut position = start
+  while position < end {
+    if let Option.Some { value } = source.at(position) {
+      match value.token.kind {
+        Kind.Colon => { return axesOrZero(namedAxes(source, start, position)) }
+        Kind.Function { .. } => { position = structure.end(position) }
+        Kind.OpenParen => { position = structure.end(position) }
+        Kind.OpenSquare => { position = structure.end(position) }
+        Kind.OpenBrace => { position = structure.end(position) }
+        Kind.Delim { scalar } => {
+          if scalar == 60 || scalar == 62 || scalar == 61 {
+            if count == 2 { return 0 }
+            starts[count] = position
+            if scalar != 61 && position + 1 < end {
+              if let Option.Some { value: next } = source.at(position + 1) {
+                if let Kind.Delim { scalar: second } = next.token.kind {
+                  if second == 61 { position = position + 1 }
+                }
+              }
+            }
+            ends[count] = position + 1
+            count = count + 1
+          }
+        }
+        _ => {}
+      }
+    }
+    position = position + 1
+  }
+  if count == 0 { return axesOrZero(namedAxes(source, start, end)) }
+  if count == 2 { return axesOrZero(namedAxes(source, ends[0], starts[1])) }
+  if let Option<u32>.Some { value } = namedAxes(source, start, starts[0]) { return value }
+  return axesOrZero(namedAxes(source, ends[0], end))
+}
+
+/// One list arm. The name and condition are decoded tokens, so escaped names need no special host path.
+/// The required axes cover the whole query, including both sides of `or`.
+pub effect fn inspect(buffer: &TokenBuffer, range: TokenRange, limits: &Limits) -> Query
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let source = Input.Contiguous { buffer: buffer, range: range }
+  let structure = run condition_cursor.inspect(&source, limits)
+  let end = source.length()
+  let mut start = condition_cursor.skip(&source, 0, end)
+  let mut query = Query { valid: false, name: Bytes.make(), axes: 0, condition: range, unsupported: false }
+  if !structure.valid || start == end { return move query }
+  if let Option.Some { value } = source.at(start) {
+    if let Kind.Ident { text } = value.token.kind {
+      let name = value.text(text)
+      if !insensitive(name, b"not") {
+        if reserved(name) { return move query }
+        query.name = run Bytes.copy(name)
+        start = condition_cursor.skip(&source, start + 1, end)
+      }
+    }
+  }
+  query.condition = TokenRange { start: range.start + start, end: range.end }
+  if start == end && query.name.length() != 0 { query.valid = true return move query }
+  let mut environment = Environment.headless(800.0, 600.0)
+  environment.querySize = Option<QuerySize>.some(QuerySize { width: 100.0, height: 100.0 })
+  let parsed = run media_queries.parseCondition(&source, start, end, false, &structure, &environment)
+  query.valid = parsed.valid && condition_cursor.skip(&source, parsed.next, end) == end
+  let mut position = start
+  while query.valid && position < end {
+    if let Option.Some { value } = source.at(position) {
+      match value.token.kind {
+        Kind.OpenParen => { query.axes = u32.bitOr(query.axes, featureAxes(&source, position + 1, structure.end(position), &structure)) }
+        Kind.Function { name: text } => {
+          let name = value.text(text)
+          if insensitive(name, b"style") || insensitive(name, b"scroll-state") { query.unsupported = true }
+          // Identifiers inside a feature's value or a general-enclosed function cannot
+          // add container selection axes, even if one happens to be named "width".
+          let close = structure.end(position)
+          position = if close < end { close } else { end }
+        }
+        _ => {}
+      }
+    }
+    position = position + 1
+  }
+  if query.axes == 0 { query.unsupported = true }
+  return move query
+}
+
+/// Call only after selecting one eligible ancestor for every axis in Query.axes.
+/// Missing containers stay false even for `not`; they are not a zero-size viewport.
+pub effect fn matches(buffer: &TokenBuffer, query: &Query, environment: &Environment, limits: &Limits) -> bool
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  if !query.valid || environment.querySize.isNone() { return false }
+  if query.condition.start == query.condition.end { return query.name.length() != 0 }
+  if query.axes == 0 { return false }
+  let source = Input.Contiguous { buffer: buffer, range: query.condition }
+  let structure = run condition_cursor.inspect(&source, limits)
+  if !structure.valid { return false }
+  let parsed = run media_queries.parseCondition(&source, 0, source.length(), false, &structure, environment)
+  return parsed.valid && parsed.next == source.length() && parsed.value == Truth.True
+}
+
+/// A comma list chooses a container independently for each arm. One invalid arm
+/// invalidates the rule; unknown features remain valid and use three-valued logic.
+pub struct Queries { pub valid: bool, pub unsupported: bool, pub arms: List<Query> }
+
+pub effect fn parse(buffer: &TokenBuffer, range: TokenRange, limits: &Limits) -> Queries
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let source = Input.Contiguous { buffer: buffer, range: range }
+  let structure = run condition_cursor.inspect(&source, limits)
+  let mut result = Queries { valid: structure.valid, unsupported: false, arms: List<Query>.make() }
+  if !structure.valid { return move result }
+  let mut start: usize = 0
+  let mut position: usize = 0
+  while position < source.length() {
+    if let Option.Some { value } = source.at(position) {
+      match value.token.kind {
+        Kind.Comma => {
+          let arm = run inspect(buffer, TokenRange { start: range.start + start, end: range.start + position }, limits)
+          result.valid = result.valid && arm.valid
+          result.unsupported = result.unsupported || arm.unsupported
+          run result.arms.append(move arm)
+          start = position + 1
+        }
+        Kind.OpenParen | Kind.Function { .. } | Kind.OpenSquare | Kind.OpenBrace => {
+          let close = structure.end(position)
+          position = if close < source.length() { close } else { source.length() }
+        }
+        _ => {}
+      }
+    }
+    position = position + 1
+  }
+  let arm = run inspect(buffer, TokenRange { start: range.start + start, end: range.end }, limits)
+  result.valid = result.valid && arm.valid
+  result.unsupported = result.unsupported || arm.unsupported
+  run result.arms.append(move arm)
+  return move result
+}
