@@ -3,13 +3,27 @@ import silk.core.option { Option }
 import media_features { Environment }
 import silk.num.usize
 import tokens { CssError, CssErrorKind }
+import tokens
 import silk.core.ownership { Copy }
 import silk.collections.list { List }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 
 pub const NO_ELEMENT: usize = usize.MAX
 
-pub enum PseudoTarget { None, Before, After }
+/// A style target supplied by the host. Parts are not ordinary selector-tree children.
+pub enum PseudoTarget { None, Before, After, Placeholder, Selection, Scrollbar, ScrollbarThumb, ScrollbarTrack }
+
+/// Supported nonfunctional pseudo-elements. None means no matching host target.
+pub fn pseudoTarget(name: &[u8]) -> PseudoTarget {
+  if tokens.insensitive(name, b"before") { return PseudoTarget.Before }
+  if tokens.insensitive(name, b"after") { return PseudoTarget.After }
+  if tokens.insensitive(name, b"placeholder") { return PseudoTarget.Placeholder }
+  if tokens.insensitive(name, b"selection") { return PseudoTarget.Selection }
+  if tokens.insensitive(name, b"-webkit-scrollbar") { return PseudoTarget.Scrollbar }
+  if tokens.insensitive(name, b"-webkit-scrollbar-thumb") { return PseudoTarget.ScrollbarThumb }
+  if tokens.insensitive(name, b"-webkit-scrollbar-track") { return PseudoTarget.ScrollbarTrack }
+  return PseudoTarget.None
+}
 
 /// Host-reported selector states. Bits describe applicability as well as state:
 /// disabled/enabled and required/optional are independent, not complements.

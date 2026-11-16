@@ -394,3 +394,55 @@ test effect fn sizeContainerRulesCompileStrictlyAndOtherQueriesReportTheirLimits
   let invalid = run compile.compile(b"@container none (width){.x{width:2px}}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(invalid.diagnostics.length() == 1 && invalid.diagnostics.asSlice()[0].kind == DiagnosticKind.AtRule && invalid.resolver.rules().length == 0, "invalid container grammar drops the entire rule")
 }
+
+effect fn checkPartSheet(sheet: &mut Sheet) -> ()
+  ! AssertionError<'static> | ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+  let tree = Tree { hovered: true }
+  let targets = [PseudoTarget.Placeholder, PseudoTarget.Selection, PseudoTarget.Scrollbar, PseudoTarget.ScrollbarThumb, PseudoTarget.ScrollbarTrack]
+  let mut i: usize = 0
+  while i < targets.length {
+    let mut context = MatchContext.make(0, NO_ELEMENT)
+    context.pseudo = targets[i]
+    run sheet.resolver.resolve(BufferView.of(sheet.buffers.asSlice()), &tree, 0, &[], &mut context)
+    let matched = sheet.resolver.matches()
+    run Testing.expect(matched.length == 1 && matched[0].rule == i, "parts select their own indexed rules")
+    run Testing.expect(sheet.resolver.rules()[i].selectors.hasPseudoTarget(targets[i]), "target flags survive compilation and decoding")
+    run Testing.expect(!sheet.resolver.rules()[i].selectors.hasPseudoTarget(PseudoTarget.Before), "part rules do not enable generated boxes")
+    i = i + 1
+  }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheet.resolver.resolve(BufferView.of(sheet.buffers.asSlice()), &tree, 0, &[], &mut context)
+  run Testing.expect(sheet.resolver.matches().length == 0, "part declarations do not leak onto their origin")
+}
+
+test effect fn compiledPartTargetsRoundTripAndStayIsolated() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | ResolverError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut sheet = run compile.compile(b".button::placeholder{color:red}.button::selection{color:blue}.button::-webkit-scrollbar{width:8px}.button:hover::-webkit-scrollbar-thumb{background-color:red}.button::-webkit-scrollbar-track{background-color:blue}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 0, "host part selectors compile without diagnostics")
+  run checkPartSheet(&mut sheet) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run checkPartSheet(&mut decoded) |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+test effect fn unavailablePseudoElementsAreDiagnosedWithoutDroppingValidListArms() -> ()
+  ! AssertionError<'static> | CompileError | ResolverError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let css = b".button::marker,.button{color:red}.button::marker{color:blue}.button::backdrop{color:red}.button::file-selector-button{color:red}.button::-webkit-scrollbar-button{color:red}.button:first-line{color:red}.button::part(label){color:red}"
+  let mut sheet = run compile.compile(css, &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 6 && sheet.diagnostics.asSlice()[0].count == 2, "each unavailable target is diagnosed and repeated targets are aggregated")
+  let mut i: usize = 0
+  while i < sheet.diagnostics.length() {
+    run Testing.expect(sheet.diagnostics.asSlice()[i].kind == DiagnosticKind.Unsupported, "valid unsupported pseudo-elements have feature diagnostics")
+    i = i + 1
+  }
+  let tree = Tree { hovered: true }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheet.resolver.resolve(BufferView.of(sheet.buffers.asSlice()), &tree, 0, &[], &mut context) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.resolver.matches().length == 1 && sheet.resolver.matches()[0].rule == 0, "supported comma arm still applies while unsupported targets never match")
+  let mut strict = Options.make()
+  strict.strict = true
+  let failed = run Effect.result(compile.compile(css, &strict)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &failed { Result.Failure { .. } => true _ => false }, "strict mode rejects unavailable pseudo-elements")
+}

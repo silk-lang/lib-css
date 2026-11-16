@@ -373,6 +373,17 @@ impl SelectorList {
     return false
   }
 
+  pub fn hasPseudoTarget(self: &Self, target: PseudoTarget) -> bool {
+    let mut i: usize = 0
+    while i < self.simples.length() {
+      if let Test.Element { target: found } = self.simples.asSlice()[i].test {
+        if found == target { return true }
+      }
+      i = i + 1
+    }
+    return false
+  }
+
   pub fn hasPseudoStates(self: &Self) -> bool {
     let mut i: usize = 0
     while i < self.simples.length() {
@@ -980,8 +991,8 @@ effect fn parseArm(
                 }
                 pseudoElement = kind
                 specificity.types = specificity.types + 1
-                if tokens.insensitive(word, b"before") || tokens.insensitive(word, b"after") {
-                  let target = if tokens.insensitive(word, b"before") { PseudoTarget.Before } else { PseudoTarget.After }
+                let target = element.pseudoTarget(word)
+                if target != PseudoTarget.None {
                   let compounds = ast.compounds.asMutSlice()
                   compounds[compound].target = target
                   run appendSimple(&mut ast.*, compound, Test.Element { target: target })
@@ -1280,6 +1291,15 @@ fn pseudoElementKind(word: &[u8]) -> PseudoElement {
   if tokens.insensitive(word, b"file-selector-button")
     || tokens.insensitive(word, b"details-content") {
     return PseudoElement.ElementBacked
+  }
+  if tokens.insensitive(word, b"-webkit-scrollbar")
+    || tokens.insensitive(word, b"-webkit-scrollbar-thumb")
+    || tokens.insensitive(word, b"-webkit-scrollbar-track")
+    || tokens.insensitive(word, b"-webkit-scrollbar-track-piece")
+    || tokens.insensitive(word, b"-webkit-scrollbar-button")
+    || tokens.insensitive(word, b"-webkit-scrollbar-corner")
+    || tokens.insensitive(word, b"-webkit-resizer") {
+    return PseudoElement.TreeAbiding
   }
   if tokens.insensitive(word, b"search-text") {
     return PseudoElement.SearchText
@@ -3127,7 +3147,9 @@ effect fn writeTest(writer: &mut BinaryWriter, buffer: &TokenBuffer, test: &Test
     }
     Test.Element { target } => {
       run writer.byte(7)
-      run writer.byte(match target { PseudoTarget.None => 0 PseudoTarget.Before => 1 PseudoTarget.After => 2 })
+      run writer.byte(match target { PseudoTarget.None => 0 PseudoTarget.Before => 1 PseudoTarget.After => 2
+        PseudoTarget.Placeholder => 3 PseudoTarget.Selection => 4 PseudoTarget.Scrollbar => 5
+        PseudoTarget.ScrollbarThumb => 6 PseudoTarget.ScrollbarTrack => 7 })
     }
     Test.ElementState { pseudo } => {
       run writer.byte(8)
@@ -3149,6 +3171,11 @@ effect fn readTest(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> T
     7 => Test.Element { target: match run reader.byte() {
       1 => PseudoTarget.Before
       2 => PseudoTarget.After
+      3 => PseudoTarget.Placeholder
+      4 => PseudoTarget.Selection
+      5 => PseudoTarget.Scrollbar
+      6 => PseudoTarget.ScrollbarThumb
+      7 => PseudoTarget.ScrollbarTrack
       _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
     } }
     8 => Test.ElementState { pseudo: run readPseudo(&mut reader.*) }

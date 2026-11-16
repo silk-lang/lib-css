@@ -671,3 +671,23 @@ test effect fn generatedPseudoTargetsKeepOriginSelectorsAndSpecificitySeparate()
   run invalid(b"rect::before > .hot")
   run invalid(b"rect:has(::after)")
 }
+
+test effect fn partPseudoTargetsMatchOnlyTheirOriginAndOwnTarget() -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  run checkTarget(b"rect::placeholder", 2, true, 0, 0, 2, 0, PseudoTarget.Placeholder, 0)
+  run checkTarget(b"rect::placeholder", 2, false, 0, 0, 0, 0, PseudoTarget.None, 0)
+  run checkTarget(b"rect::placeholder", 2, false, 0, 0, 0, 0, PseudoTarget.Selection, 0)
+  run checkTarget(b"#chosen::selection", 2, true, 1, 0, 1, 0, PseudoTarget.Selection, 0)
+  run checkTarget(b"g > .hot::selection", 2, true, 0, 1, 2, 0, PseudoTarget.Selection, 0)
+  run checkTarget(b"rect::-webkit-scrollbar", 2, true, 0, 0, 2, 0, PseudoTarget.Scrollbar, 0)
+  run checkTarget(b"rect:hover::-webkit-scrollbar-thumb", 2, true, 0, 1, 2, element.HOVER, PseudoTarget.ScrollbarThumb, 0)
+  run checkTarget(b"rect:hover::-webkit-scrollbar-thumb", 2, false, 0, 0, 0, 0, PseudoTarget.ScrollbarThumb, 0)
+  run checkTarget(b"rect::-webkit-scrollbar-thumb:hover", 2, false, 0, 0, 0, element.HOVER, PseudoTarget.ScrollbarThumb, 0)
+  run checkTarget(b"rect::-webkit-scrollbar-thumb:hover", 2, true, 0, 1, 2, 0, PseudoTarget.ScrollbarThumb, element.HOVER)
+  run checkTarget(b"rect::-WEBKIT-SCROLLBAR-TRACK", 2, true, 0, 0, 2, 0, PseudoTarget.ScrollbarTrack, 0)
+  run checkTarget(b"rect::-webkit-scrollbar-track", 2, false, 0, 0, 0, 0, PseudoTarget.ScrollbarThumb, 0)
+  run checkTarget(b"#chosen, .hot::selection", 2, true, 0, 1, 1, 0, PseudoTarget.Selection, 0)
+  run checkTarget(b"#chosen, .hot::selection", 2, true, 1, 0, 0, 0, PseudoTarget.None, 0)
+  run invalid(b"rect::placeholder > .hot")
+  run invalid(b"rect:has(::selection)")
+}

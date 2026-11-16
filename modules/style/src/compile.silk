@@ -8,6 +8,8 @@ import tokens { TokenBuffer, TokenRange, Kind, Limits, CssError, CssErrorKind, e
 import lexer
 import syntax { Rule, RuleKind }
 import syntax
+import element { PseudoTarget }
+import element
 import selectors { SelectorList }
 import selectors
 import input { Input }
@@ -125,6 +127,42 @@ impl Compiler {
     return Option<usize>.some(layer)
   }
 
+  /// Valid but unimplemented targets remain nonmatching, preserving other list arms.
+  effect fn reportPseudoElements(self: &mut Self, buffer: &TokenBuffer) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    let entries = buffer.tokens.asSlice()
+    let mut at: usize = 0
+    while at < entries.length {
+      if let Kind.OpenSquare = entries[at].kind {
+        at = after(buffer, at, entries.length)
+        continue
+      }
+      if let Kind.Colon = entries[at].kind {
+        at = at + 1
+        let mut doubled = false
+        if at < entries.length {
+          if let Kind.Colon = entries[at].kind { doubled = true at = at + 1 }
+        }
+        if at < entries.length {
+          match &entries[at].kind {
+            Kind.Ident { text } => {
+              let name = buffer.text(text)
+              if (doubled || insensitive(name, b"first-line") || insensitive(name, b"first-letter"))
+                && element.pseudoTarget(name) == PseudoTarget.None {
+                run self.report(DiagnosticKind.Unsupported, name)
+              }
+            }
+            Kind.Function { name } => {
+              if doubled { run self.report(DiagnosticKind.Unsupported, buffer.text(name)) }
+            }
+            _ => {}
+          }
+        }
+      }
+      at = at + 1
+    }
+  }
+
   effect fn rules(self: &mut Self, source: &TokenBuffer, range: TokenRange, parent: &[u8], layer: usize, condition: usize, depth: usize) -> ()
     ! CssError | OutOfMemoryError ? &mut Allocator {
     if depth >= self.limits.maxDepth { fail CssError { kind: CssErrorKind.NestingLimit, offset: range.start } }
@@ -161,6 +199,7 @@ impl Compiler {
           return
         }
       }
+      run self.reportPseudoElements(&buffer)
       run self.block(source, rule.body, text.asSlice(), layer, condition, depth + 1)
       return
     }
