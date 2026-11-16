@@ -13,20 +13,21 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: bool, limits: &Limits) -> bool
   ! CssError | OutOfMemoryError ? &mut Allocator {
   let mut results = List<bool>.make()
+  let mut starts = List<bool>.make()
   let mut i: usize = 0
   while i < sheet.conditions.length() {
     let condition = sheet.conditions.asSlice()[i]
-    let parent = condition.parent == NONE || results.asSlice()[condition.parent]
-    let matches = if !parent { false } else {
-      match condition.kind {
-        ConditionKind.Media => run media_queries.matches(
-          &Input.Contiguous { buffer: &sheet.buffers.asSlice()[condition.buffer], range: condition.range }, environment, limits,
-        )
-        ConditionKind.Starting => starting
-        ConditionKind.Container => false
-      }
+    let matches = match condition.kind {
+      ConditionKind.Media => run media_queries.matches(
+        &Input.Contiguous { buffer: &sheet.buffers.asSlice()[condition.buffer], range: condition.range }, environment, limits,
+      )
+      ConditionKind.Starting => true
+      ConditionKind.Container => false
     }
-    run results.append(matches)
+    let parent = condition.parent == NONE || results.asSlice()[condition.parent]
+    let startParent = condition.parent == NONE || starts.asSlice()[condition.parent]
+    run results.append(parent && matches && (starting || condition.kind != ConditionKind.Starting))
+    run starts.append(startParent && matches)
     i = i + 1
   }
   let mut changed = false
@@ -36,6 +37,7 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
     let enabled = condition == NONE || results.asSlice()[condition]
     if sheet.resolver.rules()[i].enabled != enabled { changed = true }
     sheet.resolver.setEnabled(i, enabled)
+    sheet.resolver.setStarting(i, !enabled && condition != NONE && starts.asSlice()[condition])
     i = i + 1
   }
   i = 0

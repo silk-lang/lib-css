@@ -41,6 +41,7 @@ pub struct Resolver {
   candidates: List<Candidate>,
   matched: List<Match>,
   dependencies: List<List<Dependency>>,
+  starting: List<bool>,
 }
 
 impl Resolver {
@@ -51,6 +52,7 @@ impl Resolver {
       candidates: List<Candidate>.make(),
       matched: List<Match>.make(),
       dependencies: List<List<Dependency>>.make(),
+      starting: List<bool>.make(),
     }
   }
 
@@ -58,11 +60,13 @@ impl Resolver {
   pub effect fn add(self: &mut Self, rule: Rule, buffer: &TokenBuffer) -> ()
     ! OutOfMemoryError ? &mut Allocator {
     let dependencies = run rule.selectors.dependencies()
+    run self.starting.reserve(1)
     run self.dependencies.reserve(1)
     run self.entries.reserve(1)
     run self.index.add(&rule.selectors, buffer)
     run self.entries.append(move rule)
     run self.dependencies.append(move dependencies)
+    run self.starting.append(false)
   }
 
   pub effect fn finish(self: &mut Self) -> () ! OutOfMemoryError ? &mut Allocator {
@@ -77,6 +81,22 @@ impl Resolver {
     }
   }
 
+  pub fn setStarting(self: &mut Self, rule: usize, enabled: bool) -> () {
+    if rule < self.starting.length() {
+      let entries = self.starting.asMutSlice()
+      entries[rule] = enabled
+    }
+  }
+
+  pub fn hasStarting(self: &Self) -> bool {
+    let mut i: usize = 0
+    while i < self.starting.length() {
+      if self.starting.asSlice()[i] { return true }
+      i = i + 1
+    }
+    return false
+  }
+
   /// Matches one element, replacing the previous result. Inline candidates share the same
   /// catalog and cascade; callers set their inline flag and source order explicitly.
   /// Match-budget exhaustion is an error and never a partial successful style.
@@ -88,6 +108,12 @@ impl Resolver {
     inline: &[Candidate],
     context: &mut MatchContext,
   ) -> () ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+    run self.resolveWith(buffers, tree, node, inline, &mut context, false)
+  }
+
+  pub effect fn resolveWith<T: ElementTree>(self: &mut Self, buffers: BufferView<'_>, tree: &T,
+    node: usize, inline: &[Candidate], context: &mut MatchContext, starting: bool) -> ()
+    ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
     self.candidates.truncate(0)
     self.matched.truncate(0)
     if !self.index.ready(self.entries.length()) {
@@ -100,7 +126,7 @@ impl Resolver {
     let mut i: usize = 0
     while i < selected.length {
       let rule = &self.entries.asSlice()[selected[i]]
-      if rule.enabled {
+      if rule.enabled || (starting && self.starting.asSlice()[selected[i]]) {
         if rule.buffer >= buffers.length() || rule.declarations.start > rule.declarations.end {
           fail ResolverError.InvalidRule
         }

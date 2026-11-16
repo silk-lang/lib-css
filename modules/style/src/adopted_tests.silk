@@ -270,3 +270,35 @@ test effect fn adoptedInlineCustomPropertiesShareTheCascadeAndReclaimStorage() -
   let mut allocator = Allocator.systemAllocatorProvider()
   run inlineVariablesBody() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+
+effect fn startingBody() -> ()
+  ! AssertionError<'static> | AdoptionError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, run compiled(b".button{height:10px}@media(width>600px){@starting-style{.button{height:2px}}}"))
+  let tree = Tree { hovered: false }
+  drop run sheets.environment(&Environment.headless(800.0, 300.0), false, &Limits.make())
+  run Testing.expect(sheets.hasStarting(), "eligible starting rules are available without changing normal eligibility")
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolveWith(&tree, 0, &[], &mut context, true)
+  run Testing.expect(winningNumber(&sheets, Property.Height) == 2.0, "the starting cascade includes normal and starting rules")
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  run Testing.expect(winningNumber(&sheets, Property.Height) == 10.0, "resolving a starting style does not change the next normal style")
+  let mut inline = Priority.make(Origin.Author, 0)
+  inline.inline = true
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolveWith(&tree, 0, &[inline], &mut context, true)
+  run Testing.expect(winner(&sheets, Property.Height) == 999, "inline declarations retain their priority in the starting cascade")
+  drop run sheets.environment(&Environment.headless(400.0, 300.0), false, &Limits.make())
+  run Testing.expect(!sheets.hasStarting(), "starting rules respect their enclosing media condition")
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolveWith(&tree, 0, &[], &mut context, true)
+  run Testing.expect(winningNumber(&sheets, Property.Height) == 10.0, "a false media condition suppresses the starting declaration")
+}
+
+test effect fn startingCascadeDoesNotChangeNormalEligibility() -> ()
+  ! AssertionError<'static> | AdoptionError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run startingBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}

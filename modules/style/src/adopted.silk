@@ -209,11 +209,26 @@ impl StyleSheets {
     }
   }
 
+  pub fn hasStarting(self: &Self) -> bool {
+    let mut i: usize = 0
+    while i < self.entries.length() {
+      if self.entries.asSlice()[i].sheet.resolver.hasStarting() { return true }
+      i = i + 1
+    }
+    return false
+  }
+
   /// Matches one element, adding active style-object declarations with their inline priorities.
   /// Output is in ascending cascade order. Importance belongs to each declaration, not its rule.
   /// A failed match exposes no stale or partial output.
   pub effect fn resolve<T: ElementTree>(self: &mut Self, tree: &T, node: usize,
     inline: &[Priority], context: &mut MatchContext) -> ()
+    ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+    run self.resolveWith(tree, node, inline, &mut context, false)
+  }
+
+  pub effect fn resolveWith<T: ElementTree>(self: &mut Self, tree: &T, node: usize,
+    inline: &[Priority], context: &mut MatchContext, starting: bool) -> ()
     ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
     self.output.clear()
     self.matched.clear()
@@ -224,7 +239,7 @@ impl StyleSheets {
     let mut i: usize = 0
     while i < entries.length {
       let entry = &mut entries[i]
-      run entry.sheet.resolver.resolve(BufferView.of(entry.sheet.buffers.asSlice()), tree, node, &[], &mut context)
+      run entry.sheet.resolver.resolveWith(BufferView.of(entry.sheet.buffers.asSlice()), tree, node, &[], &mut context, starting)
       let found = entry.sheet.resolver.declarations()
       let mut at: usize = 0
       while at < found.length {
