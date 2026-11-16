@@ -78,7 +78,7 @@ impl StyleSheets {
       let sheet = &self.entries.asSlice()[index].sheet
       if dependency.condition >= sheet.conditions.length() { return true }
       let condition = sheet.conditions.asSlice()[dependency.condition]
-      if (run sheet_conditions.containerMatches(sheet.buffers.asSlice(), condition, tree, node, pseudo)) != dependency.matched { return true }
+      if (run sheet_conditions.containerMatches(sheet.buffers.asSlice(), condition, sheet.containerPrograms.asSlice(), tree, node, pseudo)) != dependency.matched { return true }
       i = i + 1
     }
     return false
@@ -295,7 +295,7 @@ impl StyleSheets {
     while i < entries.length {
       let entry = &mut entries[i]
       let filter = sheet_conditions.Filter { tree: tree, node: node, sheet: entry.id, buffers: entry.sheet.buffers.asSlice(),
-        conditions: entry.sheet.conditions.asSlice(), rules: entry.sheet.ruleConditions.asSlice() }
+        conditions: entry.sheet.conditions.asSlice(), programs: entry.sheet.containerPrograms.asSlice(), rules: entry.sheet.ruleConditions.asSlice() }
       run entry.sheet.resolver.resolveFiltered(BufferView.of(entry.sheet.buffers.asSlice()), tree, node, &[], &mut context, starting, &filter)
       states = u32.bitOr(states, entry.sheet.resolver.stateDependencies())
       let found = entry.sheet.resolver.declarations()

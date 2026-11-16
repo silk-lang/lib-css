@@ -250,7 +250,7 @@ retained media conditions against a host environment and reports whether rule el
 its default `None` matches ordinary elements. Normal rule arms do not match generated targets,
 and mixed selector lists retain the specificity of the matching arm. `pseudoStates` supplies
 states on the pseudo-element itself, separately from origin states before the `::before` or
-`::after` selector. These targets survive binary round trips in format version 5.
+`::after` selector. These targets survive binary round trips in the compiled format.
 The low-level matcher supports these state suffixes, but the stylesheet compiler diagnoses and
 drops rules containing them, matching Chromium 151 (which rejects `::before:hover` and
 `::before:active`). Origin-state selectors such as `:hover::before` remain supported.
@@ -276,6 +276,10 @@ supplies its content-box size and font/writing metrics in `Environment.querySize
 `resolveFiltered` with `sheet_conditions.Filter`. Global condition updates deliberately ignore
 container conditions for name-defining rules such as `@keyframes`. Query lists select ancestors
 independently, nested conditions must all match, and a missing container never matches `not`.
+Format version 6 stores decoded container names, required axes, and postfix boolean programs.
+Decoding and per-element matching do not parse the query grammar. Feature operands retain tokens
+so relative values are evaluated against the selected container; ordinary boolean evaluation
+uses an inline stack, with bounded spill storage for deeply nested conditions.
 Each resolution resets `MatchContext.containers` and records the reached conditions after
 selector matching, including false results. Shared conditions are evaluated once per resolution.
 Hosts retain those records with the element and pseudo target, then call

@@ -18,6 +18,7 @@ import supports
 import values { Store }
 import written
 import cssom_serialization
+import container_queries
 import condition_cursor
 import declaration_values
 import generated_content
@@ -188,7 +189,9 @@ impl Compiler {
       }
       let index = self.sheet.conditions.length()
       if index >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: rule.prelude.start } }
-      run self.sheet.conditions.append(Condition { kind: kind, parent: condition, buffer: 0, range: rule.prelude })
+      let program = if kind == ConditionKind.Container { self.sheet.containerPrograms.length() } else { NONE }
+      if kind == ConditionKind.Container { run self.sheet.containerPrograms.append(run container_queries.parse(source, rule.prelude, &self.limits)) }
+      run self.sheet.conditions.append(Condition { kind: kind, parent: condition, buffer: 0, range: rule.prelude, program: program })
       if kind == ConditionKind.Container { run self.report(DiagnosticKind.Unsupported, b"container") }
       run self.group(source, rule.body, parent, layer, index, depth + 1)
       return

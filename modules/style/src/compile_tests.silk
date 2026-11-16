@@ -87,6 +87,7 @@ test effect fn sheetDecoderRejectsTruncationVersionCatalogAndTrailingData() -> (
     }, "every truncated prefix fails")
     i = i + 1
   }
+  let encodedVersion = bytes.asSlice()[8]
   let data = bytes.asMutSlice()
   data[8] = 255
   let version = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -95,7 +96,7 @@ test effect fn sheetDecoderRejectsTruncationVersionCatalogAndTrailingData() -> (
     _ => false
   }, "format mismatch rejected")
   let catalogData = bytes.asMutSlice()
-  catalogData[8] = 5
+  catalogData[8] = encodedVersion
   catalogData[12] = catalogData[12] ^ 1
   let catalog = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &catalog {

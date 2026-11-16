@@ -1,6 +1,8 @@
 //! Compiled stylesheet data and its versioned byte format. Decoding does not invoke CSS parsers.
 import tokens { TokenBuffer, TokenRange, Limits }
 import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
+import container_queries { Queries }
+import container_queries
 import sheet_tokens
 import sheet_values
 import sheet_colors
@@ -26,7 +28,7 @@ import silk.num.u64
 import silk.num.u32
 import silk.text.string { String, InvalidUtf8 }
 
-pub const VERSION: u32 = 5
+pub const VERSION: u32 = 6
 pub const NONE: usize = UNLAYERED
 
 pub union Declaration {
@@ -42,6 +44,7 @@ pub struct Condition {
   pub parent: usize,
   pub buffer: usize,
   pub range: TokenRange,
+  pub program: usize,
 }
 impl Copy for Condition {}
 
@@ -80,6 +83,7 @@ pub struct Sheet {
   pub buffers: List<TokenBuffer>,
   pub declarations: List<Declaration>,
   pub conditions: List<Condition>,
+  pub containerPrograms: List<Queries>,
   pub ruleConditions: List<usize>,
   pub metadata: List<AtRule>,
   pub keyframes: List<Keyframes>,
@@ -136,7 +140,7 @@ impl Sheet {
   pub fn make() -> Sheet {
     return Sheet {
       buffers: List<TokenBuffer>.make(), declarations: List<Declaration>.make(),
-      conditions: List<Condition>.make(), ruleConditions: List<usize>.make(),
+      conditions: List<Condition>.make(), containerPrograms: List<Queries>.make(), ruleConditions: List<usize>.make(),
       metadata: List<AtRule>.make(), keyframes: List<Keyframes>.make(), registrations: List<RegisteredProperty>.make(), layers: Layers.make(), resolver: Resolver.make(),
       diagnostics: List<Diagnostic>.make(),
     }
@@ -203,6 +207,7 @@ impl Sheet {
       run writer.index(condition.parent)
       run writer.index(condition.buffer)
       run writeRange(&mut writer, condition.range)
+      if condition.kind == ConditionKind.Container { run container_queries.encode(&self.containerPrograms.asSlice()[condition.program], &mut writer) }
       i = i + 1
     }
     let rules = self.resolver.rules()
@@ -341,7 +346,9 @@ impl Sheet {
       if parent != NONE && parent >= i { run reader.invalid() }
       let buffer = run bufferIndex(&mut reader, &sheet)
       let range = run readRange(&mut reader, &sheet.buffers.asSlice()[buffer])
-      run sheet.conditions.append(Condition { kind: kind, parent: parent, buffer: buffer, range: range })
+      let program = if kind == ConditionKind.Container { sheet.containerPrograms.length() } else { NONE }
+      if kind == ConditionKind.Container { run sheet.containerPrograms.append(run container_queries.decode(&mut reader, range, limits)) }
+      run sheet.conditions.append(Condition { kind: kind, parent: parent, buffer: buffer, range: range, program: program })
       i = i + 1
     }
     let ruleCount = run reader.count(limits.maxRules)

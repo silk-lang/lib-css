@@ -2,6 +2,7 @@
 import sheet { Sheet, Condition, ConditionKind, NONE }
 import element { ElementTree, MatchContext, PseudoTarget }
 import resolver { RuleFilter }
+import container_queries { Queries }
 import container_queries
 import silk.core.option { Option }
 import media_features { Environment }
@@ -66,11 +67,12 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
 }
 
 /// Borrowed per-sheet query filter; ordinary and media-only rules need no allocation.
-pub effect fn containerMatches<T: ElementTree>(buffers: &[TokenBuffer], condition: Condition, tree: &T,
+pub effect fn containerMatches<T: ElementTree>(buffers: &[TokenBuffer], condition: Condition, programs: &[Queries], tree: &T,
   node: usize, pseudo: PseudoTarget) -> bool ! CssError | OutOfMemoryError ? &mut Allocator {
   if condition.kind != ConditionKind.Container { return false }
   let buffer = &buffers[condition.buffer]
-  let queries = run container_queries.parse(buffer, condition.range, &Limits.make())
+  if condition.program >= programs.length { return false }
+  let queries = &programs[condition.program]
   if !queries.valid { return false }
   let mut i: usize = 0
   while i < queries.arms.length() {
@@ -89,6 +91,7 @@ pub struct Filter<'a, T: ElementTree> {
   pub sheet: u32,
   pub buffers: &'a [TokenBuffer],
   pub conditions: &'a [Condition],
+  pub programs: &'a [Queries],
   pub rules: &'a [usize],
 }
 impl<'a, T: ElementTree> RuleFilter for Filter<'a, T> {
@@ -105,7 +108,7 @@ impl<'a, T: ElementTree> RuleFilter for Filter<'a, T> {
           matched = value
         } else {
           run context.spend(condition.range.end - condition.range.start)
-          matched = run containerMatches(self.buffers, condition, self.tree, self.node, context.pseudo)
+          matched = run containerMatches(self.buffers, condition, self.programs, self.tree, self.node, context.pseudo)
           run context.recordContainer(self.sheet, at, matched)
         }
         if !matched { return false }

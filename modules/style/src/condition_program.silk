@@ -1,0 +1,191 @@
+//! Postfix boolean conditions with retained feature operands and three-valued evaluation.
+import input { Input }
+import tokens { TokenRange, Kind, Limits }
+import condition_cursor { Structure }
+import condition_cursor
+import media_features { Environment, Truth }
+import media_features
+import sheet_binary { Writer, Reader, DecodeError }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.core.ownership { Copy }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.usize
+
+union Op {
+  Unknown,
+  Feature { range: TokenRange },
+  Not,
+  And,
+  Or,
+}
+impl Copy for Op {}
+
+pub struct Program {
+  ops: List<Op>,
+  depth: usize,
+}
+impl Program {
+  pub fn make() -> Program { return Program { ops: List<Op>.make(), depth: 0 } }
+}
+
+effect fn term(program: &mut Program, input: &Input<'_>, start: usize, end: usize, structure: &Structure, base: usize) -> usize
+  ! OutOfMemoryError ? &mut Allocator {
+  let at = condition_cursor.skip(input, start, end)
+  if at >= end { return usize.MAX }
+  let mut function = false
+  match input.at(at) {
+    Option.Some { value } => match value.token.kind {
+      Kind.OpenParen => {}
+      Kind.Function { .. } => { function = true }
+      _ => { return usize.MAX }
+    }
+    _ => { return usize.MAX }
+  }
+  let close = structure.end(at)
+  if close > end || !structure.any(at + 1, close) { return usize.MAX }
+  let next = if close < end { close + 1 } else { close }
+  if function { run program.ops.append(Op.Unknown) return next }
+  let saved = program.ops.length()
+  let nested = run condition(&mut program, input, at + 1, close, structure, base)
+  if nested != usize.MAX && condition_cursor.skip(input, nested, close) == close { return next }
+  program.ops.truncate(saved)
+  run program.ops.append(Op.Feature { range: TokenRange { start: base + at + 1, end: base + close } })
+  return next
+}
+
+effect fn condition(program: &mut Program, input: &Input<'_>, start: usize, end: usize, structure: &Structure, base: usize) -> usize
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut at = condition_cursor.skip(input, start, end)
+  if at >= end { return usize.MAX }
+  if condition_cursor.ident(input, at, b"not") {
+    let next = run term(&mut program, input, at + 1, end, structure, base)
+    if next == usize.MAX { return next }
+    run program.ops.append(Op.Not)
+    return next
+  }
+  let first = run term(&mut program, input, at, end, structure, base)
+  if first == usize.MAX { return first }
+  at = condition_cursor.skip(input, first, end)
+  let mut operator: u8 = 0
+  while at < end {
+    let current: u8 = if condition_cursor.ident(input, at, b"and") { 1 }
+      else if condition_cursor.ident(input, at, b"or") { 2 } else { 0 }
+    if current == 0 || (operator != 0 && operator != current) { return usize.MAX }
+    operator = current
+    let next = run term(&mut program, input, at + 1, end, structure, base)
+    if next == usize.MAX { return next }
+    run program.ops.append(if current == 1 { Op.And } else { Op.Or })
+    at = condition_cursor.skip(input, next, end)
+  }
+  return at
+}
+
+pub effect fn compile(input: &Input<'_>, start: usize, end: usize, structure: &Structure, base: usize) -> Program
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut program = Program.make()
+  let next = run condition(&mut program, input, start, end, structure, base)
+  if !structure.valid || next == usize.MAX || condition_cursor.skip(input, next, end) != end {
+    program.ops.clear()
+    return move program
+  }
+  let mut depth: usize = 0
+  let mut i: usize = 0
+  while i < program.ops.length() {
+    match program.ops.get(i) {
+      Op.Unknown | Op.Feature { .. } => { depth = depth + 1 }
+      Op.And | Op.Or => { depth = depth - 1 }
+      Op.Not => {}
+    }
+    if depth > program.depth { program.depth = depth }
+    i = i + 1
+  }
+  return move program
+}
+
+fn negate(value: Truth) -> Truth {
+  return match value { Truth.True => Truth.False Truth.False => Truth.True Truth.Unknown => Truth.Unknown }
+}
+fn combine(left: Truth, right: Truth, and: bool) -> Truth {
+  let decisive = if and { Truth.False } else { Truth.True }
+  if left == decisive || right == decisive { return decisive }
+  if left == Truth.Unknown || right == Truth.Unknown { return Truth.Unknown }
+  return negate(decisive)
+}
+
+effect fn evaluateWith(program: &Program, input: &Input<'_>, environment: &Environment, stack: &mut [Truth]) -> Truth
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut count: usize = 0
+  let mut i: usize = 0
+  while i < program.ops.length() {
+    match program.ops.get(i) {
+      Op.Unknown => { stack[count] = Truth.Unknown count = count + 1 }
+      Op.Feature { range } => {
+        stack[count] = run media_features.evaluate(input, range.start, range.end, environment)
+        count = count + 1
+      }
+      Op.Not => { stack[count - 1] = negate(stack[count - 1]) }
+      Op.And => { stack[count - 2] = combine(stack[count - 2], stack[count - 1], true) count = count - 1 }
+      Op.Or => { stack[count - 2] = combine(stack[count - 2], stack[count - 1], false) count = count - 1 }
+    }
+    i = i + 1
+  }
+  return if count == 1 { stack[0] } else { Truth.Unknown }
+}
+
+pub effect fn evaluate(program: &Program, input: &Input<'_>, environment: &Environment) -> Truth
+  ! OutOfMemoryError ? &mut Allocator {
+  if program.depth <= 32 {
+    let mut stack = [Truth.Unknown; 32]
+    return run evaluateWith(program, input, environment, &mut stack)
+  }
+  let mut stack = List<Truth>.make()
+  run stack.appendRepeated(Truth.Unknown, program.depth)
+  return run evaluateWith(program, input, environment, stack.asMutSlice())
+}
+
+pub effect fn encode(program: &Program, writer: &mut Writer) ! OutOfMemoryError ? &mut Allocator {
+  run writer.index(program.ops.length())
+  let mut i: usize = 0
+  while i < program.ops.length() {
+    match program.ops.get(i) {
+      Op.Unknown => { run writer.byte(0) }
+      Op.Feature { range } => { run writer.byte(1) run writer.index(range.start) run writer.index(range.end) }
+      Op.Not => { run writer.byte(2) }
+      Op.And => { run writer.byte(3) }
+      Op.Or => { run writer.byte(4) }
+    }
+    i = i + 1
+  }
+}
+
+pub effect fn decode(reader: &mut Reader<'_>, range: TokenRange, limits: &Limits) -> Program
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  let mut program = Program.make()
+  let count = run reader.count(limits.maxTokens)
+  let mut depth: usize = 0
+  let mut i: usize = 0
+  while i < count {
+    let tag = run reader.byte()
+    if tag == 0 { run program.ops.append(Op.Unknown) depth = depth + 1 }
+    else if tag == 1 {
+      let start = run reader.index()
+      let end = run reader.index()
+      if start < range.start || start > end || end > range.end { run reader.invalid() }
+      run program.ops.append(Op.Feature { range: TokenRange { start: start, end: end } })
+      depth = depth + 1
+    } else if tag == 2 {
+      if depth == 0 { run reader.invalid() }
+      run program.ops.append(Op.Not)
+    } else if tag == 3 || tag == 4 {
+      if depth < 2 { run reader.invalid() }
+      run program.ops.append(if tag == 3 { Op.And } else { Op.Or })
+      depth = depth - 1
+    } else { run reader.invalid() }
+    if depth > limits.maxDepth + 1 { run reader.invalid() }
+    if depth > program.depth { program.depth = depth }
+    i = i + 1
+  }
+  if count != 0 && depth != 1 { run reader.invalid() }
+  return move program
+}
