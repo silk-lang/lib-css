@@ -17,7 +17,7 @@ struct Entry {
   next: usize,
 }
 
-pub struct Cache { entries: List<Entry>, heads: HashMap<u64, usize>, bytes: usize }
+pub struct Cache { entries: List<Entry>, heads: HashMap<u64, usize>, bytes: usize, complete: bool }
 
 fn parentIndex(parent: Option<ScopeId>) -> usize {
   return match parent { Option.Some { value } => value.index _ => usize.MAX }
@@ -52,13 +52,16 @@ fn same(entry: &Entry, parent: Option<ScopeId>, candidates: &[Candidate], limits
 
 impl Cache {
   pub fn make() -> Cache {
-    return Cache { entries: List<Entry>.make(), heads: HashMap<u64, usize>.make(Hash.seed(1087)), bytes: 0 }
+    return Cache { entries: List<Entry>.make(), heads: HashMap<u64, usize>.make(Hash.seed(1087)), bytes: 0, complete: true }
   }
+
+  pub fn retainsAll(self: &Self) -> bool { return self.complete }
 
   pub fn reset(self: &mut Self) -> () {
     self.entries.truncate(0)
     self.heads.clear()
     self.bytes = 0
+    self.complete = true
   }
 
   pub fn find(self: &Self, parent: Option<ScopeId>, candidates: &[Candidate], limits: &Limits) -> Option<ScopeId> {
@@ -73,9 +76,11 @@ impl Cache {
 
   pub effect fn insert(self: &mut Self, parent: Option<ScopeId>, candidates: List<Candidate>, limits: &Limits, scope: ScopeId) -> ()
     ! OutOfMemoryError ? &mut Allocator {
-    if self.entries.length() >= 128 || candidates.capacity() >= limits.maxStorageBytes / 128 { return () }
+    if self.entries.length() >= 128 || candidates.capacity() >= limits.maxStorageBytes / 128 { self.complete = false
+      return () }
     let cost = (candidates.capacity() + 1) * 128
-    if self.bytes > limits.maxStorageBytes - cost { return () }
+    if self.bytes > limits.maxStorageBytes - cost { self.complete = false
+      return () }
     let hash = key(parent, candidates.asSlice())
     let next = match self.heads.get(hash) { Option.Some { value } => value _ => usize.MAX }
     let index = self.entries.length()

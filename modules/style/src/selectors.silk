@@ -287,6 +287,9 @@ impl SelectorList {
         if kind == FunctionKind.Has { ancestors = true
           structural = true }
       }
+      if let Test.Nth { list, .. } = self.simples.asSlice()[i].test {
+        if list != NONE { siblings = true }
+      }
       i = i + 1
     }
     let mut out = List<Dependency>.make()

@@ -24,6 +24,7 @@ pub struct InlineCustom<'name, 'tokens> {
 
 pub struct Inputs {
   scopes: Cache,
+  retained: bool,
   baseBuffers: usize,
   baseCatalog: usize,
   pub buffers: Buffers<'static>,
@@ -106,12 +107,16 @@ impl Inputs {
     }
     let baseBuffers = buffers.owned().length
     let baseCatalog = catalog.length()
-    return Inputs { scopes: Cache.make(), baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
+    return Inputs { scopes: Cache.make(), retained: true, baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
   }
+
+  /// Repeating the same scope inputs cannot grow storage until this becomes false.
+  pub fn canRetainScopes(self: &Self) -> bool { return self.retained && self.scopes.retainsAll() }
 
   /// Builds only the custom-property part of the cascade; ordinary declarations do not add work.
   pub effect fn scope(self: &mut Self, matches: &[MatchedCandidate], inline: &[InlineCustom<'_, '_>], parent: Option<ScopeId>, limits: &Limits) -> ScopeId
     ! CssError | OutOfMemoryError ? &mut Allocator {
+    if inline.length != 0 { self.retained = false }
     let mut candidates = List<Candidate>.make()
     let mut i: usize = 0
     while i < matches.length {
@@ -154,6 +159,7 @@ impl Inputs {
 
   pub fn resetScopes(self: &mut Self) -> () {
     self.scopes.reset()
+    self.retained = true
     self.variables.resetScopes()
     self.buffers.truncateOwned(self.baseBuffers)
     self.catalog.truncate(self.baseCatalog)

@@ -1,5 +1,6 @@
 //! Root-owned compiled sheets: adoption order, cross-sheet layers and indexed matching.
 //! This module consumes compiled data and never calls the stylesheet compiler or lexer.
+import silk.num.u32
 import sheet { Sheet, Declaration }
 import sheet_conditions
 import adopted_variables { Inputs, InlineCustom }
@@ -44,6 +45,7 @@ pub struct StyleSheets {
   layers: Layers,
   output: List<Candidate>,
   matched: List<MatchedRule>,
+  selectedStates: u32,
   variables: Option<Box<Inputs>>,
 }
 
@@ -59,12 +61,17 @@ fn important(declaration: &Declaration) -> bool {
 impl StyleSheets {
   pub fn make() -> StyleSheets {
     return StyleSheets { entries: List<AdoptedSheet>.make(), layers: Layers.make(),
-      output: List<Candidate>.make(), matched: List<MatchedRule>.make(), variables: Option<Box<Inputs>>.None }
+      output: List<Candidate>.make(), matched: List<MatchedRule>.make(), selectedStates: 0, variables: Option<Box<Inputs>>.None }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() }
   pub fn sheets(self: &Self) -> &[AdoptedSheet] { return self.entries.asSlice() }
   pub fn candidates(self: &Self) -> &[Candidate] { return self.output.asSlice() }
   pub fn matches(self: &Self) -> &[MatchedRule] { return self.matched.asSlice() }
+  pub fn stateDependencies(self: &Self) -> u32 { return self.selectedStates }
+  pub fn canRetainScopes(self: &Self) -> bool {
+    let inputs = self.variableInputs()
+    return inputs.length != 0 && inputs[0].canRetainScopes()
+  }
   pub fn index(self: &Self, id: u32) -> usize {
     let mut i: usize = 0
     while i < self.entries.length() {
@@ -157,6 +164,7 @@ impl StyleSheets {
     self.layers = Layers.make()
     self.output.clear()
     self.matched.clear()
+    self.selectedStates = 0
     let entries = self.entries.asMutSlice()
     let mut i: usize = 0
     while i < entries.length {
@@ -261,14 +269,17 @@ impl StyleSheets {
     ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
     self.output.clear()
     self.matched.clear()
+    self.selectedStates = 0
     let mut candidates = List<Candidate>.make()
     let mut matched = List<MatchedRule>.make()
+    let mut states: u32 = 0
     let mut order: usize = 0
     let entries = self.entries.asMutSlice()
     let mut i: usize = 0
     while i < entries.length {
       let entry = &mut entries[i]
       run entry.sheet.resolver.resolveWith(BufferView.of(entry.sheet.buffers.asSlice()), tree, node, &[], &mut context, starting)
+      states = u32.bitOr(states, entry.sheet.resolver.stateDependencies())
       let found = entry.sheet.resolver.declarations()
       let mut at: usize = 0
       while at < found.length {
@@ -313,5 +324,6 @@ impl StyleSheets {
     }
     self.output = move candidates
     self.matched = move matched
+    self.selectedStates = states
   }
 }

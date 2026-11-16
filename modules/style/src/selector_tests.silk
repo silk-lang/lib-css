@@ -611,3 +611,29 @@ test effect fn invalidationKeysIncludeRelationalAndFailedLogicalArms() -> ()
     }
   } else { run Testing.expect(false, "local selector parses") }
 }
+
+test effect fn nthOfInvalidationReachesSiblingsForClassAndStateChanges() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let cases = [b":nth-child(2 of .eligible)", b":nth-last-child(odd of :hover)"]
+  let mut index: usize = 0
+  while index < cases.length {
+    let buffer = run lexer.tokenize(cases[index], &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let parsed = run selectors.parse(&buffer, buffer.all(), &[], &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut found = false
+    if let Option<SelectorList>.Some { value } = move parsed {
+      let dependencies = run value.dependencies() |> Effect.provideMut<Allocator>(&mut allocator)
+      let mut i: usize = 0
+      while i < dependencies.length() {
+        let dependency = dependencies.asSlice()[i]
+        if dependency.kind == DependencyKind.Class || dependency.kind == DependencyKind.State {
+          found = true
+          run Testing.expect(dependency.siblings, "changing nth-of membership can restyle other siblings")
+        }
+        i = i + 1
+      }
+    }
+    run Testing.expect(found, "nth-of filter dependencies are retained")
+    index = index + 1
+  }
+}

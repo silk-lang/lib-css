@@ -79,6 +79,7 @@ effect fn exercise() -> ()
   let mut context = MatchContext.make(0, NO_ELEMENT)
   run resolver.resolve(BufferView.of(&buffers), &tree, 0, &[], &mut context)
   run Testing.expect(winner(&resolver, &catalog) == 0, "inactive state has no candidate")
+  run Testing.expect(resolver.stateDependencies() == HOVER, "failed state tests remain invalidation dependencies")
   tree.hovered = true
   run resolver.resolve(BufferView.of(&buffers), &tree, 0, &[], &mut context)
   run Testing.expect(winner(&resolver, &catalog) == 1, "later layer wins despite lower specificity")
@@ -86,6 +87,7 @@ effect fn exercise() -> ()
   resolver.setEnabled(1, false)
   run resolver.resolve(BufferView.of(&buffers), &tree, 0, &[], &mut context)
   run Testing.expect(winner(&resolver, &catalog) == 0, "condition change needs no index rebuild")
+  run Testing.expect(resolver.stateDependencies() == 0, "disabled rules do not cause state invalidation")
   let mut priority = Priority.make(Origin.Author, 2)
   priority.inline = true
   let inline = [Candidate { declaration: 1, priority: priority }]
@@ -97,7 +99,7 @@ effect fn exercise() -> ()
     Result<(), ResolverError | CssError | OutOfMemoryError>.Failure { .. } => true
     _ => false
   }, "exhausted match budget fails")
-  run Testing.expect(resolver.declarations().length == 0 && resolver.matches().length == 0, "failure exposes no stale or partial style")
+  run Testing.expect(resolver.declarations().length == 0 && resolver.matches().length == 0 && resolver.stateDependencies() == 0, "failure exposes no stale or partial style")
   context = MatchContext.make(0, NO_ELEMENT)
   run resolver.resolve(BufferView.of(&buffers), &tree, 0, &[], &mut context)
   run Testing.expect(winner(&resolver, &catalog) == 0, "resolution retries after exhaustion")

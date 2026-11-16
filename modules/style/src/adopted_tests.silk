@@ -286,6 +286,7 @@ effect fn sharedScopesBody() -> ()
   run sheets.resolve(&tree, 1, &[], &mut context)
   let child = run sheets.variableScope(Option<ScopeId>.some(parent), &Limits.make())
   run Testing.expect(child.index != parent.index, "non-inherited registration values require an isolated child scope")
+  run Testing.expect(sheets.canRetainScopes(), "all scope inputs are cached before a partial restyle")
   let mut i: usize = 0
   while i < 5000 {
     let sibling = run sheets.variableScope(Option<ScopeId>.some(parent), &Limits.make())
@@ -309,6 +310,7 @@ effect fn sharedScopesBody() -> ()
   let priority = Priority.make(Origin.Author, 0)
   let inline = [InlineCustom<'_, '_> { name: b"--gap", tokens: &gap, priority: priority }]
   let custom = run sheets.variableScopeWith(Option<ScopeId>.some(parent), &inline, &Limits.make())
+  run Testing.expect(!sheets.canRetainScopes(), "copied inline tokens require a full scope reset")
   run Testing.expect(valueIs(&(run pendingValue(&sheets, custom, Property.Width)), b"24px"), "inline custom values do not reuse a sheet-only scope")
   sheets.resetScopes()
   context = MatchContext.make(0, NO_ELEMENT)
@@ -325,6 +327,33 @@ test effect fn adoptedVariableScopesShareRepeatedInputsWithoutLeakingState() -> 
   ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run sharedScopesBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn scopeRetentionPressure() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, run compiled(b"@property --size{syntax:'<length>';inherits:false;initial-value:3px} .a{height:var(--size)}"))
+  let tree = Tree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  let mut parent = Option<ScopeId>.None
+  let mut i: usize = 0
+  while i < 140 {
+    let next = run sheets.variableScope(parent, &Limits.make())
+    run Testing.expect(valueIs(&(run pendingValue(&sheets, next, Property.Height)), b"3px"), "cache pressure does not change registration defaults")
+    parent = Option<ScopeId>.some(next)
+    i = i + 1
+  }
+  run Testing.expect(!sheets.canRetainScopes(), "uncached scopes tell the host to reset before another style pass")
+  sheets.resetScopes()
+  drop run sheets.variableScope(Option<ScopeId>.None, &Limits.make())
+  run Testing.expect(sheets.canRetainScopes(), "a full reset restores bounded scope retention")
+}
+
+test effect fn adoptedScopeRetentionReportsCachePressure() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run scopeRetentionPressure() |> Effect.provideMut<Allocator>(&mut allocator)
 }
 
 

@@ -1,4 +1,5 @@
 //! Indexed, per-element stylesheet matching. The host owns declarations and value computation.
+import silk.num.u32
 import cascade { Priority, Candidate }
 import element { ElementTree, MatchContext }
 import selectors { SelectorList, Specificity, Dependency }
@@ -41,6 +42,8 @@ pub struct Resolver {
   candidates: List<Candidate>,
   matched: List<Match>,
   dependencies: List<List<Dependency>>,
+  states: List<u32>,
+  selectedStates: u32,
   starting: List<bool>,
 }
 
@@ -52,6 +55,8 @@ impl Resolver {
       candidates: List<Candidate>.make(),
       matched: List<Match>.make(),
       dependencies: List<List<Dependency>>.make(),
+      states: List<u32>.make(),
+      selectedStates: 0,
       starting: List<bool>.make(),
     }
   }
@@ -60,12 +65,20 @@ impl Resolver {
   pub effect fn add(self: &mut Self, rule: Rule, buffer: &TokenBuffer) -> ()
     ! OutOfMemoryError ? &mut Allocator {
     let dependencies = run rule.selectors.dependencies()
+    let mut states: u32 = 0
+    let mut at: usize = 0
+    while at < dependencies.length() {
+      states = u32.bitOr(states, dependencies.asSlice()[at].states)
+      at = at + 1
+    }
+    run self.states.reserve(1)
     run self.starting.reserve(1)
     run self.dependencies.reserve(1)
     run self.entries.reserve(1)
     run self.index.add(&rule.selectors, buffer)
     run self.entries.append(move rule)
     run self.dependencies.append(move dependencies)
+    run self.states.append(states)
     run self.starting.append(false)
   }
 
@@ -116,17 +129,20 @@ impl Resolver {
     ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
     self.candidates.truncate(0)
     self.matched.truncate(0)
+    self.selectedStates = 0
     if !self.index.ready(self.entries.length()) {
       fail ResolverError.UnfinishedIndex
     }
     run self.index.collect(tree, node, &mut context.*)
     let mut candidates = List<Candidate>.make()
     let mut matched = List<Match>.make()
+    let mut states: u32 = 0
     let selected = self.index.candidates()
     let mut i: usize = 0
     while i < selected.length {
       let rule = &self.entries.asSlice()[selected[i]]
       if rule.enabled || (starting && self.starting.asSlice()[selected[i]]) {
+        states = u32.bitOr(states, self.states.asSlice()[selected[i]])
         if rule.buffer >= buffers.length() || rule.declarations.start > rule.declarations.end {
           fail ResolverError.InvalidRule
         }
@@ -152,7 +168,11 @@ impl Resolver {
     run candidates.appendSlice(inline)
     self.candidates = move candidates
     self.matched = move matched
+    self.selectedStates = states
   }
+
+  /// Includes state tests in indexed candidates whose current state did not match.
+  pub fn stateDependencies(self: &Self) -> u32 { return self.selectedStates }
 
   /// Candidates for cascade.select/selectCustom or computed.Engine.build after resolve.
   pub fn declarations(self: &Self) -> &[Candidate] {
