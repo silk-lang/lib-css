@@ -28,12 +28,35 @@ import silk.core.option { Option }
 import silk.core.ownership { Copy }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 
+/// Font-relative unit bases in CSS pixels, supplied by the text host. The caller
+/// chooses parent metrics for font-size and the inherited line height for lh in
+/// font-size/line-height; other properties use the element's computed metrics.
+pub struct FontMetrics {
+  pub xHeight: f32,
+  pub capHeight: f32,
+  pub zeroAdvance: f32,
+  pub ideographAdvance: f32,
+  pub lineHeight: f32,
+}
+
+impl Copy for FontMetrics {}
+
+impl FontMetrics {
+  /// CSS fallback metrics when the host cannot measure a font.
+  pub fn fallback(fontSize: f32) -> FontMetrics {
+    return FontMetrics { xHeight: fontSize * 0.5, capHeight: fontSize,
+      zeroAdvance: fontSize * 0.5, ideographAdvance: fontSize, lineHeight: fontSize }
+  }
+}
+
 /// What relative units resolve against. Sizes are CSS pixels.
 pub struct Context {
   /// The element's font size, for `em`.
   pub fontSize: f32,
   /// The root font size, for `rem`.
   pub rootFontSize: f32,
+  pub fontMetrics: Option<FontMetrics>,
+  pub rootFontMetrics: Option<FontMetrics>,
   pub viewportWidth: f32,
   pub viewportHeight: f32,
   pub smallViewportWidth: Option<f32>,
@@ -53,11 +76,21 @@ impl Context {
   pub fn make() -> Context {
     return Context {
       fontSize: 16.0, rootFontSize: 16.0, viewportWidth: 0.0, viewportHeight: 0.0,
+      fontMetrics: Option<FontMetrics>.None, rootFontMetrics: Option<FontMetrics>.None,
       smallViewportWidth: Option<f32>.None, smallViewportHeight: Option<f32>.None, vertical: false,
       containerWidth: Option<f32>.None, containerHeight: Option<f32>.None,
       containerInlineSize: Option<f32>.None, containerBlockSize: Option<f32>.None,
     }
   }
+
+  pub fn metrics(self: &Self) -> FontMetrics {
+    return match self.fontMetrics { Option.Some { value } => value _ => FontMetrics.fallback(self.fontSize) }
+  }
+
+  pub fn rootMetrics(self: &Self) -> FontMetrics {
+    return match self.rootFontMetrics { Option.Some { value } => value _ => FontMetrics.fallback(self.rootFontSize) }
+  }
+
 }
 
 fn basis(size: Option<f32>, fallback: f32) -> f32 {
@@ -103,15 +136,16 @@ pub fn pixelsPer(unit: Unit, context: &Context) -> Option<f32> {
     Unit.Pc => Option<f32>.some(16.0)
     Unit.Em => Option<f32>.some(context.fontSize)
     Unit.Rem => Option<f32>.some(context.rootFontSize)
-    // Without font metrics CSS Values 4 §6.1 allows 0.5em for ex and ch, and 1em for ic and cap.
-    Unit.Ex => Option<f32>.some(context.fontSize * 0.5)
-    Unit.Ch => Option<f32>.some(context.fontSize * 0.5)
-    Unit.Ic => Option<f32>.some(context.fontSize)
-    Unit.Cap => Option<f32>.some(context.fontSize)
-    Unit.Rex => Option<f32>.some(context.rootFontSize * 0.5)
-    Unit.Rch => Option<f32>.some(context.rootFontSize * 0.5)
-    Unit.Ric => Option<f32>.some(context.rootFontSize)
-    Unit.Rcap => Option<f32>.some(context.rootFontSize)
+    Unit.Ex => Option<f32>.some(context.metrics().xHeight)
+    Unit.Ch => Option<f32>.some(context.metrics().zeroAdvance)
+    Unit.Ic => Option<f32>.some(context.metrics().ideographAdvance)
+    Unit.Cap => Option<f32>.some(context.metrics().capHeight)
+    Unit.Lh => Option<f32>.some(context.metrics().lineHeight)
+    Unit.Rex => Option<f32>.some(context.rootMetrics().xHeight)
+    Unit.Rch => Option<f32>.some(context.rootMetrics().zeroAdvance)
+    Unit.Ric => Option<f32>.some(context.rootMetrics().ideographAdvance)
+    Unit.Rcap => Option<f32>.some(context.rootMetrics().capHeight)
+    Unit.Rlh => Option<f32>.some(context.rootMetrics().lineHeight)
     Unit.Vw => Option<f32>.some(context.viewportWidth / 100.0)
     Unit.Svw => Option<f32>.some(smallWidth / 100.0)
     Unit.Lvw => Option<f32>.some(context.viewportWidth / 100.0)

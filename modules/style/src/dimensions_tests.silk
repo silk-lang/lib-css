@@ -690,3 +690,31 @@ test effect fn containerLengthUnitsAndMixedCalc() ! CssError | OutOfMemoryError 
   let mut allocator = Allocator.systemAllocatorProvider()
   run containerLengthCases() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+
+import css_properties.convert { Context as PropertyContext, FontMetrics }
+
+effect fn sharedHostUnits() ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut source = PropertyContext.make()
+  source.fontSize = 20.0
+  source.rootFontSize = 30.0
+  source.viewportWidth = 800.0
+  source.viewportHeight = 600.0
+  source.smallViewportWidth = Option<f32>.some(700.0)
+  source.smallViewportHeight = Option<f32>.some(500.0)
+  source.vertical = true
+  source.containerWidth = Option<f32>.some(200.0)
+  source.containerInlineSize = Option<f32>.some(300.0)
+  source.fontMetrics = Option<FontMetrics>.some(FontMetrics { xHeight: 9.0, capHeight: 14.0, zeroAdvance: 12.0, ideographAdvance: 19.0, lineHeight: 28.0 })
+  source.rootFontMetrics = Option<FontMetrics>.some(FontMetrics { xHeight: 13.0, capHeight: 21.0, zeroAdvance: 17.0, ideographAdvance: 29.0, lineHeight: 42.0 })
+  let context = Context.fromProperties(&source)
+  run Testing.expect(run resolves(b"calc(2ch + 1rlh + 25%)", Dimension.LengthPercentage, false, &context, 200.0, 116.0), "typed and parsed lengths share font metrics and retain percentages")
+  run Testing.expect(run resolves(b"calc(1em + 1rem + 1ex + 1rex + 1cap + 1rcap + 1ic + 1ric + 1lh + 1rch)", Dimension.Length, false, &context, 0.0, 200.0), "all measured element and root units survive the shared-context conversion")
+  run Testing.expect(run resolves(b"calc(10cqw + 10cqh + 10cqi + 10cqb + 10svw + 10svh)", Dimension.Length, false, &context, 0.0, 290.0), "independently selected containers and small-viewport fallbacks survive the conversion")
+  run Testing.expect(context.parentXHeight == 9.0 && context.parentLineHeight == 28.0, "font-property parsers initially see the caller's selected font basis")
+}
+
+test effect fn parsedLengthsShareTypedPropertyUnitBases() ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run sharedHostUnits() |> Effect.provideMut<Allocator>(&mut allocator)
+}

@@ -9,6 +9,8 @@ import silk.core.option { Option }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.ownership { Copy }
 import silk.num.f64
+import silk.num.f32
+import css_properties.convert { Context as PropertyContext }
 
 pub enum Dimension {
   Number,
@@ -217,6 +219,39 @@ pub struct Context {
 impl Copy for Context {}
 
 impl Context {
+  /// Share the host's unit bases with the typed Declaration conversion path.
+  /// Parent font bases start at the supplied element bases; font-property callers
+  /// can replace them independently before using font value grammars.
+  pub fn fromProperties(source: &PropertyContext) -> Context {
+    let mut context = Context.make(f32.toF64(source.viewportWidth), f32.toF64(source.viewportHeight), f32.toF64(source.fontSize))
+    let metrics = source.metrics()
+    let root = source.rootMetrics()
+    context.rootFontSize = f32.toF64(source.rootFontSize)
+    context.xHeight = f32.toF64(metrics.xHeight)
+    context.capHeight = f32.toF64(metrics.capHeight)
+    context.zeroAdvance = f32.toF64(metrics.zeroAdvance)
+    context.ideographAdvance = f32.toF64(metrics.ideographAdvance)
+    context.lineHeight = f32.toF64(metrics.lineHeight)
+    context.rootXHeight = f32.toF64(root.xHeight)
+    context.rootCapHeight = f32.toF64(root.capHeight)
+    context.rootZeroAdvance = f32.toF64(root.zeroAdvance)
+    context.rootIdeographAdvance = f32.toF64(root.ideographAdvance)
+    context.rootLineHeight = f32.toF64(root.lineHeight)
+    context.parentXHeight = context.xHeight
+    context.parentCapHeight = context.capHeight
+    context.parentZeroAdvance = context.zeroAdvance
+    context.parentIdeographAdvance = context.ideographAdvance
+    context.parentLineHeight = context.lineHeight
+    context.vertical = source.vertical
+    if let Option.Some { value } = source.smallViewportWidth { context.smallViewportWidth = f32.toF64(value) }
+    if let Option.Some { value } = source.smallViewportHeight { context.smallViewportHeight = f32.toF64(value) }
+    context.containerWidth = wider(source.containerWidth)
+    context.containerHeight = wider(source.containerHeight)
+    context.containerInlineSize = wider(source.containerInlineSize)
+    context.containerBlockSize = wider(source.containerBlockSize)
+    return context
+  }
+
   /// Convenience for a static viewport. Override actual font metrics, ascent/cap height,
   /// line heights, root metrics, and viewport variants before computing host styles.
   pub fn make(viewportWidth: f64, viewportHeight: f64, fontSize: f64) -> Context {
@@ -1477,4 +1512,8 @@ pub fn evaluate(store: &Store<'_>, id: ExprId, percentageBasis: f64) -> f64 {
     return 0.0
   }
   return value
+}
+
+fn wider(value: Option<f32>) -> Option<f64> {
+  return match value { Option.Some { value: size } => Option<f64>.some(f32.toF64(size)) _ => Option<f64>.None }
 }
