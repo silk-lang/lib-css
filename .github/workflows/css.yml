@@ -27,11 +27,11 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          SILK_RELEASE: v0.1.0-dev.74+205aea3f5b2e
+          SILK_RELEASE: v0.1.0-pipeline.1
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --location --retry 3 \
-            "https://raw.githubusercontent.com/silk-lang/silk/8214c402307b/install.sh" \
+            "https://raw.githubusercontent.com/silk-lang/silk/v0.1.0-pipeline.1/install.sh" \
             -o "$RUNNER_TEMP/install-silk.sh"
           sh "$RUNNER_TEMP/install-silk.sh"
           echo "$HOME/.silk/bin" >> "$GITHUB_PATH"
