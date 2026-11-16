@@ -224,5 +224,8 @@ test effect fn complexShorthandProjectionSharesValueGrammars() -> ()
   run Testing.expect(run projection(Property.WhiteSpace, b"pre-wrap", Property.WhiteSpaceCollapse, b"preserve") |> Effect.provideMut<Allocator>(&mut allocator), "white-space expands its computed components")
   run Testing.expect(run projection(Property.Font, b"italic 20px serif", Property.FontSize, b"20px") |> Effect.provideMut<Allocator>(&mut allocator), "font projects through the shared grammar")
   run Testing.expect(run projection(Property.Animation, b"fade 2s linear", Property.AnimationDuration, b"2s") |> Effect.provideMut<Allocator>(&mut allocator), "animation selects its longhand list")
+  run Testing.expect(run projection(Property.Transition, b"opacity 1s linear, width 2s ease-in 100ms allow-discrete", Property.TransitionDuration, b"1s, 2s") |> Effect.provideMut<Allocator>(&mut allocator), "transition keeps each duration")
+  run Testing.expect(run projection(Property.Transition, b"opacity 1s linear, width 2s ease-in 100ms allow-discrete", Property.TransitionProperty, b"opacity, width") |> Effect.provideMut<Allocator>(&mut allocator), "transition keeps its property list")
+  run Testing.expect(run projection(Property.Transition, b"opacity 1s linear, width 2s ease-in 100ms allow-discrete", Property.TransitionBehavior, b"normal, allow-discrete") |> Effect.provideMut<Allocator>(&mut allocator), "transition behavior projects and resets")
   run Testing.expect(run projection(Property.All, b"unset", Property.Width, b"unset") |> Effect.provideMut<Allocator>(&mut allocator), "wide values project without parsing")
 }

@@ -1677,6 +1677,23 @@ effect fn parseValue(
     }
     _ => {}
   }
+  if property == Property.Transition || property == Property.TransitionProperty
+    || property == Property.TransitionDuration || property == Property.TransitionTimingFunction
+    || property == Property.TransitionDelay || property == Property.TransitionBehavior {
+    let parsed = run cssom_animation.parseInput(property, source)
+    if parsed.length() == 0 { return Option<Value>.None }
+    cursor.position = source.length()
+    if property == Property.Transition {
+      let mut texts = List<Span>.make()
+      let mut i: usize = 0
+      while i < parsed.length() {
+        run texts.append(run store.storeText(parsed.asSlice()[i].asSlice()))
+        i = i + 1
+      }
+      return Option<Value>.some(Value.Longhands { texts: move texts })
+    }
+    return Option<Value>.some(Value.Raw { text: run store.storeText(parsed.asSlice()[0].asSlice()) })
+  }
   if properties.boxProperty(property) {
     return run boxValue(&mut store.*, property, source, &mut cursor.*)
   }

@@ -502,7 +502,8 @@ pub effect fn serialize(property: Property, values: &[Bytes]) -> Bytes
     }
     return move out
   }
-  if property == Property.Mask || property == Property.Animation {
+  if property == Property.Mask || property == Property.Animation || property == Property.Transition {
+    let columns: usize = if property == Property.Transition { 5 } else { 8 }
     if property == Property.Mask {
       at = 8
       while at < count {
@@ -516,7 +517,7 @@ pub effect fn serialize(property: Property, values: &[Bytes]) -> Bytes
     while true {
       let mut ends: [usize; 8] = [0, 0, 0, 0, 0, 0, 0, 0]
       at = 0
-      while at < 8 {
+      while at < columns {
         ends[at] = listEnd(text(values, at), starts[at])
         if starts[at] >= ends[at] {
           return Bytes.make()
@@ -527,11 +528,11 @@ pub effect fn serialize(property: Property, values: &[Bytes]) -> Bytes
         run out.append(b", ")
       }
       let mut layer = Bytes.make()
-      if property == Property.Animation {
+      if property == Property.Animation || property == Property.Transition {
         // The name is last: a name that is also a keyword must not steal an omitted component.
-        let order: [usize; 8] = [1, 2, 3, 4, 5, 6, 7, 0]
+        let order: [usize; 8] = if property == Property.Transition { [1, 2, 3, 4, 0, 0, 0, 0] } else { [1, 2, 3, 4, 5, 6, 7, 0] }
         at = 0
-        while at < 8 {
+        while at < columns {
           let slot = order[at]
           run word(&mut layer, listPart(text(values, slot), starts[slot], ends[slot]))
           at = at + 1
@@ -571,7 +572,7 @@ pub effect fn serialize(property: Property, values: &[Bytes]) -> Bytes
       run out.append(Bytes.asSlice(&layer))
       let done = ends[0] == text(values, 0).length
       at = 0
-      while at < 8 {
+      while at < columns {
         if (ends[at] == text(values, at).length) != done {
           return Bytes.make()
         }

@@ -1,4 +1,4 @@
-//! CSS Animations 1 declaration grammar and canonical longhand expansion.
+//! CSS animation and transition grammars and canonical longhand expansion.
 import properties { Property }
 import tokens { TokenRange, Kind, Span }
 import tokens
@@ -16,6 +16,11 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 
 fn slot(property: Property) -> usize {
   return match property {
+    Property.TransitionProperty => 0
+    Property.TransitionDuration => 1
+    Property.TransitionTimingFunction => 2
+    Property.TransitionDelay => 3
+    Property.TransitionBehavior => 4
     Property.AnimationName => 0
     Property.AnimationDuration => 1
     Property.AnimationTimingFunction => 2
@@ -28,7 +33,9 @@ fn slot(property: Property) -> usize {
   }
 }
 
-fn initial(index: usize) -> &'static [u8] {
+fn initial(index: usize, transition: bool) -> &'static [u8] {
+  if transition && index == 0 { return b"all" }
+  if transition && index == 4 { return b"normal" }
   return match index {
     0 => b"none"
     1 => b"0s"
@@ -316,10 +323,18 @@ fn easing(source: &Input<'_>, start: usize, end: usize) -> bool {
   return false
 }
 
-effect fn component(index: usize, source: &Input<'_>, range: TokenRange) -> Option<Bytes>
+effect fn component(index: usize, transition: bool, source: &Input<'_>, range: TokenRange) -> Option<Bytes>
   ! OutOfMemoryError
   ? &mut Allocator {
   let first = kind(source, range.start)
+  if transition && index == 4 {
+    if let Kind.Ident { text: span } = first {
+      let name = text(source, range.start, span)
+      if tokens.insensitive(name, b"normal") { return Option<Bytes>.some(run Bytes.copy(b"normal")) }
+      if tokens.insensitive(name, b"allow-discrete") { return Option<Bytes>.some(run Bytes.copy(b"allow-discrete")) }
+    }
+    return Option<Bytes>.None
+  }
   if index == 0 {
     match &first {
       Kind.Ident { text: span } => {
@@ -340,6 +355,7 @@ effect fn component(index: usize, source: &Input<'_>, range: TokenRange) -> Opti
         )
       }
       Kind.String { text: span } => {
+        if transition { return Option<Bytes>.None }
         return Option<Bytes>.some(run cssom_serialization.string(text(source, range.start, span)))
       }
       _ => {
@@ -384,9 +400,12 @@ effect fn component(index: usize, source: &Input<'_>, range: TokenRange) -> Opti
 pub effect fn parseInput(property: Property, source: &Input<'_>) -> List<Bytes>
   ! OutOfMemoryError
   ? &mut Allocator {
-  let shorthand = property == Property.Animation
+  let transition = property == Property.Transition || property == Property.TransitionProperty
+    || property == Property.TransitionDuration || property == Property.TransitionTimingFunction
+    || property == Property.TransitionDelay || property == Property.TransitionBehavior
+  let shorthand = property == Property.Animation || property == Property.Transition
   let count: usize = if shorthand {
-    8
+    if transition { 5 } else { 8 }
   } else {
     1
   }
@@ -421,15 +440,15 @@ pub effect fn parseInput(property: Property, source: &Input<'_>) -> List<Bytes>
       let range = TokenRange { start: at, end: end }
       let mut matched = false
       if shorthand {
-        let order: [usize; 8] = [1, 2, 3, 4, 5, 6, 7, 0]
+        let order: [usize; 8] = if transition { [1, 2, 3, 4, 0, 0, 0, 0] } else { [1, 2, 3, 4, 5, 6, 7, 0] }
         k = 0
-        while k < 8 {
+        while k < count {
           let candidate = order[k]
 
           // The first time always fills duration; a negative first time is invalid.
           if layer.asSlice()[candidate].length() == 0
             && (candidate != 3 || layer.asSlice()[1].length() != 0) {
-            match run component(candidate, source, range) {
+            match run component(candidate, transition, source, range) {
               Option<Bytes>.Some { value } => {
                 layer.set(candidate, move value)
                 matched = true
@@ -443,7 +462,7 @@ pub effect fn parseInput(property: Property, source: &Input<'_>) -> List<Bytes>
           k = k + 1
         }
       } else if !any {
-        match run component(target, source, range) {
+        match run component(target, transition, source, range) {
           Option<Bytes>.Some { value } => {
             layer.set(0, move value)
             matched = true
@@ -460,6 +479,8 @@ pub effect fn parseInput(property: Property, source: &Input<'_>) -> List<Bytes>
     if !any {
       return List<Bytes>.make()
     }
+    if transition && (shorthand || target == 0) && tokens.equal(layer.asSlice()[0].asSlice(), b"none")
+      && (at != source.length() || out.asSlice()[0].length() != 0) { return List<Bytes>.make() }
     k = 0
     while k < count {
       let mut destination = out.asMutSlice()
@@ -467,7 +488,7 @@ pub effect fn parseInput(property: Property, source: &Input<'_>) -> List<Bytes>
         run destination[k].append(b", ")
       }
       if layer.asSlice()[k].length() == 0 {
-        run destination[k].append(initial(k))
+        run destination[k].append(initial(k, transition))
       } else {
         run destination[k].append(Bytes.asSlice(&layer.asSlice()[k]))
       }

@@ -60,3 +60,30 @@ test effect fn animationGrammarAndIndependentListExpansion() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   run grammar() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+effect fn transitionGrammar() -> ()
+  ! CssError | OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
+  let mut store = Store.make()
+  let valid = [b"opacity 1s ease-in -200ms, width 2s steps(2, end) allow-discrete", b"none", b"1s linear all", b"--progress 300ms"]
+  let mut i: usize = 0
+  while i < valid.length {
+    let buffer = run lexer.tokenize(valid[i], &Limits.make())
+    let parsed = run values.parse(&mut store, Property.Transition, &Input.Contiguous { buffer: &buffer, range: buffer.all() }, Mode.Css)
+    run Testing.expect(parsed.isSome(), "transition accepts timing lists, behavior, omitted properties and custom properties")
+    i = i + 1
+  }
+  let invalid = [b"opacity -1s", b"opacity 1s 2s 3s", b"opacity 1s,", b"opacity width 1s", b"opacity steps(0) 1s", b"none 1s, opacity 1s", b"opacity 1s, none", b"\"opacity\" 1s", b"opacity 1s normal allow-discrete"]
+  i = 0
+  while i < invalid.length {
+    let buffer = run lexer.tokenize(invalid[i], &Limits.make())
+    let parsed = run values.parse(&mut store, Property.Transition, &Input.Contiguous { buffer: &buffer, range: buffer.all() }, Mode.Css)
+    run Testing.expect(parsed.isNone(), "invalid transition grammar cannot become partial longhands")
+    i = i + 1
+  }
+}
+
+test effect fn transitionsValidateAndExpandThroughTheSharedGrammar() -> ()
+  ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run transitionGrammar() |> Effect.provideMut<Allocator>(&mut allocator)
+}
