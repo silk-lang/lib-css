@@ -329,6 +329,8 @@ test effect fn adoptedVariableScopesShareRepeatedInputsWithoutLeakingState() -> 
   run sharedScopesBody() |> Effect.provideMut<Allocator>(&mut allocator)
 }
 
+import scope_cache { SCOPE_LIMIT }
+
 effect fn scopeRetentionPressure() -> ()
   ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
   let mut sheets = StyleSheets.make()
@@ -338,7 +340,7 @@ effect fn scopeRetentionPressure() -> ()
   run sheets.resolve(&tree, 1, &[], &mut context)
   let mut parent = Option<ScopeId>.None
   let mut i: usize = 0
-  while i < 140 {
+  while i < SCOPE_LIMIT + 12 {
     let next = run sheets.variableScope(parent, &Limits.make())
     run Testing.expect(valueIs(&(run pendingValue(&sheets, next, Property.Height)), b"3px"), "cache pressure does not change registration defaults")
     parent = Option<ScopeId>.some(next)

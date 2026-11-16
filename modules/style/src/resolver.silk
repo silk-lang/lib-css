@@ -57,6 +57,7 @@ pub struct Resolver {
   states: List<u32>,
   selectedStates: u32,
   starting: List<bool>,
+  relations: u32,
 }
 
 impl Resolver {
@@ -70,6 +71,7 @@ impl Resolver {
       states: List<u32>.make(),
       selectedStates: 0,
       starting: List<bool>.make(),
+      relations: 0,
     }
   }
 
@@ -77,6 +79,7 @@ impl Resolver {
   pub effect fn add(self: &mut Self, rule: Rule, buffer: &TokenBuffer) -> ()
     ! OutOfMemoryError ? &mut Allocator {
     let dependencies = run rule.selectors.dependencies()
+    self.relations = self.relations | rule.selectors.reads()
     let mut states: u32 = 0
     let mut at: usize = 0
     while at < dependencies.length() {
@@ -198,6 +201,9 @@ impl Resolver {
   pub fn declarations(self: &Self) -> &[Candidate] {
     return self.candidates.asSlice()
   }
+
+  /// The union of `SelectorList.reads` over every rule, enabled or not.
+  pub fn reads(self: &Self) -> u32 { return self.relations }
 
   pub fn invalidation(self: &Self, rule: usize) -> &[Dependency] {
     return self.dependencies.asSlice()[rule].asSlice()
