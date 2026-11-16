@@ -1,0 +1,55 @@
+import sheet_fonts { FontFaceRule }
+import font_web.stylesheet
+import cssom_descriptors { Context }
+import cssom_descriptors
+import syntax
+import tokens { TokenBuffer, TokenRange, Limits, CssError, Kind, insensitive }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.url.url { Url }
+
+pub struct Parsed { pub rule: Option<FontFaceRule>, pub unsupported: List<Bytes> }
+
+pub effect fn parse(buffer: &TokenBuffer, body: TokenRange, limits: &Limits) -> Parsed
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let declarations = run syntax.parseDeclarations(buffer, body, limits)
+  let mut css = run Bytes.copy(b"@font-face{")
+  let mut unsupported = List<Bytes>.make()
+  let mut i: usize = 0
+  while i < declarations.length() {
+    let declaration = declarations.asSlice()[i]
+    if !declaration.important {
+      let name = buffer.text(declaration.name)
+      let numeric = insensitive(name,b"font-weight") || insensitive(name,b"font-width") || insensitive(name,b"font-stretch") || insensitive(name,b"font-style")
+      let mut math = false
+      let mut token = declaration.value.start
+      while token < declaration.value.end {
+        if numeric && match &buffer.tokens.asSlice()[token].kind { Kind.Function { .. } => true _ => false } { math = true }
+        token = token + 1
+      }
+      if math { run unsupported.append(run Bytes.copy(b"descriptor math")) i = i + 1 continue }
+      let normalized = run cssom_descriptors.parse(Context.FontFace, name, buffer, declaration.value, limits)
+      if normalized.length() != 0 {
+        let item = &normalized.asSlice()[0]
+        let supported = insensitive(item.name,b"font-family") || insensitive(item.name,b"src") || insensitive(item.name,b"font-weight")
+          || insensitive(item.name,b"font-width") || insensitive(item.name,b"font-style") || insensitive(item.name,b"unicode-range")
+          || insensitive(item.name,b"font-display")
+        if supported {
+          run css.append(item.name)
+          run css.append(b":")
+          run css.append(item.value.asSlice())
+          run css.append(b";")
+        } else { run unsupported.append(run Bytes.copy(item.name)) }
+      } else if cssom_descriptors.name(Context.FontFace, name).length == 0 {
+        run unsupported.append(run Bytes.copy(name))
+      }
+    }
+    i = i + 1
+  }
+  run css.append(b"}")
+  let mut rules = run stylesheet.parse(css.asSlice(), Option<&'static Url>.None)
+  let rule = if rules.length() == 0 { Option<FontFaceRule>.None } else { Option<FontFaceRule>.some(rules.remove(0)) }
+  return Parsed { rule: move rule, unsupported: move unsupported }
+}

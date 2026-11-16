@@ -63,6 +63,15 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
     rules[i].enabled = enabled
     i = i + 1
   }
+  i = 0
+  while i < sheet.fontFaces.length() {
+    let faces = sheet.fontFaces.asMutSlice()
+    let condition = faces[i].condition
+    let enabled = condition == NONE || results.asSlice()[condition]
+    if faces[i].enabled != enabled { changed = true }
+    faces[i].enabled = enabled
+    i = i + 1
+  }
   return changed
 }
 

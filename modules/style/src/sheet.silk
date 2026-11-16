@@ -1,3 +1,5 @@
+import sheet_fonts { Face }
+import sheet_fonts
 //! Compiled stylesheet data and its versioned byte format. Decoding does not invoke CSS parsers.
 import tokens { TokenBuffer, TokenRange, Limits }
 import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
@@ -28,7 +30,7 @@ import silk.num.u64
 import silk.num.u32
 import silk.text.string { String, InvalidUtf8 }
 
-pub const VERSION: u32 = 7
+pub const VERSION: u32 = 8
 pub const NONE: usize = UNLAYERED
 
 pub union Declaration {
@@ -86,6 +88,7 @@ pub struct Sheet {
   pub containerPrograms: List<Queries>,
   pub ruleConditions: List<usize>,
   pub metadata: List<AtRule>,
+  pub fontFaces: List<Face>,
   pub keyframes: List<Keyframes>,
   pub registrations: List<RegisteredProperty>,
   pub layers: Layers,
@@ -141,7 +144,7 @@ impl Sheet {
     return Sheet {
       buffers: List<TokenBuffer>.make(), declarations: List<Declaration>.make(),
       conditions: List<Condition>.make(), containerPrograms: List<Queries>.make(), ruleConditions: List<usize>.make(),
-      metadata: List<AtRule>.make(), keyframes: List<Keyframes>.make(), registrations: List<RegisteredProperty>.make(), layers: Layers.make(), resolver: Resolver.make(),
+      metadata: List<AtRule>.make(), fontFaces: List<Face>.make(), keyframes: List<Keyframes>.make(), registrations: List<RegisteredProperty>.make(), layers: Layers.make(), resolver: Resolver.make(),
       diagnostics: List<Diagnostic>.make(),
     }
   }
@@ -237,6 +240,15 @@ impl Sheet {
         run writeRange(&mut writer, item.declarations)
         frame = frame + 1
       }
+      i = i + 1
+    }
+    run writer.index(self.fontFaces.length())
+    i = 0
+    while i < self.fontFaces.length() {
+      let face = &self.fontFaces.asSlice()[i]
+      run writer.index(face.condition)
+      run writer.index(face.layer)
+      run sheet_fonts.encode(&face.rule, &mut writer)
       i = i + 1
     }
     run writer.index(self.metadata.length())
@@ -397,6 +409,16 @@ impl Sheet {
         frame = frame + 1
       }
       run sheet.keyframes.append(Keyframes { name: move name, condition: condition, layer: layer, frames: move frames, enabled: condition == NONE })
+      i = i + 1
+    }
+    let fontCount = run reader.count(limits.maxRules)
+    i = 0
+    while i < fontCount {
+      let condition = run reader.index()
+      let layer = run reader.index()
+      if condition != NONE && condition >= conditionCount || layer != NONE && layer >= layerCount { run reader.invalid() }
+      let rule = run sheet_fonts.decode(&mut reader, limits)
+      run sheet.fontFaces.append(Face { rule: move rule, condition: condition, layer: layer, enabled: condition == NONE })
       i = i + 1
     }
     let metadataCount = run reader.count(limits.maxRules)

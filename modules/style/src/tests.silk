@@ -62,3 +62,5 @@ import adopted_tests
 import generated_content_tests
 
 import container_queries_tests
+
+import sheet_fonts_tests as _sheet_fonts_tests

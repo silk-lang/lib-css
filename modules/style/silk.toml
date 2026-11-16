@@ -10,7 +10,7 @@ exports = [
   "properties", "values", "value_cursor", "value_keywords", "dimensions",
   "colors", "text_values", "effect_values", "transform_values",
   "media_queries", "media_features", "container_queries", "supports", "declaration_values", "encoding",
-  "cascade", "layers", "resolver", "adopted", "adopted_variables", "compile", "sheet", "sheet_conditions", "sheet_binary", "variables", "registration", "computed", "computed_projection", "computed_queries", "key_index",
+  "cascade", "layers", "resolver", "adopted", "adopted_variables", "compile", "sheet", "sheet_fonts", "sheet_conditions", "sheet_binary", "variables", "registration", "computed", "computed_projection", "computed_queries", "key_index",
   "cssom_error", "cssom_serialization", "cssom_declaration", "cssom_descriptors",
   "cssom_stylesheet", "cssom_media", "cssom_document", "cssom_computed",
   "cssom_inline", "cssom_loading",
@@ -26,3 +26,5 @@ exports = [
 [dependencies]
 css_properties = { path = "../properties", package = "css-properties" }
 svg_geometry = { git = "https://github.com/silk-lang/lib-graphics.git", rev = "7e3770cb41beaf709272548863f5b020f476765f", path = "modules/geometry", package = "graphics-geometry" }
+
+font_web = { git = "https://github.com/silk-lang/lib-fonts.git", rev = "9c2c5e579164b7f12bfa769cc5d08566ec140856", path = "modules/web", package = "font-web" }

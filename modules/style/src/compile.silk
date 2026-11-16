@@ -1,5 +1,7 @@
+import compile_fonts
+import sheet_fonts { Face }
 //! Compiles CSS syntax to shared declarations, selector programs and retained conditions.
-import sheet { Sheet, Declaration, Condition, ConditionKind, AtRule, Keyframes, Keyframe, RegisteredProperty, Diagnostic, DiagnosticKind, NONE }
+import sheet { Sheet, Declaration, Condition, ConditionKind, Keyframes, Keyframe, RegisteredProperty, Diagnostic, DiagnosticKind, NONE }
 import registration { Parsed }
 import registration
 import resolver { Rule as MatchRule }
@@ -263,8 +265,22 @@ impl Compiler {
       return
     }
     if insensitive(name, b"font-face") && rule.kind == RuleKind.AtBlock {
-      if self.sheet.metadata.length() >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: rule.prelude.start } }
-      run self.sheet.metadata.append(AtRule { name: run Bytes.copy(name), buffer: 0, prelude: rule.prelude, body: rule.body })
+      if parent.length != 0 || skip(source, rule.prelude.start, rule.prelude.end) != rule.prelude.end {
+        run self.report(DiagnosticKind.AtRule, name)
+        return
+      }
+      if self.sheet.fontFaces.length() >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: rule.prelude.start } }
+      let parsed = run compile_fonts.parse(source, rule.body, &self.limits)
+      let mut i: usize = 0
+      while i < parsed.unsupported.length() {
+        let mut feature = run Bytes.copy(b"font-face ")
+        run feature.append(parsed.unsupported.asSlice()[i].asSlice())
+        run self.report(DiagnosticKind.Unsupported, feature.asSlice())
+        i = i + 1
+      }
+      if let Option.Some { value } = move parsed.rule {
+        run self.sheet.fontFaces.append(Face { rule: move value, condition: condition, layer: layer, enabled: condition == NONE })
+      }
       return
     }
     run self.report(DiagnosticKind.AtRule, name)

@@ -410,3 +410,26 @@ test effect fn namedKeyframesFollowLayersConditionsAndAdoptionOrder() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   run keyframeNames() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+effect fn faceNames() ! AssertionError<'static> | AdoptionError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, run compiled(b"@layer low,high;@layer high{@font-face{font-family:Brand;src:url(high.ttf);font-weight:700}}"))
+  run sheets.adopt(2, run compiled(b"@layer low{@font-face{font-family:Brand;src:url(low.ttf);font-weight:400}}@media(width>600px){@font-face{font-family:Brand;src:url(wide.ttf)}}"))
+  drop run sheets.environment(&Environment.headless(400.0,300.0),false,&Limits.make())
+  let small = run sheets.fontFaces()
+  run Testing.expect(small.length() == 2 && small.get(0).sheet == 1 && small.get(1).sheet == 0, "all eligible font descriptors participate, ordered by cross-sheet layer priority")
+  drop run sheets.environment(&Environment.headless(800.0,300.0),false,&Limits.make())
+  let large = run sheets.fontFaces()
+  run Testing.expect(large.length() == 3 && large.get(2).sheet == 1 && large.get(2).rule == 1, "unlayered faces follow layered faces when media matches")
+  run sheets.adopt(3,run compiled(b"@font-face{font-family:Brand;src:url(last.ttf)}"))
+  let adopted = run sheets.fontFaces()
+  run Testing.expect(adopted.length() == 4 && adopted.get(3).sheet == 2, "later adoption breaks equal-layer ties")
+  run sheets.reorder(&[3,2,1])
+  let reordered = run sheets.fontFaces()
+  run Testing.expect(reordered.length() == 4 && reordered.get(3).sheet == 1, "reordering changes face precedence without dropping descriptor variants")
+}
+
+test effect fn namedFontFacesFollowLayersConditionsAndAdoptionOrder() ! AssertionError<'static> | AdoptionError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run faceNames() |> Effect.provideMut<Allocator>(&mut allocator)
+}

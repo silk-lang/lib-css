@@ -33,6 +33,9 @@ impl Copy for MatchedRule {}
 pub struct KeyframesRef { pub sheet: usize, pub rule: usize }
 impl Copy for KeyframesRef {}
 
+pub struct FontFaceRef { pub sheet: usize, pub rule: usize, pub priority: Priority }
+impl Copy for FontFaceRef {}
+
 pub struct AdoptedSheet {
   pub id: u32,
   pub sheet: Sheet,
@@ -120,6 +123,36 @@ impl StyleSheets {
       sheet = sheet + 1
     }
     return found
+  }
+
+  pub effect fn fontFaces(self: &Self) -> List<FontFaceRef> ! OutOfMemoryError ? &mut Allocator {
+    let mut result = List<FontFaceRef>.make()
+    let mut order: usize = 0
+    let mut sheet: usize = 0
+    while sheet < self.entries.length() {
+      let entry = &self.entries.asSlice()[sheet]
+      let mut rule: usize = 0
+      while rule < entry.sheet.fontFaces.length() {
+        let candidate = &entry.sheet.fontFaces.asSlice()[rule]
+        if candidate.enabled {
+          let mut priority = Priority.make(Origin.Author, order)
+          priority.layer = if candidate.layer == UNLAYERED { UNLAYERED } else { entry.layers.asSlice()[candidate.layer] }
+          run result.append(FontFaceRef { sheet: sheet, rule: rule, priority: priority })
+          let mut at = result.length() - 1
+          while at > 0 && cascade.compare(result.get(at).priority, result.get(at - 1).priority) < 0 {
+            let entries = result.asMutSlice()
+            let previous = entries[at - 1]
+            entries[at - 1] = entries[at]
+            entries[at] = previous
+            at = at - 1
+          }
+        }
+        rule = rule + 1
+        order = order + 1
+      }
+      sheet = sheet + 1
+    }
+    return move result
   }
 
   /// Adopts at the end. Duplicate ids are rejected rather than changing source order.
