@@ -4,6 +4,8 @@ import media_features { Environment }
 import silk.num.usize
 import tokens { CssError, CssErrorKind }
 import silk.core.ownership { Copy }
+import silk.collections.list { List }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
 
 pub const NO_ELEMENT: usize = usize.MAX
 
@@ -116,6 +118,13 @@ pub interface ElementTree {
   fn isLink(self: &Self, node: usize) -> bool
 }
 
+pub struct ContainerDependency {
+  pub sheet: u32,
+  pub condition: usize,
+  pub matched: bool,
+}
+impl Copy for ContainerDependency {}
+
 pub struct MatchContext {
   pub scope: usize,
   pub target: usize,
@@ -125,6 +134,7 @@ pub struct MatchContext {
   pub shadowHost: usize,
   /// Shared across a document's matching work; exhaustion is CssError.MatchLimit, never false.
   pub remainingSteps: usize,
+  pub containers: List<ContainerDependency>,
 }
 
 impl MatchContext {
@@ -136,7 +146,23 @@ impl MatchContext {
       pseudoStates: StateBits.empty(),
       shadowHost: NO_ELEMENT,
       remainingSteps: 64000000,
+      containers: List<ContainerDependency>.make(),
     }
+  }
+
+  pub fn containerResult(self: &Self, sheet: u32, condition: usize) -> Option<bool> {
+    let entries = self.containers.asSlice()
+    let mut i: usize = 0
+    while i < entries.length {
+      if entries[i].sheet == sheet && entries[i].condition == condition { return Option<bool>.some(entries[i].matched) }
+      i = i + 1
+    }
+    return Option<bool>.None
+  }
+
+  pub effect fn recordContainer(self: &mut Self, sheet: u32, condition: usize, matched: bool)
+    ! OutOfMemoryError ? &mut Allocator {
+    run self.containers.append(ContainerDependency { sheet: sheet, condition: condition, matched: matched })
   }
 
   /// Charge bounded matching or candidate-discovery work before performing it.

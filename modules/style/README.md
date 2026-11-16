@@ -276,6 +276,10 @@ supplies its content-box size and font/writing metrics in `Environment.querySize
 `resolveFiltered` with `sheet_conditions.Filter`. Global condition updates deliberately ignore
 container conditions for name-defining rules such as `@keyframes`. Query lists select ancestors
 independently, nested conditions must all match, and a missing container never matches `not`.
+Each resolution resets `MatchContext.containers` and records the reached conditions after
+selector matching, including false results. Shared conditions are evaluated once per resolution.
+Hosts retain those records with the element and pseudo target, then call
+`StyleSheets.containersChanged` after layout to detect truth changes without rematching selectors.
 Hosts that omit the operation have no eligible containers. The compiler still reports container
 rules as unsupported until the UI host's containment, query invalidation and relayout are connected.
 Diagnostics aggregate dropped features; `Options.strict` rejects a sheet with diagnostics.

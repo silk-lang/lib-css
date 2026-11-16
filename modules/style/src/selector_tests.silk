@@ -431,14 +431,8 @@ test effect fn matchingWorkIsSharedAndTyped() -> ()
   match &parsed {
     Option<SelectorList>.Some { value } => {
       let tree = Tree { states: 0 }
-      let mut context = MatchContext {
-        scope: 0,
-        target: NO_ELEMENT,
-        pseudo: PseudoTarget.None,
-        pseudoStates: StateBits.empty(),
-        shadowHost: NO_ELEMENT,
-        remainingSteps: 6,
-      }
+      let mut context = MatchContext.make(0, NO_ELEMENT)
+      context.remainingSteps = 6
       let first = run selectors.matchElement(&value, &buffer, &tree, 2, &mut context)
       run Testing.expect(
         match &first {

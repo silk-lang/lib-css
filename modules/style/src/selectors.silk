@@ -10,7 +10,7 @@ import silk.simd.mask16
 import tokens { Span, TokenRange, TokenBuffer, Kind, Limits, CssError, CssErrorKind }
 import tokens
 import element
-import element { ElementTree, MatchContext, PseudoTarget, StateBits, NO_ELEMENT }
+import element { ElementTree, MatchContext, PseudoTarget, NO_ELEMENT }
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
 import silk.core.ownership { Copy }
@@ -2322,14 +2322,9 @@ effect fn matchNormal<T: ElementTree>(
   depth: usize,
 ) -> bool
   ! CssError {
-  let mut normal = MatchContext {
-    scope: context.scope,
-    target: context.target,
-    pseudo: PseudoTarget.None,
-    pseudoStates: StateBits.empty(),
-    shadowHost: ElementTree.containingHost(tree, node),
-    remainingSteps: context.remainingSteps,
-  }
+  let mut normal = MatchContext.make(context.scope, context.target)
+  normal.shadowHost = ElementTree.containingHost(tree, node)
+  normal.remainingSteps = context.remainingSteps
   let result = run Effect.result(
     matchesAny(ast, buffer, tree, list, node, NONE, &mut normal, depth),
   )

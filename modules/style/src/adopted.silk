@@ -10,7 +10,7 @@ import silk.mem.box { Box }
 import layers { Layers, UNLAYERED }
 import cascade { Priority, Origin }
 import cascade
-import element { ElementTree, MatchContext }
+import element { ElementTree, MatchContext, ContainerDependency, PseudoTarget }
 import resolver { ResolverError }
 import tokens { BufferView, Limits, CssError, equal }
 import media_features { Environment }
@@ -68,6 +68,21 @@ impl StyleSheets {
   pub fn candidates(self: &Self) -> &[Candidate] { return self.output.asSlice() }
   pub fn matches(self: &Self) -> &[MatchedRule] { return self.matched.asSlice() }
   pub fn stateDependencies(self: &Self) -> u32 { return self.selectedStates }
+  pub effect fn containersChanged<T: ElementTree>(self: &Self, dependencies: &[ContainerDependency], tree: &T,
+    node: usize, pseudo: PseudoTarget) -> bool ! CssError | OutOfMemoryError ? &mut Allocator {
+    let mut i: usize = 0
+    while i < dependencies.length {
+      let dependency = dependencies[i]
+      let index = self.index(dependency.sheet)
+      if index == usize.MAX { return true }
+      let sheet = &self.entries.asSlice()[index].sheet
+      if dependency.condition >= sheet.conditions.length() { return true }
+      let condition = sheet.conditions.asSlice()[dependency.condition]
+      if (run sheet_conditions.containerMatches(sheet.buffers.asSlice(), condition, tree, node, pseudo)) != dependency.matched { return true }
+      i = i + 1
+    }
+    return false
+  }
   pub fn canRetainScopes(self: &Self) -> bool {
     let inputs = self.variableInputs()
     return inputs.length != 0 && inputs[0].canRetainScopes()
@@ -270,6 +285,7 @@ impl StyleSheets {
     self.output.clear()
     self.matched.clear()
     self.selectedStates = 0
+    context.containers.clear()
     let mut candidates = List<Candidate>.make()
     let mut matched = List<MatchedRule>.make()
     let mut states: u32 = 0
@@ -278,7 +294,7 @@ impl StyleSheets {
     let mut i: usize = 0
     while i < entries.length {
       let entry = &mut entries[i]
-      let filter = sheet_conditions.Filter { tree: tree, node: node, buffers: entry.sheet.buffers.asSlice(),
+      let filter = sheet_conditions.Filter { tree: tree, node: node, sheet: entry.id, buffers: entry.sheet.buffers.asSlice(),
         conditions: entry.sheet.conditions.asSlice(), rules: entry.sheet.ruleConditions.asSlice() }
       run entry.sheet.resolver.resolveFiltered(BufferView.of(entry.sheet.buffers.asSlice()), tree, node, &[], &mut context, starting, &filter)
       states = u32.bitOr(states, entry.sheet.resolver.stateDependencies())

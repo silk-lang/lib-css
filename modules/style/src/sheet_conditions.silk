@@ -1,6 +1,6 @@
 //! Evaluates retained stylesheet conditions once per host-environment change.
 import sheet { Sheet, Condition, ConditionKind, NONE }
-import element { ElementTree, MatchContext }
+import element { ElementTree, MatchContext, PseudoTarget }
 import resolver { RuleFilter }
 import container_queries
 import silk.core.option { Option }
@@ -66,9 +66,27 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
 }
 
 /// Borrowed per-sheet query filter; ordinary and media-only rules need no allocation.
+pub effect fn containerMatches<T: ElementTree>(buffers: &[TokenBuffer], condition: Condition, tree: &T,
+  node: usize, pseudo: PseudoTarget) -> bool ! CssError | OutOfMemoryError ? &mut Allocator {
+  if condition.kind != ConditionKind.Container { return false }
+  let buffer = &buffers[condition.buffer]
+  let queries = run container_queries.parse(buffer, condition.range, &Limits.make())
+  if !queries.valid { return false }
+  let mut i: usize = 0
+  while i < queries.arms.length() {
+    let query = &queries.arms.asSlice()[i]
+    if let Option<Environment>.Some { value } = tree.container(node, query.name.asSlice(), query.axes, pseudo) {
+      if run container_queries.matches(buffer, query, &value, &Limits.make()) { return true }
+    }
+    i = i + 1
+  }
+  return false
+}
+
 pub struct Filter<'a, T: ElementTree> {
   pub tree: &'a T,
   pub node: usize,
+  pub sheet: u32,
   pub buffers: &'a [TokenBuffer],
   pub conditions: &'a [Condition],
   pub rules: &'a [usize],
@@ -82,18 +100,13 @@ impl<'a, T: ElementTree> RuleFilter for Filter<'a, T> {
       let condition = self.conditions[at]
       run context.spend(1)
       if condition.kind == ConditionKind.Container {
-        run context.spend(condition.range.end - condition.range.start)
-        let buffer = &self.buffers[condition.buffer]
-        let queries = run container_queries.parse(buffer, condition.range, &Limits.make())
-        if !queries.valid { return false }
         let mut matched = false
-        let mut i: usize = 0
-        while !matched && i < queries.arms.length() {
-          let query = &queries.arms.asSlice()[i]
-          if let Option<Environment>.Some { value } = self.tree.container(self.node, query.name.asSlice(), query.axes, context.pseudo) {
-            matched = run container_queries.matches(buffer, query, &value, &Limits.make())
-          }
-          i = i + 1
+        if let Option<bool>.Some { value } = context.containerResult(self.sheet, at) {
+          matched = value
+        } else {
+          run context.spend(condition.range.end - condition.range.start)
+          matched = run containerMatches(self.buffers, condition, self.tree, self.node, context.pseudo)
+          run context.recordContainer(self.sheet, at, matched)
         }
         if !matched { return false }
       }
