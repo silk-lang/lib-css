@@ -49,5 +49,14 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
     registrations[i].enabled = enabled
     i = i + 1
   }
+  i = 0
+  while i < sheet.keyframes.length() {
+    let rules = sheet.keyframes.asMutSlice()
+    let condition = rules[i].condition
+    let enabled = condition == NONE || results.asSlice()[condition]
+    if rules[i].enabled != enabled { changed = true }
+    rules[i].enabled = enabled
+    i = i + 1
+  }
   return changed
 }

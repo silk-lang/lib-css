@@ -12,6 +12,7 @@ import tokens { Limits, CssError }
 import css_properties.catalog { Property }
 import css_properties.values { Value }
 import silk.core.effect { Effect }
+import silk.core.option { Option }
 import silk.core.result { Result }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.testing.testing { Testing, AssertionError }
@@ -301,4 +302,27 @@ test effect fn startingCascadeDoesNotChangeNormalEligibility() -> ()
   ! AssertionError<'static> | AdoptionError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run startingBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+
+effect fn keyframeNames() -> ()
+  ! AssertionError<'static> | AdoptionError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, run compiled(b"@layer base,utilities; @layer utilities{@keyframes fade{to{opacity:.2}}}"))
+  run sheets.adopt(2, run compiled(b"@layer base{@keyframes fade{to{opacity:.3}}} @media(width>600px){@keyframes fade{to{opacity:.4}}}"))
+  drop run sheets.environment(&Environment.headless(400.0, 300.0), false, &Limits.make())
+  run Testing.expect(match sheets.keyframes(b"fade") { Option.Some { value } => value.sheet == 0 _ => false }, "named keyframes use cross-sheet layer order")
+  drop run sheets.environment(&Environment.headless(800.0, 300.0), false, &Limits.make())
+  run Testing.expect(match sheets.keyframes(b"fade") { Option.Some { value } => value.sheet == 1 && value.rule == 1 _ => false }, "eligible unlayered definitions win")
+  run sheets.adopt(3, run compiled(b"@keyframes fade{}"))
+  run Testing.expect(match sheets.keyframes(b"fade") { Option.Some { value } => value.sheet == 2 _ => false }, "a later empty definition still replaces earlier definitions")
+  run sheets.reorder(&[3,2,1])
+  run Testing.expect(match sheets.keyframes(b"fade") { Option.Some { value } => value.sheet == 1 _ => false }, "adoption order breaks equal-layer ties")
+  run Testing.expect(sheets.keyframes(b"Fade").isNone(), "keyframe names are case sensitive")
+}
+
+test effect fn namedKeyframesFollowLayersConditionsAndAdoptionOrder() -> ()
+  ! AssertionError<'static> | AdoptionError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run keyframeNames() |> Effect.provideMut<Allocator>(&mut allocator)
 }

@@ -7,11 +7,11 @@ import variables { ScopeId, RegistrationError }
 import silk.core.option { Option }
 import silk.mem.box { Box }
 import layers { Layers, UNLAYERED }
-import cascade { Priority }
+import cascade { Priority, Origin }
 import cascade
 import element { ElementTree, MatchContext }
 import resolver { ResolverError }
-import tokens { BufferView, Limits, CssError }
+import tokens { BufferView, Limits, CssError, equal }
 import media_features { Environment }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
@@ -28,6 +28,9 @@ pub struct Candidate { pub source: Source, pub priority: Priority }
 impl Copy for Candidate {}
 pub struct MatchedRule { pub sheet: u32, pub rule: usize }
 impl Copy for MatchedRule {}
+
+pub struct KeyframesRef { pub sheet: usize, pub rule: usize }
+impl Copy for KeyframesRef {}
 
 pub struct AdoptedSheet {
   pub id: u32,
@@ -69,6 +72,32 @@ impl StyleSheets {
       i = i + 1
     }
     return usize.MAX
+  }
+
+  pub fn keyframes(self: &Self, name: &[u8]) -> Option<KeyframesRef> {
+    let mut found = Option<KeyframesRef>.None
+    let mut best = Priority.make(Origin.Author, 0)
+    let mut order: usize = 0
+    let mut sheet: usize = 0
+    while sheet < self.entries.length() {
+      let entry = &self.entries.asSlice()[sheet]
+      let mut rule: usize = 0
+      while rule < entry.sheet.keyframes.length() {
+        let candidate = &entry.sheet.keyframes.asSlice()[rule]
+        if candidate.enabled && equal(candidate.name.asSlice(), name) {
+          let mut priority = Priority.make(Origin.Author, order)
+          priority.layer = if candidate.layer == UNLAYERED { UNLAYERED } else { entry.layers.asSlice()[candidate.layer] }
+          if found.isNone() || cascade.compare(priority, best) >= 0 {
+            best = priority
+            found = Option<KeyframesRef>.some(KeyframesRef { sheet: sheet, rule: rule })
+          }
+        }
+        rule = rule + 1
+        order = order + 1
+      }
+      sheet = sheet + 1
+    }
+    return found
   }
 
   /// Adopts at the end. Duplicate ids are rejected rather than changing source order.

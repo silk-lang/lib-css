@@ -234,6 +234,8 @@ conditions, validated `@property` registrations, and `@font-face`/`@keyframes` m
 `Sheet.encode()` writes the internal `SILKCSS` byte format. `Sheet.decode(bytes, limits)` reads
 parsed programs without invoking the CSS tokenizer or selector parser. The format is versioned
 and checks the property-catalog fingerprint; it has no cross-version compatibility promise.
+Keyframe definitions retain numeric offsets, shared declarations, layer ranks and conditions;
+`StyleSheets.keyframes(name)` chooses the active definition in adoption order.
 Decoded buffers contain token text but no original stylesheet source. Written values without a
 shared typed shape still carry their value text. Subject indexes and conservative invalidation
 keys are rebuilt from the decoded selector programs.

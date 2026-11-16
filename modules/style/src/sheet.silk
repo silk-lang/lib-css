@@ -20,12 +20,13 @@ import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.core.result { Result }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.f64
 import silk.num.u8
 import silk.num.u64
 import silk.num.u32
 import silk.text.string { String, InvalidUtf8 }
 
-pub const VERSION: u32 = 3
+pub const VERSION: u32 = 4
 pub const NONE: usize = UNLAYERED
 
 pub union Declaration {
@@ -51,6 +52,20 @@ pub struct AtRule {
   pub body: TokenRange,
 }
 
+pub struct Keyframe {
+  pub offset: f64,
+  pub declarations: TokenRange,
+}
+impl Copy for Keyframe {}
+
+pub struct Keyframes {
+  pub name: Bytes,
+  pub condition: usize,
+  pub layer: usize,
+  pub frames: List<Keyframe>,
+  pub enabled: bool,
+}
+
 pub struct RegisteredProperty {
   pub definition: Registration,
   pub condition: usize,
@@ -67,6 +82,7 @@ pub struct Sheet {
   pub conditions: List<Condition>,
   pub ruleConditions: List<usize>,
   pub metadata: List<AtRule>,
+  pub keyframes: List<Keyframes>,
   pub registrations: List<RegisteredProperty>,
   pub layers: Layers,
   pub resolver: Resolver,
@@ -121,7 +137,7 @@ impl Sheet {
     return Sheet {
       buffers: List<TokenBuffer>.make(), declarations: List<Declaration>.make(),
       conditions: List<Condition>.make(), ruleConditions: List<usize>.make(),
-      metadata: List<AtRule>.make(), registrations: List<RegisteredProperty>.make(), layers: Layers.make(), resolver: Resolver.make(),
+      metadata: List<AtRule>.make(), keyframes: List<Keyframes>.make(), registrations: List<RegisteredProperty>.make(), layers: Layers.make(), resolver: Resolver.make(),
       diagnostics: List<Diagnostic>.make(),
     }
   }
@@ -199,6 +215,23 @@ impl Sheet {
       run writer.index(self.ruleConditions.asSlice()[i])
       run writeRange(&mut writer, rule.declarations)
       run rule.selectors.encodeProgram(&self.buffers.asSlice()[rule.buffer], &mut writer)
+      i = i + 1
+    }
+    run writer.index(self.keyframes.length())
+    i = 0
+    while i < self.keyframes.length() {
+      let rule = &self.keyframes.asSlice()[i]
+      run writer.data(rule.name.asSlice())
+      run writer.index(rule.condition)
+      run writer.index(rule.layer)
+      run writer.index(rule.frames.length())
+      let mut frame: usize = 0
+      while frame < rule.frames.length() {
+        let item = rule.frames.asSlice()[frame]
+        run writer.number(item.offset)
+        run writeRange(&mut writer, item.declarations)
+        frame = frame + 1
+      }
       i = i + 1
     }
     run writer.index(self.metadata.length())
@@ -331,6 +364,32 @@ impl Sheet {
         declarations: TokenRange { start: start, end: end }, priority: priority, enabled: condition == NONE,
       }, &sheet.buffers.asSlice()[buffer])
       run sheet.ruleConditions.append(condition)
+      i = i + 1
+    }
+    let keyframesCount = run reader.count(limits.maxRules)
+    let mut totalFrames: usize = 0
+    i = 0
+    while i < keyframesCount {
+      let name = run Bytes.copy(run reader.data())
+      if let Result<string, InvalidUtf8>.Failure { .. } = String.fromUtf8(name.asSlice()) { run reader.invalid() }
+      let condition = run reader.index()
+      if condition != NONE && condition >= conditionCount { run reader.invalid() }
+      let layer = run reader.index()
+      if layer != NONE && layer >= layerCount { run reader.invalid() }
+      let count = run reader.count(limits.maxRules - totalFrames)
+      totalFrames = totalFrames + count
+      let mut frames = List<Keyframe>.make()
+      let mut frame: usize = 0
+      while frame < count {
+        let offset = run reader.number()
+        if !f64.isFinite(offset) || offset < 0.0 || offset > 1.0 { run reader.invalid() }
+        let start = run reader.index()
+        let end = run reader.index()
+        if start > end || end > declarationCount { run reader.invalid() }
+        run frames.append(Keyframe { offset: offset, declarations: TokenRange { start: start, end: end } })
+        frame = frame + 1
+      }
+      run sheet.keyframes.append(Keyframes { name: move name, condition: condition, layer: layer, frames: move frames, enabled: condition == NONE })
       i = i + 1
     }
     let metadataCount = run reader.count(limits.maxRules)

@@ -95,7 +95,7 @@ test effect fn sheetDecoderRejectsTruncationVersionCatalogAndTrailingData() -> (
     _ => false
   }, "format mismatch rejected")
   let catalogData = bytes.asMutSlice()
-  catalogData[8] = 3
+  catalogData[8] = 4
   catalogData[12] = catalogData[12] ^ 1
   let catalog = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &catalog {
@@ -236,3 +236,59 @@ test effect fn compiledColorMixKeepsDynamicLeavesWithoutRuntimeParsing() -> ()
 }
 
 import silk.core.option { Option }
+
+
+test effect fn compiledKeyframesRetainTypedFramesConditionsAndLayerOrder() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(b"@layer base{ @media(width>600px){ @keyframes spin { from, 25%{opacity:.2; animation-name:ignored; width:2px!important} 75%{transform:rotate(180deg)} to{opacity:var(--end)} } } }", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 0 && sheet.keyframes.length() == 1 && sheet.metadata.length() == 0, "keyframes compile to a dedicated typed table")
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let rule = &decoded.keyframes.asSlice()[0]
+  run Testing.expect(equal(rule.name.asSlice(), b"spin") && rule.layer == 0 && rule.condition == 0 && rule.frames.length() == 4, "name, scope and offset list survive serialization")
+  let frames = rule.frames.asSlice()
+  run Testing.expect(frames[0].offset == 0.0 && frames[1].offset == 0.25 && frames[2].offset == 0.75 && frames[3].offset == 1.0, "from/to and percentage lists become numeric offsets")
+  run Testing.expect(frames[0].declarations.end - frames[0].declarations.start == 1 && frames[0].declarations.start == frames[1].declarations.start, "important and animation-control declarations are ignored, and offset lists share declarations")
+  run Testing.expect(match &decoded.declarations.asSlice()[frames[3].declarations.start] { Declaration.Pending { property: Property.Opacity, .. } => true _ => false }, "keyframe var references remain substitutable")
+  drop run sheet_conditions.update(&mut decoded, &Environment.headless(800.0, 300.0), false, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(decoded.keyframes.asSlice()[0].enabled, "keyframes honor their enclosing media condition")
+  let changed = run sheet_conditions.update(&mut decoded, &Environment.headless(400.0, 300.0), false, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(changed && !decoded.keyframes.asSlice()[0].enabled, "a keyframes-only eligibility change requests restyling")
+}
+
+test effect fn invalidKeyframeNamesAndOffsetsDoNotBecomeExecutableFrames() -> ()
+  ! AssertionError<'static> | CompileError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(b"@keyframes none{from{opacity:0}} @keyframes initial{to{opacity:1}} @keyframes valid{ -1%{opacity:0} 101%{opacity:0} from,{opacity:0} 50%{opacity:.5} } @keyframes \"none\"{to{opacity:1}}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.keyframes.length() == 2 && sheet.keyframes.asSlice()[0].frames.length() == 1, "reserved unquoted names and invalid offset lists are dropped")
+  run Testing.expect(sheet.keyframes.asSlice()[0].frames.asSlice()[0].offset == 0.5, "valid frames survive invalid neighbors")
+  run Testing.expect(equal(sheet.keyframes.asSlice()[1].name.asSlice(), b"none"), "quoted reserved names remain valid names")
+}
+
+import sheet { Keyframe, Keyframes, NONE }
+import tokens { TokenRange }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+
+effect fn invalidFrames() -> ()
+  ! AssertionError<'static> | DecodeError | OutOfMemoryError ? &mut Allocator {
+  let mut case: usize = 0
+  while case < 5 {
+    let mut sheet = Sheet.make()
+    let mut frames = List<Keyframe>.make()
+    run frames.append(Keyframe { offset: if case == 1 { 2.0 } else { 0.0 }, declarations: TokenRange { start: 0, end: if case == 2 { 1 } else { 0 } } })
+    run sheet.keyframes.append(Keyframes { name: run Bytes.copy(b"x"), frames: move frames,
+      condition: if case == 3 { 0 } else { NONE }, layer: if case == 4 { 0 } else { NONE }, enabled: true })
+    let bytes = run sheet.encode()
+    let decoded = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make()))
+    run Testing.expect(match &decoded { Result.Success { .. } => case == 0 Result.Failure { .. } => case != 0 }, "decoder validates numeric offsets, declaration ranges, conditions and layers")
+    case = case + 1
+  }
+}
+
+test effect fn compiledKeyframeTablesAreValidatedBeforeAdoption() -> ()
+  ! AssertionError<'static> | DecodeError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run invalidFrames() |> Effect.provideMut<Allocator>(&mut allocator)
+}
