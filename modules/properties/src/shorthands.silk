@@ -3,7 +3,7 @@
 //! `longhand` answers what one longhand gets from a value written for its shorthand, such as
 //! `margin-left` from `margin: 1px 2px`. A longhand the value leaves out gets its initial
 //! value. The grammars are the common forms, not the whole of each spec: `background` takes
-//! one layer without a size, and `grid` and `grid-template` take `none` or `rows / columns`.
+//! one layer without a size, and `grid` also takes an `auto-flow` axis; area-string templates are not expanded.
 //! A value outside those forms has no expansion, and the caller drops the declaration.
 import catalog { Property }
 import catalog
@@ -171,7 +171,7 @@ pub effect fn longhand(shorthand: Property, value: &Value, target: Property) -> 
     return run intrinsicSize(value, index)
   }
   if shorthand == Property.GridTemplate || shorthand == Property.Grid {
-    return run grid(value, index)
+    return run grid(value, index, shorthand == Property.Grid)
   }
   if shorthand == Property.Background {
     return run background(value, index)
@@ -867,43 +867,76 @@ fn mentions(css: &[u8], word: &[u8]) -> bool {
   return false
 }
 
-// `grid-template` (rows, columns, areas) and `grid` (those, then auto-rows, auto-columns,
-// auto-flow): `none` or `rows / columns`. The forms with area strings or `auto-flow` are
-// not expanded.
-effect fn grid(value: &Value, index: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
-  if index == 3 || index == 4 {
-    return Option<Value>.some(values.auto())
+struct AutoFlowPart { tracks: Value, dense: bool }
+
+fn wordPrefix(bytes: &[u8], word: &[u8]) -> bool {
+  if bytes.length < word.length { return false }
+  let mut i: usize = 0
+  while i < word.length {
+    let lower = if bytes[i] >= 65 && bytes[i] <= 90 { bytes[i] + 32 } else { bytes[i] }
+    if lower != word[i] { return false }
+    i = i + 1
   }
-  if index == 5 {
-    return Option<Value>.some(values.keyword(Keyword.Row))
+  return bytes.length == word.length || bytes[word.length] == 32 || bytes[word.length] == 9
+    || bytes[word.length] == 10 || bytes[word.length] == 12 || bytes[word.length] == 13
+}
+
+effect fn autoFlowPart(value: &Value) -> Option<AutoFlowPart> ! OutOfMemoryError ? &mut Allocator {
+  let text = run values.cssText(value)
+  let bytes = text.asSlice()
+  let mut start: usize = 0
+  let mut dense = false
+  if wordPrefix(bytes, b"dense") {
+    dense = true
+    start = 5
   }
+  let rest = trimmed(bytes, start, bytes.length)
+  if !wordPrefix(rest, b"auto-flow") { return Option<AutoFlowPart>.None }
+  let after = trimmed(rest, 9, rest.length)
+  let tracks = if wordPrefix(after, b"dense") {
+    if dense { return Option<AutoFlowPart>.None }
+    dense = true
+    trimmed(after, 5, after.length)
+  } else { after }
+  let parsed = if tracks.length == 0 { values.auto() } else { run values.text(tracks) }
+  return Option<AutoFlowPart>.some(AutoFlowPart { tracks: move parsed, dense: dense })
+}
+
+// Grid longhands are rows, columns, areas, auto-rows, auto-columns, auto-flow.
+effect fn grid(value: &Value, index: usize, automatic: bool) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
   if isKeyword(value, Keyword.None) {
-    return Option<Value>.some(values.none())
+    return Option<Value>.some(if index == 3 || index == 4 { values.auto() }
+      else if index == 5 { values.keyword(Keyword.Row) } else { values.none() })
   }
   let parts = match move run slashed(value) {
     Option<List<Value>>.Some { value: found } => move found
-    _ => {
-      return Option<Value>.None
-    }
+    _ => { return Option<Value>.None }
   }
-  if parts.length() != 2 {
-    return Option<Value>.None
+  if parts.length() != 2 { return Option<Value>.None }
+  let mut axis: usize = 0
+  while axis < 2 {
+    if let Option<AutoFlowPart>.Some { value: flow } = move run autoFlowPart(&parts.asSlice()[axis]) {
+      if !automatic || (run autoFlowPart(&parts.asSlice()[1 - axis])).isSome() { return Option<Value>.None }
+      if index == axis || index == 2 { return Option<Value>.some(values.none()) }
+      if index == 1 - axis { return Option<Value>.some(run values.clone(&parts.asSlice()[index])) }
+      if index == 3 + axis { return Option<Value>.some(move flow.tracks) }
+      if index == 5 {
+        let direction = values.keyword(if axis == 0 { Keyword.Row } else { Keyword.Column })
+        return Option<Value>.some(if flow.dense { run values.pair(move direction, values.keyword(Keyword.Dense)) } else { move direction })
+      }
+      return Option<Value>.some(values.auto())
+    }
+    axis = axis + 1
   }
   let mut i: usize = 0
   while i < 2 {
-    match &parts.asSlice()[i] {
-      Value.Text { css } => {
-        if mentions(css.asSlice(), b"auto-flow") {
-          return Option<Value>.None
-        }
-      }
-      _ => {}
-    }
+    let text = run values.cssText(&parts.asSlice()[i])
+    if mentions(text.asSlice(), b"auto-flow") { return Option<Value>.None }
     i = i + 1
   }
-  if index == 2 {
-    return Option<Value>.some(values.none())
-  }
+  if index == 3 || index == 4 { return Option<Value>.some(values.auto()) }
+  if index == 5 { return Option<Value>.some(values.keyword(Keyword.Row)) }
+  if index == 2 { return Option<Value>.some(values.none()) }
   return Option<Value>.some(run values.clone(&parts.asSlice()[index]))
 }
 
