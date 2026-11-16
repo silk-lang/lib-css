@@ -37,6 +37,9 @@ pub effect fn parse(buffer: &TokenBuffer, body: TokenRange, limits: &Limits) -> 
           || insensitive(item.name,b"font-width") || insensitive(item.name,b"font-style") || insensitive(item.name,b"unicode-range")
           || insensitive(item.name,b"font-display")
         if supported {
+          if insensitive(item.name,b"font-display") && !insensitive(item.value.asSlice(),b"auto") && !insensitive(item.value.asSlice(),b"swap") {
+            run unsupported.append(run Bytes.copy(b"font-display timing"))
+          }
           run css.append(item.name)
           run css.append(b":")
           run css.append(item.value.asSlice())
