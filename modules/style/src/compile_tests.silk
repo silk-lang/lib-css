@@ -5,7 +5,7 @@ import sheet_binary { DecodeError, DecodeReason }
 import resolver { ResolverError }
 import resolver_tests { Tree }
 import tokens { Limits, CssError, BufferView, equal }
-import element { MatchContext, NO_ELEMENT }
+import element { MatchContext, PseudoTarget, NO_ELEMENT }
 import css_properties.catalog { Property }
 import css_properties.values { Value }
 import silk.collections.slice { Slice }
@@ -95,7 +95,7 @@ test effect fn sheetDecoderRejectsTruncationVersionCatalogAndTrailingData() -> (
     _ => false
   }, "format mismatch rejected")
   let catalogData = bytes.asMutSlice()
-  catalogData[8] = 4
+  catalogData[8] = 5
   catalogData[12] = catalogData[12] ^ 1
   let catalog = run Effect.result(Sheet.decode(bytes.asSlice(), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &catalog {
@@ -300,4 +300,45 @@ test effect fn compiledKeyframeTablesAreValidatedBeforeAdoption() -> ()
   ! AssertionError<'static> | DecodeError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run invalidFrames() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+
+effect fn checkPseudoSheet(sheet: &mut Sheet) -> ()
+  ! AssertionError<'static> | ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+  let tree = Tree { hovered: true }
+  let targets = [PseudoTarget.None, PseudoTarget.Before, PseudoTarget.After]
+  let expected: [usize; 3] = [0, 1, 2]
+  let mut i: usize = 0
+  while i < targets.length {
+    let mut context = MatchContext.make(0, NO_ELEMENT)
+    context.pseudo = targets[i]
+    run sheet.resolver.resolve(BufferView.of(sheet.buffers.asSlice()), &tree, 0, &[], &mut context)
+    let matched = sheet.resolver.matches()
+    run Testing.expect(matched.length == 1 && matched[0].rule == expected[i], "normal and generated targets select separate rule arms")
+    i = i + 1
+  }
+}
+
+test effect fn compiledGeneratedSelectorsRoundTripWithoutNormalRuleLeakage() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | ResolverError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut sheet = run compile.compile(b".button{color:red}.button:hover::before{content:'before';color:blue}.button::after{content:attr(data-label, 'after');color:green}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 0, "supported generated content compiles without diagnostics")
+  run checkPseudoSheet(&mut sheet) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run checkPseudoSheet(&mut decoded) |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+test effect fn unsupportedGeneratedContentIsReportedAndDropped() -> ()
+  ! AssertionError<'static> | CompileError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let css = b".button::before{content:'fallback';content:counter(item);content:url(icon.png)}"
+  let sheet = run compile.compile(css, &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 1 && sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Unsupported && sheet.diagnostics.asSlice()[0].count == 2, "unsupported content forms aggregate diagnostics")
+  run Testing.expect(sheet.declarations.length() == 1, "unsupported declarations leave the supported fallback")
+  let mut strict = Options.make()
+  strict.strict = true
+  let failed = run Effect.result(compile.compile(css, &strict)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &failed { Result<Sheet, CompileError | CssError | OutOfMemoryError>.Failure { .. } => true _ => false }, "strict compilation rejects unsupported content")
 }

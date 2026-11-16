@@ -20,6 +20,7 @@ import written
 import cssom_serialization
 import condition_cursor
 import declaration_values
+import generated_content
 import css_properties.catalog as catalog
 import css_properties.catalog { Property }
 import silk.collections.bytes { Bytes }
@@ -273,6 +274,11 @@ impl Compiler {
           run self.sheet.declarations.append(Declaration.Custom { name: run Bytes.copy(name), buffer: 0, range: declaration.value, important: declaration.important })
         }
       } else if let Option<Property>.Some { value: property } = catalog.lookup(name) {
+        if property == Property.Content && !validation.hasVariables && (run generated_content.parse(&input)).isNone() {
+          run self.report(DiagnosticKind.Unsupported, b"content")
+          i = i + 1
+          continue
+        }
         if validation.hasVariables {
           run self.sheet.declarations.append(Declaration.Pending { property: property, buffer: 0, range: declaration.value, important: declaration.important })
         } else {

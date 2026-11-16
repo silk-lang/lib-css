@@ -7,7 +7,7 @@ import lexer
 import tokens
 import tokens { Limits, CssError, CssErrorKind, Span, TokenRange }
 import element
-import element { ElementTree, MatchContext, NO_ELEMENT, AttributeText }
+import element { ElementTree, MatchContext, PseudoTarget, StateBits, NO_ELEMENT, AttributeText }
 import silk.collections.bytes { Bytes }
 import silk.core.effect { Effect }
 import silk.core.result { Result }
@@ -194,6 +194,12 @@ effect fn checkState(
   states: u32,
 ) -> ()
   ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  run checkTarget(source, node, yes, ids, classes, types, states, PseudoTarget.None, 0)
+}
+
+effect fn checkTarget(source: &[u8], node: usize, yes: bool, ids: usize, classes: usize, types: usize,
+  states: u32, target: PseudoTarget, pseudoStates: u32) -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   let limits = Limits.make()
   let buffer = run lexer.tokenize(source, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -203,6 +209,8 @@ effect fn checkState(
     Option<SelectorList>.Some { value } => {
       let tree = Tree { states: states }
       let mut context = MatchContext.make(1, 2)
+      context.pseudo = target
+      context.pseudoStates = StateBits { bits: pseudoStates }
       let result = run selectors.matchElement(&value, &buffer, &tree, node, &mut context)
       run Testing.expect(
         match &result {
@@ -221,6 +229,8 @@ effect fn checkState(
       let decoded = run SelectorList.decodeProgram(&mut reader, &mut decodedBuffer, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
       run reader.finish()
       context = MatchContext.make(1, 2)
+      context.pseudo = target
+      context.pseudoStates = StateBits { bits: pseudoStates }
       let decodedResult = run selectors.matchElement(&decoded, &decodedBuffer, &tree, node, &mut context)
       run Testing.expect(
         match &decodedResult {
@@ -230,6 +240,11 @@ effect fn checkState(
         },
         "decoded selector preserves matching and specificity",
       )
+      let recorded = run selectors.matchElementRecorded(&decoded, &decodedBuffer, &tree, node, &mut context)
+      run Testing.expect(match &recorded.specificity {
+        Option<Specificity>.Some { value: recordedValue } => yes && recordedValue.ids == ids && recordedValue.classes == classes && recordedValue.types == types
+        _ => !yes
+      }, "recorded matching preserves the target and specificity")
     }
     _ => {
       run Testing.expect(false, "selector must parse")
@@ -419,6 +434,8 @@ test effect fn matchingWorkIsSharedAndTyped() -> ()
       let mut context = MatchContext {
         scope: 0,
         target: NO_ELEMENT,
+        pseudo: PseudoTarget.None,
+        pseudoStates: StateBits.empty(),
         shadowHost: NO_ELEMENT,
         remainingSteps: 6,
       }
@@ -636,4 +653,27 @@ test effect fn nthOfInvalidationReachesSiblingsForClassAndStateChanges() -> ()
     run Testing.expect(found, "nth-of filter dependencies are retained")
     index = index + 1
   }
+}
+
+test effect fn generatedPseudoTargetsKeepOriginSelectorsAndSpecificitySeparate() -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  run checkTarget(b"rect", 2, false, 0, 0, 0, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before", 2, false, 0, 0, 0, 0, PseudoTarget.None, 0)
+  run checkTarget(b"rect::before", 2, true, 0, 0, 2, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"rect:before", 2, true, 0, 0, 2, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before", 2, false, 0, 0, 0, 0, PseudoTarget.After, 0)
+  run checkTarget(b"rect::after", 2, true, 0, 0, 2, 0, PseudoTarget.After, 0)
+  run checkTarget(b"#chosen, .hot::before", 2, true, 0, 1, 1, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"#chosen, .hot::before", 2, true, 1, 0, 0, 0, PseudoTarget.None, 0)
+  run checkTarget(b":is(#chosen, .hot)::before", 2, true, 1, 0, 1, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"g > rect:nth-child(1 of .hot)::before", 2, true, 0, 2, 3, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"g:has(rect.hot) > rect::after", 2, true, 0, 1, 4, 0, PseudoTarget.After, 0)
+  run checkTarget(b"rect:hover::before", 2, true, 0, 1, 2, element.HOVER, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before:hover", 2, false, 0, 0, 0, element.HOVER, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before:hover", 2, true, 0, 1, 2, 0, PseudoTarget.Before, element.HOVER)
+  run checkTarget(b"rect:hover::before:not(:hover)", 2, true, 0, 2, 2, element.HOVER, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before:is(:hover,:active)", 2, true, 0, 1, 2, 0, PseudoTarget.Before, element.ACTIVE)
+  run checkTarget(b"rect::before::marker", 2, false, 0, 0, 0, 0, PseudoTarget.Before, 0)
+  run invalid(b"rect::before > .hot")
+  run invalid(b"rect:has(::after)")
 }

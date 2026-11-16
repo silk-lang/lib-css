@@ -1,0 +1,72 @@
+import input { Input, TokenView }
+import tokens { Kind, Span }
+import value_cursor { Cursor }
+import css_properties.keywords { Keyword }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+
+pub union Item {
+  Text { pub value: Bytes },
+  Attribute { pub name: Bytes, pub fallback: Bytes },
+}
+
+pub union Content {
+  Keyword { pub value: Keyword },
+  Items { pub values: List<Item> },
+}
+
+fn text<'a>(input: &'a Input<'_>, cursor: &mut Cursor, identifier: bool) -> Option<&'a [u8]> {
+  cursor.skip(input)
+  if let Option<TokenView>.Some { value } = input.at(cursor.position) {
+    let span = match value.token.kind {
+      Kind.String { text } => if !identifier { Option<Span>.some(text) } else { Option<Span>.None }
+      Kind.Ident { text } => if identifier { Option<Span>.some(text) } else { Option<Span>.None }
+      _ => Option<Span>.None
+    }
+    if let Option<Span>.Some { value: found } = span {
+      cursor.position = cursor.position + 1
+      return Option<&[u8]>.some(value.text(found))
+    }
+  }
+  return Option<&[u8]>.None
+}
+
+pub effect fn parse(input: &Input<'_>) -> Option<Content>
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut cursor = Cursor.make(input)
+  let keywords = [Keyword.Normal, Keyword.None, Keyword.Initial, Keyword.Inherit, Keyword.Unset, Keyword.Revert, Keyword.RevertLayer]
+  let words = [b"normal", b"none", b"initial", b"inherit", b"unset", b"revert", b"revert-layer"]
+  let mut i: usize = 0
+  while i < words.length {
+    if cursor.ident(input, words[i]) {
+      if cursor.done(input) { return Option<Content>.some(Content.Keyword { value: keywords[i] }) }
+      return Option<Content>.None
+    }
+    i = i + 1
+  }
+  let mut items = List<Item>.make()
+  while !cursor.done(input) {
+    if let Option<&[u8]>.Some { value } = text(input, &mut cursor, false) {
+      run items.append(Item.Text { value: run Bytes.copy(value) })
+    } else if cursor.function(input, b"attr") {
+      let name = match text(input, &mut cursor, true) {
+        Option<&[u8]>.Some { value } => value
+        _ => { return Option<Content>.None }
+      }
+      let mut fallback = Bytes.make()
+      if cursor.comma(input) {
+        let value = match text(input, &mut cursor, false) {
+          Option<&[u8]>.Some { value } => value
+          _ => { return Option<Content>.None }
+        }
+        fallback = run Bytes.copy(value)
+      }
+      if !cursor.close(input) { return Option<Content>.None }
+      run items.append(Item.Attribute { name: run Bytes.copy(name), fallback: move fallback })
+    } else { return Option<Content>.None }
+  }
+  if items.length() == 0 { return Option<Content>.None }
+  return Option<Content>.some(Content.Items { values: move items })
+}

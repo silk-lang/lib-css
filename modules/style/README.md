@@ -246,6 +246,17 @@ state, structural, descendant, sibling, and ancestor dependencies. Static hosts 
 state operation; its default returns no interactive states. `sheet_conditions.update` evaluates
 retained media conditions against a host environment and reports whether rule eligibility changed.
 
+`MatchContext.pseudo` selects the originating element's `::before` or `::after` target;
+its default `None` matches ordinary elements. Normal rule arms do not match generated targets,
+and mixed selector lists retain the specificity of the matching arm. `pseudoStates` supplies
+states on the pseudo-element itself, separately from origin states before the `::before` or
+`::after` selector. These targets survive binary round trips in format version 5.
+
+`generated_content.parse(input)` returns keywords or an ordered list of strings and `attr()`
+references, including empty strings and string fallbacks. The compiler reports and drops
+unsupported content forms such as counters, quote controls, images, and alternative text.
+Creating boxes, reading attributes, inheritance, hit testing and accessibility are host work.
+
 `registration` validates the supported `@property` syntax: `*`, `<length>`, `<length-percentage>`,
 `<color>`, `<number>`, `<percentage>`, and `<angle>`. `VariableStore.register` installs definitions
 before scopes are built; later registrations replace earlier definitions with the same name.
@@ -254,10 +265,9 @@ and invalid-value defaults. Changing registrations requires rebuilding the scope
 store still retains token values; canonicalizing relative typed values at their defining element
 requires host integration.
 
-This foundation does not yet apply sheets to SilkUI. Hosts must resolve pending values and
-install active registrations, consume the animation/font metadata, and integrate invalidation
-with their tree. Container conditions remain disabled and produce an unsupported-feature
-diagnostic. Generated pseudo-elements are not implemented by this change.
+Hosts resolve pending values, install active registrations, consume animation/font metadata,
+and integrate invalidation with their tree. Container conditions remain disabled and produce
+an unsupported-feature diagnostic.
 Diagnostics aggregate dropped features; `Options.strict` rejects a sheet with diagnostics.
 
 `colors.parseProgram` handles nested `color-mix()` with deferred `currentcolor` and system colors.

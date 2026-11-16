@@ -1,0 +1,48 @@
+import generated_content { Content, Item }
+import generated_content
+import input { Input }
+import lexer
+import tokens { Limits, CssError, equal }
+import css_properties.keywords { Keyword }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+effect fn parse(source: &[u8]) -> Option<Content> ! CssError | OutOfMemoryError ? &mut Allocator {
+  let buffer = run lexer.tokenize(source, &Limits.make())
+  return run generated_content.parse(&Input.Contiguous { buffer: &buffer, range: buffer.all() })
+}
+
+test effect fn generatedContentPreservesStringsAttributesAndFallbacks() -> ()
+  ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let parsed = run parse(b"'Hello ' attr(data-label) ' \\1f642 ' attr(title, 'fallback') ''") |> Effect.provideMut<Allocator>(&mut allocator)
+  let content = match &parsed {
+    Option<Content>.Some { value: Content.Items { values } } => values.asSlice()
+    _ => { run Testing.expect(false, "content list parses")
+      return () }
+  }
+  run Testing.expect(content.length == 5, "adjacent strings and attributes retain their order")
+  run Testing.expect(match &content[0] { Item.Text { value } => equal(value.asSlice(), b"Hello ") _ => false }, "literal string")
+  run Testing.expect(match &content[1] { Item.Attribute { name, fallback } => equal(name.asSlice(), b"data-label") && fallback.length() == 0 _ => false }, "attribute without fallback")
+  run Testing.expect(match &content[2] { Item.Text { value } => equal(value.asSlice(), b" \xf0\x9f\x99\x82") _ => false }, "CSS escapes decode to UTF-8")
+  run Testing.expect(match &content[3] { Item.Attribute { name, fallback } => equal(name.asSlice(), b"title") && equal(fallback.asSlice(), b"fallback") _ => false }, "missing attribute fallback")
+  run Testing.expect(match &content[4] { Item.Text { value } => value.length() == 0 _ => false }, "an empty string still generates a box")
+  let none = run parse(b"none") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &none { Option<Content>.Some { value: Content.Keyword { value } } => value == Keyword.None _ => false }, "none is distinct from an empty string")
+  let inherit = run parse(b"inherit") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &inherit { Option<Content>.Some { value: Content.Keyword { value } } => value == Keyword.Inherit _ => false }, "wide keywords reach the cascade")
+}
+
+test effect fn generatedContentRejectsUnsupportedAndMalformedForms() -> ()
+  ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sources = [b"", b"counter(item)", b"counters(item,'.')", b"url(icon.png)", b"open-quote", b"'text' / 'alternative'", b"attr()", b"attr(data-x px)", b"attr(data-x, 3)", b"none ''", b"attr(x) garbage", b"123"]
+  let mut i: usize = 0
+  while i < sources.length {
+    let result = run parse(sources[i]) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(result.isNone(), "unsupported content must not silently produce a partial string")
+    i = i + 1
+  }
+}

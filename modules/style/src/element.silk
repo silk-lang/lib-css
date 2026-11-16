@@ -5,6 +5,8 @@ import silk.core.ownership { Copy }
 
 pub const NO_ELEMENT: usize = usize.MAX
 
+pub enum PseudoTarget { None, Before, After }
+
 /// Host-reported selector states. Bits describe applicability as well as state:
 /// disabled/enabled and required/optional are independent, not complements.
 pub struct StateBits {
@@ -106,6 +108,8 @@ pub interface ElementTree {
 pub struct MatchContext {
   pub scope: usize,
   pub target: usize,
+  pub pseudo: PseudoTarget,
+  pub pseudoStates: StateBits,
   /// Host exposed as featureless in the current selector scope; absent in light context.
   pub shadowHost: usize,
   /// Shared across a document's matching work; exhaustion is CssError.MatchLimit, never false.
@@ -117,6 +121,8 @@ impl MatchContext {
     return MatchContext {
       scope: scope,
       target: target,
+      pseudo: PseudoTarget.None,
+      pseudoStates: StateBits.empty(),
       shadowHost: NO_ELEMENT,
       remainingSteps: 64000000,
     }

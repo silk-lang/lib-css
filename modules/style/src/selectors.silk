@@ -1,5 +1,5 @@
 //! Shared Selectors 4 grammar for host-tree matching and CSSOM validation.
-//! Pseudo-elements validate but never match ElementTree nodes. Nesting 1 is
+//! Generated pseudo-elements match a separate host-supplied target. Nesting 1 is
 //! validation-only: resolving & requires a parent selector and its specificity.
 //! Pseudo suffix/argument grammar: https://drafts.csswg.org/selectors-4/#pseudo-elements
 //! https://drafts.csswg.org/css-pseudo-4/ and https://drafts.csswg.org/css-shadow-1/
@@ -10,7 +10,7 @@ import silk.simd.mask16
 import tokens { Span, TokenRange, TokenBuffer, Kind, Limits, CssError, CssErrorKind }
 import tokens
 import element
-import element { ElementTree, MatchContext, NO_ELEMENT }
+import element { ElementTree, MatchContext, PseudoTarget, StateBits, NO_ELEMENT }
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
 import silk.core.ownership { Copy }
@@ -172,6 +172,8 @@ union Test {
   Class { text: Span },
   Attribute { namespace: Namespace, name: Span, value: Span, op: AttributeOp, insensitive: bool },
   State { pseudo: Pseudo },
+  Element { target: PseudoTarget },
+  ElementState { pseudo: Pseudo },
   Function { kind: FunctionKind, list: usize },
   Nth { a: f64, b: f64, reverse: bool, ofType: bool, list: usize },
   Language { range: TokenRange },
@@ -187,6 +189,7 @@ struct Simple {
 impl Copy for Simple {}
 
 struct Compound {
+  target: PseudoTarget,
   namespace: Namespace,
   name: Span,
   named: bool,
@@ -315,6 +318,8 @@ impl SelectorList {
           } else { keep = pseudo != Pseudo.Never
           DependencyKind.Host }
         }
+        Test.ElementState { pseudo } => { states = stateMask(pseudo)
+          DependencyKind.State }
         Test.Nth { .. } => { structural = true
           DependencyKind.Structure }
         Test.Language { .. } => { descendants = true
@@ -358,6 +363,15 @@ impl SelectorList {
   pub fn subjectKeys<'a>(self: &'a Self) -> SubjectKeys<'a> {
     return SubjectKeys<'a> { selectors: self, nextArm: self.head }
   }
+
+  pub fn hasPseudoElements(self: &Self) -> bool {
+    let mut i: usize = 0
+    while i < self.simples.length() {
+      if let Test.Element { .. } = self.simples.asSlice()[i].test { return true }
+      i = i + 1
+    }
+    return false
+  }
 }
 
 fn localArms(ast: &SelectorList, first: usize, depth: usize) -> bool {
@@ -391,6 +405,7 @@ fn localCompound(ast: &SelectorList, index: usize, depth: usize) -> bool {
       Test.Id { .. } => true
       Test.Class { .. } => true
       Test.Attribute { .. } => true
+      Test.Element { .. } => true
       Test.State { pseudo } => pseudo == Pseudo.Link || pseudo == Pseudo.Empty
         || pseudo == Pseudo.Never
       Test.Function { kind, list } => (kind == FunctionKind.Is || kind == FunctionKind.Not)
@@ -846,6 +861,7 @@ effect fn parseArm(
     let compound = ast.compounds.length()
     run ast.compounds.append(
       Compound {
+        target: PseudoTarget.None,
         namespace: if name.valid {
           name.namespace
         } else {
@@ -955,7 +971,12 @@ effect fn parseArm(
                 }
                 pseudoElement = kind
                 specificity.types = specificity.types + 1
-                run appendSimple(&mut ast.*, compound, Test.State { pseudo: Pseudo.Never })
+                if tokens.insensitive(word, b"before") || tokens.insensitive(word, b"after") {
+                  let target = if tokens.insensitive(word, b"before") { PseudoTarget.Before } else { PseudoTarget.After }
+                  let compounds = ast.compounds.asMutSlice()
+                  compounds[compound].target = target
+                  run appendSimple(&mut ast.*, compound, Test.Element { target: target })
+                } else { run appendSimple(&mut ast.*, compound, Test.State { pseudo: Pseudo.Never }) }
               } else {
                 if !allowedPseudoClass(pseudoElement, word, false) {
                   return rejected()
@@ -963,7 +984,8 @@ effect fn parseArm(
                 let state = pseudo(word)
                 match &state {
                   Option<Pseudo>.Some { value } => {
-                    run appendSimple(&mut ast.*, compound, Test.State { pseudo: value })
+                    if pseudoElement != PseudoElement.None { run appendSimple(&mut ast.*, compound, Test.ElementState { pseudo: value }) }
+                    else { run appendSimple(&mut ast.*, compound, Test.State { pseudo: value }) }
                   }
                   _ => {
                     return rejected()
@@ -1921,7 +1943,8 @@ pub effect fn matchElement<T: ElementTree>(
   while arm != NONE {
     run spend(&mut context.*)
     let entry = &selectors.arms.asSlice()[arm]
-    if run matchComplex(selectors, buffer, tree, entry.tail, node, NONE, &mut context.*, 0) {
+    if subjectTarget(selectors, entry.tail) == context.pseudo
+      && run matchComplex(selectors, buffer, tree, entry.tail, node, NONE, &mut context.*, 0) {
       let best = match &result {
         Option<Specificity>.Some { value } => maximum(value, entry.specificity)
         _ => entry.specificity
@@ -1976,7 +1999,8 @@ pub effect fn matchElementRecorded<T: ElementTree>(
             &mut context.*,
           ))
     }
-    if run matchComplex(selectors, buffer, tree, entry.tail, node, NONE, &mut context.*, 0) {
+    if subjectTarget(selectors, entry.tail) == context.pseudo
+      && run matchComplex(selectors, buffer, tree, entry.tail, node, NONE, &mut context.*, 0) {
       let best = match &result {
         Option<Specificity>.Some { value } => maximum(value, entry.specificity)
         _ => entry.specificity
@@ -1986,6 +2010,10 @@ pub effect fn matchElementRecorded<T: ElementTree>(
     arm = entry.next
   }
   return RecordedMatch { specificity: result, positional: positional }
+}
+
+fn subjectTarget(ast: &SelectorList, compound: usize) -> PseudoTarget {
+  return ast.compounds.asSlice()[compound].target
 }
 
 effect fn matchesAny<T: ElementTree>(
@@ -2288,6 +2316,8 @@ effect fn matchNormal<T: ElementTree>(
   let mut normal = MatchContext {
     scope: context.scope,
     target: context.target,
+    pseudo: PseudoTarget.None,
+    pseudoStates: StateBits.empty(),
     shadowHost: ElementTree.containingHost(tree, node),
     remainingSteps: context.remainingSteps,
   }
@@ -2377,6 +2407,11 @@ effect fn matchTest<T: ElementTree>(
     }
     Test.State { pseudo: state } => {
       return run matchState(tree, node, state, &mut context.*)
+    }
+    Test.Element { target } => { return target == context.pseudo }
+    Test.ElementState { pseudo } => {
+      let mask = stateMask(pseudo)
+      return mask != 0 && context.pseudo != PseudoTarget.None && context.pseudoStates.contains(mask)
     }
     Test.Function { kind, list } => {
       if kind == FunctionKind.Host || kind == FunctionKind.HostContext {
@@ -3010,9 +3045,10 @@ effect fn writeCompound(writer: &mut BinaryWriter, buffer: &TokenBuffer, value: 
   run writeCombinator(&mut writer.*, value.relation)
 }
 
-effect fn readCompound(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> Compound
+effect fn readCompound(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer, targets: &[PseudoTarget]) -> Compound
   ! DecodeError | OutOfMemoryError ? &mut Allocator {
-  return Compound {
+  let mut result = Compound {
+    target: PseudoTarget.None,
     namespace: run readNamespace(&mut reader.*, &mut buffer.*),
     name: run sheet_tokens.readText(&mut reader.*, &mut buffer.*),
     named: run reader.flag(),
@@ -3022,6 +3058,11 @@ effect fn readCompound(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) 
     previous: run reader.index(),
     relation: run readCombinator(&mut reader.*),
   }
+  if result.first != NONE {
+    if result.first >= targets.length { run reader.invalid() }
+    result.target = targets[result.first]
+  }
+  return result
 }
 
 effect fn writeArm(writer: &mut BinaryWriter, buffer: &TokenBuffer, value: &Arm) -> ()
@@ -3080,6 +3121,14 @@ effect fn writeTest(writer: &mut BinaryWriter, buffer: &TokenBuffer, test: &Test
       run writer.byte(6)
       run writeTokenRange(&mut writer.*, buffer, &range)
     }
+    Test.Element { target } => {
+      run writer.byte(7)
+      run writer.byte(match target { PseudoTarget.None => 0 PseudoTarget.Before => 1 PseudoTarget.After => 2 })
+    }
+    Test.ElementState { pseudo } => {
+      run writer.byte(8)
+      run writePseudo(&mut writer.*, pseudo)
+    }
   }
 }
 
@@ -3093,6 +3142,12 @@ effect fn readTest(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> T
     4 => Test.Function { kind: run readFunctionKind(&mut reader.*), list: run reader.index() }
     5 => Test.Nth { a: run reader.number(), b: run reader.number(), reverse: run reader.flag(), ofType: run reader.flag(), list: run reader.index() }
     6 => Test.Language { range: run readTokenRange(&mut reader.*, &mut buffer.*) }
+    7 => Test.Element { target: match run reader.byte() {
+      1 => PseudoTarget.Before
+      2 => PseudoTarget.After
+      _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+    } }
+    8 => Test.ElementState { pseudo: run readPseudo(&mut reader.*) }
     _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
   }
 }
@@ -3134,16 +3189,24 @@ impl SelectorList {
     if maxDepth > limits.maxDepth || validationOnly { run reader.invalid() }
     let simplesCount = run reader.count(limits.maxTokens)
     let mut simples = List<Simple>.make()
+    let mut targets = List<PseudoTarget>.make()
     let mut simplesAt: usize = 0
     while simplesAt < simplesCount {
-      run simples.append(run readSimple(&mut reader.*, &mut buffer.*))
+      let simple = run readSimple(&mut reader.*, &mut buffer.*)
+      if simple.next != NONE && simple.next >= simplesAt { run reader.invalid() }
+      let target = match simple.test {
+        Test.Element { target } => target
+        _ => if simple.next == NONE { PseudoTarget.None } else { targets.asSlice()[simple.next] }
+      }
+      run targets.append(target)
+      run simples.append(simple)
       simplesAt = simplesAt + 1
     }
     let compoundsCount = run reader.count(limits.maxTokens)
     let mut compounds = List<Compound>.make()
     let mut compoundsAt: usize = 0
     while compoundsAt < compoundsCount {
-      run compounds.append(run readCompound(&mut reader.*, &mut buffer.*))
+      run compounds.append(run readCompound(&mut reader.*, &mut buffer.*, targets.asSlice()))
       compoundsAt = compoundsAt + 1
     }
     let armsCount = run reader.count(limits.maxTokens)
