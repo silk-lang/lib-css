@@ -301,7 +301,7 @@ impl Compiler {
               } else { run self.report(DiagnosticKind.Value, name) }
             } else { run self.report(DiagnosticKind.Value, name) }
           } else {
-            let value = run written.valueIn(source, declaration.value.start, declaration.value.end)
+            let value = run written.propertyValueIn(property, source, declaration.value.start, declaration.value.end)
             run self.sheet.declarations.append(Declaration.Typed { property: property, value: move value, important: declaration.important })
           }
         }

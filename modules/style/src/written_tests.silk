@@ -7,6 +7,7 @@ import css_properties.convert { Context }
 import css_properties.computed { Dimension, DimensionKind }
 import css_properties.values as values
 import css_properties.values { Value, Declaration }
+import css_properties.keywords { Keyword }
 import silk.collections.bytes { Bytes }
 import silk.core.effect { Effect }
 import silk.core.option { Option }
@@ -230,4 +231,20 @@ test effect fn complexShorthandProjectionSharesValueGrammars() -> ()
   run Testing.expect(run projection(Property.Transition, b"opacity 1s linear, width 2s ease-in 100ms allow-discrete", Property.TransitionProperty, b"opacity, width") |> Effect.provideMut<Allocator>(&mut allocator), "transition keeps its property list")
   run Testing.expect(run projection(Property.Transition, b"opacity 1s linear, width 2s ease-in 100ms allow-discrete", Property.TransitionBehavior, b"normal, allow-discrete") |> Effect.provideMut<Allocator>(&mut allocator), "transition behavior projects and resets")
   run Testing.expect(run projection(Property.All, b"unset", Property.Width, b"unset") |> Effect.provideMut<Allocator>(&mut allocator), "wide values project without parsing")
+}
+
+test effect fn containerShorthandProjectsTypedContainmentAndNames() ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let declarations = run written.declarations(b"container: outer card / size; container: ca\\72 d / inline-size; container: red") |> Effect.provideMut<Allocator>(&mut allocator)
+  let expected = [Keyword.Size, Keyword.InlineSize, Keyword.Normal]
+  let mut i: usize = 0
+  while i < expected.length {
+    let projected = run written.longhand(&declarations.asSlice()[i], Property.ContainerType) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(match &projected { Option<Value>.Some { value: Value.Keyword { value } } => value == expected[i] _ => false }, "textual container shorthand types become typed keyword components")
+    i = i + 1
+  }
+  let name = run written.longhand(&declarations.asSlice()[2], Property.ContainerName) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &name { Option<Value>.Some { value: Value.Text { css } } => sameText(css.asSlice(), b"red") _ => false }, "a container name that is also a color remains an identifier")
+  let standalone = run written.declarations(b"container-name: currentcolor; container-name: red") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &standalone.asSlice()[0].value { Value.Text { css } => sameText(css.asSlice(), b"currentcolor") _ => false }, "standalone names do not become context-dependent colors")
 }
