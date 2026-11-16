@@ -1,7 +1,7 @@
-pub import font_web.stylesheet { FontFaceRule, FaceSource, FaceStyle, Range, UnicodeRange, FontDisplay }
-import font_web.stylesheet
 import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
-import tokens { Limits }
+import tokens { Limits, insensitive }
+import silk.core.ownership { Copy }
+import silk.collections.slice { Slice }
 import silk.collections.bytes { Bytes }
 import silk.collections.list { List }
 import silk.core.option { Option }
@@ -10,6 +10,28 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.text.string { String }
 import silk.num.f64
 
+/// Portable compiled descriptors: no font decoder, I/O, or URL parser is needed to compile CSS.
+pub struct Range { pub min: f64, pub max: f64 }
+impl Copy for Range {}
+pub union FaceStyle { Normal, Italic, Oblique { pub min: f64, pub max: f64 } }
+impl Copy for FaceStyle {}
+pub union FaceSource {
+  Url { pub url: String, pub format: Bytes, pub tech: Bytes },
+  Local { pub name: Bytes },
+}
+pub enum FontDisplay { Auto, Block, Swap, Fallback, Optional }
+pub struct UnicodeRange { pub start: u32, pub end: u32 }
+impl Copy for UnicodeRange {}
+pub struct FontFaceRule {
+  pub family: Bytes,
+  pub sources: List<FaceSource>,
+  pub weight: Option<Range>,
+  pub width: Option<Range>,
+  pub style: Option<FaceStyle>,
+  pub ranges: List<UnicodeRange>,
+  pub display: FontDisplay,
+}
+
 pub struct Face {
   pub rule: FontFaceRule,
   pub condition: usize,
@@ -17,7 +39,25 @@ pub struct Face {
   pub enabled: bool,
 }
 
-pub fn loadable(format: &[u8], tech: &[u8]) -> bool { return stylesheet.knownFormat(format) && stylesheet.knownTech(tech) }
+pub fn loadable(format: &[u8], tech: &[u8]) -> bool {
+  let formats = [b"woff2", b"woff", b"truetype", b"opentype", b"collection", b"woff2-variations", b"woff-variations", b"truetype-variations", b"opentype-variations"]
+  let mut known = format.length == 0
+  let mut i: usize = 0
+  while i < formats.length { known = known || insensitive(format,formats[i]) i = i + 1 }
+  if !known { return false }
+  let unsupported = [b"incremental", b"graphite"]
+  i = 0
+  while i < unsupported.length {
+    let word = unsupported[i]
+    let mut at: usize = 0
+    while at + word.length <= tech.length {
+      if insensitive(Slice.view<u8>(tech,at,word.length),word) { return false }
+      at = at + 1
+    }
+    i = i + 1
+  }
+  return true
+}
 
 effect fn writeRange(writer: &mut Writer, value: Option<Range>) ! OutOfMemoryError ? &mut Allocator {
   run writer.flag(value.isSome())

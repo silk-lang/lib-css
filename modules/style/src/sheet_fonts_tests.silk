@@ -71,3 +71,21 @@ test effect fn compiledFontFaceEmptyNamesAndZeroWidthRoundTrip() ! CompileError 
   let decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(sheet.fontFaces.length() == decoded.fontFaces.length(), "the codec accepts every descriptor value admitted by compilation")
 }
+
+test effect fn compiledFontFaceDescriptorsKeepKeywordsEscapesAndAlternatives() ! CompileError | CssError | DecodeError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(b"@font-face{font-family:Br\\61 nd;src:local(Full Name),url('a b.woff2') format('WOFF2') tech(variations,color-COLRv1),url(fallback.ttf);font-weight:bold normal;font-width:expanded condensed;font-style:oblique .125turn -50grad;unicode-range:U+41,U+1F600-1F64F}@font-face{font-family:Auto;src:url(auto.ttf);font-weight:auto;font-width:auto;font-style:auto}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let decoded = run Sheet.decode(bytes.asSlice(),&Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(decoded.fontFaces.length() == 2 && sheet.diagnostics.length() == 0, "normalized descriptors compile and decode")
+  let rule = &decoded.fontFaces.asSlice()[0].rule
+  run Testing.expect(equal(rule.family.asSlice(),b"Brand"), "CSS escapes are decoded once")
+  run Testing.expect(match rule.weight { Option.Some { value } => value.min == 400.0 && value.max == 700.0 _ => false }, "weight keywords form an ordered range")
+  run Testing.expect(match rule.width { Option.Some { value } => value.min == 75.0 && value.max == 125.0 _ => false }, "width keywords form an ordered range")
+  run Testing.expect(match rule.style { Option.Some { value: FaceStyle.Oblique { min, max } } => min == -45.0 && max == 45.0 _ => false }, "angle units become ordered degree ranges")
+  run Testing.expect(rule.ranges.length() == 2 && rule.ranges.asSlice()[0].start == 65 && rule.ranges.asSlice()[1].end == 0x1F64F, "singleton and supplementary Unicode ranges survive")
+  run Testing.expect(match &rule.sources.asSlice()[0] { FaceSource.Local { name } => equal(name.asSlice(),b"Full Name") _ => false }, "unquoted local names retain spaces")
+  run Testing.expect(match &rule.sources.asSlice()[1] { FaceSource.Url { url, format, tech } => String.view(&url) == "a b.woff2" && equal(format.asSlice(),b"WOFF2") && equal(tech.asSlice(),b"variations,color-COLRv1") _ => false }, "source hints and relative URL text survive")
+  let auto = &decoded.fontFaces.asSlice()[1].rule
+  run Testing.expect(auto.weight.isNone() && auto.width.isNone() && auto.style.isNone(), "auto descriptors stay unspecified")
+}
