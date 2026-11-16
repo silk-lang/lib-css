@@ -1,0 +1,169 @@
+//! CSS Properties and Values API registrations over the stylesheet's token buffers.
+import cascade { Name }
+import declaration_values
+import input { Input, TokenView }
+import tokens { TokenBuffer, TokenRange, Kind, Limits, CssError, insensitive, equal }
+import syntax
+import value_cursor { Cursor }
+import dimensions { Store, Dimension }
+import dimensions
+import colors
+import silk.core.option { Option }
+import silk.core.ownership { Copy }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+
+pub enum Syntax { Universal, Length, LengthPercentage, Color, Number, Percentage, Angle }
+
+pub struct Registration {
+  pub name: Name,
+  pub syntax: Syntax,
+  pub inherits: bool,
+  pub initial: Option<TokenRange>,
+}
+impl Copy for Registration {}
+
+pub union Parsed {
+  Valid { pub registration: Registration },
+  Invalid,
+  Unsupported,
+}
+
+fn grammar(text: &[u8]) -> Option<Syntax> {
+  if equal(text, b"*") { return Option<Syntax>.some(Syntax.Universal) }
+  if equal(text, b"<length>") { return Option<Syntax>.some(Syntax.Length) }
+  if equal(text, b"<length-percentage>") { return Option<Syntax>.some(Syntax.LengthPercentage) }
+  if equal(text, b"<color>") { return Option<Syntax>.some(Syntax.Color) }
+  if equal(text, b"<number>") { return Option<Syntax>.some(Syntax.Number) }
+  if equal(text, b"<percentage>") { return Option<Syntax>.some(Syntax.Percentage) }
+  if equal(text, b"<angle>") { return Option<Syntax>.some(Syntax.Angle) }
+  return Option<Syntax>.None
+}
+
+fn sole<'a>(source: &'a Input<'_>) -> Option<TokenView<'a>> {
+  let mut cursor = Cursor.make(source)
+  cursor.skip(source)
+  let value = source.at(cursor.position)
+  cursor.position = cursor.position + 1
+  if !cursor.done(source) { return Option<TokenView<'a>>.None }
+  return value
+}
+
+fn independent(source: &Input<'_>) -> bool {
+  let mut i: usize = 0
+  while i < source.length() {
+    if let Option<TokenView>.Some { value } = source.at(i) {
+      match &value.token.kind {
+        Kind.Dimension { unit, .. } => {
+          let name = value.text(unit)
+          if insensitive(name, b"em") || insensitive(name, b"rem") || insensitive(name, b"ex")
+            || insensitive(name, b"rex") || insensitive(name, b"ch") || insensitive(name, b"rch")
+            || insensitive(name, b"cap") || insensitive(name, b"rcap") || insensitive(name, b"ic")
+            || insensitive(name, b"ric") || insensitive(name, b"lh") || insensitive(name, b"rlh")
+            || insensitive(name, b"cqw") || insensitive(name, b"cqh") || insensitive(name, b"cqi")
+            || insensitive(name, b"cqb") || insensitive(name, b"cqmin") || insensitive(name, b"cqmax") {
+            return false
+          }
+        }
+        Kind.Ident { text } => { if insensitive(value.text(text), b"currentcolor") { return false } }
+        Kind.Function { name } => {
+          if insensitive(value.text(name), b"var") || insensitive(value.text(name), b"env")
+            || insensitive(value.text(name), b"attr") { return false }
+        }
+        _ => {}
+      }
+    }
+    i = i + 1
+  }
+  return true
+}
+
+/// Checks a substituted value against the supported registration grammar. Initial values must
+/// additionally be independent of the element's font, color, attributes and custom properties.
+pub effect fn valid(syntax: Syntax, source: &Input<'_>, initial: bool, limits: &Limits) -> bool
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let mut empty = Cursor.make(source)
+  if syntax == Syntax.Universal && empty.done(source) { return true }
+  let validation = run declaration_values.validate(source, limits)
+  if !validation.valid || validation.hasVariables || (initial && syntax != Syntax.Universal && !independent(source)) { return false }
+  if syntax == Syntax.Universal {
+    if initial {
+      let mut cursor = Cursor.make(source)
+      if cursor.done(source) { return true }
+      if cursor.ident(source, b"initial") || cursor.ident(source, b"inherit") || cursor.ident(source, b"unset")
+        || cursor.ident(source, b"revert") || cursor.ident(source, b"revert-layer") {
+        if cursor.done(source) { return false }
+      }
+    }
+    return true
+  }
+  let mut cursor = Cursor.make(source)
+  if syntax == Syntax.Color {
+    let parsed = run colors.parseProgram(source, &mut cursor)
+    return parsed.isSome() && cursor.done(source)
+  }
+  let dimension = match syntax {
+    Syntax.Length => Dimension.Length
+    Syntax.LengthPercentage => Dimension.LengthPercentage
+    Syntax.Number => Dimension.Number
+    Syntax.Percentage => Dimension.Percentage
+    Syntax.Angle => Dimension.Angle
+    _ => Dimension.Number
+  }
+  let mut store = Store.make()
+  let parsed = run dimensions.parse(&mut store, source, &mut cursor, dimension, false)
+  return parsed.isSome() && cursor.done(source)
+}
+
+/// Parses a complete @property rule. Unknown descriptors are ignored; the supported syntax,
+/// inherits descriptor and (except for universal syntax) an independent initial value are required.
+pub effect fn parse(buffer: &TokenBuffer, index: usize, prelude: TokenRange, body: TokenRange, limits: &Limits) -> Parsed
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let name = match &sole(&Input.Contiguous { buffer: buffer, range: prelude }) {
+    Option<TokenView>.Some { value } => match &value.token.kind {
+      Kind.Ident { text } => {
+        if !declaration_values.customName(buffer.text(text)) { return Parsed.Invalid }
+        Name { buffer: index, span: text }
+      }
+      _ => { return Parsed.Invalid }
+    }
+    _ => { return Parsed.Invalid }
+  }
+  let declarations = run syntax.parseDeclarations(buffer, body, limits)
+  let mut syntax = Option<Syntax>.None
+  let mut inherits = Option<bool>.None
+  let mut initial = Option<TokenRange>.None
+  let mut unsupported = false
+  let mut i: usize = 0
+  while i < declarations.length() {
+    let descriptor = declarations.asSlice()[i]
+    let key = buffer.text(descriptor.name)
+    let source = Input.Contiguous { buffer: buffer, range: descriptor.value }
+    if !descriptor.important {
+      if insensitive(key, b"syntax") {
+        if let Option<TokenView>.Some { value } = sole(&source) {
+          if let Kind.String { text } = value.token.kind {
+            syntax = grammar(buffer.text(text))
+            unsupported = !syntax.isSome()
+          }
+        }
+      } else if insensitive(key, b"inherits") {
+        let mut cursor = Cursor.make(&source)
+        if cursor.ident(&source, b"true") && cursor.done(&source) { inherits = Option<bool>.some(true) }
+        else {
+          cursor = Cursor.make(&source)
+          if cursor.ident(&source, b"false") && cursor.done(&source) { inherits = Option<bool>.some(false) }
+        }
+      } else if insensitive(key, b"initial-value") {
+        initial = Option<TokenRange>.some(descriptor.value)
+      }
+    }
+    i = i + 1
+  }
+  if unsupported { return Parsed.Unsupported }
+  let selected = match syntax { Option<Syntax>.Some { value } => value _ => { return Parsed.Invalid } }
+  let inherited = match inherits { Option<bool>.Some { value } => value _ => { return Parsed.Invalid } }
+  if let Option<TokenRange>.Some { value } = initial {
+    if !run valid(selected, &Input.Contiguous { buffer: buffer, range: value }, true, limits) { return Parsed.Invalid }
+  } else if selected != Syntax.Universal { return Parsed.Invalid }
+  return Parsed.Valid { registration: Registration { name: name, syntax: selected, inherits: inherited, initial: initial } }
+}

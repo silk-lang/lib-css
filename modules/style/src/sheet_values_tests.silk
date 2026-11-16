@@ -1,0 +1,27 @@
+import sheet_binary { Writer, Reader, DecodeError }
+import sheet_values
+import written
+import css_properties.values
+import tokens { Limits, CssError, equal }
+import silk.core.effect { Effect }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+test effect fn sharedValuesRoundTripThroughBinaryEncoding() -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let cases = [b"auto", b"2px", b"calc(100% - 8px)", b"#1234", b"1px 2px / 4px", b"blur(2px)", b"var(--gap)"]
+  let mut i: usize = 0
+  while i < cases.length {
+    let original = run written.value(cases[i]) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut writer = Writer.make()
+    run sheet_values.encode(&original, &mut writer) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut reader = Reader.make(writer.bytes.asSlice())
+    let decoded = run sheet_values.decode(&mut reader, &Limits.make(), 0) |> Effect.provideMut<Allocator>(&mut allocator)
+    run reader.finish()
+    let before = run values.cssText(&original) |> Effect.provideMut<Allocator>(&mut allocator)
+    let after = run values.cssText(&decoded) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(equal(before.asSlice(), after.asSlice()), "typed value serialization preserved")
+    i = i + 1
+  }
+}

@@ -1,4 +1,5 @@
-//! Cascade4 declaration compilation and origin-aware winner selection.
+//! Cascade5 declaration compilation and origin-aware winner selection.
+import silk.num.usize
 import tokens { TokenRange, Span, Limits, CssError, BufferView, Kind }
 import tokens
 import syntax
@@ -27,6 +28,8 @@ pub struct Priority {
   pub origin: Origin,
   pub important: bool,
   pub encapsulationDepth: usize,
+  /// Flattened first-appearance layer order; usize.MAX denotes unlayered rules.
+  pub layer: usize,
   pub specificity: Specificity,
   pub inline: bool,
   pub order: usize,
@@ -40,6 +43,7 @@ impl Priority {
       origin: origin,
       important: false,
       encapsulationDepth: 0,
+      layer: usize.MAX,
       specificity: Specificity { ids: 0, classes: 0, types: 0 },
       inline: false,
       order: order,
@@ -107,7 +111,7 @@ fn rank(priority: Priority) -> u8 {
   }
 }
 
-// https://www.w3.org/TR/css-cascade-4/#cascade-sort
+// https://www.w3.org/TR/css-cascade-5/#cascade-sort
 pub fn compare(a: Priority, b: Priority) -> i32 {
   let x = rank(a)
   let y = rank(b)
@@ -136,6 +140,10 @@ pub fn compare(a: Priority, b: Priority) -> i32 {
     } else {
       -1
     }
+  }
+  if a.layer != b.layer {
+    let greater = if a.important { a.layer < b.layer } else { a.layer > b.layer }
+    return if greater { 1 } else { -1 }
   }
   let specificity = selectors.compare(a.specificity, b.specificity)
   if specificity != 0 {
@@ -198,9 +206,61 @@ pub fn sameName(buffers: BufferView<'_>, a: Name, b: Name) -> bool {
   return tokens.equal(buffers.one(a.buffer)[0].text(a.span), buffers.one(b.buffer)[0].text(b.span))
 }
 
+/// Rollback state also survives substitution: var() can produce a wide keyword.
+pub struct Rollback {
+  origins: u8,
+  before: Option<Priority>,
+  inline: u8,
+}
+impl Copy for Rollback {}
+
+// Compare cascade levels, ignoring specificity and source order within a layer.
+fn level(a: Priority, b: Priority) -> i32 {
+  let mut left = a
+  let mut right = b
+  left.specificity = Specificity { ids: 0, classes: 0, types: 0 }
+  right.specificity = left.specificity
+  left.order = 0
+  right.order = 0
+  return compare(left, right)
+}
+
+impl Rollback {
+  pub fn make(excluded: u8) -> Rollback {
+    return Rollback { origins: excluded, before: Option<Priority>.None, inline: 0 }
+  }
+  pub fn allows(self: &Rollback, priority: Priority) -> bool {
+    if (self.origins & originBit(priority.origin)) != 0 { return false }
+    if let Option<Priority>.Some { value } = &self.before {
+      if level(priority, value) >= 0 { return false }
+    }
+    if priority.inline && (self.inline & originBit(priority.origin)) != 0 { return false }
+    return true
+  }
+  pub fn apply(self: &mut Rollback, keyword: Wide, priority: Priority) -> bool {
+    if keyword == Wide.Revert {
+      self.origins = self.origins | revertMask(priority.origin)
+      return true
+    }
+    if keyword != Wide.RevertLayer { return false }
+    // Cascade 5: remove the layer and the interval between its normal and
+    // important levels. Important element-attached styles are the exception:
+    // they leave important author rules available, but remove animations.
+    if priority.inline && priority.important {
+      self.inline = self.inline | originBit(priority.origin)
+      self.origins = self.origins | originBit(Origin.Animation)
+    } else {
+      let mut boundary = priority
+      boundary.important = false
+      self.before = Option<Priority>.some(boundary)
+    }
+    return true
+  }
+}
+
 pub fn reverted(declaration: &Declaration) -> bool {
   return match &declaration.specified {
-    Specified.Wide { keyword } => keyword == Wide.Revert
+    Specified.Wide { keyword } => keyword == Wide.Revert || keyword == Wide.RevertLayer
     _ => false
   }
 }
@@ -211,7 +271,11 @@ pub fn select(
   property: Property,
   excluded: u8,
 ) -> Option<Candidate> {
-  let mut skip = excluded
+  let mut rollback = Rollback.make(excluded)
+  return selectWith(catalog, candidates, property, &mut rollback)
+}
+
+pub fn selectWith(catalog: &[Declaration], candidates: &[Candidate], property: Property, rollback: &mut Rollback) -> Option<Candidate> {
   while true {
     let mut best = Option<Candidate>.None
     let mut i: usize = 0
@@ -219,8 +283,8 @@ pub fn select(
       let mut candidate = candidates[i]
       if candidate.declaration < catalog.length {
         let declaration = &catalog[candidate.declaration]
-        if (skip & originBit(candidate.priority.origin)) == 0 && covers(declaration, property) {
-          candidate.priority.important = declaration.important
+        candidate.priority.important = declaration.important
+        if rollback.allows(candidate.priority) && covers(declaration, property) {
           let replace = match &best {
             Option<Candidate>.Some { value } => compare(candidate.priority, value.priority) >= 0
             _ => true
@@ -234,11 +298,10 @@ pub fn select(
     }
     match &best {
       Option<Candidate>.Some { value } => {
-        if reverted(&catalog[value.declaration]) {
-          skip = skip | revertMask(value.priority.origin)
-        } else {
-          return best
+        if let Specified.Wide { keyword } = &catalog[value.declaration].specified {
+          if rollback.apply(keyword, value.priority) { continue }
         }
+        return best
       }
       _ => {
         return best
@@ -254,7 +317,11 @@ pub fn selectCustom(
   name: Name,
   excluded: u8,
 ) -> Option<Candidate> {
-  let mut skip = excluded
+  let mut rollback = Rollback.make(excluded)
+  return selectCustomWith(buffers, catalog, candidates, name, &mut rollback)
+}
+
+pub fn selectCustomWith(buffers: BufferView<'_>, catalog: &[Declaration], candidates: &[Candidate], name: Name, rollback: &mut Rollback) -> Option<Candidate> {
   while true {
     let mut best = Option<Candidate>.None
     let mut i: usize = 0
@@ -266,8 +333,8 @@ pub fn selectCustom(
           Target.Custom { name: other } => sameName(buffers, name, other)
           _ => false
         }
-        if matches && (skip & originBit(candidate.priority.origin)) == 0 {
-          candidate.priority.important = declaration.important
+        candidate.priority.important = declaration.important
+        if matches && rollback.allows(candidate.priority) {
           let replace = match &best {
             Option<Candidate>.Some { value } => compare(candidate.priority, value.priority) >= 0
             _ => true
@@ -281,11 +348,10 @@ pub fn selectCustom(
     }
     match &best {
       Option<Candidate>.Some { value } => {
-        if reverted(&catalog[value.declaration]) {
-          skip = skip | revertMask(value.priority.origin)
-        } else {
-          return best
+        if let Specified.Wide { keyword } = &catalog[value.declaration].specified {
+          if rollback.apply(keyword, value.priority) { continue }
         }
+        return best
       }
       _ => {
         return best
@@ -308,6 +374,9 @@ pub fn wide(input: &Input<'_>) -> Option<Wide> {
   }
   if condition_cursor.ident(input, first, b"unset") {
     return Option<Wide>.some(Wide.Unset)
+  }
+  if condition_cursor.ident(input, first, b"revert-layer") {
+    return Option<Wide>.some(Wide.RevertLayer)
   }
   if condition_cursor.ident(input, first, b"revert") {
     return Option<Wide>.some(Wide.Revert)

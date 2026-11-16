@@ -1,0 +1,204 @@
+//! Extract typed descriptors after the CSSOM grammar has validated and normalized them.
+//! URLs stay relative until the sheet is loaded; compilation needs no platform URL module.
+import sheet_fonts { FontFaceRule, FaceSource, FaceStyle, Range, UnicodeRange, FontDisplay }
+import cssom_descriptors { Context }
+import cssom_descriptors
+import cssom_font_source
+import syntax
+import lexer
+import tokens { TokenBuffer, TokenRange, Limits, CssError, Kind, insensitive }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.string { String }
+import silk.num.u8
+
+pub struct Parsed { pub rule: Option<FontFaceRule>, pub unsupported: List<Bytes> }
+
+fn skip(buffer: &TokenBuffer, at: usize, end: usize) -> usize {
+  let mut i = at
+  while i < end && match buffer.tokens.asSlice()[i].kind { Kind.Whitespace => true _ => false } { i = i + 1 }
+  return i
+}
+
+// These helpers consume only normalized descriptors, not arbitrary CSS source.
+fn numeric(buffer: &TokenBuffer, kind: Kind, width: bool) -> f64 {
+  match kind {
+    Kind.Number { value, .. } => { return value }
+    Kind.Percentage { value, .. } => { return value }
+    Kind.Ident { text } => {
+      let name = buffer.text(text)
+      if width {
+        let names = [b"ultra-condensed",b"extra-condensed",b"condensed",b"semi-condensed",b"normal",b"semi-expanded",b"expanded",b"extra-expanded",b"ultra-expanded"]
+        let values: [f64; 9] = [50.0,62.5,75.0,87.5,100.0,112.5,125.0,150.0,200.0]
+        let mut i: usize = 0
+        while i < names.length { if insensitive(name,names[i]) { return values[i] } i = i + 1 }
+      }
+      return if insensitive(name,b"bold") { 700.0 } else { 400.0 }
+    }
+    _ => { return 0.0 }
+  }
+}
+
+fn range(buffer: &TokenBuffer, width: bool) -> Option<Range> {
+  let end = buffer.all().end
+  let first = skip(buffer,0,end)
+  let kind = buffer.tokens.asSlice()[first].kind
+  if match kind { Kind.Ident { text } => insensitive(buffer.text(text),b"auto") _ => false } { return Option<Range>.None }
+  let low = numeric(buffer,kind,width)
+  let next = skip(buffer,first + 1,end)
+  let high = if next < end { numeric(buffer,buffer.tokens.asSlice()[next].kind,width) } else { low }
+  return Option<Range>.some(Range { min: if low < high { low } else { high }, max: if low > high { low } else { high } })
+}
+
+fn angle(buffer: &TokenBuffer, at: usize) -> f64 {
+  match buffer.tokens.asSlice()[at].kind {
+    Kind.Dimension { value, unit, .. } => {
+      let name = buffer.text(unit)
+      return value * if insensitive(name,b"rad") { 57.29577951308232 } else if insensitive(name,b"grad") { 0.9 } else if insensitive(name,b"turn") { 360.0 } else { 1.0 }
+    }
+    _ => { return 0.0 }
+  }
+}
+
+fn style(buffer: &TokenBuffer) -> Option<FaceStyle> {
+  let end = buffer.all().end
+  let first = skip(buffer,0,end)
+  let name = match buffer.tokens.asSlice()[first].kind { Kind.Ident { text } => buffer.text(text) _ => b"" }
+  if insensitive(name,b"auto") { return Option<FaceStyle>.None }
+  if insensitive(name,b"normal") { return Option<FaceStyle>.some(FaceStyle.Normal) }
+  if insensitive(name,b"italic") { return Option<FaceStyle>.some(FaceStyle.Italic) }
+  let next = skip(buffer,first + 1,end)
+  let low = if next < end { angle(buffer,next) } else { 14.0 }
+  let last = skip(buffer,next + 1,end)
+  let high = if last < end { angle(buffer,last) } else { low }
+  return Option<FaceStyle>.some(FaceStyle.Oblique { min: if low < high { low } else { high }, max: if low > high { low } else { high } })
+}
+
+effect fn sources(buffer: &TokenBuffer) -> List<FaceSource> ! OutOfMemoryError ? &mut Allocator {
+  let mut out = List<FaceSource>.make()
+  let end = buffer.all().end
+  let mut at = skip(buffer,0,end)
+  while at < end {
+    let start = at
+    let token = buffer.tokens.asSlice()[at]
+    let local = match token.kind { Kind.Function { name } => insensitive(buffer.text(name),b"local") _ => false }
+    let text = match token.kind {
+      Kind.Url { text: value } => { at = at + 1 buffer.text(value) }
+      Kind.Function { .. } => {
+        let inner = skip(buffer,at + 1,token.matching)
+        at = token.matching + 1
+        match buffer.tokens.asSlice()[inner].kind { Kind.String { text: value } => buffer.text(value) _ => b"" }
+      }
+      _ => { at = at + 1 b"" }
+    }
+    if local {
+      run out.append(FaceSource.Local { name: run Bytes.copy(text) })
+    } else {
+      let mut format = Bytes.make()
+      let mut tech = Bytes.make()
+      at = skip(buffer,at,end)
+      while at < end {
+        let hint = buffer.tokens.asSlice()[at]
+        let isFormat = match hint.kind { Kind.Function { name } => insensitive(buffer.text(name),b"format") _ => { break } }
+        let mut inner = at + 1
+        while inner < hint.matching {
+          let hintText = match buffer.tokens.asSlice()[inner].kind {
+            Kind.Ident { text: span } => buffer.text(span)
+            Kind.String { text: span } => buffer.text(span)
+            _ => b""
+          }
+          if hintText.length != 0 {
+            if isFormat { run format.append(hintText) }
+            else { if tech.length() != 0 { run tech.append(b",") } run tech.append(hintText) }
+          }
+          inner = inner + 1
+        }
+        at = skip(buffer,hint.matching + 1,end)
+      }
+      if let Result.Success { value } = String.fromUtf8(text) {
+        run out.append(FaceSource.Url { url: run String.copy(value), format: move format, tech: move tech })
+      }
+    }
+    at = skip(buffer,at,end)
+    if at < end && match buffer.tokens.asSlice()[at].kind { Kind.Comma => true _ => false } { at = skip(buffer,at + 1,end) }
+    if at <= start { break }
+  }
+  return move out
+}
+
+fn hex(byte: u8) -> u32 {
+  return if byte <= 57 { u8.toU32(byte) - 48 } else if byte <= 70 { u8.toU32(byte) - 55 } else { u8.toU32(byte) - 87 }
+}
+
+effect fn unicode(data: &[u8]) -> List<UnicodeRange> ! OutOfMemoryError ? &mut Allocator {
+  let mut out = List<UnicodeRange>.make()
+  let mut at: usize = 0
+  while at < data.length {
+    // CSSOM emits U+HEX[-HEX], with no wildcards or internal whitespace.
+    at = at + 2
+    let mut low: u32 = 0
+    while at < data.length && data[at] != 45 && data[at] != 44 { low = low * 16 + hex(data[at]) at = at + 1 }
+    let mut high = low
+    if at < data.length && data[at] == 45 {
+      at = at + 1
+      high = 0
+      while at < data.length && data[at] != 44 { high = high * 16 + hex(data[at]) at = at + 1 }
+    }
+    run out.append(UnicodeRange { start: low, end: high })
+    if at < data.length { at = at + 1 }
+    while at < data.length && data[at] == 32 { at = at + 1 }
+  }
+  return move out
+}
+
+pub effect fn parse(buffer: &TokenBuffer, body: TokenRange, limits: &Limits) -> Parsed
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let declarations = run syntax.parseDeclarations(buffer, body, limits)
+  let mut rule = FontFaceRule { family: Bytes.make(), sources: List<FaceSource>.make(), weight: Option<Range>.None,
+    width: Option<Range>.None, style: Option<FaceStyle>.None, ranges: List<UnicodeRange>.make(), display: FontDisplay.Auto }
+  let mut hasFamily = false
+  let mut unsupported = List<Bytes>.make()
+  let mut i: usize = 0
+  while i < declarations.length() {
+    let declaration = declarations.asSlice()[i]
+    if !declaration.important {
+      let name = buffer.text(declaration.name)
+      let numeric = insensitive(name,b"font-weight") || insensitive(name,b"font-width") || insensitive(name,b"font-stretch") || insensitive(name,b"font-style")
+      let mut math = false
+      let mut token = declaration.value.start
+      while token < declaration.value.end {
+        if numeric && match buffer.tokens.asSlice()[token].kind { Kind.Function { .. } => true _ => false } { math = true }
+        token = token + 1
+      }
+      if math { run unsupported.append(run Bytes.copy(b"descriptor math")) i = i + 1 continue }
+      let normalized = run cssom_descriptors.parse(Context.FontFace, name, buffer, declaration.value, limits)
+      if normalized.length() != 0 {
+        let item = &normalized.asSlice()[0]
+        if insensitive(item.name,b"unicode-range") {
+          rule.ranges = run unicode(item.value.asSlice())
+        } else if insensitive(item.name,b"font-display") {
+          let display = item.value.asSlice()
+          rule.display = if insensitive(display,b"block") { FontDisplay.Block } else if insensitive(display,b"swap") { FontDisplay.Swap }
+            else if insensitive(display,b"fallback") { FontDisplay.Fallback } else if insensitive(display,b"optional") { FontDisplay.Optional } else { FontDisplay.Auto }
+          if rule.display != FontDisplay.Auto && rule.display != FontDisplay.Swap { run unsupported.append(run Bytes.copy(b"font-display timing")) }
+        } else if insensitive(item.name,b"font-family") || insensitive(item.name,b"src") || numeric {
+          let value = run lexer.tokenize(item.value.asSlice(),limits)
+          if insensitive(item.name,b"font-family") {
+            if let Option.Some { value: family } = run cssom_font_source.family(&value,value.all()) { rule.family = move family hasFamily = true }
+          } else if insensitive(item.name,b"src") { rule.sources = run sources(&value) }
+          else if insensitive(item.name,b"font-style") { rule.style = style(&value) }
+          else if insensitive(item.name,b"font-weight") { rule.weight = range(&value,false) }
+          else { rule.width = range(&value,true) }
+        } else { run unsupported.append(run Bytes.copy(item.name)) }
+      } else if cssom_descriptors.name(Context.FontFace, name).length == 0 {
+        run unsupported.append(run Bytes.copy(name))
+      }
+    }
+    i = i + 1
+  }
+  let valid = hasFamily && rule.sources.length() != 0
+  return Parsed { rule: if valid { Option<FontFaceRule>.some(move rule) } else { Option<FontFaceRule>.None }, unsupported: move unsupported }
+}

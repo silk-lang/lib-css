@@ -1,6 +1,6 @@
 //! Immutable computed styles. Source buffers and declarations remain caller-owned.
 import silk.mem.box { Box }
-import cascade { Declaration, Candidate, Target, Specified, Priority }
+import cascade { Declaration, Candidate, Target, Specified, Priority, Rollback }
 import cascade
 import variables { VariableStore, ScopeId }
 import variables
@@ -1364,23 +1364,24 @@ effect fn resolve(
   if style.entries[index].value != u32.MAX {
     return
   }
-  let mut excluded: u8 = 0
+  let mut rollback = Rollback.make(0)
+  let mut selecting = true
   while true {
     let canonicalIndex = properties.index(properties.canonical(property))
     let winner = if !engine.tables.get()[0].covered[canonicalIndex] {
       Option<Candidate>.None
-    } else if excluded == 0 {
+    } else if selecting {
       let best = u32.toUsize(engine.tables.get()[0].winners[canonicalIndex])
       let mut stored = candidates[best]
       let declaration = &declarations[stored.declaration]
       if cascade.reverted(declaration) {
-        cascade.select(declarations, candidates, property, excluded)
+        cascade.selectWith(declarations, candidates, property, &mut rollback)
       } else {
         stored.priority.important = declaration.important
         Option<Candidate>.some(stored)
       }
     } else {
-      cascade.select(declarations, candidates, property, excluded)
+      cascade.selectWith(declarations, candidates, property, &mut rollback)
     }
     let candidate = match &winner {
       Option<Candidate>.Some { value } => value
@@ -1414,8 +1415,8 @@ effect fn resolve(
     let specified = match &selected.value {
       Option<ValueId>.Some { value } => value
       _ => {
-        if selected.wide == Wide.Revert {
-          excluded = excluded | cascade.revertMask(candidate.priority.origin)
+        if rollback.apply(selected.wide, candidate.priority) {
+          selecting = false
           continue
         }
         let value = run defaultValue(
@@ -1676,9 +1677,11 @@ effect fn computeValue(
     }
     Value.Paint { paint } => {
       let stable = match &paint {
+        Paint.ColorMix { .. } => false
         Paint.Color { color } => stableColor(color, property)
         Paint.IccColor { color, .. } => stableColor(color, property)
         Paint.Server { fallback, .. } => match &fallback {
+          Fallback.ColorMix { .. } => false
           Fallback.Color { color } => stableColor(color, property)
           Fallback.IccColor { color, .. } => stableColor(color, property)
           _ => true

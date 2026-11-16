@@ -1,0 +1,131 @@
+//! Parsed Color 5 expression programs, without source text or a runtime CSS parser.
+import colors { Color, ColorProgram, ColorNode, Space, Identity, SystemColor, HueMethod }
+import colors
+import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
+import tokens { Limits }
+import silk.collections.list { List }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.f64
+
+const SPACES: [Space; 15] = [Space.Srgb, Space.SrgbLinear, Space.DisplayP3, Space.DisplayP3Linear,
+  Space.A98Rgb, Space.ProphotoRgb, Space.Rec2020, Space.XyzD50, Space.XyzD65, Space.Hsl,
+  Space.Hwb, Space.Lab, Space.Lch, Space.Oklab, Space.Oklch]
+const SYSTEMS: [SystemColor; 19] = [SystemColor.AccentColor, SystemColor.AccentColorText,
+  SystemColor.ActiveText, SystemColor.ButtonBorder, SystemColor.ButtonFace, SystemColor.ButtonText,
+  SystemColor.Canvas, SystemColor.CanvasText, SystemColor.Field, SystemColor.FieldText,
+  SystemColor.GrayText, SystemColor.Highlight, SystemColor.HighlightText, SystemColor.LinkText,
+  SystemColor.Mark, SystemColor.MarkText, SystemColor.SelectedItem, SystemColor.SelectedItemText, SystemColor.VisitedText]
+
+fn spaceIndex(space: Space) -> usize {
+  let mut i: usize = 0
+  while i < SPACES.length { if SPACES[i] == space { return i }
+    i = i + 1
+  }
+  return 0
+}
+
+effect fn space(reader: &mut Reader<'_>) -> Space ! DecodeError {
+  let index = run reader.index()
+  if index >= SPACES.length { run reader.invalid() }
+  return SPACES[index]
+}
+
+pub effect fn encode(program: &ColorProgram, writer: &mut Writer) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.index(program.nodes.length())
+  let mut i: usize = 0
+  while i < program.nodes.length() {
+    match &program.nodes.asSlice()[i] {
+      ColorNode.Leaf { color } => {
+        run writer.byte(0)
+        run writer.index(spaceIndex(color.space))
+        run writer.number(color.channels[0])
+        run writer.number(color.channels[1])
+        run writer.number(color.channels[2])
+        run writer.number(color.alpha)
+        run writer.byte(color.missing)
+        match &color.identity {
+          Identity.Absolute => run writer.byte(0)
+          Identity.CurrentColor => run writer.byte(1)
+          Identity.System { color: system } => { run writer.byte(2)
+            run writer.index(colors.systemIndex(system))
+          }
+        }
+      }
+      ColorNode.Mix { left, right, space, hue, leftWeight, alphaMultiplier } => {
+        run writer.byte(1)
+        run writer.index(left)
+        run writer.index(right)
+        run writer.index(spaceIndex(space))
+        run writer.byte(match hue { HueMethod.Shorter => 0 HueMethod.Longer => 1 HueMethod.Increasing => 2 HueMethod.Decreasing => 3 })
+        run writer.number(leftWeight)
+        run writer.number(alphaMultiplier)
+      }
+    }
+    i = i + 1
+  }
+}
+
+pub effect fn decode(reader: &mut Reader<'_>, limits: &Limits) -> ColorProgram
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  let count = run reader.count(if limits.maxTokens < 4096 { limits.maxTokens } else { 4096 })
+  if count == 0 { run reader.invalid() }
+  let mut result = ColorProgram { nodes: List<ColorNode>.make() }
+  let mut depths = List<usize>.make()
+  let mut used = List<bool>.make()
+  let mut i: usize = 0
+  while i < count {
+    let tag = run reader.byte()
+    let mut depth: usize = 1
+    let node = if tag == 0 {
+      let coordinates = run space(&mut reader.*)
+      let channels = [run reader.number(), run reader.number(), run reader.number()]
+      let alpha = run reader.number()
+      let missing = run reader.byte()
+      if missing > 15 { run reader.invalid() }
+      let identity = match run reader.byte() {
+        0 => Identity.Absolute 1 => Identity.CurrentColor
+        2 => {
+          let index = run reader.index()
+          if index >= SYSTEMS.length { run reader.invalid() }
+          Identity.System { color: SYSTEMS[index] }
+        }
+        _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+      }
+      ColorNode.Leaf { color: Color { space: coordinates, channels: channels, alpha: alpha, missing: missing, identity: identity } }
+    } else if tag == 1 {
+      let left = run reader.index()
+      let right = run reader.index()
+      if left >= i || right >= i || left == right { run reader.invalid() }
+      if used.asSlice()[left] || used.asSlice()[right] { run reader.invalid() }
+      let flags = used.asMutSlice()
+      flags[left] = true
+      flags[right] = true
+      let a = depths.asSlice()[left]
+      let b = depths.asSlice()[right]
+      depth = 1 + (if a > b { a } else { b })
+      let coordinates = run space(&mut reader.*)
+      let hue = match run reader.byte() {
+        0 => HueMethod.Shorter 1 => HueMethod.Longer 2 => HueMethod.Increasing 3 => HueMethod.Decreasing
+        _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+      }
+      if hue != HueMethod.Shorter && coordinates != Space.Oklch && coordinates != Space.Lch
+        && coordinates != Space.Hsl && coordinates != Space.Hwb { run reader.invalid() }
+      let weight = run reader.number()
+      let alpha = run reader.number()
+      if !f64.isFinite(weight) || !f64.isFinite(alpha) || weight < 0.0 || weight > 1.0 || alpha <= 0.0 || alpha > 1.0 { run reader.invalid() }
+      ColorNode.Mix { left: left, right: right, space: coordinates, hue: hue, leftWeight: weight, alphaMultiplier: alpha }
+    } else { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+    if depth > 64 || depth > limits.maxDepth { fail DecodeError { reason: DecodeReason.Limit, offset: reader.at } }
+    run result.nodes.append(node)
+    run depths.append(depth)
+    run used.append(false)
+    i = i + 1
+  }
+  i = 0
+  while i + 1 < count {
+    if !used.asSlice()[i] { run reader.invalid() }
+    i = i + 1
+  }
+  return move result
+}

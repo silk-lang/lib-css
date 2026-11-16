@@ -262,6 +262,16 @@ effect fn preferencesCase() -> ()
   ! AssertionError<'static> | CssError | OutOfMemoryError
   ? &mut Allocator {
   let mut environment = Environment.headless(800.0, 600.0)
+  run expectFeature(b"forced-colors: none", &environment, Truth.True)
+  run expectFeature(b"forced-colors: active", &environment, Truth.False)
+  run expectFeature(b"forced-colors", &environment, Truth.False)
+  environment.forcedColors = true
+  run expectFeature(b"forced-colors: none", &environment, Truth.False)
+  run expectFeature(b"forced-colors: active", &environment, Truth.True)
+  run expectFeature(b"forced-colors", &environment, Truth.True)
+  run expectFeature(b"min-forced-colors: active", &environment, Truth.Unknown)
+  run expectFeature(b"forced-colors >= active", &environment, Truth.Unknown)
+  run expectFeature(b"forced-colors: reduce", &environment, Truth.Unknown)
   run expectFeature(b"prefers-color-scheme: light", &environment, Truth.True)
   run expectFeature(b"prefers-color-scheme: dark", &environment, Truth.False)
   run expectFeature(b"prefers-color-scheme", &environment, Truth.True)

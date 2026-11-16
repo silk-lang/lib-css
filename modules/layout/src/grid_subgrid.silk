@@ -7,7 +7,7 @@ import axes { Axes }
 import box_tree { BoxTree, BoxKind }
 import context { Input, outOfFlow }
 import geometry { max }
-import style { Style, WritingMode, Direction, DisplayInside }
+import style { SizeContainment, Style, WritingMode, Direction, DisplayInside }
 import grid_style { GridNamedLine, GridArea, MAX_GRID_TRACKS }
 import grid_tracks { TrackState }
 import grid_placement { GridItem }
@@ -228,7 +228,7 @@ pub fn eligible(nodes: &BoxTree<'_>, id: usize) -> bool {
   if nodes.node(id).kind != BoxKind.Grid { return false }
   let style = nodes.style(id)
   let template = &nodes.grids[style.grid]
-  if !template.columns.subgrid && !template.rows.subgrid { return false }
+  if style.sizeContainment != SizeContainment.None || !template.columns.subgrid && !template.rows.subgrid { return false }
   return nodes.node(id).measurement != Measurement.Content && !style.replaced
     && style.display.insideIs(DisplayInside.Grid) && !outOfFlow(style)
 }

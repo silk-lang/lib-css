@@ -9,6 +9,8 @@ import silk.core.option { Option }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.ownership { Copy }
 import silk.num.f64
+import silk.num.f32
+import css_properties.convert { Context as PropertyContext }
 
 pub enum Dimension {
   Number,
@@ -68,6 +70,12 @@ pub enum Unit {
   Dvb,
   Dvmin,
   Dvmax,
+  Cqw,
+  Cqh,
+  Cqi,
+  Cqb,
+  Cqmin,
+  Cqmax,
   Deg,
   Grad,
   Rad,
@@ -190,6 +198,11 @@ pub struct Context {
   pub dynamicViewportWidth: f64,
   pub dynamicViewportHeight: f64,
   pub vertical: bool,
+  /// Each axis may select a different ancestor; None uses the small viewport.
+  pub containerWidth: Option<f64>,
+  pub containerHeight: Option<f64>,
+  pub containerInlineSize: Option<f64>,
+  pub containerBlockSize: Option<f64>,
   pub parentFontSize: f64,
   pub parentXHeight: f64,
   pub parentCapHeight: f64,
@@ -206,6 +219,39 @@ pub struct Context {
 impl Copy for Context {}
 
 impl Context {
+  /// Share the host's unit bases with the typed Declaration conversion path.
+  /// Parent font bases start at the supplied element bases; font-property callers
+  /// can replace them independently before using font value grammars.
+  pub fn fromProperties(source: &PropertyContext) -> Context {
+    let mut context = Context.make(f32.toF64(source.viewportWidth), f32.toF64(source.viewportHeight), f32.toF64(source.fontSize))
+    let metrics = source.metrics()
+    let root = source.rootMetrics()
+    context.rootFontSize = f32.toF64(source.rootFontSize)
+    context.xHeight = f32.toF64(metrics.xHeight)
+    context.capHeight = f32.toF64(metrics.capHeight)
+    context.zeroAdvance = f32.toF64(metrics.zeroAdvance)
+    context.ideographAdvance = f32.toF64(metrics.ideographAdvance)
+    context.lineHeight = f32.toF64(metrics.lineHeight)
+    context.rootXHeight = f32.toF64(root.xHeight)
+    context.rootCapHeight = f32.toF64(root.capHeight)
+    context.rootZeroAdvance = f32.toF64(root.zeroAdvance)
+    context.rootIdeographAdvance = f32.toF64(root.ideographAdvance)
+    context.rootLineHeight = f32.toF64(root.lineHeight)
+    context.parentXHeight = context.xHeight
+    context.parentCapHeight = context.capHeight
+    context.parentZeroAdvance = context.zeroAdvance
+    context.parentIdeographAdvance = context.ideographAdvance
+    context.parentLineHeight = context.lineHeight
+    context.vertical = source.vertical
+    if let Option.Some { value } = source.smallViewportWidth { context.smallViewportWidth = f32.toF64(value) }
+    if let Option.Some { value } = source.smallViewportHeight { context.smallViewportHeight = f32.toF64(value) }
+    context.containerWidth = wider(source.containerWidth)
+    context.containerHeight = wider(source.containerHeight)
+    context.containerInlineSize = wider(source.containerInlineSize)
+    context.containerBlockSize = wider(source.containerBlockSize)
+    return context
+  }
+
   /// Convenience for a static viewport. Override actual font metrics, ascent/cap height,
   /// line heights, root metrics, and viewport variants before computing host styles.
   pub fn make(viewportWidth: f64, viewportHeight: f64, fontSize: f64) -> Context {
@@ -229,6 +275,8 @@ impl Context {
       dynamicViewportWidth: viewportWidth,
       dynamicViewportHeight: viewportHeight,
       vertical: false,
+      containerWidth: Option<f64>.None, containerHeight: Option<f64>.None,
+      containerInlineSize: Option<f64>.None, containerBlockSize: Option<f64>.None,
       parentFontSize: fontSize,
       parentFontWeight: 400.0,
       parentXHeight: fontSize * 0.5,
@@ -432,6 +480,12 @@ pub fn unit(text: &[u8]) -> Option<Unit> {
   if insensitive(text, b"dvmax") {
     return Option<Unit>.some(Unit.Dvmax)
   }
+  if insensitive(text, b"cqw") { return Option<Unit>.some(Unit.Cqw) }
+  if insensitive(text, b"cqh") { return Option<Unit>.some(Unit.Cqh) }
+  if insensitive(text, b"cqi") { return Option<Unit>.some(Unit.Cqi) }
+  if insensitive(text, b"cqb") { return Option<Unit>.some(Unit.Cqb) }
+  if insensitive(text, b"cqmin") { return Option<Unit>.some(Unit.Cqmin) }
+  if insensitive(text, b"cqmax") { return Option<Unit>.some(Unit.Cqmax) }
   if insensitive(text, b"deg") {
     return Option<Unit>.some(Unit.Deg)
   }
@@ -1200,6 +1254,11 @@ fn absoluteFactor(unitValue: Unit) -> f64 {
   }
 }
 
+fn containerBasis(size: Option<f64>, fallback: f64) -> f64 {
+  if let Option<f64>.Some { value } = size { return value }
+  return fallback
+}
+
 fn factor(unitValue: Unit, context: &Context) -> f64 {
   let inlineSize = if context.vertical {
     context.viewportHeight
@@ -1231,7 +1290,15 @@ fn factor(unitValue: Unit, context: &Context) -> f64 {
   } else {
     context.dynamicViewportHeight
   }
+  let containerInline = containerBasis(context.containerInlineSize, smallInline)
+  let containerBlock = containerBasis(context.containerBlockSize, smallBlock)
   return match unitValue {
+    Unit.Cqw => containerBasis(context.containerWidth, context.smallViewportWidth) * 0.01
+    Unit.Cqh => containerBasis(context.containerHeight, context.smallViewportHeight) * 0.01
+    Unit.Cqi => containerInline * 0.01
+    Unit.Cqb => containerBlock * 0.01
+    Unit.Cqmin => f64.min(containerInline, containerBlock) * 0.01
+    Unit.Cqmax => f64.max(containerInline, containerBlock) * 0.01
     Unit.Em => context.fontSize
     Unit.Rem => context.rootFontSize
     Unit.Ex => context.xHeight
@@ -1445,4 +1512,8 @@ pub fn evaluate(store: &Store<'_>, id: ExprId, percentageBasis: f64) -> f64 {
     return 0.0
   }
   return value
+}
+
+fn wider(value: Option<f32>) -> Option<f64> {
+  return match value { Option.Some { value: size } => Option<f64>.some(f32.toF64(size)) _ => Option<f64>.None }
 }

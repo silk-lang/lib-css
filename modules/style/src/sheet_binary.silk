@@ -1,0 +1,98 @@
+//! Bounded little-endian primitives for the internal compiled stylesheet format.
+import silk.collections.bytes { Bytes }
+import silk.collections.slice { Slice }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.u8
+import silk.num.u32
+import silk.num.u64
+import silk.num.usize
+import silk.num.f64
+
+pub enum DecodeReason { Truncated, Invalid, Version, Catalog, Limit }
+pub struct DecodeError { pub reason: DecodeReason, pub offset: usize }
+
+pub struct Writer { pub bytes: Bytes }
+impl Writer {
+  pub fn make() -> Writer { return Writer { bytes: Bytes.make() } }
+  pub effect fn byte(self: &mut Self, value: u8) -> () ! OutOfMemoryError ? &mut Allocator {
+    run self.bytes.append(&[value])
+  }
+  pub effect fn word(self: &mut Self, value: u32) -> () ! OutOfMemoryError ? &mut Allocator {
+    let mut remaining = value
+    let mut i: usize = 0
+    while i < 4 {
+      run self.byte(u32.toU8(remaining & 255))
+      remaining = u32.shiftRight(remaining, 8)
+      i = i + 1
+    }
+  }
+  pub effect fn index(self: &mut Self, value: usize) -> () ! OutOfMemoryError ? &mut Allocator {
+    run self.word(if value == usize.MAX { u32.MAX } else { usize.toU32(value) })
+  }
+  pub effect fn number(self: &mut Self, value: f64) -> () ! OutOfMemoryError ? &mut Allocator {
+    let bits = f64.toBits(value)
+    run self.word(u64.toU32(bits & 4294967295))
+    run self.word(u64.toU32(u64.shiftRight(bits, 32)))
+  }
+  pub effect fn flag(self: &mut Self, value: bool) -> () ! OutOfMemoryError ? &mut Allocator {
+    run self.byte(if value { 1 } else { 0 })
+  }
+  pub effect fn data(self: &mut Self, value: &[u8]) -> () ! OutOfMemoryError ? &mut Allocator {
+    run self.index(value.length)
+    run self.bytes.append(value)
+  }
+}
+
+pub struct Reader<'a> { pub bytes: &'a [u8], pub at: usize }
+impl<'a> Reader<'a> {
+  pub fn make(bytes: &'a [u8]) -> Reader<'a> { return Reader<'a> { bytes: bytes, at: 0 } }
+  pub effect fn invalid(self: &Self) -> () ! DecodeError {
+    fail DecodeError { reason: DecodeReason.Invalid, offset: self.at }
+  }
+  pub effect fn byte(self: &mut Self) -> u8 ! DecodeError {
+    if self.at >= self.bytes.length { fail DecodeError { reason: DecodeReason.Truncated, offset: self.at } }
+    let result = self.bytes[self.at]
+    self.at = self.at + 1
+    return result
+  }
+  pub effect fn word(self: &mut Self) -> u32 ! DecodeError {
+    let mut result: u32 = 0
+    let mut shift: u32 = 0
+    while shift < 32 {
+      result = result | u32.shiftLeft(u8.toU32(run self.byte()), shift)
+      shift = shift + 8
+    }
+    return result
+  }
+  pub effect fn index(self: &mut Self) -> usize ! DecodeError {
+    let value = run self.word()
+    return if value == u32.MAX { usize.MAX } else { u32.toUsize(value) }
+  }
+  pub effect fn number(self: &mut Self) -> f64 ! DecodeError {
+    let low = u32.toU64(run self.word())
+    let high = u32.toU64(run self.word())
+    return f64.fromBits(low | u64.shiftLeft(high, 32))
+  }
+  pub effect fn flag(self: &mut Self) -> bool ! DecodeError {
+    let value = run self.byte()
+    if value > 1 { run self.invalid() }
+    return value == 1
+  }
+  pub effect fn count(self: &mut Self, maximum: usize) -> usize ! DecodeError {
+    let value = run self.index()
+    if value > maximum || value > self.bytes.length - self.at {
+      fail DecodeError { reason: DecodeReason.Limit, offset: self.at }
+    }
+    return value
+  }
+  pub effect fn data(self: &mut Self) -> &'a [u8] ! DecodeError {
+    let remaining = self.bytes.length - self.at
+    let length = run self.count(remaining)
+    let result = Slice.view<u8>(self.bytes, self.at, length)
+    self.at = self.at + length
+    return result
+  }
+  pub effect fn finish(self: &Self) -> () ! DecodeError {
+    if self.at != self.bytes.length { run self.invalid() }
+  }
+}

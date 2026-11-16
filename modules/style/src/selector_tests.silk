@@ -1,9 +1,13 @@
 //! Selector tests use the real tokenizer and parser and an element-only host tree.
-import selectors { SelectorList, Specificity, NamespaceBinding }
+import sheet_binary { Writer, Reader, DecodeError }
+import sheet_tokens
+import selectors { SelectorList, Specificity, NamespaceBinding, DependencyKind }
 import selectors
 import lexer
+import tokens
 import tokens { Limits, CssError, CssErrorKind, Span, TokenRange }
-import element { ElementTree, MatchContext, NO_ELEMENT, AttributeText }
+import element
+import element { ElementTree, MatchContext, PseudoTarget, StateBits, NO_ELEMENT, AttributeText }
 import silk.collections.bytes { Bytes }
 import silk.core.effect { Effect }
 import silk.core.result { Result }
@@ -14,9 +18,13 @@ import silk.testing.testing { Testing, AssertionError }
 // svg(0) > g(1) > rect(2), circle(3), rect(4); svg > foreign rect(5).
 // The host reports whitespace-only content at 2, but non-whitespace text at 4.
 // Both have no element children: :empty must use host semantics, not firstChild.
-struct Tree {}
+struct Tree { states: u32 }
 
 impl ElementTree for Tree {
+  fn state(self: &Self, node: usize) -> element.StateBits {
+    return element.StateBits { bits: if node == 2 { self.states } else { 0 } }
+  }
+
   fn containingHost(self: &Self, node: usize) -> usize {
     return NO_ELEMENT
   }
@@ -172,7 +180,26 @@ effect fn check(
   classes: usize,
   types: usize,
 ) -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  run checkState(source, node, yes, ids, classes, types, 0)
+}
+
+effect fn checkState(
+  source: &[u8],
+  node: usize,
+  yes: bool,
+  ids: usize,
+  classes: usize,
+  types: usize,
+  states: u32,
+) -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  run checkTarget(source, node, yes, ids, classes, types, states, PseudoTarget.None, 0)
+}
+
+effect fn checkTarget(source: &[u8], node: usize, yes: bool, ids: usize, classes: usize, types: usize,
+  states: u32, target: PseudoTarget, pseudoStates: u32) -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   let limits = Limits.make()
   let buffer = run lexer.tokenize(source, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -180,8 +207,10 @@ effect fn check(
     |> Effect.provideMut<Allocator>(&mut allocator)
   match &parsed {
     Option<SelectorList>.Some { value } => {
-      let tree = Tree {}
+      let tree = Tree { states: states }
       let mut context = MatchContext.make(1, 2)
+      context.pseudo = target
+      context.pseudoStates = StateBits { bits: pseudoStates }
       let result = run selectors.matchElement(&value, &buffer, &tree, node, &mut context)
       run Testing.expect(
         match &result {
@@ -192,6 +221,30 @@ effect fn check(
         },
         "parsed selector match and specificity",
       )
+      let mut writer = Writer.make()
+      run sheet_tokens.encode(&buffer, &mut writer) |> Effect.provideMut<Allocator>(&mut allocator)
+      run value.encodeProgram(&buffer, &mut writer) |> Effect.provideMut<Allocator>(&mut allocator)
+      let mut reader = Reader.make(writer.bytes.asSlice())
+      let mut decodedBuffer = run sheet_tokens.decode(&mut reader, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+      let decoded = run SelectorList.decodeProgram(&mut reader, &mut decodedBuffer, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+      run reader.finish()
+      context = MatchContext.make(1, 2)
+      context.pseudo = target
+      context.pseudoStates = StateBits { bits: pseudoStates }
+      let decodedResult = run selectors.matchElement(&decoded, &decodedBuffer, &tree, node, &mut context)
+      run Testing.expect(
+        match &decodedResult {
+          Option<Specificity>.Some { value: specificity } => yes && specificity.ids == ids
+            && specificity.classes == classes && specificity.types == types
+          _ => !yes
+        },
+        "decoded selector preserves matching and specificity",
+      )
+      let recorded = run selectors.matchElementRecorded(&decoded, &decodedBuffer, &tree, node, &mut context)
+      run Testing.expect(match &recorded.specificity {
+        Option<Specificity>.Some { value: recordedValue } => yes && recordedValue.ids == ids && recordedValue.classes == classes && recordedValue.types == types
+        _ => !yes
+      }, "recorded matching preserves the target and specificity")
     }
     _ => {
       run Testing.expect(false, "selector must parse")
@@ -200,7 +253,7 @@ effect fn check(
 }
 
 effect fn invalid(source: &[u8]) -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   let limits = Limits.make()
   let buffer = run lexer.tokenize(source, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -219,7 +272,7 @@ effect fn invalid(source: &[u8]) -> ()
 // https://www.w3.org/TR/selectors-4/#matches
 // https://www.w3.org/TR/selectors-4/#negation
 test effect fn competingMatchingArmsAndFunctionalSpecificity() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   run check(b"rect, #missing, .hot", 2, true, 0, 1, 0)
   run check(b"rect, #chosen, .hot", 2, true, 1, 0, 0)
   run check(b":is(rect, #missing)", 2, true, 1, 0, 0)
@@ -238,7 +291,7 @@ test effect fn competingMatchingArmsAndFunctionalSpecificity() -> ()
 // https://www.w3.org/TR/selectors-4/#relational
 // https://www.w3.org/TR/selectors-4/#grammar
 test effect fn combinatorsRelativeSelectorsAndHasBoundaries() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   run check(b"svg g > rect + circle ~ rect", 4, true, 0, 0, 5)
   run check(b"g:has(> rect + circle)", 1, true, 0, 0, 3)
   run check(b"rect:has(+ circle)", 2, true, 0, 0, 2)
@@ -259,7 +312,7 @@ test effect fn combinatorsRelativeSelectorsAndHasBoundaries() -> ()
 // https://www.w3.org/TR/selectors-4/#the-nth-child-pseudo
 // https://www.w3.org/TR/selectors-4/#specificity-rules
 test effect fn structuralAndFilteredNth() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   run check(b"rect:nth-child(2n + 1)", 4, true, 0, 1, 1)
   run check(b"rect:nth-child(-n+2)", 4, false, 0, 0, 0)
   run check(b"rect:nth-child(2 of .hot, #missing)", 4, true, 1, 1, 1)
@@ -285,7 +338,7 @@ test effect fn structuralAndFilteredNth() -> ()
 // https://www.w3.org/TR/selectors-4/#lang-pseudo
 // https://www.w3.org/TR/selectors-4/#empty-pseudo
 test effect fn attributesAndStaticHostSemantics() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   run check(b"[class~=selected][*|label^=abc i][*|label$=word][*|label*=def]", 2, true, 0, 4, 0)
   run check(b"[*|label^=abc s]", 2, false, 0, 0, 0)
   run check(b"[label]", 2, false, 0, 0, 0)
@@ -308,7 +361,7 @@ test effect fn attributesAndStaticHostSemantics() -> ()
 
 // https://www.w3.org/TR/selectors-4/#id-selectors
 test effect fn idSelectorsUseHostTypingAndCaseSensitiveRawValues() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   run check(b"#AliasCase", 5, true, 1, 0, 0)
   run check(b"#Alias\\43 ase", 5, true, 1, 0, 0)
   run check(b"#aliascase", 5, false, 0, 0, 0)
@@ -320,7 +373,7 @@ test effect fn idSelectorsUseHostTypingAndCaseSensitiveRawValues() -> ()
 // https://www.w3.org/TR/selectors-4/#type-nmsp
 // https://www.w3.org/TR/selectors-4/#matches
 test effect fn namespaceBindingsAndImplicitSubjectNamespace() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   let limits = Limits.make()
 
@@ -345,7 +398,7 @@ test effect fn namespaceBindingsAndImplicitSubjectNamespace() -> ()
     &limits,
   )
     |> Effect.provideMut<Allocator>(&mut allocator)
-  let tree = Tree {}
+  let tree = Tree { states: 0 }
   let mut context = MatchContext.make(0, NO_ELEMENT)
   match &parsed {
     Option<SelectorList>.Some { value } => {
@@ -369,7 +422,7 @@ test effect fn namespaceBindingsAndImplicitSubjectNamespace() -> ()
 
 // https://www.w3.org/TR/selectors-4/#grammar
 test effect fn matchingWorkIsSharedAndTyped() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   let limits = Limits.make()
   let buffer = run lexer.tokenize(b"rect", &limits) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -377,13 +430,9 @@ test effect fn matchingWorkIsSharedAndTyped() -> ()
     |> Effect.provideMut<Allocator>(&mut allocator)
   match &parsed {
     Option<SelectorList>.Some { value } => {
-      let tree = Tree {}
-      let mut context = MatchContext {
-        scope: 0,
-        target: NO_ELEMENT,
-        shadowHost: NO_ELEMENT,
-        remainingSteps: 6,
-      }
+      let tree = Tree { states: 0 }
+      let mut context = MatchContext.make(0, NO_ELEMENT)
+      context.remainingSteps = 6
       let first = run selectors.matchElement(&value, &buffer, &tree, 2, &mut context)
       run Testing.expect(
         match &first {
@@ -411,7 +460,7 @@ test effect fn matchingWorkIsSharedAndTyped() -> ()
 }
 
 effect fn namespaceCheck(source: &[u8], node: usize, yes: bool) -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   let limits = Limits.make()
   let mut input = run Bytes.copy(b"urn:svg p urn:foreign; ")
@@ -436,7 +485,7 @@ effect fn namespaceCheck(source: &[u8], node: usize, yes: bool) -> ()
     |> Effect.provideMut<Allocator>(&mut allocator)
   match &parsed {
     Option<SelectorList>.Some { value } => {
-      let tree = Tree {}
+      let tree = Tree { states: 0 }
       let mut context = MatchContext.make(0, NO_ELEMENT)
       let result = run selectors.matchElement(&value, &buffer, &tree, node, &mut context)
       run Testing.expect(
@@ -457,7 +506,7 @@ effect fn namespaceCheck(source: &[u8], node: usize, yes: bool) -> ()
 // https://www.w3.org/TR/selectors-4/#matches
 // https://www.w3.org/TR/selectors-4/#the-nth-child-pseudo
 test effect fn namespaceRestrictionsDoNotLeakIntoLogicalSubjects() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   run namespaceCheck(b".hot", 5, false)
   run namespaceCheck(b"rect", 5, false)
   run namespaceCheck(b"p|rect", 5, true)
@@ -475,7 +524,7 @@ test effect fn namespaceRestrictionsDoNotLeakIntoLogicalSubjects() -> ()
 // https://www.w3.org/TR/selectors-4/#grammar
 // https://www.w3.org/TR/selectors-4/#typedef-forgiving-selector-list
 test effect fn selectorDepthErrorsSurviveForgivingLists() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   let normal = Limits.make()
   let buffer = run lexer.tokenize(b":is(:is(:is(rect)), rect)", &normal)
@@ -503,10 +552,142 @@ test effect fn selectorDepthErrorsSurviveForgivingLists() -> ()
 // https://www.w3.org/TR/css-syntax-3/#consume-function
 // https://www.w3.org/TR/css-syntax-3/#consume-simple-block
 test effect fn implicitComponentClosuresDoNotBecomeUnmatchedClosers() -> ()
-  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   run check(b":is(circle, rect", 2, true, 0, 0, 1)
   run check(b"[class~=hot", 2, true, 0, 1, 0)
   run check(b":not(:is(circle", 2, true, 0, 0, 1)
   run invalid(b"rect)")
   run invalid(b"[class=hot)]")
+}
+
+
+test effect fn hostStatesMatchThroughCombinatorsAndLogicalSelectors() -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  let hoverFocus = element.HOVER | element.FOCUS | element.FOCUS_VISIBLE
+  run checkState(b"rect:hover:focus-visible", 2, true, 0, 2, 1, hoverFocus)
+  run checkState(b"rect:hover:focus-visible", 2, false, 0, 0, 0, element.HOVER)
+  run checkState(b"g:has(> :focus) > rect:hover", 2, true, 0, 2, 2, hoverFocus)
+  run checkState(b":hover + circle", 3, true, 0, 1, 1, hoverFocus)
+  run checkState(b":where(:hover):not(:disabled)", 2, true, 0, 1, 0, hoverFocus)
+  run checkState(b":enabled", 2, false, 0, 0, 0, 0)
+  run checkState(b":optional", 2, false, 0, 0, 0, 0)
+  run checkState(b":open:popover-open", 2, true, 0, 2, 0, element.OPEN | element.POPOVER_OPEN)
+  run checkState(b":active", 2, true, 0, 1, 0, element.ACTIVE)
+  run checkState(b":focus-within", 2, true, 0, 1, 0, element.FOCUS_WITHIN)
+  run checkState(b":disabled", 2, true, 0, 1, 0, element.DISABLED)
+  run checkState(b":enabled", 2, true, 0, 1, 0, element.ENABLED)
+  run checkState(b":checked", 2, true, 0, 1, 0, element.CHECKED)
+  run checkState(b":indeterminate", 2, true, 0, 1, 0, element.INDETERMINATE)
+  run checkState(b":placeholder-shown", 2, true, 0, 1, 0, element.PLACEHOLDER_SHOWN)
+  run checkState(b":read-only", 2, true, 0, 1, 0, element.READ_ONLY)
+  run checkState(b":read-write", 2, true, 0, 1, 0, element.READ_WRITE)
+  run checkState(b":required", 2, true, 0, 1, 0, element.REQUIRED)
+  run checkState(b":optional", 2, true, 0, 1, 0, element.OPTIONAL)
+}
+
+test effect fn invalidationKeysIncludeRelationalAndFailedLogicalArms() -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(b".group:has(+ .peer[data-open]) .child:is(:hover,.other)", &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut peer = false
+  let mut attribute = false
+  let mut state = false
+  if let Option<SelectorList>.Some { value } = move parsed {
+    let dependencies = run value.dependencies() |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut i: usize = 0
+    while i < dependencies.length() {
+      let dependency = dependencies.asSlice()[i]
+      if dependency.kind == DependencyKind.Class && tokens.equal(buffer.text(dependency.name), b"peer") {
+        peer = dependency.ancestors && dependency.siblings && dependency.descendants
+      }
+      if dependency.kind == DependencyKind.Attribute { attribute = true }
+      if dependency.kind == DependencyKind.State { state = dependency.states == element.HOVER }
+      i = i + 1
+    }
+  }
+  run Testing.expect(peer && attribute && state, "relational dependencies include reverse siblings and ancestor subtrees")
+  let localBuffer = run lexer.tokenize(b".hot:hover", &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  let local = run selectors.parse(&localBuffer, localBuffer.all(), &[], &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  if let Option<SelectorList>.Some { value } = move local {
+    let dependencies = run value.dependencies() |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut i: usize = 0
+    while i < dependencies.length() {
+      let dependency = dependencies.asSlice()[i]
+      run Testing.expect(!dependency.ancestors && !dependency.siblings && !dependency.descendants, "simple utility remains local")
+      i = i + 1
+    }
+  } else { run Testing.expect(false, "local selector parses") }
+}
+
+test effect fn nthOfInvalidationReachesSiblingsForClassAndStateChanges() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let cases = [b":nth-child(2 of .eligible)", b":nth-last-child(odd of :hover)"]
+  let mut index: usize = 0
+  while index < cases.length {
+    let buffer = run lexer.tokenize(cases[index], &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let parsed = run selectors.parse(&buffer, buffer.all(), &[], &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut found = false
+    if let Option<SelectorList>.Some { value } = move parsed {
+      let dependencies = run value.dependencies() |> Effect.provideMut<Allocator>(&mut allocator)
+      let mut i: usize = 0
+      while i < dependencies.length() {
+        let dependency = dependencies.asSlice()[i]
+        if dependency.kind == DependencyKind.Class || dependency.kind == DependencyKind.State {
+          found = true
+          run Testing.expect(dependency.siblings, "changing nth-of membership can restyle other siblings")
+        }
+        i = i + 1
+      }
+    }
+    run Testing.expect(found, "nth-of filter dependencies are retained")
+    index = index + 1
+  }
+}
+
+test effect fn generatedPseudoTargetsKeepOriginSelectorsAndSpecificitySeparate() -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  run checkTarget(b"rect", 2, false, 0, 0, 0, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before", 2, false, 0, 0, 0, 0, PseudoTarget.None, 0)
+  run checkTarget(b"rect::before", 2, true, 0, 0, 2, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"rect:before", 2, true, 0, 0, 2, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before", 2, false, 0, 0, 0, 0, PseudoTarget.After, 0)
+  run checkTarget(b"rect::after", 2, true, 0, 0, 2, 0, PseudoTarget.After, 0)
+  run checkTarget(b"#chosen, .hot::before", 2, true, 0, 1, 1, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"#chosen, .hot::before", 2, true, 1, 0, 0, 0, PseudoTarget.None, 0)
+  run checkTarget(b":is(#chosen, .hot)::before", 2, true, 1, 0, 1, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"g > rect:nth-child(1 of .hot)::before", 2, true, 0, 2, 3, 0, PseudoTarget.Before, 0)
+  run checkTarget(b"g:has(rect.hot) > rect::after", 2, true, 0, 1, 4, 0, PseudoTarget.After, 0)
+  run checkTarget(b"rect:hover::before", 2, true, 0, 1, 2, element.HOVER, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before:hover", 2, false, 0, 0, 0, element.HOVER, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before:hover", 2, true, 0, 1, 2, 0, PseudoTarget.Before, element.HOVER)
+  run checkTarget(b"rect:hover::before:not(:hover)", 2, true, 0, 2, 2, element.HOVER, PseudoTarget.Before, 0)
+  run checkTarget(b"rect::before:is(:hover,:active)", 2, true, 0, 1, 2, 0, PseudoTarget.Before, element.ACTIVE)
+  run checkTarget(b"rect::before::marker", 2, false, 0, 0, 0, 0, PseudoTarget.Before, 0)
+  run invalid(b"rect::before > .hot")
+  run invalid(b"rect:has(::after)")
+}
+
+test effect fn partPseudoTargetsMatchOnlyTheirOriginAndOwnTarget() -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  run checkTarget(b"rect::placeholder", 2, true, 0, 0, 2, 0, PseudoTarget.Placeholder, 0)
+  run checkTarget(b"rect::placeholder", 2, false, 0, 0, 0, 0, PseudoTarget.None, 0)
+  run checkTarget(b"rect::placeholder", 2, false, 0, 0, 0, 0, PseudoTarget.Selection, 0)
+  run checkTarget(b"#chosen::selection", 2, true, 1, 0, 1, 0, PseudoTarget.Selection, 0)
+  run checkTarget(b"g > .hot::selection", 2, true, 0, 1, 2, 0, PseudoTarget.Selection, 0)
+  run checkTarget(b"rect::-webkit-scrollbar", 2, true, 0, 0, 2, 0, PseudoTarget.Scrollbar, 0)
+  run checkTarget(b"rect:hover::-webkit-scrollbar-thumb", 2, true, 0, 1, 2, element.HOVER, PseudoTarget.ScrollbarThumb, 0)
+  run checkTarget(b"rect:hover::-webkit-scrollbar-thumb", 2, false, 0, 0, 0, 0, PseudoTarget.ScrollbarThumb, 0)
+  run checkTarget(b"rect::-webkit-scrollbar-thumb:hover", 2, false, 0, 0, 0, element.HOVER, PseudoTarget.ScrollbarThumb, 0)
+  run checkTarget(b"rect::-webkit-scrollbar-thumb:hover", 2, true, 0, 1, 2, 0, PseudoTarget.ScrollbarThumb, element.HOVER)
+  run checkTarget(b"rect::-WEBKIT-SCROLLBAR-TRACK", 2, true, 0, 0, 2, 0, PseudoTarget.ScrollbarTrack, 0)
+  run checkTarget(b"rect::-webkit-scrollbar-track", 2, false, 0, 0, 0, 0, PseudoTarget.ScrollbarThumb, 0)
+  run checkTarget(b"#chosen, .hot::selection", 2, true, 0, 1, 1, 0, PseudoTarget.Selection, 0)
+  run checkTarget(b"#chosen, .hot::selection", 2, true, 1, 0, 0, 0, PseudoTarget.None, 0)
+  run invalid(b"rect::placeholder > .hot")
+  run invalid(b"rect:has(::selection)")
 }

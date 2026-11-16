@@ -1,0 +1,67 @@
+import registration { Parsed }
+import input { Input }
+import registration { Syntax }
+import registration
+import lexer
+import syntax
+import tokens { Limits, CssError }
+import silk.core.effect { Effect }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+test effect fn registrationsRequireValidDescriptorsAndIndependentInitialValues() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let cases = [
+    b"@property --x { syntax:'<length>'; inherits:false; initial-value:4px }",
+    b"@property --x { syntax:'<length-percentage>'; inherits:true; initial-value:10% }",
+    b"@property --x { syntax:'*'; inherits:false }",
+    b"@property --x { syntax:'<color>'; inherits:false; initial-value:oklch(.5 .1 20) }",
+    b"@property --x { syntax:'<number>'; inherits:false; initial-value:calc(1 + 2) }",
+    b"@property --x { syntax:'<angle>'; inherits:false; initial-value:1turn }",
+    b"@property --x { syntax:'<percentage>'; inherits:false; initial-value:50% }",
+    b"@property --x { syntax:'<length>'; inherits:false; initial-value:4px; inherits:maybe }",
+    b"@property --x { syntax:'*'; inherits:false; initial-value:1em }",
+    b"@property --x { syntax:'*'; inherits:false; initial-value:currentcolor }",
+    b"@property --x { syntax:'*'; inherits:false; initial-value: }",
+    b"@property x { syntax:'*'; inherits:false }",
+    b"@property --x { syntax:'<length>'; inherits:false; initial-value:1em }",
+    b"@property --x { syntax:'<length>'; inherits:false; initial-value:calc(1px + 2rem) }",
+    b"@property --x { syntax:'<color>'; inherits:false; initial-value:currentcolor }",
+    b"@property --x { syntax:'<length>'; inherits:false; initial-value:red }",
+    b"@property --x { syntax:'<length>'; inherits:false }",
+    b"@property --x { syntax:'*' }",
+    b"@property --x { syntax:'*'; inherits:false!important }",
+    b"@property --x { syntax:'<number>'; inherits:false; initial-value:var(--n) }",
+    b"@property --x { syntax:'*'; inherits:false; initial-value:inherit }",
+    b"@property --x { syntax:'<length>+'; inherits:false; initial-value:4px }",
+  ]
+  let mut i: usize = 0
+  while i < cases.length {
+    let buffer = run lexer.tokenize(cases[i], &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let rules = run syntax.parseRules(&buffer, buffer.all(), true, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let rule = rules.asSlice()[0]
+    let parsed = run registration.parse(&buffer, 0, rule.prelude, rule.body, &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let valid = match &parsed { Parsed.Valid { .. } => true _ => false }
+    run Testing.expect(valid == (i < 11), "registration grammar and independent initial value validation")
+    if i == 21 {
+      run Testing.expect(match &parsed { Parsed.Unsupported => true _ => false }, "unsupported grammar is diagnosed separately")
+    }
+    i = i + 1
+  }
+}
+
+test effect fn registeredContainerLengthsRequireIndependentInitialValues() ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let cases = [b"1cqw", b"1cqh", b"1cqi", b"1cqb", b"1cqmin", b"calc(1px + 1cqmax)"]
+  let mut i: usize = 0
+  while i < cases.length {
+    let limits = Limits.make()
+    let buffer = run lexer.tokenize(cases[i], &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+    let input = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+    let initial = run registration.valid(Syntax.Length, &input, true, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+    let specified = run registration.valid(Syntax.Length, &input, false, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(!initial && specified, "container lengths are registered length values, but not computationally independent initial values")
+    i = i + 1
+  }
+}

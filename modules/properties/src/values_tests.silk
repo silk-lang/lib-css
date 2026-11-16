@@ -13,7 +13,7 @@ import computed {
   Fill,
   ScrollbarGutter,
 }
-import convert { Context }
+import convert { Context, FontMetrics }
 import convert
 import declare
 import keywords { Keyword }
@@ -182,4 +182,75 @@ test effect fn everyKeywordFindsItselfByName() -> () ! AssertionError<'static> {
   }
   run Testing.expect(found, "keywords match ASCII case-insensitively")
   run Testing.expect(keywords.lookup(b"not-a-keyword").isNone(), "unknown words find nothing")
+}
+
+test effect fn containerUnitsUseIndependentAxesAndSmallViewportFallback() ! AssertionError<'static> {
+  let units = [Unit.Cqw, Unit.Cqh, Unit.Cqi, Unit.Cqb, Unit.Cqmin, Unit.Cqmax]
+  let names = [b"cqw", b"cqh", b"cqi", b"cqb", b"cqmin", b"cqmax"]
+  let mut context = Context.make()
+  context.viewportWidth = 1000.0
+  context.viewportHeight = 800.0
+  context.smallViewportWidth = Option<f32>.some(600.0)
+  context.smallViewportHeight = Option<f32>.some(400.0)
+  let fallback: [f32; 6] = [6.0, 4.0, 6.0, 4.0, 4.0, 6.0]
+  let mut i: usize = 0
+  while i < units.length {
+    run Testing.expect(sameText(values.unitName(units[i]), names[i]), "container units serialize with their CSS spelling")
+    let parsed = values.unitLookup(names[i])
+    run Testing.expect(match parsed { Option<Unit>.Some { value } => value == units[i] _ => false }, "container unit names parse")
+    let factor = convert.pixelsPer(units[i], &context)
+    run Testing.expect(match factor { Option<f32>.Some { value } => value == fallback[i] _ => false }, "missing containers use small viewport dimensions")
+    i = i + 1
+  }
+  context.containerWidth = Option<f32>.some(300.0)
+  context.containerHeight = Option<f32>.some(200.0)
+  context.containerInlineSize = Option<f32>.some(150.0)
+  context.containerBlockSize = Option<f32>.some(700.0)
+  let selected: [f32; 6] = [3.0, 2.0, 1.5, 7.0, 1.5, 7.0]
+  i = 0
+  while i < units.length {
+    let factor = convert.pixelsPer(units[i], &context)
+    run Testing.expect(match factor { Option<f32>.Some { value } => value == selected[i] _ => false }, "physical and logical units use independently selected ancestors")
+    i = i + 1
+  }
+  context.containerWidth = Option<f32>.some(0.0)
+  context.containerBlockSize = Option<f32>.None
+  context.vertical = true
+  run Testing.expect(match convert.pixelsPer(Unit.Cqw, &context) { Option<f32>.Some { value } => value == 0.0 _ => false }, "a zero-size container is not a missing container")
+  run Testing.expect(match convert.pixelsPer(Unit.Cqmax, &context) { Option<f32>.Some { value } => value == 6.0 _ => false }, "only the missing logical axis falls back, using vertical small viewport axes")
+}
+
+
+effect fn fontUnits() ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let mut context = Context.make()
+  context.fontSize = 20.0
+  context.rootFontSize = 30.0
+  run Testing.expect(isDimension(convert.dimension(&values.unit(2.0, Unit.Ch), &context), Dimension.px(20.0))
+    && isDimension(convert.dimension(&values.unit(2.0, Unit.Rlh), &context), Dimension.px(60.0)), "unmeasured fonts use the current element and root fallback sizes")
+  context.fontMetrics = Option<FontMetrics>.some(FontMetrics {
+    xHeight: 9.0, capHeight: 14.0, zeroAdvance: 12.0, ideographAdvance: 19.0, lineHeight: 28.0,
+  })
+  context.rootFontMetrics = Option<FontMetrics>.some(FontMetrics {
+    xHeight: 13.0, capHeight: 21.0, zeroAdvance: 17.0, ideographAdvance: 29.0, lineHeight: 42.0,
+  })
+  let units = [Unit.Em, Unit.Rem, Unit.Ex, Unit.Rex, Unit.Ch, Unit.Rch, Unit.Cap, Unit.Rcap, Unit.Ic, Unit.Ric, Unit.Lh, Unit.Rlh]
+  let bases: [f32; 12] = [20.0, 30.0, 9.0, 13.0, 12.0, 17.0, 14.0, 21.0, 19.0, 29.0, 28.0, 42.0]
+  let mut i: usize = 0
+  while i < units.length {
+    run Testing.expect(isDimension(convert.dimension(&values.unit(2.0, units[i]), &context), Dimension.px(bases[i] * 2.0)), "each font unit uses its independently supplied element or root metric")
+    i = i + 1
+  }
+  let mut parts = List<Value>.make()
+  run parts.append(values.unit(2.0, Unit.Ch))
+  run parts.append(values.unit(1.0, Unit.Rlh))
+  run parts.append(values.percent(25.0))
+  let sum = values.math(MathOperator.Sum, move parts)
+  run Testing.expect(isDimension(convert.dimension(&sum, &context), Dimension.calc(66.0, 0.25)), "font units reduce inside math without consuming deferred percentages")
+  context.fontMetrics = Option<FontMetrics>.some(FontMetrics { xHeight: 0.0, capHeight: 0.0, zeroAdvance: 0.0, ideographAdvance: 0.0, lineHeight: 0.0 })
+  run Testing.expect(isDimension(convert.dimension(&values.unit(1.0, Unit.Lh), &context), Dimension.px(0.0)), "a measured zero line height is not replaced by a fallback")
+}
+
+test effect fn fontRelativeUnitsUseHostMetrics() ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run fontUnits() |> Effect.provideMut<Allocator>(&mut allocator)
 }

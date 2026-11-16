@@ -1,9 +1,64 @@
-//! Static selector matching borrows a host tree; it does not duplicate XML nodes.
+//! Selector matching borrows a host tree instead of duplicating its nodes.
+import silk.core.option { Option }
+import media_features { Environment }
 import silk.num.usize
 import tokens { CssError, CssErrorKind }
+import tokens
 import silk.core.ownership { Copy }
+import silk.collections.list { List }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
 
 pub const NO_ELEMENT: usize = usize.MAX
+
+/// A style target supplied by the host. Parts are not ordinary selector-tree children.
+pub enum PseudoTarget { None, Before, After, Placeholder, Selection, Scrollbar, ScrollbarThumb, ScrollbarTrack }
+
+/// Supported nonfunctional pseudo-elements. None means no matching host target.
+pub fn pseudoTarget(name: &[u8]) -> PseudoTarget {
+  if tokens.insensitive(name, b"before") { return PseudoTarget.Before }
+  if tokens.insensitive(name, b"after") { return PseudoTarget.After }
+  if tokens.insensitive(name, b"placeholder") { return PseudoTarget.Placeholder }
+  if tokens.insensitive(name, b"selection") { return PseudoTarget.Selection }
+  if tokens.insensitive(name, b"-webkit-scrollbar") { return PseudoTarget.Scrollbar }
+  if tokens.insensitive(name, b"-webkit-scrollbar-thumb") { return PseudoTarget.ScrollbarThumb }
+  if tokens.insensitive(name, b"-webkit-scrollbar-track") { return PseudoTarget.ScrollbarTrack }
+  return PseudoTarget.None
+}
+
+/// Host-reported selector states. Bits describe applicability as well as state:
+/// disabled/enabled and required/optional are independent, not complements.
+pub struct StateBits {
+  pub bits: u32,
+}
+
+impl Copy for StateBits {}
+
+impl StateBits {
+  pub fn empty() -> StateBits {
+    return StateBits { bits: 0 }
+  }
+
+  pub fn contains(self: &Self, mask: u32) -> bool {
+    return (self.bits & mask) == mask
+  }
+}
+
+pub const HOVER: u32 = 1
+pub const ACTIVE: u32 = 2
+pub const FOCUS: u32 = 4
+pub const FOCUS_VISIBLE: u32 = 8
+pub const FOCUS_WITHIN: u32 = 16
+pub const DISABLED: u32 = 32
+pub const ENABLED: u32 = 64
+pub const CHECKED: u32 = 128
+pub const INDETERMINATE: u32 = 256
+pub const PLACEHOLDER_SHOWN: u32 = 512
+pub const READ_ONLY: u32 = 1024
+pub const READ_WRITE: u32 = 2048
+pub const REQUIRED: u32 = 4096
+pub const OPTIONAL: u32 = 8192
+pub const OPEN: u32 = 16384
+pub const POPOVER_OPEN: u32 = 32768
 
 /// One attribute's namespace, local name and value, as ElementTree.attributeNamespace,
 /// attributeName and attributeValue give them, fetched together.
@@ -23,6 +78,21 @@ impl<'a> Copy for AttributeText<'a> {}
 /// language supplies the inherited document language, or empty when explicitly unknown.
 /// isLink reports document-language link semantics, not whether a URL was fetched or visited.
 pub interface ElementTree {
+  /// Nearest eligible ancestor for all required query axes (width/height/inline/block
+  /// bits 1/2/4/8), restricted by a case-sensitive name when nonempty. For a pseudo
+  /// target the originating element is an ancestor too. Named-only queries use axes 0.
+  /// Return querySize plus the selected container's font/writing metrics in initial;
+  /// viewport metrics remain those of the host. Static hosts may expose no containers.
+  fn container(self: &Self, node: usize, name: &[u8], axes: u32, pseudo: PseudoTarget) -> Option<Environment> {
+    return Option<Environment>.None
+  }
+
+  /// States applicable to this element, including host-computed focus-within.
+  /// Static hosts have no interactive states unless they override this operation.
+  fn state(self: &Self, node: usize) -> StateBits {
+    return StateBits.empty()
+  }
+
   fn parent(self: &Self, node: usize) -> usize
 
   /// Host of the node's own tree scope, or NO_ELEMENT in an ordinary tree.
@@ -62,13 +132,23 @@ pub interface ElementTree {
   fn isLink(self: &Self, node: usize) -> bool
 }
 
+pub struct ContainerDependency {
+  pub sheet: u32,
+  pub condition: usize,
+  pub matched: bool,
+}
+impl Copy for ContainerDependency {}
+
 pub struct MatchContext {
   pub scope: usize,
   pub target: usize,
+  pub pseudo: PseudoTarget,
+  pub pseudoStates: StateBits,
   /// Host exposed as featureless in the current selector scope; absent in light context.
   pub shadowHost: usize,
   /// Shared across a document's matching work; exhaustion is CssError.MatchLimit, never false.
   pub remainingSteps: usize,
+  pub containers: List<ContainerDependency>,
 }
 
 impl MatchContext {
@@ -76,9 +156,27 @@ impl MatchContext {
     return MatchContext {
       scope: scope,
       target: target,
+      pseudo: PseudoTarget.None,
+      pseudoStates: StateBits.empty(),
       shadowHost: NO_ELEMENT,
       remainingSteps: 64000000,
+      containers: List<ContainerDependency>.make(),
     }
+  }
+
+  pub fn containerResult(self: &Self, sheet: u32, condition: usize) -> Option<bool> {
+    let entries = self.containers.asSlice()
+    let mut i: usize = 0
+    while i < entries.length {
+      if entries[i].sheet == sheet && entries[i].condition == condition { return Option<bool>.some(entries[i].matched) }
+      i = i + 1
+    }
+    return Option<bool>.None
+  }
+
+  pub effect fn recordContainer(self: &mut Self, sheet: u32, condition: usize, matched: bool)
+    ! OutOfMemoryError ? &mut Allocator {
+    run self.containers.append(ContainerDependency { sheet: sheet, condition: condition, matched: matched })
   }
 
   /// Charge bounded matching or candidate-discovery work before performing it.

@@ -1,0 +1,48 @@
+import sheet_binary { Writer, Reader, DecodeError }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.usize
+import silk.testing.testing { Testing, AssertionError }
+
+test effect fn binaryPrimitivesRejectTruncationAndInvalidFlags() -> ()
+  ! AssertionError<'static> | DecodeError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut writer = Writer.make()
+  run writer.word(16909060) |> Effect.provideMut<Allocator>(&mut allocator)
+  run writer.index(usize.MAX) |> Effect.provideMut<Allocator>(&mut allocator)
+  run writer.number(-12.5) |> Effect.provideMut<Allocator>(&mut allocator)
+  run writer.flag(true) |> Effect.provideMut<Allocator>(&mut allocator)
+  run writer.data(b"class") |> Effect.provideMut<Allocator>(&mut allocator)
+  let bytes = writer.bytes.asSlice()
+  run Testing.expect(bytes[0] == 4 && bytes[3] == 1, "little endian representation")
+  let mut reader = Reader.make(bytes)
+  run Testing.expect((run reader.word()) == 16909060, "word round trips")
+  run Testing.expect((run reader.index()) == usize.MAX, "absent index is target neutral")
+  run Testing.expect((run reader.number()) == -12.5 && (run reader.flag()), "number and flag round trip")
+  run Testing.expect((run reader.data()).length == 5, "length-prefixed data round trips")
+  run reader.finish()
+  let mut length: usize = 0
+  while length < 4 {
+    let mut short = Reader.make(Slice.view<u8>(bytes, 0, length))
+    let result = run Effect.result(short.word())
+    run Testing.expect(match &result {
+      Result<u32, DecodeError>.Failure { .. } => true
+      _ => false
+    }, "truncated word rejected")
+    length = length + 1
+  }
+  let mut flag = Reader.make(b"\x02")
+  let result = run Effect.result(flag.flag())
+  run Testing.expect(match &result {
+    Result<bool, DecodeError>.Failure { .. } => true
+    _ => false
+  }, "invalid boolean rejected")
+  let mut oversized = Reader.make(b"\xff\xff\xff\xff")
+  let oversizedResult = run Effect.result(oversized.count(100))
+  run Testing.expect(match &oversizedResult {
+    Result<usize, DecodeError>.Failure { .. } => true
+    _ => false
+  }, "length checked before allocation")
+}

@@ -1,0 +1,549 @@
+import compile_fonts
+import sheet_fonts { Face }
+//! Compiles CSS syntax to shared declarations, selector programs and retained conditions.
+import sheet { Sheet, Declaration, Condition, ConditionKind, Keyframes, Keyframe, RegisteredProperty, Diagnostic, DiagnosticKind, NONE }
+import registration { Parsed }
+import registration
+import resolver { Rule as MatchRule }
+import cascade { Priority, Origin }
+import tokens { TokenBuffer, TokenRange, Kind, Limits, CssError, CssErrorKind, equal, insensitive }
+import lexer
+import syntax { Rule, RuleKind }
+import syntax
+import element { PseudoTarget }
+import element
+import selectors { SelectorList }
+import selectors
+import input { Input }
+import value_cursor { Cursor }
+import colors { ColorProgram }
+import colors
+import supports
+import values { Store }
+import written
+import cssom_serialization
+import container_queries
+import condition_cursor
+import declaration_values
+import generated_content
+import css_properties.catalog as catalog
+import css_properties.catalog { Property }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.string { String, InvalidUtf8 }
+
+pub struct Options { pub strict: bool, pub limits: Limits }
+impl Options {
+  pub fn make() -> Options { return Options { strict: false, limits: Limits.make() } }
+}
+pub struct CompileError { pub diagnostics: usize }
+
+struct Compiler { sheet: Sheet, supports: Store<'static>, limits: Limits, frames: usize }
+
+fn space(buffer: &TokenBuffer, at: usize) -> bool {
+  return match &buffer.tokens.asSlice()[at].kind { Kind.Whitespace => true _ => false }
+}
+fn skip(buffer: &TokenBuffer, start: usize, end: usize) -> usize {
+  let mut at = start
+  while at < end && space(buffer, at) { at = at + 1 }
+  return at
+}
+fn after(buffer: &TokenBuffer, at: usize, end: usize) -> usize {
+  let token = buffer.tokens.asSlice()[at]
+  let block = match &token.kind {
+    Kind.Function { .. } => true Kind.OpenParen => true Kind.OpenSquare => true Kind.OpenBrace => true _ => false
+  }
+  if block && token.matching > at { return if token.matching < end { token.matching + 1 } else { end } }
+  return at + 1
+}
+
+impl Compiler {
+  effect fn report(self: &mut Self, kind: DiagnosticKind, feature: &[u8]) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    let mut i: usize = 0
+    while i < self.sheet.diagnostics.length() {
+      let entries = self.sheet.diagnostics.asMutSlice()
+      if entries[i].kind == kind && equal(entries[i].feature.asSlice(), feature) {
+        entries[i].count = entries[i].count + 1
+        return
+      }
+      i = i + 1
+    }
+    run self.sheet.diagnostics.append(Diagnostic { kind: kind, feature: run Bytes.copy(feature), count: 1 })
+  }
+
+  effect fn layer(self: &mut Self, source: &TokenBuffer, range: TokenRange, parent: usize, statement: bool) -> Option<usize>
+    ! OutOfMemoryError ? &mut Allocator {
+    let first = skip(source, range.start, range.end)
+    if first == range.end {
+      if statement { return Option<usize>.None }
+      return Option<usize>.some(run self.sheet.layers.register(parent, ""))
+    }
+    let mut at = first
+    let mut expectName = true
+    while at < range.end {
+      if !space(source, at) {
+        match &source.tokens.asSlice()[at].kind {
+          Kind.Ident { text } => {
+            if !expectName { return Option<usize>.None }
+            let name = source.text(text)
+            if insensitive(name, b"initial") || insensitive(name, b"inherit") || insensitive(name, b"unset")
+              || insensitive(name, b"revert") || insensitive(name, b"revert-layer") {
+              return Option<usize>.None
+            }
+            expectName = false
+          }
+          Kind.Delim { scalar } => {
+            if scalar != 46 || expectName { return Option<usize>.None }
+            expectName = true
+          }
+          Kind.Comma => {
+            if !statement || expectName { return Option<usize>.None }
+            expectName = true
+          }
+          _ => { return Option<usize>.None }
+        }
+      }
+      at = at + 1
+    }
+    if expectName { return Option<usize>.None }
+    let mut layer = parent
+    at = first
+    while at < range.end {
+      match &source.tokens.asSlice()[at].kind {
+        Kind.Ident { text } => {
+          let name = match String.fromUtf8(source.text(text)) {
+            Result<string, InvalidUtf8>.Success { value } => value
+            _ => { return Option<usize>.None }
+          }
+          layer = run self.sheet.layers.register(layer, name)
+        }
+        Kind.Comma => { layer = parent }
+        _ => {}
+      }
+      at = at + 1
+    }
+    return Option<usize>.some(layer)
+  }
+
+  /// Valid but unimplemented targets remain nonmatching, preserving other list arms.
+  effect fn reportPseudoElements(self: &mut Self, buffer: &TokenBuffer) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    let entries = buffer.tokens.asSlice()
+    let mut at: usize = 0
+    while at < entries.length {
+      if let Kind.OpenSquare = entries[at].kind {
+        at = after(buffer, at, entries.length)
+        continue
+      }
+      if let Kind.Colon = entries[at].kind {
+        at = at + 1
+        let mut doubled = false
+        if at < entries.length {
+          if let Kind.Colon = entries[at].kind { doubled = true at = at + 1 }
+        }
+        if at < entries.length {
+          match &entries[at].kind {
+            Kind.Ident { text } => {
+              let name = buffer.text(text)
+              if (doubled || insensitive(name, b"first-line") || insensitive(name, b"first-letter"))
+                && element.pseudoTarget(name) == PseudoTarget.None {
+                run self.report(DiagnosticKind.Unsupported, name)
+              }
+            }
+            Kind.Function { name } => {
+              if doubled { run self.report(DiagnosticKind.Unsupported, buffer.text(name)) }
+            }
+            _ => {}
+          }
+        }
+      }
+      at = at + 1
+    }
+  }
+
+  effect fn rules(self: &mut Self, source: &TokenBuffer, range: TokenRange, parent: &[u8], layer: usize, condition: usize, depth: usize) -> ()
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    if depth >= self.limits.maxDepth { fail CssError { kind: CssErrorKind.NestingLimit, offset: range.start } }
+    let parsed = run syntax.parseRules(source, range, parent.length == 0, &self.limits)
+    let mut i: usize = 0
+    while i < parsed.length() {
+      run self.rule(source, parsed.asSlice()[i], parent, layer, condition, depth)
+      i = i + 1
+    }
+  }
+
+  effect fn group(self: &mut Self, source: &TokenBuffer, range: TokenRange, parent: &[u8], layer: usize, condition: usize, depth: usize) -> ()
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    if parent.length == 0 { run self.rules(source, range, parent, layer, condition, depth) }
+    else { run self.block(source, range, parent, layer, condition, depth) }
+  }
+
+  effect fn rule(self: &mut Self, source: &TokenBuffer, rule: Rule, parent: &[u8], layer: usize, condition: usize, depth: usize) -> ()
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    if depth >= self.limits.maxDepth { fail CssError { kind: CssErrorKind.NestingLimit, offset: rule.prelude.start } }
+    if rule.kind == RuleKind.Qualified {
+      let text = run nestedSelector(source, rule.prelude, parent)
+      let buffer = run lexer.tokenize(text.asSlice(), &self.limits)
+      let parsed = run selectors.parse(&buffer, buffer.all(), &[], &self.limits)
+      match &parsed {
+        Option<SelectorList>.Some { value } => {
+          if value.hasPseudoStates() {
+            run self.report(DiagnosticKind.Unsupported, b"pseudo-element state")
+            return
+          }
+        }
+        _ => {
+          run self.report(DiagnosticKind.Selector, text.asSlice())
+          return
+        }
+      }
+      run self.reportPseudoElements(&buffer)
+      run self.block(source, rule.body, text.asSlice(), layer, condition, depth + 1)
+      return
+    }
+    let name = source.text(rule.name)
+    if insensitive(name, b"layer") {
+      let selected = run self.layer(source, rule.prelude, layer, rule.kind == RuleKind.AtStatement)
+      if let Option<usize>.Some { value } = selected {
+        if rule.kind == RuleKind.AtBlock { run self.group(source, rule.body, parent, value, condition, depth + 1) }
+      } else { run self.report(DiagnosticKind.AtRule, b"layer") }
+      return
+    }
+    if insensitive(name, b"supports") && rule.kind == RuleKind.AtBlock {
+      let input = Input.Contiguous { buffer: source, range: rule.prelude }
+      let result = run supports.evaluate(&input, &mut self.supports, &self.limits)
+      if result.valid && result.value { run self.group(source, rule.body, parent, layer, condition, depth + 1) }
+      if !result.valid { run self.report(DiagnosticKind.AtRule, name) }
+      return
+    }
+    if (insensitive(name, b"media") || insensitive(name, b"container") || insensitive(name, b"starting-style"))
+      && rule.kind == RuleKind.AtBlock {
+      let kind = if insensitive(name, b"media") { ConditionKind.Media }
+        else if insensitive(name, b"container") { ConditionKind.Container } else { ConditionKind.Starting }
+      if kind == ConditionKind.Starting && skip(source, rule.prelude.start, rule.prelude.end) != rule.prelude.end {
+        run self.report(DiagnosticKind.AtRule, name)
+        return
+      }
+      let index = self.sheet.conditions.length()
+      if index >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: rule.prelude.start } }
+      let program = if kind == ConditionKind.Container { self.sheet.containerPrograms.length() } else { NONE }
+      if kind == ConditionKind.Container {
+        let queries = run container_queries.parse(source, rule.prelude, &self.limits)
+        if !queries.valid { run self.report(DiagnosticKind.AtRule, b"container") return }
+        if queries.unsupported { run self.report(DiagnosticKind.Unsupported, b"container condition") }
+        run self.sheet.containerPrograms.append(move queries)
+      }
+      run self.sheet.conditions.append(Condition { kind: kind, parent: condition, buffer: 0, range: rule.prelude, program: program })
+      run self.group(source, rule.body, parent, layer, index, depth + 1)
+      return
+    }
+    if insensitive(name, b"property") && rule.kind == RuleKind.AtBlock {
+      if parent.length != 0 {
+        run self.report(DiagnosticKind.AtRule, name)
+        return
+      }
+      let parsed = run registration.parse(source, 0, rule.prelude, rule.body, &self.limits)
+      match &parsed {
+        Parsed.Valid { registration } => {
+          if self.sheet.registrations.length() >= self.limits.maxDeclarations {
+            fail CssError { kind: CssErrorKind.DeclarationLimit, offset: rule.prelude.start }
+          }
+          run self.sheet.registrations.append(RegisteredProperty { definition: registration, condition: condition, enabled: condition == NONE })
+        }
+        Parsed.Unsupported => { run self.report(DiagnosticKind.Unsupported, b"property syntax") }
+        Parsed.Invalid => { run self.report(DiagnosticKind.AtRule, b"property") }
+      }
+      return
+    }
+    if insensitive(name, b"keyframes") && rule.kind == RuleKind.AtBlock {
+      if parent.length != 0 { run self.report(DiagnosticKind.AtRule, name) }
+      else { run self.keyframes(source, rule, layer, condition) }
+      return
+    }
+    if insensitive(name, b"font-face") && rule.kind == RuleKind.AtBlock {
+      if parent.length != 0 || skip(source, rule.prelude.start, rule.prelude.end) != rule.prelude.end {
+        run self.report(DiagnosticKind.AtRule, name)
+        return
+      }
+      if self.sheet.fontFaces.length() >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: rule.prelude.start } }
+      let parsed = run compile_fonts.parse(source, rule.body, &self.limits)
+      let mut i: usize = 0
+      while i < parsed.unsupported.length() {
+        let mut feature = run Bytes.copy(b"font-face ")
+        run feature.append(parsed.unsupported.asSlice()[i].asSlice())
+        run self.report(DiagnosticKind.Unsupported, feature.asSlice())
+        i = i + 1
+      }
+      if let Option.Some { value } = move parsed.rule {
+        run self.sheet.fontFaces.append(Face { rule: move value, condition: condition, layer: layer, enabled: condition == NONE })
+      }
+      return
+    }
+    run self.report(DiagnosticKind.AtRule, name)
+  }
+
+  effect fn block(self: &mut Self, source: &TokenBuffer, range: TokenRange, selector: &[u8], layer: usize, condition: usize, depth: usize) -> ()
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    if depth >= self.limits.maxDepth { fail CssError { kind: CssErrorKind.NestingLimit, offset: range.start } }
+    let mut at = range.start
+    let mut declarations = at
+    while at < range.end {
+      at = skip(source, at, range.end)
+      if at == range.end { break }
+      let start = at
+      let isAt = match &source.tokens.asSlice()[at].kind { Kind.AtKeyword { .. } => true _ => false }
+      let custom = match &source.tokens.asSlice()[at].kind {
+        Kind.Ident { text } => declaration_values.customName(source.text(text))
+        _ => false
+      }
+      let mut isRule = isAt
+      while at < range.end {
+        match &source.tokens.asSlice()[at].kind {
+          Kind.Semicolon => { at = at + 1
+            break }
+          Kind.OpenBrace => {
+            if !custom || isAt { isRule = true
+              at = after(source, at, range.end)
+            break }
+          }
+          _ => {}
+        }
+        at = after(source, at, range.end)
+      }
+      if isRule {
+        run self.declarations(source, TokenRange { start: declarations, end: start }, selector, layer, condition)
+        run self.rules(source, TokenRange { start: start, end: at }, selector, layer, condition, depth)
+        declarations = at
+      }
+    }
+    run self.declarations(source, TokenRange { start: declarations, end: range.end }, selector, layer, condition)
+  }
+
+  effect fn appendDeclarations(self: &mut Self, source: &TokenBuffer, range: TokenRange, keyframe: bool) -> ()
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    let parsed = run syntax.parseDeclarations(source, range, &self.limits)
+    let mut i: usize = 0
+    while i < parsed.length() {
+      let declaration = parsed.asSlice()[i]
+      let name = source.text(declaration.name)
+      if keyframe && (declaration.important || animationProperty(name)) { i = i + 1
+        continue }
+      let input = Input.Contiguous { buffer: source, range: declaration.value }
+      let structure = run condition_cursor.inspect(&input, &self.limits)
+      let validation = declaration_values.validateRange(&input, &structure, 0, input.length())
+      if !validation.valid {
+        run self.report(DiagnosticKind.Value, name)
+      } else if declaration_values.customName(name) {
+        if keyframe {
+          run self.report(DiagnosticKind.Unsupported, b"keyframe custom properties")
+        } else {
+          run self.sheet.declarations.append(Declaration.Custom { name: run Bytes.copy(name), buffer: 0, range: declaration.value, important: declaration.important })
+        }
+      } else if let Option<Property>.Some { value: property } = catalog.lookup(name) {
+        if property == Property.Content && !validation.hasVariables && (run generated_content.parse(&input)).isNone() {
+          run self.report(DiagnosticKind.Unsupported, b"content")
+          i = i + 1
+          continue
+        }
+        if validation.hasVariables {
+          run self.sheet.declarations.append(Declaration.Pending { property: property, buffer: 0, range: declaration.value, important: declaration.important })
+        } else {
+          let mut cursor = Cursor.make(&input)
+          let colorMix = cursor.function(&input, b"color-mix")
+          cursor = Cursor.make(&input)
+          if colorMix {
+            let program = run colors.parseProgram(&input, &mut cursor)
+            if let Option<ColorProgram>.Some { value } = move program {
+              if cursor.done(&input) {
+                run self.sheet.declarations.append(Declaration.ColorExpression { property: property, program: move value, important: declaration.important })
+              } else { run self.report(DiagnosticKind.Value, name) }
+            } else { run self.report(DiagnosticKind.Value, name) }
+          } else {
+            let value = run written.propertyValueIn(property, source, declaration.value.start, declaration.value.end)
+            run self.sheet.declarations.append(Declaration.Typed { property: property, value: move value, important: declaration.important })
+          }
+        }
+      } else { run self.report(DiagnosticKind.Property, name) }
+      if self.sheet.declarations.length() > self.limits.maxDeclarations { fail CssError { kind: CssErrorKind.DeclarationLimit, offset: declaration.value.start } }
+      i = i + 1
+    }
+  }
+
+  effect fn keyframes(self: &mut Self, source: &TokenBuffer, rule: Rule, layer: usize, condition: usize) -> ()
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    let first = skip(source, rule.prelude.start, rule.prelude.end)
+    if first == rule.prelude.end || skip(source, first + 1, rule.prelude.end) != rule.prelude.end {
+      run self.report(DiagnosticKind.AtRule, b"keyframes")
+      return
+    }
+    let name = match source.tokens.asSlice()[first].kind {
+      Kind.Ident { text } => {
+        let name = source.text(text)
+        if insensitive(name, b"none") || insensitive(name, b"default") || insensitive(name, b"initial")
+          || insensitive(name, b"inherit") || insensitive(name, b"unset") || insensitive(name, b"revert") || insensitive(name, b"revert-layer") {
+          run self.report(DiagnosticKind.AtRule, b"keyframes")
+          return
+        }
+        run Bytes.copy(name)
+      }
+      Kind.String { text } => run Bytes.copy(source.text(text))
+      _ => { run self.report(DiagnosticKind.AtRule, b"keyframes")
+        return }
+    }
+    let mut frames = List<Keyframe>.make()
+    let blocks = run syntax.parseRules(source, rule.body, false, &self.limits)
+    let mut i: usize = 0
+    while i < blocks.length() {
+      let block = blocks.asSlice()[i]
+      let offsets = if block.kind == RuleKind.Qualified { run keyframeOffsets(source, block.prelude) } else { List<f64>.make() }
+      if offsets.length() == 0 { run self.report(DiagnosticKind.Selector, b"keyframe offset") }
+      else {
+        let start = self.sheet.declarations.length()
+        run self.appendDeclarations(source, block.body, true)
+        let end = self.sheet.declarations.length()
+        let mut at: usize = 0
+        while at < offsets.length() {
+          if self.frames >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: block.prelude.start } }
+          run frames.append(Keyframe { offset: offsets.asSlice()[at], declarations: TokenRange { start: start, end: end } })
+          self.frames = self.frames + 1
+          at = at + 1
+        }
+      }
+      i = i + 1
+    }
+    if self.sheet.keyframes.length() >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: rule.prelude.start } }
+    run self.sheet.keyframes.append(Keyframes { name: move name, frames: move frames, layer: layer, condition: condition, enabled: condition == NONE })
+  }
+
+  effect fn declarations(self: &mut Self, source: &TokenBuffer, range: TokenRange, selector: &[u8], layer: usize, condition: usize) -> ()
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    let start = self.sheet.declarations.length()
+    run self.appendDeclarations(source, range, false)
+    let end = self.sheet.declarations.length()
+    if end == start { return }
+    let index = self.sheet.resolver.rules().length
+    if index >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: range.start } }
+    let buffer = run lexer.tokenize(selector, &self.limits)
+    let parsedSelector = run selectors.parse(&buffer, buffer.all(), &[], &self.limits)
+    if let Option<SelectorList>.Some { value } = move parsedSelector {
+      let bufferIndex = self.sheet.buffers.length()
+      let mut priority = Priority.make(Origin.Author, index)
+      priority.layer = layer
+      run self.sheet.resolver.add(MatchRule {
+        sheet: 0, index: index, selectors: move value, buffer: bufferIndex,
+        declarations: TokenRange { start: start, end: end }, priority: priority, enabled: condition == NONE,
+      }, &buffer)
+      run self.sheet.buffers.append(move buffer)
+      run self.sheet.ruleConditions.append(condition)
+    }
+  }
+}
+
+fn animationProperty(name: &[u8]) -> bool {
+  return insensitive(name, b"animation") || insensitive(name, b"animation-name") || insensitive(name, b"animation-duration")
+    || insensitive(name, b"animation-delay") || insensitive(name, b"animation-iteration-count")
+    || insensitive(name, b"animation-direction") || insensitive(name, b"animation-fill-mode") || insensitive(name, b"animation-play-state")
+}
+
+effect fn keyframeOffsets(source: &TokenBuffer, range: TokenRange) -> List<f64>
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut out = List<f64>.make()
+  let mut at = skip(source, range.start, range.end)
+  while at < range.end {
+    let offset = match source.tokens.asSlice()[at].kind {
+      Kind.Percentage { value, .. } => value / 100.0
+      Kind.Ident { text } => if insensitive(source.text(text), b"from") { 0.0 }
+        else if insensitive(source.text(text), b"to") { 1.0 } else { -1.0 }
+      _ => -1.0
+    }
+    if !(offset >= 0.0 && offset <= 1.0) { return List<f64>.make() }
+    run out.append(offset)
+    at = skip(source, at + 1, range.end)
+    if at == range.end { return move out }
+    if !match source.tokens.asSlice()[at].kind { Kind.Comma => true _ => false } { return List<f64>.make() }
+    at = skip(source, at + 1, range.end)
+    if at == range.end { return List<f64>.make() }
+  }
+  return move out
+}
+
+effect fn nestedSelector(source: &TokenBuffer, range: TokenRange, parent: &[u8]) -> Bytes
+  ! OutOfMemoryError ? &mut Allocator {
+  if parent.length == 0 { return run cssom_serialization.components(source, range) }
+  let mut out = Bytes.make()
+  let mut start = range.start
+  let mut at = start
+  while at <= range.end {
+    let comma = if at == range.end { false } else {
+      match &source.tokens.asSlice()[at].kind { Kind.Comma => true _ => false }
+    }
+    if at == range.end || comma {
+      let arm = run nestedArm(source, TokenRange { start: start, end: at }, parent)
+      run out.append(arm.asSlice())
+      if at == range.end { break }
+      run out.append(b",")
+      start = at + 1
+      at = start
+    } else { at = after(source, at, range.end) }
+  }
+  return move out
+}
+
+effect fn nestedArm(source: &TokenBuffer, range: TokenRange, parent: &[u8]) -> Bytes
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut out = Bytes.make()
+  let mut found = false
+  let mut start = range.start
+  let mut i = start
+  while i < range.end {
+    if let Kind.Delim { scalar } = source.tokens.asSlice()[i].kind {
+      if scalar != 38 { i = i + 1
+        continue }
+      let before = run cssom_serialization.components(source, TokenRange { start: start, end: i })
+      run out.append(before.asSlice())
+      run out.append(b":is(")
+      run out.append(parent)
+      run out.append(b")")
+      found = true
+      start = i + 1
+    }
+    i = i + 1
+  }
+  if !found {
+    run out.append(b":is(")
+    run out.append(parent)
+    run out.append(b") ")
+  }
+  let rest = run cssom_serialization.components(source, TokenRange { start: start, end: range.end })
+  run out.append(rest.asSlice())
+  return move out
+}
+
+pub effect fn compile(css: &[u8], options: &Options) -> Sheet
+  ! CompileError | CssError | OutOfMemoryError ? &mut Allocator {
+  let source = run lexer.tokenize(css, &options.limits)
+  let mut compiler = Compiler { sheet: Sheet.make(), supports: Store.make(), limits: options.limits, frames: 0 }
+  run compiler.sheet.buffers.append(run source.copy())
+  run compiler.rules(&source, source.all(), b"", NONE, NONE, 0)
+  let mut i: usize = 0
+  while i < compiler.sheet.resolver.rules().length {
+    let layer = compiler.sheet.resolver.rules()[i].priority.layer
+    compiler.sheet.resolver.setLayer(i, compiler.sheet.layers.rank(layer))
+    i = i + 1
+  }
+  i = 0
+  while i < compiler.sheet.keyframes.length() {
+    let keyframes = compiler.sheet.keyframes.asMutSlice()
+    keyframes[i].layer = compiler.sheet.layers.rank(keyframes[i].layer)
+    i = i + 1
+  }
+  run compiler.sheet.resolver.finish()
+  if options.strict && compiler.sheet.diagnostics.length() != 0 {
+    fail CompileError { diagnostics: compiler.sheet.diagnostics.length() }
+  }
+  return move compiler.sheet
+}

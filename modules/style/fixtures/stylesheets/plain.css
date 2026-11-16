@@ -1,0 +1,26 @@
+@layer reset, theme, components, utilities;
+@layer reset {
+  * { box-sizing: border-box; margin: 0; }
+}
+@layer theme {
+  :root { --gap: 8px; --ink: #123456; }
+}
+@layer components {
+  .card {
+    display: flex;
+    gap: calc(var(--gap) * 2);
+    color: var(--ink);
+    & > .title { font-weight: 600; }
+    &:hover { color: #abcdef; }
+    @media (width >= 600px) { padding: 16px; }
+  }
+  .card:has(> [data-state="open"]) { border-width: 2px; }
+}
+@layer utilities {
+  .p-2 { padding: 8px; }
+  .important { color: red !important; }
+}
+.card { padding: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  .card { transition-duration: 0s; }
+}

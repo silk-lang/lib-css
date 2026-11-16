@@ -1,0 +1,182 @@
+//! Immutable token inputs shared by a root's variable scopes across adopted sheets.
+import adopted { AdoptedSheet, Candidate as MatchedCandidate, Source }
+import sheet { Declaration as SheetDeclaration }
+import cascade { Declaration, Candidate, Name, Target, Specified, Priority }
+import cascade
+import declaration_values
+import variables { VariableStore, ScopeId, RegistrationError }
+import variables
+import scope_cache { Cache }
+import values { Wide, Mode }
+import tokens { Buffers, TokenBuffer, Span, Limits, CssError }
+import input { Input, TokenRef }
+import cssom_serialization
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+
+pub struct InlineCustom<'name, 'tokens> {
+  pub name: &'name [u8],
+  pub tokens: &'tokens TokenBuffer,
+  pub priority: Priority,
+}
+
+pub struct Inputs {
+  scopes: Cache,
+  retained: bool,
+  baseBuffers: usize,
+  baseCatalog: usize,
+  pub buffers: Buffers<'static>,
+  pub catalog: List<Declaration>,
+  offsets: List<usize>,
+  pub variables: VariableStore,
+}
+
+impl Inputs {
+  pub effect fn make(sheets: &[AdoptedSheet], limits: &Limits) -> Inputs
+    ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
+    let mut buffers = Buffers.make()
+    let mut bufferOffsets = List<usize>.make()
+    let mut offsets = List<usize>.make()
+    let mut catalog = List<Declaration>.make()
+    let mut names = TokenBuffer.make()
+    let mut i: usize = 0
+    while i < sheets.length {
+      run bufferOffsets.append(buffers.length())
+      let source = sheets[i].sheet.buffers.asSlice()
+      let mut at: usize = 0
+      while at < source.length {
+        run buffers.append(run source[at].copy())
+        at = at + 1
+      }
+      i = i + 1
+    }
+    let nameBuffer = buffers.length()
+    i = 0
+    while i < sheets.length {
+      run offsets.append(catalog.length())
+      let declarations = sheets[i].sheet.declarations.asSlice()
+      let offset = bufferOffsets.asSlice()[i]
+      let mut at: usize = 0
+      while at < declarations.length {
+        let declaration = match &declarations[at] {
+          SheetDeclaration.Custom { name, buffer, range, important } => {
+            let start = names.data.length()
+            run names.data.append(name.asSlice())
+            let key = Name { buffer: nameBuffer, span: Span { start: start, end: names.data.length() } }
+            let source = Input.Contiguous { buffer: &sheets[i].sheet.buffers.asSlice()[buffer], range: range }
+            let specified = match cascade.wide(&source) {
+              Option<Wide>.Some { value } => Specified.Wide { keyword: value }
+              Option<Wide>.None => Specified.Pending { range: range, mode: Mode.Css }
+            }
+            Declaration { target: Target.Custom { name: key }, specified: specified, buffer: offset + buffer, important: important }
+          }
+          SheetDeclaration.Pending { property, buffer, range, important } => Declaration {
+            target: Target.Property { property: property }, specified: Specified.Pending { range: range, mode: Mode.Css },
+            buffer: offset + buffer, important: important,
+          }
+          SheetDeclaration.Typed { property, important, .. } => Declaration {
+            target: Target.Property { property: property }, specified: Specified.Wide { keyword: Wide.Initial }, buffer: 0, important: important,
+          }
+          SheetDeclaration.ColorExpression { property, important, .. } => Declaration {
+            target: Target.Property { property: property }, specified: Specified.Wide { keyword: Wide.Initial }, buffer: 0, important: important,
+          }
+        }
+        run catalog.append(declaration)
+        at = at + 1
+      }
+      i = i + 1
+    }
+    run buffers.append(move names)
+    let closing = run variables.appendClosingBuffer(&mut buffers)
+    let mut variables = VariableStore.make(closing)
+    i = 0
+    while i < sheets.length {
+      let registrations = sheets[i].sheet.registrations.asSlice()
+      let mut at: usize = 0
+      while at < registrations.length {
+        if registrations[at].enabled {
+          let mut definition = registrations[at].definition
+          definition.name.buffer = definition.name.buffer + bufferOffsets.asSlice()[i]
+          run variables.register(buffers.view(), definition, limits)
+        }
+        at = at + 1
+      }
+      i = i + 1
+    }
+    let baseBuffers = buffers.owned().length
+    let baseCatalog = catalog.length()
+    return Inputs { scopes: Cache.make(), retained: true, baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
+  }
+
+  /// Repeating the same scope inputs cannot grow storage until this becomes false.
+  pub fn canRetainScopes(self: &Self) -> bool { return self.retained && self.scopes.retainsAll() }
+
+  /// Builds only the custom-property part of the cascade; ordinary declarations do not add work.
+  pub effect fn scope(self: &mut Self, matches: &[MatchedCandidate], inline: &[InlineCustom<'_, '_>], parent: Option<ScopeId>, limits: &Limits) -> ScopeId
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    if inline.length != 0 { self.retained = false }
+    let mut candidates = List<Candidate>.make()
+    let mut i: usize = 0
+    while i < matches.length {
+      if let Source.Sheet { sheet, declaration } = matches[i].source {
+        let index = self.offsets.asSlice()[sheet] + declaration
+        if let Target.Custom { .. } = self.catalog.asSlice()[index].target {
+          run candidates.append(Candidate { declaration: index, priority: matches[i].priority })
+        }
+      }
+      i = i + 1
+    }
+    i = 0
+    while i < inline.length {
+      let item = &inline[i]
+      if declaration_values.customName(item.name) {
+        let mut buffer = run item.tokens.copy()
+        let range = buffer.all()
+        let specified = match cascade.wide(&Input.Contiguous { buffer: &buffer, range: range }) {
+          Option<Wide>.Some { value } => Specified.Wide { keyword: value }
+          _ => Specified.Pending { range: range, mode: Mode.Css }
+        }
+        let start = buffer.data.length()
+        run buffer.data.append(item.name)
+        let name = Name { buffer: self.buffers.length(), span: Span { start: start, end: buffer.data.length() } }
+        let mut priority = item.priority
+        priority.inline = true
+        run candidates.append(Candidate { declaration: self.catalog.length(), priority: priority })
+        run self.catalog.append(Declaration { target: Target.Custom { name: name }, specified: specified, buffer: name.buffer, important: priority.important })
+        run self.buffers.append(move buffer)
+      }
+      i = i + 1
+    }
+    if inline.length == 0 {
+      if let Option<ScopeId>.Some { value } = self.scopes.find(parent, candidates.asSlice(), limits) { return value }
+    }
+    let scope = run self.variables.build(self.buffers.view(), self.catalog.asSlice(), candidates.asSlice(), parent, limits)
+    if inline.length == 0 { run self.scopes.insert(parent, move candidates, limits, scope) }
+    return scope
+  }
+
+  pub fn resetScopes(self: &mut Self) -> () {
+    self.scopes.reset()
+    self.retained = true
+    self.variables.resetScopes()
+    self.buffers.truncateOwned(self.baseBuffers)
+    self.catalog.truncate(self.baseCatalog)
+  }
+
+  /// A pending declaration after substitution. None is invalid at computed-value time.
+  /// The receiver parses/caches the resulting value; no stylesheet syntax is reparsed.
+  pub effect fn substitute(self: &Self, scope: ScopeId, sheet: usize, declaration: usize, limits: &Limits) -> Option<Bytes>
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    let item = self.catalog.asSlice()[self.offsets.asSlice()[sheet] + declaration]
+    if let Specified.Pending { range, .. } = item.specified {
+      let replaced = run self.variables.substitute(self.buffers.view(), scope, item.buffer, range, limits)
+      if let Option<List<TokenRef>>.Some { value } = move replaced {
+        let source = Input.Expanded { buffers: self.buffers.view(), references: value.asSlice() }
+        return Option<Bytes>.some(run cssom_serialization.componentsInput(&source))
+      }
+    }
+    return Option<Bytes>.None
+  }
+}

@@ -44,8 +44,16 @@ import silk.core.reflect { Reflect }
 
 fn sameField<V: Equal>(left: &V, right: &V) -> bool { return left == right }
 
+// Size containment also establishes an independent formatting context, but
+// does not establish an absolute/fixed positioning containing block.
+pub enum SizeContainment { None, InlineSize, Size }
+impl Equal for SizeContainment {
+  fn equals(left: &SizeContainment, right: &SizeContainment) -> bool { return left.* == right.* }
+}
+
 pub struct Style {
   pub display: Display,
+  pub sizeContainment: SizeContainment,
   // Tree-managed handle, never a transferable template value. setStyle preserves
   // it; use Tree.setGrid to replace/reset owned grid data.
   pub grid: usize,
@@ -99,6 +107,10 @@ impl Equal for Style {
   }
 }
 impl Style {
+  pub fn containsSize(self: &Self, horizontal: bool) -> bool {
+    return self.sizeContainment == SizeContainment.Size
+      || self.sizeContainment == SizeContainment.InlineSize && horizontal == (self.writingMode == WritingMode.HorizontalTb)
+  }
   // Upright changes used bidi direction, never the computed inherited value.
   pub fn usedDirection(self: &Self) -> Direction {
     if self.textOrientation == TextOrientation.Upright
@@ -114,6 +126,7 @@ impl Style {
   pub fn make() -> Style {
     return Style {
       display: Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flow },
+      sizeContainment: SizeContainment.None,
       grid: 0,
       width: Dimension.auto(), height: Dimension.auto(),
       minWidth: Dimension.auto(), minHeight: Dimension.auto(),

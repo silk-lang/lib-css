@@ -322,6 +322,10 @@ impl<'a> Buffers<'a> {
     run self.own.append(move buffer)
   }
 
+  pub fn truncateOwned(self: &mut Self, count: usize) -> () {
+    self.own.truncate(count)
+  }
+
   pub effect fn reserve(self: &mut Self, count: usize) -> ()
     ! OutOfMemoryError
     ? &mut Allocator {

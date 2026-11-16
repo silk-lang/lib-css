@@ -272,7 +272,7 @@ effect fn fontRange(descriptor: &[u8], buffer: &TokenBuffer, range: TokenRange) 
     return Option<Bytes>.some(run Bytes.copy(single))
   }
   if insensitive(descriptor, b"font-style") {
-    let basic = keyword(buffer, range, &[b"normal", b"italic", b"left", b"right", b"oblique"])
+    let basic = keyword(buffer, range, &[b"normal", b"italic", b"oblique"])
     if basic.length != 0 {
       return Option<Bytes>.some(run Bytes.copy(basic))
     }

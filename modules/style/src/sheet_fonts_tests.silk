@@ -1,0 +1,91 @@
+import compile { Options, CompileError }
+import compile
+import sheet { Sheet, DiagnosticKind }
+import sheet_fonts { FaceStyle, FaceSource, Range, FontDisplay }
+import sheet_binary { DecodeError }
+import sheet_conditions
+import media_features { Environment }
+import tokens { Limits, CssError, equal }
+import silk.collections.slice { Slice }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.core.effect { Effect }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+import silk.text.string { String }
+import silk.num.f64
+
+effect fn checkFaces(sheet: &mut Sheet) ! CssError | OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
+  run Testing.expect(sheet.fontFaces.length() == 3 && sheet.metadata.length() == 0, "font faces have a typed table")
+  let face = &sheet.fontFaces.asSlice()[0]
+  run Testing.expect(equal(face.rule.family.asSlice(), b"Brand Face") && face.layer == 0, "family and layer survive compilation")
+  run Testing.expect(match face.rule.weight { Option.Some { value } => value.min == 100.0 && value.max == 900.0 _ => false }, "variable weight range ignores later invalid and important descriptors")
+  run Testing.expect(match face.rule.width { Option.Some { value } => value.min == 75.0 && value.max == 125.0 _ => false }, "font-stretch is a width range")
+  run Testing.expect(match face.rule.style { Option.Some { value: FaceStyle.Oblique { min, max } } => min == -10.0 && max == 20.0 _ => false }, "oblique angle range survives")
+  run Testing.expect(face.rule.display == FontDisplay.Swap && face.rule.ranges.length() == 2
+    && face.rule.ranges.asSlice()[0].start == 0 && face.rule.ranges.asSlice()[0].end == 255
+    && face.rule.ranges.asSlice()[1].start == 0x400 && face.rule.ranges.asSlice()[1].end == 0x4ff, "Unicode ranges and display survive")
+  run Testing.expect(face.rule.sources.length() == 3, "all source alternatives remain in order")
+  run Testing.expect(match &face.rule.sources.asSlice()[0] { FaceSource.Local { name } => equal(name.asSlice(),b"Brand Full") _ => false }, "local source retains its full name")
+  run Testing.expect(match &face.rule.sources.asSlice()[1] { FaceSource.Url { url, format, tech } => String.view(&url) == "fonts/brand.woff2" && equal(format.asSlice(),b"woff2") && equal(tech.asSlice(),b"variations") _ => false }, "URL source retains format and technology hints")
+  run Testing.expect(sheet.fontFaces.asSlice()[1].rule.sources.length() == 1, "invalid list items do not discard a valid font source")
+  drop run sheet_conditions.update(&mut sheet, &Environment.headless(400.0,300.0), false, &Limits.make())
+  run Testing.expect(!sheet.fontFaces.asSlice()[0].enabled && sheet.fontFaces.asSlice()[1].enabled && sheet.fontFaces.asSlice()[2].enabled, "media conditions gate faces while container conditions do not scope name definitions")
+  drop run sheet_conditions.update(&mut sheet, &Environment.headless(800.0,300.0), false, &Limits.make())
+  run Testing.expect(sheet.fontFaces.asSlice()[0].enabled, "font face media eligibility updates without style rules")
+}
+
+test effect fn compiledFontFacesRoundTripWithoutDescriptorParsing() ! CompileError | CssError | DecodeError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut sheet = run compile.compile(b"@layer brand{@media(width>600px){@font-face{font-family:'Brand Face';src:local('Brand Full'),url('fonts/brand.woff2') format('woff2') tech(variations),url('fallback.ttf');font-weight:100 900;font-weight:2000;font-weight:700!important;font-stretch:75% 125%;font-style:oblique -10deg 20deg;unicode-range:U+0-FF,U+4??;font-display:swap}}}@font-face{font-family:Other;src:bad(),url('other.ttf')}@container missing (width>9000px){@font-face{font-family:Global;src:url(global.ttf)}}@font-face{font-family:serif;src:url(invalid.ttf)}@font-face{font-family:NoSource}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 0, "valid font descriptors and invalid CSS recovery add no unsupported diagnostics")
+  run checkFaces(&mut sheet) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(decoded.buffers.asSlice()[0].source().length == 0, "decoded font faces need no stylesheet source")
+  run checkFaces(&mut decoded) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut i: usize = 0
+  while i < bytes.length() {
+    let failed = run Effect.result(Sheet.decode(Slice.view<u8>(bytes.asSlice(),0,i), &Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(match &failed { Result.Failure { .. } => true _ => false }, "truncated font data is rejected")
+    i = i + 1
+  }
+}
+
+test effect fn compiledFontFacesValidateNumbersAndReportUnsupportedDescriptors() ! CompileError | CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut sheet = run compile.compile(b"@font-face{font-family:Brand;src:url(a.ttf);font-weight:calc(300 + 100);size-adjust:110%;unknown-face-descriptor:1;font-display:block}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 4 && sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Unsupported, "unsupported descriptors are counted rather than silently applied")
+  let faces = sheet.fontFaces.asMutSlice()
+  faces[0].rule.weight = Option<Range>.some(Range { min: f64.INFINITY, max: f64.INFINITY })
+  let invalid = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let failed = run Effect.result(Sheet.decode(invalid.asSlice(),&Limits.make())) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &failed { Result.Failure { .. } => true _ => false }, "non-finite face descriptors cannot enter through a compiled sheet")
+}
+
+
+test effect fn compiledFontFaceEmptyNamesAndZeroWidthRoundTrip() ! CompileError | CssError | DecodeError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(b"@font-face{font-family:'';src:local(''),url('a.ttf');font-width:0%}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.fontFaces.length() == decoded.fontFaces.length(), "the codec accepts every descriptor value admitted by compilation")
+}
+
+test effect fn compiledFontFaceDescriptorsKeepKeywordsEscapesAndAlternatives() ! CompileError | CssError | DecodeError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(b"@font-face{font-family:Br\\61 nd;src:local(Full Name),url('a b.woff2') format('WOFF2') tech(variations,color-COLRv1),url(fallback.ttf);font-weight:bold normal;font-width:expanded condensed;font-style:oblique .125turn -50grad;unicode-range:U+41,U+1F600-1F64F}@font-face{font-family:Auto;src:url(auto.ttf);font-weight:auto;font-width:auto;font-style:auto}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let decoded = run Sheet.decode(bytes.asSlice(),&Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(decoded.fontFaces.length() == 2 && sheet.diagnostics.length() == 0, "normalized descriptors compile and decode")
+  let rule = &decoded.fontFaces.asSlice()[0].rule
+  run Testing.expect(equal(rule.family.asSlice(),b"Brand"), "CSS escapes are decoded once")
+  run Testing.expect(match rule.weight { Option.Some { value } => value.min == 400.0 && value.max == 700.0 _ => false }, "weight keywords form an ordered range")
+  run Testing.expect(match rule.width { Option.Some { value } => value.min == 75.0 && value.max == 125.0 _ => false }, "width keywords form an ordered range")
+  run Testing.expect(match rule.style { Option.Some { value: FaceStyle.Oblique { min, max } } => min == -45.0 && max == 45.0 _ => false }, "angle units become ordered degree ranges")
+  run Testing.expect(rule.ranges.length() == 2 && rule.ranges.asSlice()[0].start == 65 && rule.ranges.asSlice()[1].end == 0x1F64F, "singleton and supplementary Unicode ranges survive")
+  run Testing.expect(match &rule.sources.asSlice()[0] { FaceSource.Local { name } => equal(name.asSlice(),b"Full Name") _ => false }, "unquoted local names retain spaces")
+  run Testing.expect(match &rule.sources.asSlice()[1] { FaceSource.Url { url, format, tech } => String.view(&url) == "a b.woff2" && equal(format.asSlice(),b"WOFF2") && equal(tech.asSlice(),b"variations,color-COLRv1") _ => false }, "source hints and relative URL text survive")
+  let auto = &decoded.fontFaces.asSlice()[1].rule
+  run Testing.expect(auto.weight.isNone() && auto.width.isNone() && auto.style.isNone(), "auto descriptors stay unspecified")
+}

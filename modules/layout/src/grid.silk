@@ -27,9 +27,9 @@ import fragment_box as FragmentBox
 import grid_fragment as Fragments
 import grid_fragment { FragmentGrid }
 import axes { Axes }
-import grid_placement { GridItem, collectItems }
+import grid_placement { GridItem, GridBounds, collectItems }
 import grid_style { GridTrack, GridBreadthKind }
-import grid_scratch { GridAxisScratch, ContributionMemo, ContributionMemos, TrackArea }
+import grid_scratch { GridScratch, GridAxisScratch, ContributionMemo, ContributionMemos, TrackArea }
 import layout_cache { REUSE_INDEPENDENT }
 import grid_lines { LineNames }
 import grid_template { expandedTracks, expandedLines }
@@ -1009,6 +1009,42 @@ pub effect fn layoutGrid<'pass, 'source, M: Measure + TextMeasure>(
 ) -> Layout
   ! OutOfMemoryError | TextError | FragmentationError
   ? &mut Allocator {
+  let mut lease = run output.cache.gridMemos.take(id, nodes.boxes.length())
+  let fresh = lease.fresh
+  let result = run gridWithScratch(nodes, &mut output, &mut measurer, id, input, box, &mut lease.value.getMut()[0], fresh, false)
+  output.cache.gridMemos.put(move lease)
+  return result
+}
+
+// A containment sizing pass retains the grid's explicit tracks, repeats and
+// gaps, but creates no implicit tracks or contributions from descendants.
+pub effect fn layoutEmptyGrid<'pass, 'source, M: Measure + TextMeasure>(
+  nodes: &BoxTree<'source>,
+  output: &mut LayoutPass<'pass, 'source>,
+  measurer: &mut M,
+  id: usize,
+  input: &Input,
+  box: &ResolvedBox,
+) -> Layout
+  ! OutOfMemoryError | TextError | FragmentationError
+  ? &mut Allocator {
+  let mut scratch = GridScratch.make()
+  return run gridWithScratch(nodes, &mut output, &mut measurer, id, input, box, &mut scratch, true, true)
+}
+
+effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
+  nodes: &BoxTree<'source>,
+  output: &mut LayoutPass<'pass, 'source>,
+  measurer: &mut M,
+  id: usize,
+  input: &Input,
+  box: &ResolvedBox,
+  scratch: &mut GridScratch,
+  leaseFresh: bool,
+  empty: bool,
+) -> Layout
+  ! OutOfMemoryError | TextError | FragmentationError
+  ? &mut Allocator {
   let fragmented = input.performLayout && input.fragmentation.active
   let mut allocationCheckpoint = Option<ResumeCheckpoint>.None
   if fragmented {
@@ -1032,9 +1068,6 @@ pub effect fn layoutGrid<'pass, 'source, M: Measure + TextMeasure>(
   let mut base = childrenInput(input, style, box, OptionalSize.none())
   base.performLayout = false
   base.baselines = false
-  let mut lease = run output.cache.gridMemos.take(id, nodes.boxes.length())
-  let leaseFresh = lease.fresh
-  let scratch = &mut lease.value.getMut()[0]
   let emptyInherited = SubgridContext.make()
   let mut inherited = &emptyInherited
   if input.gridContext != 0 { inherited = output.cache.subgrids.get(input.gridContext) }
@@ -1082,7 +1115,10 @@ pub effect fn layoutGrid<'pass, 'source, M: Measure + TextMeasure>(
       rowOverride,
       &mut scratch,
       inherited,
+      empty,
     )
+  } else if empty {
+    scratch.bounds = GridBounds { rowOrigin: 0, columnOrigin: 0, rows: template.rows.tracks.length(), columns: template.columns.tracks.length() }
   } else if leaseFresh {
     let emptyNames = LineNames.make()
     scratch.bounds = run collectItems(
@@ -1437,10 +1473,7 @@ pub effect fn layoutGrid<'pass, 'source, M: Measure + TextMeasure>(
     width: gridSize.width,
     height: gridSize.height,
   }
-  if !input.performLayout && !input.baselines {
-    output.cache.gridMemos.put(move lease)
-    return result
-  }
+  if !input.performLayout && !input.baselines { return result }
   let sharing = baselines.any()
   let mut passes: usize = 1
   match move allocationCheckpoint {
@@ -1719,7 +1752,6 @@ pub effect fn layoutGrid<'pass, 'source, M: Measure + TextMeasure>(
       output.cache.gridGeometry.captureRows(id, scratch)
     }
   }
-  output.cache.gridMemos.put(move lease)
   return result
 }
 

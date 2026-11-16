@@ -1,0 +1,216 @@
+//! Indexed, per-element stylesheet matching. The host owns declarations and value computation.
+import silk.num.u32
+import cascade { Priority, Candidate }
+import element { ElementTree, MatchContext }
+import selectors { SelectorList, Specificity, Dependency }
+import selectors
+import selector_index { CandidateIndex }
+import tokens { BufferView, TokenBuffer, TokenRange, CssError }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.core.ownership { Copy }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+
+/// Per-element conditions supplement globally enabled rules without mutating their
+/// eligibility. State dependencies are recorded even when this filter returns false.
+pub interface RuleFilter {
+  effect fn accepts(self: &Self, rule: usize, context: &mut MatchContext) -> bool
+    ! CssError | OutOfMemoryError ? &mut Allocator
+}
+struct AllRules {}
+impl RuleFilter for AllRules {
+  effect fn accepts(self: &Self, rule: usize, context: &mut MatchContext) -> bool
+    ! CssError | OutOfMemoryError ? &mut Allocator { return true }
+}
+
+/// One rule in adoption/source order. Declaration ranges refer to the host's shared catalog.
+pub struct Rule {
+  pub sheet: usize,
+  pub index: usize,
+  pub selectors: SelectorList,
+  pub buffer: usize,
+  pub declarations: TokenRange,
+  pub priority: Priority,
+  pub enabled: bool,
+}
+
+/// A matching rule's stable identity, retained separately from the declaration catalog.
+pub struct Match {
+  pub sheet: usize,
+  pub rule: usize,
+  pub specificity: Specificity,
+}
+
+impl Copy for Match {}
+
+pub enum ResolverError {
+  UnfinishedIndex,
+  InvalidRule,
+}
+
+pub struct Resolver {
+  entries: List<Rule>,
+  index: CandidateIndex,
+  candidates: List<Candidate>,
+  matched: List<Match>,
+  dependencies: List<List<Dependency>>,
+  states: List<u32>,
+  selectedStates: u32,
+  starting: List<bool>,
+}
+
+impl Resolver {
+  pub fn make() -> Resolver {
+    return Resolver {
+      entries: List<Rule>.make(),
+      index: CandidateIndex.make(),
+      candidates: List<Candidate>.make(),
+      matched: List<Match>.make(),
+      dependencies: List<List<Dependency>>.make(),
+      states: List<u32>.make(),
+      selectedStates: 0,
+      starting: List<bool>.make(),
+    }
+  }
+
+  /// Appends a rule. Call finish after adding rules and before matching.
+  pub effect fn add(self: &mut Self, rule: Rule, buffer: &TokenBuffer) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    let dependencies = run rule.selectors.dependencies()
+    let mut states: u32 = 0
+    let mut at: usize = 0
+    while at < dependencies.length() {
+      states = u32.bitOr(states, dependencies.asSlice()[at].states)
+      at = at + 1
+    }
+    run self.states.reserve(1)
+    run self.starting.reserve(1)
+    run self.dependencies.reserve(1)
+    run self.entries.reserve(1)
+    run self.index.add(&rule.selectors, buffer)
+    run self.entries.append(move rule)
+    run self.dependencies.append(move dependencies)
+    run self.states.append(states)
+    run self.starting.append(false)
+  }
+
+  pub effect fn finish(self: &mut Self) -> () ! OutOfMemoryError ? &mut Allocator {
+    run self.index.finish()
+  }
+
+  /// Changes the result of a host-evaluated condition without rebuilding the subject index.
+  pub fn setEnabled(self: &mut Self, rule: usize, enabled: bool) -> () {
+    if rule < self.entries.length() {
+      let rules = self.entries.asMutSlice()
+      rules[rule].enabled = enabled
+    }
+  }
+
+  pub fn setStarting(self: &mut Self, rule: usize, enabled: bool) -> () {
+    if rule < self.starting.length() {
+      let entries = self.starting.asMutSlice()
+      entries[rule] = enabled
+    }
+  }
+
+  pub fn hasStarting(self: &Self) -> bool {
+    let mut i: usize = 0
+    while i < self.starting.length() {
+      if self.starting.asSlice()[i] { return true }
+      i = i + 1
+    }
+    return false
+  }
+
+  /// Matches one element, replacing the previous result. Inline candidates share the same
+  /// catalog and cascade; callers set their inline flag and source order explicitly.
+  /// Match-budget exhaustion is an error and never a partial successful style.
+  pub effect fn resolve<T: ElementTree>(
+    self: &mut Self,
+    buffers: BufferView<'_>,
+    tree: &T,
+    node: usize,
+    inline: &[Candidate],
+    context: &mut MatchContext,
+  ) -> () ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+    run self.resolveWith(buffers, tree, node, inline, &mut context, false)
+  }
+
+  pub effect fn resolveWith<T: ElementTree>(self: &mut Self, buffers: BufferView<'_>, tree: &T,
+    node: usize, inline: &[Candidate], context: &mut MatchContext, starting: bool) -> ()
+    ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+    run self.resolveFiltered(buffers, tree, node, inline, &mut context, starting, &AllRules {})
+  }
+
+  pub effect fn resolveFiltered<T: ElementTree, F: RuleFilter>(self: &mut Self, buffers: BufferView<'_>, tree: &T,
+    node: usize, inline: &[Candidate], context: &mut MatchContext, starting: bool, filter: &F) -> ()
+    ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+    self.candidates.truncate(0)
+    self.matched.truncate(0)
+    self.selectedStates = 0
+    if !self.index.ready(self.entries.length()) {
+      fail ResolverError.UnfinishedIndex
+    }
+    run self.index.collect(tree, node, &mut context.*)
+    let mut candidates = List<Candidate>.make()
+    let mut matched = List<Match>.make()
+    let mut states: u32 = 0
+    let selected = self.index.candidates()
+    let mut i: usize = 0
+    while i < selected.length {
+      let rule = &self.entries.asSlice()[selected[i]]
+      if rule.enabled || (starting && self.starting.asSlice()[selected[i]]) {
+        states = u32.bitOr(states, self.states.asSlice()[selected[i]])
+        if rule.buffer >= buffers.length() || rule.declarations.start > rule.declarations.end {
+          fail ResolverError.InvalidRule
+        }
+        let specificity = run selectors.matchElement(
+          &rule.selectors, &buffers.one(rule.buffer)[0], tree, node, &mut context.*,
+        )
+        if let Option<Specificity>.Some { value } = specificity {
+          if run filter.accepts(selected[i], &mut context) {
+            run matched.append(Match { sheet: rule.sheet, rule: rule.index, specificity: value })
+            let mut declaration = rule.declarations.start
+            while declaration < rule.declarations.end {
+              run context.spend(1)
+              let mut priority = rule.priority
+              priority.specificity = value
+              priority.order = declaration
+              run candidates.append(Candidate { declaration: declaration, priority: priority })
+              declaration = declaration + 1
+            }
+          }
+        }
+      }
+      i = i + 1
+    }
+    run context.spend(inline.length)
+    run candidates.appendSlice(inline)
+    self.candidates = move candidates
+    self.matched = move matched
+    self.selectedStates = states
+  }
+
+  /// Includes state tests in indexed candidates whose current state did not match.
+  pub fn stateDependencies(self: &Self) -> u32 { return self.selectedStates }
+
+  /// Candidates for cascade.select/selectCustom or computed.Engine.build after resolve.
+  pub fn declarations(self: &Self) -> &[Candidate] {
+    return self.candidates.asSlice()
+  }
+
+  pub fn invalidation(self: &Self, rule: usize) -> &[Dependency] {
+    return self.dependencies.asSlice()[rule].asSlice()
+  }
+
+  pub fn rules(self: &Self) -> &[Rule] { return self.entries.asSlice() }
+
+  pub fn setLayer(self: &mut Self, rule: usize, layer: usize) -> () {
+    let rules = self.entries.asMutSlice()
+    rules[rule].priority.layer = layer
+  }
+
+  pub fn matches(self: &Self) -> &[Match] {
+    return self.matched.asSlice()
+  }
+}

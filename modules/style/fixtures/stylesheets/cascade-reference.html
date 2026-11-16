@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cascade 5 layer rollback references</title>
+<style>
+@layer a, b;
+@layer a {
+  .normal, .important-late, .inline-important { color: blue }
+  .important-early { color: yellow; color: revert-layer !important }
+  .inline-sheet { color: blue !important }
+  .variable { --x: red }
+}
+@layer b {
+  .normal { color: green; color: revert-layer }
+  .important-late { color: green; color: revert-layer !important }
+  .important-early { color: green; color: blue !important }
+  .inline-sheet { color: green }
+  .variable { --x: blue; --x: var(--missing, revert-layer); --y: var(--x, green); color: var(--y) }
+}
+</style>
+<div class="normal" data-expected="rgb(0, 0, 255)"></div>
+<div class="important-late" data-expected="rgb(0, 0, 255)"></div>
+<div class="important-early" data-expected="rgb(0, 0, 0)"></div>
+<div class="inline-important" style="color:green;color:revert-layer!important" data-expected="rgb(0, 0, 255)"></div>
+<div class="inline-sheet" style="color:revert-layer!important" data-expected="rgb(0, 0, 255)"></div>
+<div class="variable" data-expected="rgb(255, 0, 0)"></div>
+<pre id="results"></pre>
+<script>
+results.textContent = JSON.stringify([...document.querySelectorAll('[data-expected]')].map(element => ({
+  name: element.className,
+  expected: element.dataset.expected,
+  actual: getComputedStyle(element).color,
+  pass: getComputedStyle(element).color === element.dataset.expected,
+})));
+</script>
