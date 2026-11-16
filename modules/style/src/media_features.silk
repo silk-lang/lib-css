@@ -92,6 +92,7 @@ pub struct Environment {
   // the embedding node's used color scheme (MQ5 #prefers-color-scheme).
   pub colorScheme: ColorScheme,
   pub reducedMotion: bool,
+  pub forcedColors: bool,
 }
 
 impl Copy for Environment {}
@@ -123,6 +124,7 @@ impl Environment {
       anyHover: false,
       colorScheme: ColorScheme.Light,
       reducedMotion: false,
+      forcedColors: false,
     }
   }
 }
@@ -152,6 +154,7 @@ enum Feature {
   AnyHover,
   PrefersColorScheme,
   PrefersReducedMotion,
+  ForcedColors,
 }
 
 enum Relation {
@@ -187,6 +190,7 @@ fn truth(value: bool) -> Truth {
 }
 
 fn lookup(text: &[u8]) -> Feature {
+  if insensitive(text, b"forced-colors") { return Feature.ForcedColors }
   if insensitive(text, b"width") {
     return Feature.Width
   }
@@ -388,6 +392,7 @@ fn boolean(feature: Feature, environment: &Environment) -> Truth {
       Feature.AnyHover => environment.anyHover
       Feature.PrefersColorScheme => true
       Feature.PrefersReducedMotion => environment.reducedMotion
+      Feature.ForcedColors => environment.forcedColors
       _ => false
     },
   )
@@ -620,6 +625,10 @@ fn discrete(feature: Feature, text: &[u8], environment: &Environment) -> Truth {
       if insensitive(text, b"reduce") {
         return truth(environment.reducedMotion)
       }
+    }
+    Feature.ForcedColors => {
+      if none { return truth(!environment.forcedColors) }
+      if insensitive(text, b"active") { return truth(environment.forcedColors) }
     }
     Feature.Update => {
       if none {
