@@ -65,6 +65,12 @@ pub enum Unit {
   Dvb,
   Dvmin,
   Dvmax,
+  Cqw,
+  Cqh,
+  Cqi,
+  Cqb,
+  Cqmin,
+  Cqmax,
   Deg,
   Grad,
   Rad,
@@ -127,6 +133,12 @@ pub fn unitName(unit: Unit) -> &'static [u8] {
     Unit.Dvb => b"dvb"
     Unit.Dvmin => b"dvmin"
     Unit.Dvmax => b"dvmax"
+    Unit.Cqw => b"cqw"
+    Unit.Cqh => b"cqh"
+    Unit.Cqi => b"cqi"
+    Unit.Cqb => b"cqb"
+    Unit.Cqmin => b"cqmin"
+    Unit.Cqmax => b"cqmax"
     Unit.Deg => b"deg"
     Unit.Grad => b"grad"
     Unit.Rad => b"rad"
@@ -145,7 +157,7 @@ pub fn unitName(unit: Unit) -> &'static [u8] {
 /// The unit a dimension spells, compared ASCII case-insensitively: `px`, `EM`, `deg`. A plain
 /// number and `%` are not dimension units, so they are not found.
 pub fn unitLookup(name: &[u8]) -> Option<Unit> {
-  let units: [Unit; 55] = [
+  let units: [Unit; 61] = [
     Unit.Px,
     Unit.Cm,
     Unit.Mm,
@@ -189,6 +201,12 @@ pub fn unitLookup(name: &[u8]) -> Option<Unit> {
     Unit.Dvb,
     Unit.Dvmin,
     Unit.Dvmax,
+    Unit.Cqw,
+    Unit.Cqh,
+    Unit.Cqi,
+    Unit.Cqb,
+    Unit.Cqmin,
+    Unit.Cqmax,
     Unit.Deg,
     Unit.Grad,
     Unit.Rad,

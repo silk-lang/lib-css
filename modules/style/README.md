@@ -280,6 +280,14 @@ Hosts that omit the operation have no eligible containers. The compiler still re
 rules as unsupported until the UI host's containment, query invalidation and relayout are connected.
 Diagnostics aggregate dropped features; `Options.strict` rejects a sheet with diagnostics.
 
+Container length units (`cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`) parse, serialize,
+participate in dimensional math, and survive compiled-sheet round trips. `dimensions.Context`
+provides independent optional container sizes for physical and logical axes, falling back to
+the small viewport for missing inputs. Hosts select the appropriate ancestors; logical unit
+axes follow the styled element's writing mode. These relative lengths are valid registered
+property values, but cannot be typed `@property` initial values because they depend on context.
+Units are encoded by CSS spelling, so these additions do not change the binary layout.
+
 `colors.parseProgram` handles nested `color-mix()` with deferred `currentcolor` and system colors.
 It supports the standard rectangular and polar spaces, normalized percentages, premultiplied
 alpha, hue interpolation methods, and missing components. Standalone sheet color expressions

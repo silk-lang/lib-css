@@ -68,6 +68,12 @@ pub enum Unit {
   Dvb,
   Dvmin,
   Dvmax,
+  Cqw,
+  Cqh,
+  Cqi,
+  Cqb,
+  Cqmin,
+  Cqmax,
   Deg,
   Grad,
   Rad,
@@ -190,6 +196,11 @@ pub struct Context {
   pub dynamicViewportWidth: f64,
   pub dynamicViewportHeight: f64,
   pub vertical: bool,
+  /// Each axis may select a different ancestor; None uses the small viewport.
+  pub containerWidth: Option<f64>,
+  pub containerHeight: Option<f64>,
+  pub containerInlineSize: Option<f64>,
+  pub containerBlockSize: Option<f64>,
   pub parentFontSize: f64,
   pub parentXHeight: f64,
   pub parentCapHeight: f64,
@@ -229,6 +240,8 @@ impl Context {
       dynamicViewportWidth: viewportWidth,
       dynamicViewportHeight: viewportHeight,
       vertical: false,
+      containerWidth: Option<f64>.None, containerHeight: Option<f64>.None,
+      containerInlineSize: Option<f64>.None, containerBlockSize: Option<f64>.None,
       parentFontSize: fontSize,
       parentFontWeight: 400.0,
       parentXHeight: fontSize * 0.5,
@@ -432,6 +445,12 @@ pub fn unit(text: &[u8]) -> Option<Unit> {
   if insensitive(text, b"dvmax") {
     return Option<Unit>.some(Unit.Dvmax)
   }
+  if insensitive(text, b"cqw") { return Option<Unit>.some(Unit.Cqw) }
+  if insensitive(text, b"cqh") { return Option<Unit>.some(Unit.Cqh) }
+  if insensitive(text, b"cqi") { return Option<Unit>.some(Unit.Cqi) }
+  if insensitive(text, b"cqb") { return Option<Unit>.some(Unit.Cqb) }
+  if insensitive(text, b"cqmin") { return Option<Unit>.some(Unit.Cqmin) }
+  if insensitive(text, b"cqmax") { return Option<Unit>.some(Unit.Cqmax) }
   if insensitive(text, b"deg") {
     return Option<Unit>.some(Unit.Deg)
   }
@@ -1200,6 +1219,11 @@ fn absoluteFactor(unitValue: Unit) -> f64 {
   }
 }
 
+fn containerBasis(size: Option<f64>, fallback: f64) -> f64 {
+  if let Option<f64>.Some { value } = size { return value }
+  return fallback
+}
+
 fn factor(unitValue: Unit, context: &Context) -> f64 {
   let inlineSize = if context.vertical {
     context.viewportHeight
@@ -1231,7 +1255,15 @@ fn factor(unitValue: Unit, context: &Context) -> f64 {
   } else {
     context.dynamicViewportHeight
   }
+  let containerInline = containerBasis(context.containerInlineSize, smallInline)
+  let containerBlock = containerBasis(context.containerBlockSize, smallBlock)
   return match unitValue {
+    Unit.Cqw => containerBasis(context.containerWidth, context.smallViewportWidth) * 0.01
+    Unit.Cqh => containerBasis(context.containerHeight, context.smallViewportHeight) * 0.01
+    Unit.Cqi => containerInline * 0.01
+    Unit.Cqb => containerBlock * 0.01
+    Unit.Cqmin => f64.min(containerInline, containerBlock) * 0.01
+    Unit.Cqmax => f64.max(containerInline, containerBlock) * 0.01
     Unit.Em => context.fontSize
     Unit.Rem => context.rootFontSize
     Unit.Ex => context.xHeight

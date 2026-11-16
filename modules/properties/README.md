@@ -60,3 +60,11 @@ import these instead of defining their own.
 
   let patch = [declare.width(percent(50.0)), declare.position(Position.Absolute), declare.marginTop(px(8.0))]
   ```
+
+`convert.Context.make()` initializes unit resolution. Override the font and viewport inputs
+as needed. Container lengths (`cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`) use four independent
+optional inputs: `containerWidth`, `containerHeight`, `containerInlineSize`, and
+`containerBlockSize`. A missing input falls back to the small viewport; an explicit zero
+remains zero. `smallViewportWidth`/`smallViewportHeight` default to the ordinary viewport when
+omitted, and `vertical` selects the logical axes. Hosts select the nearest eligible ancestor
+for each physical axis; for logical units, that axis follows the styled element's writing mode.

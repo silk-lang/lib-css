@@ -36,6 +36,14 @@ pub struct Context {
   pub rootFontSize: f32,
   pub viewportWidth: f32,
   pub viewportHeight: f32,
+  pub smallViewportWidth: Option<f32>,
+  pub smallViewportHeight: Option<f32>,
+  pub vertical: bool,
+  /// Independently selected ancestor content sizes; None uses the small viewport.
+  pub containerWidth: Option<f32>,
+  pub containerHeight: Option<f32>,
+  pub containerInlineSize: Option<f32>,
+  pub containerBlockSize: Option<f32>,
 }
 
 impl Copy for Context {}
@@ -43,8 +51,18 @@ impl Copy for Context {}
 impl Context {
   /// A 16 px font and an empty viewport.
   pub fn make() -> Context {
-    return Context { fontSize: 16.0, rootFontSize: 16.0, viewportWidth: 0.0, viewportHeight: 0.0 }
+    return Context {
+      fontSize: 16.0, rootFontSize: 16.0, viewportWidth: 0.0, viewportHeight: 0.0,
+      smallViewportWidth: Option<f32>.None, smallViewportHeight: Option<f32>.None, vertical: false,
+      containerWidth: Option<f32>.None, containerHeight: Option<f32>.None,
+      containerInlineSize: Option<f32>.None, containerBlockSize: Option<f32>.None,
+    }
   }
+}
+
+fn basis(size: Option<f32>, fallback: f32) -> f32 {
+  if let Option<f32>.Some { value } = size { return value }
+  return fallback
 }
 
 /// CSS pixels per one `unit`, or `None` when `unit` is not a length this context resolves.
@@ -59,7 +77,23 @@ pub fn pixelsPer(unit: Unit, context: &Context) -> Option<f32> {
   } else {
     context.viewportWidth
   }
+  let smallWidth = basis(context.smallViewportWidth, context.viewportWidth)
+  let smallHeight = basis(context.smallViewportHeight, context.viewportHeight)
+  let inlineSize = if context.vertical { context.viewportHeight } else { context.viewportWidth }
+  let blockSize = if context.vertical { context.viewportWidth } else { context.viewportHeight }
+  let smallInline = if context.vertical { smallHeight } else { smallWidth }
+  let smallBlock = if context.vertical { smallWidth } else { smallHeight }
+  let containerInline = basis(context.containerInlineSize, smallInline)
+  let containerBlock = basis(context.containerBlockSize, smallBlock)
+  let containerMin = if containerInline < containerBlock { containerInline } else { containerBlock }
+  let containerMax = if containerInline > containerBlock { containerInline } else { containerBlock }
   return match unit {
+    Unit.Cqw => Option<f32>.some(basis(context.containerWidth, smallWidth) / 100.0)
+    Unit.Cqh => Option<f32>.some(basis(context.containerHeight, smallHeight) / 100.0)
+    Unit.Cqi => Option<f32>.some(containerInline / 100.0)
+    Unit.Cqb => Option<f32>.some(containerBlock / 100.0)
+    Unit.Cqmin => Option<f32>.some(containerMin / 100.0)
+    Unit.Cqmax => Option<f32>.some(containerMax / 100.0)
     Unit.Px => Option<f32>.some(1.0)
     Unit.Cm => Option<f32>.some(96.0 / 2.54)
     Unit.Mm => Option<f32>.some(96.0 / 25.4)
@@ -79,27 +113,27 @@ pub fn pixelsPer(unit: Unit, context: &Context) -> Option<f32> {
     Unit.Ric => Option<f32>.some(context.rootFontSize)
     Unit.Rcap => Option<f32>.some(context.rootFontSize)
     Unit.Vw => Option<f32>.some(context.viewportWidth / 100.0)
-    Unit.Svw => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Svw => Option<f32>.some(smallWidth / 100.0)
     Unit.Lvw => Option<f32>.some(context.viewportWidth / 100.0)
     Unit.Dvw => Option<f32>.some(context.viewportWidth / 100.0)
-    Unit.Vi => Option<f32>.some(context.viewportWidth / 100.0)
-    Unit.Svi => Option<f32>.some(context.viewportWidth / 100.0)
-    Unit.Lvi => Option<f32>.some(context.viewportWidth / 100.0)
-    Unit.Dvi => Option<f32>.some(context.viewportWidth / 100.0)
+    Unit.Vi => Option<f32>.some(inlineSize / 100.0)
+    Unit.Svi => Option<f32>.some(smallInline / 100.0)
+    Unit.Lvi => Option<f32>.some(inlineSize / 100.0)
+    Unit.Dvi => Option<f32>.some(inlineSize / 100.0)
     Unit.Vh => Option<f32>.some(context.viewportHeight / 100.0)
-    Unit.Svh => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Svh => Option<f32>.some(smallHeight / 100.0)
     Unit.Lvh => Option<f32>.some(context.viewportHeight / 100.0)
     Unit.Dvh => Option<f32>.some(context.viewportHeight / 100.0)
-    Unit.Vb => Option<f32>.some(context.viewportHeight / 100.0)
-    Unit.Svb => Option<f32>.some(context.viewportHeight / 100.0)
-    Unit.Lvb => Option<f32>.some(context.viewportHeight / 100.0)
-    Unit.Dvb => Option<f32>.some(context.viewportHeight / 100.0)
+    Unit.Vb => Option<f32>.some(blockSize / 100.0)
+    Unit.Svb => Option<f32>.some(smallBlock / 100.0)
+    Unit.Lvb => Option<f32>.some(blockSize / 100.0)
+    Unit.Dvb => Option<f32>.some(blockSize / 100.0)
     Unit.Vmin => Option<f32>.some(smaller / 100.0)
-    Unit.Svmin => Option<f32>.some(smaller / 100.0)
+    Unit.Svmin => Option<f32>.some((if smallWidth < smallHeight { smallWidth } else { smallHeight }) / 100.0)
     Unit.Lvmin => Option<f32>.some(smaller / 100.0)
     Unit.Dvmin => Option<f32>.some(smaller / 100.0)
     Unit.Vmax => Option<f32>.some(larger / 100.0)
-    Unit.Svmax => Option<f32>.some(larger / 100.0)
+    Unit.Svmax => Option<f32>.some((if smallWidth > smallHeight { smallWidth } else { smallHeight }) / 100.0)
     Unit.Lvmax => Option<f32>.some(larger / 100.0)
     Unit.Dvmax => Option<f32>.some(larger / 100.0)
     _ => Option<f32>.None

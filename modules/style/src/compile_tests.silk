@@ -7,7 +7,7 @@ import resolver_tests { Tree }
 import tokens { Limits, CssError, BufferView, equal }
 import element { MatchContext, PseudoTarget, NO_ELEMENT }
 import css_properties.catalog { Property }
-import css_properties.values { Value }
+import css_properties.values { Value, Unit }
 import silk.collections.slice { Slice }
 import silk.core.effect { Effect }
 import silk.core.result { Result }
@@ -354,4 +354,28 @@ test effect fn compiledPseudoStateSuffixesAreDiagnosedWithoutDroppingOriginState
   strict.strict = true
   let rejected = run Effect.result(compile.compile(css, &strict)) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &rejected { Result<Sheet, CompileError | CssError | OutOfMemoryError>.Failure { .. } => true _ => false }, "strict mode rejects pseudo-element state suffixes")
+}
+
+test effect fn containerUnitDeclarationsRoundTripWithoutSource() ! CompileError | CssError | DecodeError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let css = b".a{width:1cqw}.b{width:1cqh}.c{width:1cqi}.d{width:1cqb}.e{width:1cqmin}.f{width:1cqmax}"
+  let units = [Unit.Cqw, Unit.Cqh, Unit.Cqi, Unit.Cqb, Unit.Cqmin, Unit.Cqmax]
+  let sheet = run compile.compile(css, &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 0 && sheet.declarations.length() == 6, "container lengths compile as typed declarations")
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut i: usize = 0
+  while i < units.length {
+    let mut matches = false
+    if let Declaration.Typed { property: Property.Width, value: Value.Unit { value: amount, unit }, important } = &decoded.declarations.asSlice()[i] {
+      matches = !important && amount == 1.0 && unit == units[i]
+    }
+    run Testing.expect(matches, "container unit identities survive binary decoding")
+    i = i + 1
+  }
+  i = 0
+  while i < decoded.buffers.length() {
+    run Testing.expect(decoded.buffers.asSlice()[i].source().length == 0, "decoded unit declarations require no original stylesheet")
+    i = i + 1
+  }
 }

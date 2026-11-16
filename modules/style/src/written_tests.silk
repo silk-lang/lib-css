@@ -129,7 +129,9 @@ effect fn blocks() -> () ! AssertionError<'static> | CssError | OutOfMemoryError
     run expectDeclaration(&items[2], b"margin: 1px 2px !important", "important with inner space")
     run expectDeclaration(&items[3], b"background-image: url(\"a;b.png\")", "a semicolon inside a string")
     run expectDeclaration(&items[4], b"flex-grow: 2", "the last declaration needs no semicolon")
-    let context = Context { fontSize: 16.0, rootFontSize: 16.0, viewportWidth: 800.0, viewportHeight: 600.0 }
+    let mut context = Context.make()
+    context.viewportWidth = 800.0
+    context.viewportHeight = 600.0
     let width = convert.dimension(&items[0].value, &context)
     run Testing.expect(
       match &width {

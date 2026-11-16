@@ -1,4 +1,6 @@
 import registration { Parsed }
+import input { Input }
+import registration { Syntax }
 import registration
 import lexer
 import syntax
@@ -45,6 +47,21 @@ test effect fn registrationsRequireValidDescriptorsAndIndependentInitialValues()
     if i == 21 {
       run Testing.expect(match &parsed { Parsed.Unsupported => true _ => false }, "unsupported grammar is diagnosed separately")
     }
+    i = i + 1
+  }
+}
+
+test effect fn registeredContainerLengthsRequireIndependentInitialValues() ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let cases = [b"1cqw", b"1cqh", b"1cqi", b"1cqb", b"1cqmin", b"calc(1px + 1cqmax)"]
+  let mut i: usize = 0
+  while i < cases.length {
+    let limits = Limits.make()
+    let buffer = run lexer.tokenize(cases[i], &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+    let input = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+    let initial = run registration.valid(Syntax.Length, &input, true, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+    let specified = run registration.valid(Syntax.Length, &input, false, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(!initial && specified, "container lengths are registered length values, but not computationally independent initial values")
     i = i + 1
   }
 }

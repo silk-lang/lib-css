@@ -58,7 +58,9 @@ fn independent(source: &Input<'_>) -> bool {
           if insensitive(name, b"em") || insensitive(name, b"rem") || insensitive(name, b"ex")
             || insensitive(name, b"rex") || insensitive(name, b"ch") || insensitive(name, b"rch")
             || insensitive(name, b"cap") || insensitive(name, b"rcap") || insensitive(name, b"ic")
-            || insensitive(name, b"ric") || insensitive(name, b"lh") || insensitive(name, b"rlh") {
+            || insensitive(name, b"ric") || insensitive(name, b"lh") || insensitive(name, b"rlh")
+            || insensitive(name, b"cqw") || insensitive(name, b"cqh") || insensitive(name, b"cqi")
+            || insensitive(name, b"cqb") || insensitive(name, b"cqmin") || insensitive(name, b"cqmax") {
             return false
           }
         }

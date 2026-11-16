@@ -670,3 +670,23 @@ test effect fn dimensionalMediaNegativeResolution() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   run dimensionalMediaNegativeResolutionCase() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+effect fn containerLengthCases() ! CssError | OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
+  let mut context = Context.make(1000.0, 800.0, 16.0)
+  context.smallViewportWidth = 600.0
+  context.smallViewportHeight = 400.0
+  run Testing.expect(run resolves(b"calc(1cqw + 1cqh + 1cqi + 1cqb + 1cqmin + 1cqmax)", Dimension.Length, false, &context, 0.0, 30.0), "all container units fall back to the small viewport")
+  context.containerWidth = Option<f64>.some(300.0)
+  context.containerHeight = Option<f64>.some(200.0)
+  context.containerInlineSize = Option<f64>.some(150.0)
+  context.containerBlockSize = Option<f64>.some(700.0)
+  run Testing.expect(run resolves(b"calc(10CQW + 20cqh + 2cqi + 3cqb + 1cqmin + 1cqmax + 5%)", Dimension.LengthPercentage, false, &context, 200.0, 112.5), "mixed container axes compute before percentage layout resolution")
+  context.containerWidth = Option<f64>.some(0.0)
+  context.containerBlockSize = Option<f64>.None
+  context.vertical = true
+  run Testing.expect(run resolves(b"calc(100cqw + 1cqmin + 1cqmax)", Dimension.Length, false, &context, 0.0, 7.5), "zero-sized physical container and missing logical block axis stay distinct")
+}
+test effect fn containerLengthUnitsAndMixedCalc() ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run containerLengthCases() |> Effect.provideMut<Allocator>(&mut allocator)
+}
