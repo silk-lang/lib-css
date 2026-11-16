@@ -62,7 +62,7 @@ test effect fn droppedFeaturesAreCountedAndStrictCompilationFails() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   let css = b".x { made-up:1; made-up:2; width:var(bad) } @unknown {} @container (width>10px) { .x{width:20px} }"
   let sheet = run compile.compile(css, &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
-  run Testing.expect(sheet.diagnostics.length() == 4, "distinct dropped features reported")
+  run Testing.expect(sheet.diagnostics.length() == 3, "distinct dropped features reported")
   run Testing.expect(sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Property && sheet.diagnostics.asSlice()[0].count == 2, "repeated feature aggregated")
   let mut strict = Options.make()
   strict.strict = true
@@ -379,4 +379,18 @@ test effect fn containerUnitDeclarationsRoundTripWithoutSource() ! CompileError 
     run Testing.expect(decoded.buffers.asSlice()[i].source().length == 0, "decoded unit declarations require no original stylesheet")
     i = i + 1
   }
+}
+
+
+test effect fn sizeContainerRulesCompileStrictlyAndOtherQueriesReportTheirLimits()
+  ! AssertionError<'static> | CompileError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut options = Options.make()
+  options.strict = true
+  let valid = run compile.compile(b".card{container:panel / inline-size;width:10cqw}@container panel (inline-size>=20em){.child{width:50cqi}}", &options) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(valid.diagnostics.length() == 0 && valid.containerPrograms.length() == 1, "size queries and container units need no unsupported diagnostics")
+  let other = run compile.compile(b"@container style(--theme:dark){.x{color:red}}@container scroll-state(stuck:top){.x{color:blue}}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(other.diagnostics.length() == 1 && other.diagnostics.asSlice()[0].kind == DiagnosticKind.Unsupported && other.diagnostics.asSlice()[0].count == 2, "style and scroll-state queries remain diagnosed")
+  let invalid = run compile.compile(b"@container none (width){.x{width:2px}}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(invalid.diagnostics.length() == 1 && invalid.diagnostics.asSlice()[0].kind == DiagnosticKind.AtRule && invalid.resolver.rules().length == 0, "invalid container grammar drops the entire rule")
 }

@@ -190,9 +190,13 @@ impl Compiler {
       let index = self.sheet.conditions.length()
       if index >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: rule.prelude.start } }
       let program = if kind == ConditionKind.Container { self.sheet.containerPrograms.length() } else { NONE }
-      if kind == ConditionKind.Container { run self.sheet.containerPrograms.append(run container_queries.parse(source, rule.prelude, &self.limits)) }
+      if kind == ConditionKind.Container {
+        let queries = run container_queries.parse(source, rule.prelude, &self.limits)
+        if !queries.valid { run self.report(DiagnosticKind.AtRule, b"container") return }
+        if queries.unsupported { run self.report(DiagnosticKind.Unsupported, b"container condition") }
+        run self.sheet.containerPrograms.append(move queries)
+      }
       run self.sheet.conditions.append(Condition { kind: kind, parent: condition, buffer: 0, range: rule.prelude, program: program })
-      if kind == ConditionKind.Container { run self.report(DiagnosticKind.Unsupported, b"container") }
       run self.group(source, rule.body, parent, layer, index, depth + 1)
       return
     }

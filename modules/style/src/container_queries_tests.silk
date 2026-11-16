@@ -239,10 +239,13 @@ effect fn programs() ! CssError | CompileError | DecodeError | OutOfMemoryError 
   run Testing.expect(query.valid && (run container_queries.matches(&deepBuffer, &query, &env, &limits)), "conditions deeper than the inline evaluation stack use bounded spill storage")
   env.querySize = Option<QuerySize>.some(QuerySize { width: 400.0, height: 120.0 })
   run Testing.expect(!(run container_queries.matches(&deepBuffer, &query, &env, &limits)), "deep programs evaluate the final operand after the container changes")
-  let invalid = run compile.compile(b"@container none (width){button{width:1px}}@container (width), and (height){button{height:1px}}", &Options.make())
-  let invalidBytes = run invalid.encode()
-  let recovered = run Sheet.decode(invalidBytes.asSlice(), &limits)
-  run Testing.expect(!recovered.containerPrograms.asSlice()[0].valid && !recovered.containerPrograms.asSlice()[1].valid, "invalid conditions remain nonmatching through binary recovery")
+  let invalidBuffer = run lexer.tokenize(b"(width), and (height)", &limits)
+  let invalid = run container_queries.parse(&invalidBuffer, invalidBuffer.all(), &limits)
+  let mut writer = Writer.make()
+  run container_queries.encode(&invalid, &mut writer)
+  let mut reader = Reader.make(writer.bytes.asSlice())
+  let recovered = run container_queries.decode(&mut reader, invalidBuffer.all(), &limits)
+  run Testing.expect(!recovered.valid, "invalid conditions remain nonmatching through binary recovery")
 }
 
 test effect fn sizeContainerProgramsPreserveGrammarTruthAndBinaryRoundTrips()

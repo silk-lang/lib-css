@@ -284,8 +284,9 @@ Each resolution resets `MatchContext.containers` and records the reached conditi
 selector matching, including false results. Shared conditions are evaluated once per resolution.
 Hosts retain those records with the element and pseudo target, then call
 `StyleSheets.containersChanged` after layout to detect truth changes without rematching selectors.
-Hosts that omit the operation have no eligible containers. The compiler still reports container
-rules as unsupported until the UI host's containment, query invalidation and relayout are connected.
+Hosts that omit the operation have no eligible containers. Valid size queries compile without
+unsupported diagnostics. Invalid container grammar drops the rule; style and scroll-state
+queries retain unknown truth and produce an unsupported-condition diagnostic.
 Diagnostics aggregate dropped features; `Options.strict` rejects a sheet with diagnostics.
 
 Container length units (`cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`) parse, serialize,
