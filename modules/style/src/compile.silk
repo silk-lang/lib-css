@@ -148,9 +148,17 @@ impl Compiler {
       let text = run nestedSelector(source, rule.prelude, parent)
       let buffer = run lexer.tokenize(text.asSlice(), &self.limits)
       let parsed = run selectors.parse(&buffer, buffer.all(), &[], &self.limits)
-      if let Option<SelectorList>.None = move parsed {
-        run self.report(DiagnosticKind.Selector, text.asSlice())
-        return
+      match &parsed {
+        Option<SelectorList>.Some { value } => {
+          if value.hasPseudoStates() {
+            run self.report(DiagnosticKind.Unsupported, b"pseudo-element state")
+            return
+          }
+        }
+        _ => {
+          run self.report(DiagnosticKind.Selector, text.asSlice())
+          return
+        }
       }
       run self.block(source, rule.body, text.asSlice(), layer, condition, depth + 1)
       return

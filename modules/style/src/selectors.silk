@@ -372,6 +372,15 @@ impl SelectorList {
     }
     return false
   }
+
+  pub fn hasPseudoStates(self: &Self) -> bool {
+    let mut i: usize = 0
+    while i < self.simples.length() {
+      if let Test.ElementState { .. } = self.simples.asSlice()[i].test { return true }
+      i = i + 1
+    }
+    return false
+  }
 }
 
 fn localArms(ast: &SelectorList, first: usize, depth: usize) -> bool {

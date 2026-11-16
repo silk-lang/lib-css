@@ -251,6 +251,9 @@ its default `None` matches ordinary elements. Normal rule arms do not match gene
 and mixed selector lists retain the specificity of the matching arm. `pseudoStates` supplies
 states on the pseudo-element itself, separately from origin states before the `::before` or
 `::after` selector. These targets survive binary round trips in format version 5.
+The low-level matcher supports these state suffixes, but the stylesheet compiler diagnoses and
+drops rules containing them, matching Chromium 151 (which rejects `::before:hover` and
+`::before:active`). Origin-state selectors such as `:hover::before` remain supported.
 
 `generated_content.parse(input)` returns keywords or an ordered list of strings and `attr()`
 references, including empty strings and string fallbacks. The compiler reports and drops

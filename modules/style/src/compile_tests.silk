@@ -342,3 +342,16 @@ test effect fn unsupportedGeneratedContentIsReportedAndDropped() -> ()
   let failed = run Effect.result(compile.compile(css, &strict)) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &failed { Result<Sheet, CompileError | CssError | OutOfMemoryError>.Failure { .. } => true _ => false }, "strict compilation rejects unsupported content")
 }
+
+test effect fn compiledPseudoStateSuffixesAreDiagnosedWithoutDroppingOriginStates() -> ()
+  ! AssertionError<'static> | CompileError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let css = b".button:hover::before{content:''}.button::before:hover,.button{color:red}.button::after:is(:active){color:blue}"
+  let sheet = run compile.compile(css, &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.resolver.rules().length == 1 && sheet.resolver.rules()[0].selectors.hasPseudoElements(), "origin state remains supported but a list with an unsupported suffix is dropped")
+  run Testing.expect(sheet.diagnostics.length() == 1 && sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Unsupported && sheet.diagnostics.asSlice()[0].count == 2, "pseudo state suffixes produce one aggregated feature diagnostic")
+  let mut strict = Options.make()
+  strict.strict = true
+  let rejected = run Effect.result(compile.compile(css, &strict)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(match &rejected { Result<Sheet, CompileError | CssError | OutOfMemoryError>.Failure { .. } => true _ => false }, "strict mode rejects pseudo-element state suffixes")
+}
