@@ -266,6 +266,15 @@ test effect fn invalidKeyframeNamesAndOffsetsDoNotBecomeExecutableFrames() -> ()
   run Testing.expect(equal(sheet.keyframes.asSlice()[1].name.asSlice(), b"none"), "quoted reserved names remain valid names")
 }
 
+test effect fn keyframeCustomPropertiesReportTheirUnsupportedAnimation() -> ()
+  ! AssertionError<'static> | CompileError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(b"@keyframes fade{from{--alpha:0;opacity:var(--alpha)}to{--alpha:1;opacity:var(--alpha)}}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 1 && sheet.diagnostics.asSlice()[0].count == 2
+    && equal(sheet.diagnostics.asSlice()[0].feature.asSlice(), b"keyframe custom properties"), "unsupported animated custom properties are counted for build warnings and strict mode")
+  run Testing.expect(sheet.declarations.length() == 2, "ordinary keyframe declarations still retain variable references")
+}
+
 import sheet { Keyframe, Keyframes, NONE }
 import tokens { TokenRange }
 import silk.collections.bytes { Bytes }

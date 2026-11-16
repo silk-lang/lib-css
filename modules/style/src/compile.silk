@@ -267,7 +267,11 @@ impl Compiler {
       if !validation.valid {
         run self.report(DiagnosticKind.Value, name)
       } else if declaration_values.customName(name) {
-        run self.sheet.declarations.append(Declaration.Custom { name: run Bytes.copy(name), buffer: 0, range: declaration.value, important: declaration.important })
+        if keyframe {
+          run self.report(DiagnosticKind.Unsupported, b"keyframe custom properties")
+        } else {
+          run self.sheet.declarations.append(Declaration.Custom { name: run Bytes.copy(name), buffer: 0, range: declaration.value, important: declaration.important })
+        }
       } else if let Option<Property>.Some { value: property } = catalog.lookup(name) {
         if validation.hasVariables {
           run self.sheet.declarations.append(Declaration.Pending { property: property, buffer: 0, range: declaration.value, important: declaration.important })
