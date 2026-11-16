@@ -6,6 +6,7 @@ import cascade
 import declaration_values
 import variables { VariableStore, ScopeId, RegistrationError }
 import variables
+import scope_cache { Cache }
 import values { Wide, Mode }
 import tokens { Buffers, TokenBuffer, Span, Limits, CssError }
 import input { Input, TokenRef }
@@ -22,6 +23,7 @@ pub struct InlineCustom<'name, 'tokens> {
 }
 
 pub struct Inputs {
+  scopes: Cache,
   baseBuffers: usize,
   baseCatalog: usize,
   pub buffers: Buffers<'static>,
@@ -104,7 +106,7 @@ impl Inputs {
     }
     let baseBuffers = buffers.owned().length
     let baseCatalog = catalog.length()
-    return Inputs { baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
+    return Inputs { scopes: Cache.make(), baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
   }
 
   /// Builds only the custom-property part of the cascade; ordinary declarations do not add work.
@@ -142,10 +144,16 @@ impl Inputs {
       }
       i = i + 1
     }
-    return run self.variables.build(self.buffers.view(), self.catalog.asSlice(), candidates.asSlice(), parent, limits)
+    if inline.length == 0 {
+      if let Option<ScopeId>.Some { value } = self.scopes.find(parent, candidates.asSlice(), limits) { return value }
+    }
+    let scope = run self.variables.build(self.buffers.view(), self.catalog.asSlice(), candidates.asSlice(), parent, limits)
+    if inline.length == 0 { run self.scopes.insert(parent, move candidates, limits, scope) }
+    return scope
   }
 
   pub fn resetScopes(self: &mut Self) -> () {
+    self.scopes.reset()
     self.variables.resetScopes()
     self.buffers.truncateOwned(self.baseBuffers)
     self.catalog.truncate(self.baseCatalog)

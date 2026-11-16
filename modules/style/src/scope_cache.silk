@@ -1,0 +1,86 @@
+import cascade { Candidate }
+import cascade
+import tokens { Limits }
+import variables { ScopeId }
+import silk.collections.list { List }
+import silk.collections.hash_map { HashMap }
+import silk.collections.hash { Hash }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.usize
+
+struct Entry {
+  parent: usize,
+  scope: ScopeId,
+  candidates: List<Candidate>,
+  limits: Limits,
+  next: usize,
+}
+
+pub struct Cache { entries: List<Entry>, heads: HashMap<u64, usize>, bytes: usize }
+
+fn parentIndex(parent: Option<ScopeId>) -> usize {
+  return match parent { Option.Some { value } => value.index _ => usize.MAX }
+}
+
+fn key(parent: Option<ScopeId>, candidates: &[Candidate]) -> u64 {
+  let mut result = Hash.mix(&Hash.seed(1069), usize.toU64(parentIndex(parent)))
+  let mut i: usize = 0
+  while i < candidates.length {
+    result = Hash.combine(result, usize.toU64(candidates[i].declaration))
+    i = i + 1
+  }
+  return result
+}
+
+fn sameLimits(a: &Limits, b: &Limits) -> bool {
+  return a.maxInputBytes == b.maxInputBytes && a.maxStorageBytes == b.maxStorageBytes
+    && a.maxTokens == b.maxTokens && a.maxDepth == b.maxDepth
+    && a.maxRules == b.maxRules && a.maxDeclarations == b.maxDeclarations
+}
+
+fn same(entry: &Entry, parent: Option<ScopeId>, candidates: &[Candidate], limits: &Limits) -> bool {
+  if entry.parent != parentIndex(parent) || entry.candidates.length() != candidates.length || !sameLimits(&entry.limits, limits) { return false }
+  let mut i: usize = 0
+  while i < candidates.length {
+    let previous = entry.candidates.asSlice()[i]
+    if previous.declaration != candidates[i].declaration || cascade.compare(previous.priority, candidates[i].priority) != 0 { return false }
+    i = i + 1
+  }
+  return true
+}
+
+impl Cache {
+  pub fn make() -> Cache {
+    return Cache { entries: List<Entry>.make(), heads: HashMap<u64, usize>.make(Hash.seed(1087)), bytes: 0 }
+  }
+
+  pub fn reset(self: &mut Self) -> () {
+    self.entries.truncate(0)
+    self.heads.clear()
+    self.bytes = 0
+  }
+
+  pub fn find(self: &Self, parent: Option<ScopeId>, candidates: &[Candidate], limits: &Limits) -> Option<ScopeId> {
+    let mut at = match self.heads.get(key(parent, candidates)) { Option.Some { value } => value _ => usize.MAX }
+    while at != usize.MAX {
+      let entry = &self.entries.asSlice()[at]
+      if same(entry, parent, candidates, limits) { return Option<ScopeId>.some(entry.scope) }
+      at = entry.next
+    }
+    return Option<ScopeId>.None
+  }
+
+  pub effect fn insert(self: &mut Self, parent: Option<ScopeId>, candidates: List<Candidate>, limits: &Limits, scope: ScopeId) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    if self.entries.length() >= 128 || candidates.capacity() >= limits.maxStorageBytes / 128 { return () }
+    let cost = (candidates.capacity() + 1) * 128
+    if self.bytes > limits.maxStorageBytes - cost { return () }
+    let hash = key(parent, candidates.asSlice())
+    let next = match self.heads.get(hash) { Option.Some { value } => value _ => usize.MAX }
+    let index = self.entries.length()
+    run self.entries.append(Entry { parent: parentIndex(parent), scope: scope, candidates: move candidates, limits: limits.*, next: next })
+    drop run self.heads.insert(hash, index)
+    self.bytes = self.bytes + cost
+  }
+}
