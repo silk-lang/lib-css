@@ -267,7 +267,46 @@ pub struct Dependency {
 }
 impl Copy for Dependency {}
 
+/// `SelectorList.reads` bits: what a match can depend on besides the element's own name,
+/// attributes and state and those of its ancestors.
+/// `:first-child`, `:last-child` and `:only-child`.
+pub const READS_EDGE: u32 = 1
+/// `:empty`.
+pub const READS_EMPTY: u32 = 2
+/// `:nth-*()` and the `*-of-type` pseudo-classes: the element's index among its siblings.
+pub const READS_INDEX: u32 = 4
+/// `+` and `~`: which elements precede it.
+pub const READS_SIBLINGS: u32 = 8
+/// `:has()`.
+pub const READS_DESCENDANTS: u32 = 16
+
 impl SelectorList {
+  /// The `READS_*` bits of every compound and nested selector, including failed logical arms.
+  pub fn reads(self: &Self) -> u32 {
+    let mut result: u32 = 0
+    let mut i: usize = 0
+    while i < self.compounds.length() {
+      let relation = self.compounds.asSlice()[i].relation
+      if relation == Combinator.Adjacent || relation == Combinator.Sibling { result = result | READS_SIBLINGS }
+      i = i + 1
+    }
+    i = 0
+    while i < self.simples.length() {
+      match &self.simples.asSlice()[i].test {
+        Test.Function { kind, .. } => { if kind == FunctionKind.Has { result = result | READS_DESCENDANTS } }
+        Test.Nth { .. } => { result = result | READS_INDEX }
+        Test.State { pseudo } => {
+          if pseudo == Pseudo.Empty { result = result | READS_EMPTY }
+          else if pseudo == Pseudo.FirstChild || pseudo == Pseudo.LastChild || pseudo == Pseudo.OnlyChild { result = result | READS_EDGE }
+          else if pseudo == Pseudo.FirstType || pseudo == Pseudo.LastType || pseudo == Pseudo.OnlyType { result = result | READS_INDEX }
+        }
+        _ => {}
+      }
+      i = i + 1
+    }
+    return result
+  }
+
   /// Builds invalidation keys once for this program, including failed logical arms.
   /// Relational rules deliberately use coarse reach; simple class rules stay local.
   pub effect fn dependencies(self: &Self) -> List<Dependency>

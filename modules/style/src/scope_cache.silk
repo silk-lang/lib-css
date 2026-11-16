@@ -17,6 +17,9 @@ struct Entry {
   next: usize,
 }
 
+/// Distinct scopes one epoch retains. A larger tree makes the host restyle from the root each pass.
+pub const SCOPE_LIMIT: usize = 4096
+
 pub struct Cache { entries: List<Entry>, heads: HashMap<u64, usize>, bytes: usize, complete: bool }
 
 fn parentIndex(parent: Option<ScopeId>) -> usize {
@@ -76,7 +79,7 @@ impl Cache {
 
   pub effect fn insert(self: &mut Self, parent: Option<ScopeId>, candidates: List<Candidate>, limits: &Limits, scope: ScopeId) -> ()
     ! OutOfMemoryError ? &mut Allocator {
-    if self.entries.length() >= 128 || candidates.capacity() >= limits.maxStorageBytes / 128 { self.complete = false
+    if self.entries.length() >= SCOPE_LIMIT || candidates.capacity() >= limits.maxStorageBytes / 128 { self.complete = false
       return () }
     let cost = (candidates.capacity() + 1) * 128
     if self.bytes > limits.maxStorageBytes - cost { self.complete = false

@@ -14,6 +14,7 @@ import silk.core.result { Result }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.option { Option }
 import silk.testing.testing { Testing, AssertionError }
+import silk.num.u32
 
 // svg(0) > g(1) > rect(2), circle(3), rect(4); svg > foreign rect(5).
 // The host reports whitespace-only content at 2, but non-whitespace text at 4.
@@ -690,4 +691,29 @@ test effect fn partPseudoTargetsMatchOnlyTheirOriginAndOwnTarget() -> ()
   run checkTarget(b"#chosen, .hot::selection", 2, true, 1, 0, 0, 0, PseudoTarget.None, 0)
   run invalid(b"rect::placeholder > .hot")
   run invalid(b"rect:has(::selection)")
+}
+
+effect fn readsOf(text: &[u8]) -> u32
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(text, &limits)
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &limits)
+  return match &parsed { Option<SelectorList>.Some { value } => value.reads() _ => 4294967295 }
+}
+
+effect fn readsBody() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  run Testing.expect((run readsOf(b".a .b > .c:hover[data-x]:not(.d):is(.e, :root)")) == 0, "names, attributes, states and ancestors read nothing else")
+  run Testing.expect((run readsOf(b":where(.stack > :not(:last-child))")) == selectors.READS_EDGE, "nested edge tests are seen")
+  run Testing.expect((run readsOf(b".a:first-child, .b:only-child")) == selectors.READS_EDGE, "every selector of the list counts")
+  run Testing.expect((run readsOf(b".a:empty")) == selectors.READS_EMPTY, "empty")
+  run Testing.expect((run readsOf(b".a:nth-child(2n+1)")) == selectors.READS_INDEX && (run readsOf(b"li:last-of-type")) == selectors.READS_INDEX, "indexes and types")
+  run Testing.expect((run readsOf(b".a + .b")) == selectors.READS_SIBLINGS && (run readsOf(b".a ~ .b .c")) == selectors.READS_SIBLINGS, "sibling combinators at any depth")
+  run Testing.expect(((run readsOf(b".a:has(.b)")) & selectors.READS_DESCENDANTS) != 0, "has")
+}
+
+test effect fn selectorListsReportWhatTheyReadBeyondAncestors() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run readsBody() |> Effect.provideMut<Allocator>(&mut allocator)
 }
