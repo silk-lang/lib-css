@@ -395,6 +395,47 @@ pub fn dimension(value: &Value, context: &Context) -> Option<Dimension> {
   return Option<Dimension>.some(Dimension.px(finite(reduced.pixels)))
 }
 
+/// A width, height, minimum, maximum or flex basis: a `dimension`, or `min()` or `max()` of
+/// lengths and percentages, such as `min(100%, 600px)`. The lengths come to one length and
+/// the percentages to one percentage; a term that mixes the two has no form here.
+pub fn size(value: &Value, context: &Context) -> Option<Dimension> {
+  if let Option<Dimension>.Some { value: found } = dimension(value, context) {
+    return Option<Dimension>.some(found)
+  }
+  if let Value.Math { operator, values } = &value.* {
+    let least = operator == MathOperator.Min
+    if !least && operator != MathOperator.Max {
+      return Option<Dimension>.None
+    }
+    let items = values.asSlice()
+    let mut length: f32 = 0.0
+    let mut percent: f32 = 0.0
+    let mut lengths = false
+    let mut percents = false
+    let mut i: usize = 0
+    while i < items.length {
+      let term = linear(&items[i], context)
+      if !term.valid || term.scalar || (term.pixels != 0.0 && term.percent != 0.0) {
+        return Option<Dimension>.None
+      }
+      if term.percent != 0.0 {
+        // The basis of a size is never negative, so percentages compare as numbers.
+        if !percents || (term.percent < percent) == least { percent = term.percent }
+        percents = true
+      } else {
+        let pixels = finite(term.pixels)
+        if !lengths || (pixels < length) == least { length = pixels }
+        lengths = true
+      }
+      i = i + 1
+    }
+    if lengths && percents {
+      return Option<Dimension>.some(if least { Dimension.least(length, percent) } else { Dimension.most(length, percent) })
+    }
+  }
+  return Option<Dimension>.None
+}
+
 /// A computed size as written: lengths in `px`, percentages 0 to 100.
 pub effect fn fromDimension(value: Dimension) -> Value ! OutOfMemoryError ? &mut Allocator {
   match value.kind {
@@ -412,6 +453,18 @@ pub effect fn fromDimension(value: Dimension) -> Value ! OutOfMemoryError ? &mut
       run terms.append(Value.Unit { value: value.value, unit: Unit.Px })
       run terms.append(Value.Unit { value: value.percent * 100.0, unit: Unit.Percent })
       return Value.Math { operator: MathOperator.Sum, values: move terms }
+    }
+    DimensionKind.Least => {
+      let mut terms = List<Value>.make()
+      run terms.append(Value.Unit { value: value.value, unit: Unit.Px })
+      run terms.append(Value.Unit { value: value.percent * 100.0, unit: Unit.Percent })
+      return Value.Math { operator: MathOperator.Min, values: move terms }
+    }
+    DimensionKind.Most => {
+      let mut terms = List<Value>.make()
+      run terms.append(Value.Unit { value: value.value, unit: Unit.Px })
+      run terms.append(Value.Unit { value: value.percent * 100.0, unit: Unit.Percent })
+      return Value.Math { operator: MathOperator.Max, values: move terms }
     }
     DimensionKind.MinContent => {
       return Value.Keyword { value: Keyword.MinContent }
