@@ -103,8 +103,9 @@ pub fn resolve(value: Dimension, basis: f32, definite: bool, fallback: f32) -> f
   if value.kind == DimensionKind.Length { return value.value }
   if definite {
     if value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc { return value.value + value.percent * basis }
-    if value.kind == DimensionKind.Least { return min(value.value, value.percent * basis) }
-    if value.kind == DimensionKind.Most { return max(value.value, value.percent * basis) }
+    if value.kind == DimensionKind.Least { return min(value.bound, value.value + value.percent * basis) }
+    if value.kind == DimensionKind.Most { return max(value.bound, value.value + value.percent * basis) }
+    if value.kind == DimensionKind.Clamp { return max(value.value, min(value.percent * basis, value.bound)) }
   }
   return fallback
 }
@@ -123,8 +124,9 @@ pub fn edges(value: Edges, basis: f32, definite: bool) -> ResolvedEdges {
 fn minimumLength(value: Dimension, basis: f32, definite: bool) -> f32 {
   let mut used: f32 = 0.0
   if definite { used = basis }
-  if value.kind == DimensionKind.Least { return min(value.value, value.percent * used) }
-  if value.kind == DimensionKind.Most { return max(value.value, value.percent * used) }
+  if value.kind == DimensionKind.Least { return min(value.bound, value.value + value.percent * used) }
+  if value.kind == DimensionKind.Most { return max(value.bound, value.value + value.percent * used) }
+  if value.kind == DimensionKind.Clamp { return max(value.value, min(value.percent * used, value.bound)) }
   return value.value + value.percent * used
 }
 @inlineAlways
