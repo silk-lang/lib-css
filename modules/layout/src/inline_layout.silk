@@ -5,7 +5,7 @@ import silk.core.option { Option }
 import silk.mem.box { Box }
 import silk.text.string { String }
 import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min }
-import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, Position }
+import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, Position }
 import tree { Node, NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, TextFragment, TextFragmentKind }
@@ -160,6 +160,64 @@ fn lineIndent(style: &Style, firstFormatted: bool, firstLine: bool, afterForced:
   let selected = (firstLine && (firstFormatted || indent.eachLine)) || (afterForced && indent.eachLine)
   if selected == indent.hanging { return 0.0 }
   return resolve(indent.value, width, true, 0.0)
+}
+
+/// `band` with `slack` taken off its end side: the room balanced lines are fitted in.
+fn narrowed(band: Band, slack: f32, rtl: bool) -> Band {
+  if slack <= 0.0 { return band }
+  let mut result = band
+  if rtl { result.left = min(result.right, result.left + slack) }
+  else { result.right = max(result.left, result.right - slack) }
+  return result
+}
+
+/// Lines that greedy fitting in `room` makes, by the advances in `prefix` (see the fast fit
+/// in layoutText), counting at most to `limit + 1`.
+fn estimatedLines(tokens: &[TextToken<'_>], points: &[TextBreak], prefix: &[f32], room: f32, limit: usize) -> usize {
+  let mut lines: usize = 0
+  let mut next: usize = 0
+  let mut start: usize = 0
+  while next < points.length && lines <= limit {
+    let mut startUnit = start
+    while startUnit < tokens.length && tokens[startUnit].kind == TextTokenKind.Space { startUnit = startUnit + 1 }
+    let mut chosen = next
+    let mut probe = next
+    while probe < points.length {
+      let point = points[probe]
+      let mut endUnit = point.at.unit
+      while endUnit > startUnit && tokens[endUnit - 1].kind == TextTokenKind.Space { endUnit = endUnit - 1 }
+      let mut estimate: f32 = 0.0
+      if endUnit > startUnit { estimate = prefix[endUnit] - prefix[startUnit] }
+      if probe > next && estimate > room { break }
+      chosen = probe
+      if point.kind == TextBreakKind.Forced { break }
+      probe = probe + 1
+    }
+    lines = lines + 1
+    start = points[chosen].at.unit
+    next = chosen + 1
+  }
+  return lines
+}
+
+/// Balanced text (CSS Text 4 §6.1.1) is wrapped at most this many lines deep, like Chromium.
+const BALANCE_LINES: usize = 6
+
+/// The narrowest room, within `room`, in which greedy fitting still makes as many lines as in
+/// `room`; `room` itself for one line or more than BALANCE_LINES.
+fn balancedWidth(tokens: &[TextToken<'_>], points: &[TextBreak], prefix: &[f32], room: f32) -> f32 {
+  if prefix.length != tokens.length + 1 || room <= 0.0 { return room }
+  let lines = estimatedLines(tokens, points, prefix, room, BALANCE_LINES)
+  if lines <= 1 || lines > BALANCE_LINES { return room }
+  let mut low: f32 = 0.0
+  let mut high = room
+  while high - low > 0.25 {
+    let middle = (low + high) * 0.5
+    if estimatedLines(tokens, points, prefix, middle, lines) <= lines { high = middle }
+    else { low = middle }
+  }
+  // Shaping a line alone can differ from its share of the whole paragraph by a kerning pair.
+  return min(room, high + 1.0)
 }
 
 fn indentBand(band: Band, indent: f32, rtl: bool) -> Band {
@@ -2322,8 +2380,11 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   // width is seldom the final one.
   let recording = clearAtEntry && wraps.length() == 0 && !input.fragmentation.active && style.textAlign != TextAlign.Justify && style.textAlignLast != TextAlign.Justify
     && (input.performLayout || available.kind != AvailableKind.MinContent)
+  // text-wrap: balance fits the lines in the narrowest width that keeps their count, and
+  // aligns them in the full one. It covers the fast-fit case: plain text without floats.
+  let balancing = fastFit && style.textWrapStyle == TextWrapStyle.Balance
   let mut memoFirst = NO_NODE
-  if fitsMemo { memoFirst = memo.linesFor(width) }
+  if fitsMemo && !balancing { memoFirst = memo.linesFor(width) }
   let mut memoLine: usize = 0
   let lineEnds = &mut text.lineEnds
   if fastFit && memoFirst == NO_NODE && memo.prefix.length() != context.tokens.length + 1 {
@@ -2346,6 +2407,12 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       index = index + 1
     }
   }
+  let mut fitWidth = width
+  if balancing {
+    fitWidth = balancedWidth(context.tokens, points.asSlice(), memo.prefix.asSlice(), width)
+    if fitsMemo { memoFirst = memo.linesFor(fitWidth) }
+  }
+  let slack = width - fitWidth
   let initialStart = start
   let initialNext = next
   let initialRealLines = realLines
@@ -2396,7 +2463,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     let mut probedEnd = start
     let mut total: f32 = 0.0
     let mut lineClosed = false
-    let mut band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, 0.0), indent, indentRtl)
+    let mut band = narrowed(indentBand(bfc.band(input.bfcContentOrigin, width, cursor, 0.0), indent, indentRtl), slack, rtl)
     if memoFirst != NO_NODE {
       let point = points.get(memo.ends.get(memoFirst + memoLine))
       let room = band.right - band.left
@@ -2500,7 +2567,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       }
       bfc.restore(checkpoint)
       if hasFloats { run placeFloats(nodes, &mut output, &mut measurer, candidate.items.asSlice(), &candidate.visual, atomics.asMutSlice(), 0, candidate.items.length(), &mut bfc, input.bfcContentOrigin, width, sourceY, metrics.height, axes, leading, &input, box.inset.top) }
-      band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
+      band = narrowed(indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl), slack, rtl)
       while next == first && proposed > band.right - band.left && band.occupied && band.nextBottom > cursor {
         cursor = band.nextBottom
         band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
@@ -2793,7 +2860,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     state.descendantsComplete = state.normalContentComplete && state.pendingFirst == NO_NODE
     run output.resumes.set(id, state)
   }
-  if fitsMemo && memoFirst == NO_NODE && !blocked && next == points.length() { run memo.record(width, lineEnds.asSlice()) }
+  if fitsMemo && memoFirst == NO_NODE && !blocked && next == points.length() { run memo.record(fitWidth, lineEnds.asSlice()) }
   run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
   if recording && !blocked && next == points.length() {
     memo.fitted.valid = true

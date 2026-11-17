@@ -65,6 +65,7 @@ pub fn expands(property: Property) -> bool {
     || property == Property.WebkitLineClamp
     || property == Property.TextWrap
     || property == Property.OverscrollBehavior
+    || property == Property.Overflow
     || property == Property.ScrollMargin
     || property == Property.ScrollMarginBlock
     || property == Property.ScrollMarginInline
@@ -115,6 +116,7 @@ pub effect fn longhand(shorthand: Property, value: &Value, target: Property) -> 
     || shorthand == Property.BorderInlineStyle
     || shorthand == Property.BorderInlineColor
     || shorthand == Property.OverscrollBehavior
+    || shorthand == Property.Overflow
     || shorthand == Property.ScrollMarginBlock
     || shorthand == Property.ScrollMarginInline
     || shorthand == Property.ScrollPaddingBlock

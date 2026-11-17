@@ -25,7 +25,9 @@ import syntax
 import tokens
 import tokens { Kind, Limits, CssError, TokenBuffer, TokenRange }
 import value_cursor { Cursor }
+import silk.collections.bytes { Bytes }
 import silk.collections.list { List }
+import silk.core.effect { Effect }
 import silk.collections.slice { Slice }
 import silk.color.rgba { Rgba }
 import silk.core.option { Option }
@@ -239,10 +241,123 @@ pub effect fn computedValue(engine: &Engine<'_>, style: StyleId, property: Prope
   return Option<Value>.some(run value(css.asSlice()))
 }
 
+fn isEnv(buffer: &TokenBuffer, at: usize) -> bool {
+  return match &buffer.tokens.asSlice()[at].kind {
+    Kind.Function { name } => tokens.insensitive(buffer.text(name), b"env")
+    _ => false
+  }
+}
+
+fn mentionsEnv(buffer: &TokenBuffer, start: usize, end: usize) -> bool {
+  let mut at = start
+  while at < end {
+    if isEnv(buffer, at) { return true }
+    at = at + 1
+  }
+  return false
+}
+
+// The environment variables a host defines. Silk UI has no safe area, title bar or keyboard
+// insets to report yet, so each is 0px.
+// https://drafts.csswg.org/css-env-1/#safe-area-insets
+fn knownEnv(name: &[u8]) -> bool {
+  let sides: [&[u8]; 4] = [b"top", b"right", b"bottom", b"left"]
+  let prefixes: [&[u8]; 3] = [b"safe-area-inset-", b"safe-area-max-inset-", b"keyboard-inset-"]
+  let mut p: usize = 0
+  while p < prefixes.length {
+    let prefix = prefixes[p]
+    if name.length > prefix.length && tokens.insensitive(Slice.view<u8>(name, 0, prefix.length), prefix) {
+      let rest = Slice.view<u8>(name, prefix.length, name.length - prefix.length)
+      let mut i: usize = 0
+      while i < sides.length {
+        if tokens.insensitive(rest, sides[i]) { return true }
+        i = i + 1
+      }
+      if p == 2 && (tokens.insensitive(rest, b"width") || tokens.insensitive(rest, b"height")) { return true }
+    }
+    p = p + 1
+  }
+  return tokens.insensitive(name, b"titlebar-area-x") || tokens.insensitive(name, b"titlebar-area-y")
+    || tokens.insensitive(name, b"titlebar-area-width") || tokens.insensitive(name, b"titlebar-area-height")
+}
+
+/// Spells `start..end` with each `env()` replaced by its value, or by its fallback when the
+/// name is not one the host defines. False when an unknown name has no fallback: the
+/// declaration is then invalid at computed-value time.
+/// https://drafts.csswg.org/css-env-1/#env-function
+effect fn withEnv(buffer: &TokenBuffer, start: usize, end: usize, out: &mut Bytes) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let items = buffer.tokens.asSlice()
+  let source = buffer.source()
+  let mut at = start
+  while at < end {
+    if !isEnv(buffer, at) {
+      let span = items[at].source
+      if span.start <= span.end && span.end <= source.length {
+        run out.append(Slice.view<u8>(source, span.start, span.end - span.start))
+      }
+      at = at + 1
+      continue
+    }
+    let after = afterBlock(buffer, at, end)
+    let close = if items[at].matching + 1 == after { after - 1 } else { after }
+    let first = skipSpace(buffer, at + 1, close)
+    let named = if first < close {
+      match &items[first].kind {
+        Kind.Ident { text } => knownEnv(buffer.text(text))
+        _ => false
+      }
+    } else { false }
+    let mut comma = first
+    while comma < close {
+      let separator = match &items[comma].kind {
+        Kind.Comma => true
+        _ => false
+      }
+      if separator { break }
+      comma = comma + 1
+    }
+    if named {
+      run out.append(b"0px")
+    } else if comma < close {
+      // A space keeps the fallback from fusing with what comes before it.
+      run out.append(b" ")
+      if !run withEnv(buffer, comma + 1, close, &mut out.*) { return false }
+      run out.append(b" ")
+    } else {
+      return false
+    }
+    at = after
+  }
+  return true
+}
+
+effect fn noTokens(error: CssError) -> Option<TokenBuffer> {
+  drop error
+  return Option<TokenBuffer>.None
+}
+
+effect fn tokenized(css: &[u8]) -> Option<TokenBuffer> ! CssError | OutOfMemoryError ? &mut Allocator {
+  return Option<TokenBuffer>.some(run lexer.tokenize(css, &Limits.make()))
+}
+
 /// The value in the tokens `start..end`: its shape, or the source text when it has none.
 pub effect fn valueIn(buffer: &TokenBuffer, start: usize, end: usize) -> Value
   ! OutOfMemoryError
   ? &mut Allocator {
+  if mentionsEnv(buffer, start, end) {
+    let mut css = Bytes.make()
+    if run withEnv(buffer, start, end, &mut css) {
+      match move run Effect.catch<CssError>(tokenized(css.asSlice()), noTokens) {
+        Option<TokenBuffer>.Some { value: spelled } => {
+          let range = spelled.all()
+          return run valueIn(&spelled, range.start, range.end)
+        }
+        _ => {}
+      }
+    }
+  }
   let first = skipSpace(buffer, start, end)
   let last = trimEnd(buffer, first, end)
   let mut one = List<Value>.make()
