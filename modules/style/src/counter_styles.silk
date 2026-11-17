@@ -13,6 +13,7 @@ import silk.core.effect { Effect }
 import silk.core.result { Result }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.i64
+import silk.num.u8
 import silk.num.u32
 import silk.num.u64
 import silk.num.f64
@@ -29,6 +30,23 @@ pub fn named(name: &[u8]) -> Option<CounterStyle> {
     i = i + 1
   }
   return Option<CounterStyle>.None
+}
+
+/// The style's place in the enum, which hosts can store in a few bits.
+pub fn code(style: CounterStyle) -> u8 {
+  return match style {
+    CounterStyle.Disc => 0 CounterStyle.Circle => 1 CounterStyle.Square => 2 CounterStyle.Decimal => 3
+    CounterStyle.DecimalLeadingZero => 4 CounterStyle.LowerRoman => 5 CounterStyle.UpperRoman => 6
+    CounterStyle.LowerAlpha => 7 CounterStyle.UpperAlpha => 8 CounterStyle.LowerGreek => 9
+    CounterStyle.DisclosureOpen => 10 CounterStyle.DisclosureClosed => 11 CounterStyle.None => 12
+  }
+}
+
+/// The style `code` gives back; any other code is `decimal`.
+pub fn ofCode(code: u8) -> CounterStyle {
+  let styles = [CounterStyle.Disc, CounterStyle.Circle, CounterStyle.Square, CounterStyle.Decimal, CounterStyle.DecimalLeadingZero, CounterStyle.LowerRoman, CounterStyle.UpperRoman, CounterStyle.LowerAlpha, CounterStyle.UpperAlpha, CounterStyle.LowerGreek, CounterStyle.DisclosureOpen, CounterStyle.DisclosureClosed, CounterStyle.None]
+  if u8.toUsize(code) < styles.length { return styles[u8.toUsize(code)] }
+  return CounterStyle.Decimal
 }
 
 /// A style that writes the counter's value, as opposed to one fixed symbol.
