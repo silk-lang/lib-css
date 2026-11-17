@@ -133,7 +133,7 @@ impl<'m> MeasureRequest<'m> {
   // Coordinates are logical line-left/block-start offsets in this content box.
   // If a line cannot fit a constrained band, retry at nextBlockOffset.
   pub fn lineSpace(self: &Self, inlineSize: f32, blockOffset: f32, lineBlockSize: f32) -> LineSpace {
-    let band = self.exclusions.band(self.origin, inlineSize, blockOffset, lineBlockSize)
+    let band = self.exclusions.lineBand(self.origin, inlineSize, blockOffset, lineBlockSize)
     let constrained = band.left > 0.0 || band.right < inlineSize
     let mut next = blockOffset
     if constrained { next = band.nextBottom }

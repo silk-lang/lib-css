@@ -2148,7 +2148,11 @@ fn sameViewport(a: &OptionalSize, b: &OptionalSize) -> bool {
 }
 
 effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since: usize, restoring: bool) -> BoxTree<'source> ! OutOfMemoryError ? &mut Allocator {
-  if !restoring { return run Boxes.build(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), WritingMode.HorizontalTb, Direction.Ltr) }
+  if !restoring {
+    let mut built = run Boxes.build(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), WritingMode.HorizontalTb, Direction.Ltr)
+    built.shapes = tree.shapes.asSlice()
+    return move built
+  }
   let boxes = Intrinsic.replace(output.boxNodes, List<BoxNode>.make())
   let styles = Intrinsic.replace(output.anonymousStyles, List<Style>.make())
   let origins = Intrinsic.replace(output.anonymousOrigins, List<usize>.make())
@@ -2160,6 +2164,7 @@ effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since:
   let logged = run tree.scrolledNodes(output.keptScrolls, &mut scrolled)
   let mut nodes = BoxTree.restore(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), move boxes, move styles, move origins, move texts, move first, move last, !logged)
   nodes.columnSets = output.keptColumnSets
+  nodes.shapes = tree.shapes.asSlice()
   let mut at: usize = 0
   while at < scrolled.length() {
     nodes.refreshScroll(scrolled.get(at))

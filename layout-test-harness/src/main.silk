@@ -581,6 +581,7 @@ effect fn applyOps(ops: &[Value], tree: &mut Tree, fonts: usize)
         }
         id = run tree.create(move style)
         run GridStyles.apply(run P.required(op, "style"), &mut tree, id)
+        run Styles.applyShape(run P.required(op, "style"), &mut tree, id)
       }
       if P.has(op, "parent") {
         run tree.insertBefore(run nodeField(op, "parent"), id, run beforeField(op))
@@ -649,6 +650,7 @@ effect fn applyStep(
       }
       run tree.setStyle(id, move style)
       run GridStyles.apply(run P.required(change, "style"), &mut tree, id)
+      run Styles.applyShape(run P.required(change, "style"), &mut tree, id)
     }
     if P.has(change, "text") {
       let text = run String.copy(run P.text(run P.required(change, "text")))
@@ -772,6 +774,7 @@ effect fn execute(document: &Value)
     }
     if !isText {
       run GridStyles.apply(run P.required(node, "style"), &mut tree, NodeId { index: index })
+      run Styles.applyShape(run P.required(node, "style"), &mut tree, NodeId { index: index })
     }
     if tree.styles.asSlice()[tree.nodes.asSlice()[index].styleIndex].fontKey
       >= fixtures.fonts.length() {
