@@ -162,7 +162,7 @@ test effect fn zeroExtentCompletesWithoutAvailableSpace() ! AssertionError<'stat
 
 fn hostFrames<'a>(rects: &'a [Rect]) -> Fragmentainers<'a> {
   return Fragmentainers {
-    rects: Option<&'a [Rect]>.Some { value: rects }, repeatStep: Option<Point>.None,
+    rects: Option<&'a [Rect]>.Some { value: rects }, repeatStep: Option<Point>.None, uniform: Option<Rect>.None,
     contexts: Option<&'a [FragmentainerKind]>.None, ancestors: Option<&'a [FragmentAncestor]>.None,
     kind: FragmentainerKind.Column, writingMode: WritingMode.HorizontalTb,
     direction: Direction.Ltr, firstPageRight: true, rectoOnRight: true,
@@ -339,7 +339,7 @@ test effect fn nestedContextRoutingUsesIdentityRatherThanKindBits() ! OutOfMemor
   let mut pass = run LayoutPass.make(&mut layouts, &mut arena, &sources, &mut passState) |> Effect.provideMut<Allocator>(&mut allocator)
   pass.frames = Fragmentainers {
     rects: Option<&[Rect]>.Some { value: &rects }, contexts: Option<&[FragmentainerKind]>.Some { value: &contexts },
-    ancestors: Option<&[FragmentAncestor]>.Some { value: &ancestors }, repeatStep: Option<Point>.None,
+    ancestors: Option<&[FragmentAncestor]>.Some { value: &ancestors }, repeatStep: Option<Point>.None, uniform: Option<Rect>.None,
     kind: FragmentainerKind.Column, writingMode: WritingMode.HorizontalTb,
     direction: Direction.Ltr, firstPageRight: true, rectoOnRight: true,
   }
@@ -389,7 +389,7 @@ test effect fn hostAncestryValidationRejectsChangingIdentityGeometry() ! Asserti
   ]
   let mut frames = Fragmentainers {
     rects: Option<&[Rect]>.Some { value: &rects }, contexts: Option.Some { value: contextSlice },
-    ancestors: Option<&[FragmentAncestor]>.Some { value: &ancestors }, repeatStep: Option<Point>.None,
+    ancestors: Option<&[FragmentAncestor]>.Some { value: &ancestors }, repeatStep: Option<Point>.None, uniform: Option<Rect>.None,
     kind: FragmentainerKind.Column, writingMode: WritingMode.HorizontalTb,
     direction: Direction.Ltr, firstPageRight: true, rectoOnRight: true,
   }

@@ -1,0 +1,191 @@
+import fragmentation { FragmentationError }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.collections.list { List }
+import silk.num.usize
+import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.testing.testing { Testing, AssertionError }
+import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize }
+import style { Style, Dimension, ColumnFill, ColumnSpan, BreakBetween, Direction, Display, DisplayOutside, DisplayInside, FlexDirection }
+import tree { Tree, LayoutTree, InvalidNode, NodeId }
+import engine { compute }
+
+// Measured leaves are `key` pixels tall and as wide as offered; fonts are 10px.
+struct Leaves {}
+impl Measure for Leaves {
+  fn font(provider: &mut Self, request: FontRequest) -> FontMetrics {
+    drop provider
+    drop request
+    let mut font = FontMetrics.zero()
+    font.fontSize = 10.0
+    return font
+  }
+  fn scrollbars(provider: &mut Self, request: ScrollbarRequest) -> ScrollbarMetrics {
+    drop provider
+    drop request
+    return ScrollbarMetrics.zero()
+  }
+  fn natural(provider: &mut Self, key: usize) -> NaturalDimensions {
+    drop provider
+    drop key
+    return NaturalDimensions.none()
+  }
+  fn measure(provider: &mut Self, key: usize, request: MeasureRequest<'_>) -> Measured {
+    drop provider
+    let mut width: f32 = 30.0
+    if request.known.widthDefinite { width = request.known.width }
+    let height = usize.toF32(key)
+    return Measured { size: Size { width: width, height: height }, scrollableOverflow: Rect { x: 0.0, y: 0.0, width: width, height: height }, contentBlockSize: height, firstBaselines: BaselineSet.uniform(height), lastBaselines: BaselineSet.uniform(height), hasBaseline: true, hasLineBoxes: false }
+  }
+}
+impl TextMeasure for Leaves {
+  fn beginTextLayout(provider: &mut Self) { drop provider }
+  effect fn analyze(provider: &mut Self, context: TextContext<'_, '_>, output: &mut List<TextBreak>) -> TextAnalysis ! OutOfMemoryError | TextError ? &mut Allocator {
+    drop provider
+    drop output
+    fail TextError { source: context.tokens[0].source, message: "box-only fixture does not support text" }
+  }
+  effect fn shape(provider: &mut Self, request: TextShapeRequest<'_, '_>, output: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator {
+    drop provider
+    drop output
+    fail TextError { source: request.context.tokens[0].source, message: "box-only fixture does not support text" }
+  }
+}
+
+effect fn leaf(tree: &mut Tree, parent: NodeId, height: usize) -> NodeId ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let id = run tree.append(parent, Style.make())
+  run tree.setMeasurement(id, height)
+  return id
+}
+effect fn rectOf(output: &LayoutTree, id: NodeId) -> Rect ! InvalidNode {
+  let mut rects = run output.sourceRects(id)
+  return match move rects.next() { Option<Rect>.Some { value } => value
+    Option<Rect>.None => Rect.zero() }
+}
+effect fn expectAt(output: &LayoutTree, id: NodeId, x: f32, y: f32, label: string<'static>) ! InvalidNode | AssertionError<'static> {
+  let rect = run rectOf(output, id)
+  run Testing.expect(rect.x == x && rect.y == y, label)
+}
+
+fn columns(count: u32) -> Style {
+  let mut style = Style.make()
+  style.width = Dimension.px(100.0)
+  style.columnCount = count
+  style.columnGap = Dimension.px(10.0)
+  return move style
+}
+
+effect fn balancedCounts() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let rootId = tree.root()
+  let container = run tree.append(rootId, columns(2))
+  let a = run leaf(&mut tree, container, 10)
+  let b = run leaf(&mut tree, container, 10)
+  let c = run leaf(&mut tree, container, 10)
+  let d = run leaf(&mut tree, container, 10)
+  let mut output = LayoutTree.make()
+  let mut host = Leaves {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  let bounds = run rectOf(&output, container)
+  run Testing.expect(bounds.width == 100.0 && bounds.height == 20.0, "two balanced columns are half as tall as the content")
+  run expectAt(&output, a, 0.0, 0.0, "first leaf opens the first column")
+  run expectAt(&output, b, 0.0, 10.0, "second leaf follows it")
+  run expectAt(&output, c, 55.0, 0.0, "third leaf opens the second column, past the gap")
+  run expectAt(&output, d, 55.0, 10.0, "fourth leaf follows it")
+  let rect = run rectOf(&output, a)
+  run Testing.expect(rect.width == 45.0, "columns share the width less the gap")
+  // Uneven content: the height grows until three leaves fit in two columns.
+  run tree.remove(d)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  let uneven = run rectOf(&output, container)
+  run Testing.expect(uneven.height == 20.0, "three leaves balance to two leaves per column at most")
+  run expectAt(&output, c, 55.0, 0.0, "the third leaf still opens the second column")
+  // A fresh compute gives the same result as the incremental one.
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectAt(&fresh, c, 55.0, 0.0, "fresh layout matches")
+  // A leaf taller than the balanced height raises the columns to fit it.
+  run tree.setMeasurement(a, 30)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  let tall = run rectOf(&output, container)
+  run Testing.expect(tall.height == 30.0, "columns are as tall as their tallest unbreakable piece")
+  run expectAt(&output, b, 55.0, 0.0, "what follows it moves to the next column")
+  // As a column flex item the container is as tall as its balanced columns.
+  let mut flexStyle = Style.make()
+  flexStyle.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  flexStyle.flexDirection = FlexDirection.Column
+  flexStyle.width = Dimension.px(100.0)
+  let flex = run tree.append(rootId, flexStyle)
+  let item = run tree.append(flex, columns(2))
+  let mut k: usize = 0
+  while k < 4 {
+    drop run leaf(&mut tree, item, 10)
+    k = k + 1
+  }
+  let after = run leaf(&mut tree, flex, 5)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  let inFlex = run rectOf(&output, item)
+  let below = run rectOf(&output, after)
+  run Testing.expect(inFlex.height == 20.0 && below.y == inFlex.y + 20.0, "a column flex item is as tall as its balanced columns")
+}
+test effect fn multicolBalancesColumnCount() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run balancedCounts() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn widthsSpansAndFill() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  // column-width 30px in 100px with a 10px gap: floor(110 / 40) = 2 columns of 45px.
+  let mut style = columns(0)
+  style.columnWidth = 30.0
+  let rootId = tree.root()
+  let container = run tree.append(rootId, style)
+  let a = run leaf(&mut tree, container, 10)
+  let b = run leaf(&mut tree, container, 10)
+  let mut spanStyle = Style.make()
+  spanStyle.multicolSpan = ColumnSpan.All
+  let spanner = run tree.append(container, spanStyle)
+  run tree.setMeasurement(spanner, 5)
+  let c = run leaf(&mut tree, container, 10)
+  let d = run leaf(&mut tree, container, 10)
+  let mut output = LayoutTree.make()
+  let mut host = Leaves {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectAt(&output, a, 0.0, 0.0, "first set, first column")
+  run expectAt(&output, b, 55.0, 0.0, "first set, second column")
+  let span = run rectOf(&output, spanner)
+  run Testing.expect(span.x == 0.0 && span.y == 10.0 && span.width == 100.0, "the spanner takes the whole width below the first set")
+  run expectAt(&output, c, 0.0, 15.0, "second set starts below the spanner")
+  run expectAt(&output, d, 55.0, 15.0, "and balances on its own")
+  let bounds = run rectOf(&output, container)
+  run Testing.expect(bounds.height == 25.0, "the container holds both sets and the spanner")
+  // A forced column break moves what follows to the next column.
+  let mut broken = Style.make()
+  broken.breakBefore = BreakBetween.Column
+  run tree.setStyle(b, broken)
+  run tree.setStyle(spanner, Style.make())
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectAt(&output, b, 55.0, 0.0, "break-before: column starts a column")
+  // column-fill: auto in a fixed height fills columns in turn.
+  let mut filled = columns(2)
+  filled.height = Dimension.px(30.0)
+  filled.columnFill = ColumnFill.Auto
+  run tree.setStyle(container, filled)
+  run tree.setStyle(b, Style.make())
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectAt(&output, spanner, 0.0, 20.0, "fill: the first column takes what fits")
+  run expectAt(&output, c, 55.0, 0.0, "fill: the next leaf goes to the second column")
+  run expectAt(&output, d, 55.0, 10.0, "fill: and the rest after it")
+  // Right to left columns run from the right edge.
+  let mut rtl = columns(2)
+  rtl.direction = Direction.Rtl
+  run tree.setStyle(container, rtl)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  let first = run rectOf(&output, a)
+  run Testing.expect(first.x == 55.0, "rtl: the first column is on the right")
+}
+test effect fn multicolWidthsSpannersBreaksAndFill() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run widthsSpansAndFill() |> Effect.provideMut<Allocator>(&mut allocator)
+}

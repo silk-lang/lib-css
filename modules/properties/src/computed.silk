@@ -273,6 +273,9 @@ pub enum BoxDecorationBreak { Slice, Clone }
 pub enum MarginBreak { Auto, Keep, Discard }
 pub enum BreakBetween { Auto, Avoid, Always, All, AvoidPage, Page, Left, Right, Recto, Verso, AvoidColumn, Column, AvoidRegion, Region }
 pub enum BreakInside { Auto, Avoid, AvoidPage, AvoidColumn, AvoidRegion }
+// Multi-column layout (CSS Multicol 1).
+pub enum ColumnFill { Balance, Auto, BalanceAll }
+pub enum ColumnSpan { None, All }
 
 // Paint and text. These are the computed values a painter reads; layout ignores them.
 
@@ -608,4 +611,10 @@ impl Equal for BreakBetween {
 }
 impl Equal for BreakInside {
   fn equals(left: &BreakInside, right: &BreakInside) -> bool { return left.* == right.* }
+}
+impl Equal for ColumnFill {
+  fn equals(left: &ColumnFill, right: &ColumnFill) -> bool { return left.* == right.* }
+}
+impl Equal for ColumnSpan {
+  fn equals(left: &ColumnSpan, right: &ColumnSpan) -> bool { return left.* == right.* }
 }

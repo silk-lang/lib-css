@@ -4,7 +4,7 @@ import silk.core.ownership { Copy }
 import silk.core.option { Option }
 import silk.text.string { String }
 import geometry { Point }
-import style { SizeContainment, Style, Display, DisplayOutside, DisplayInside, WritingMode, Direction, Align, Float, Position, BreakBetween, Visibility, DimensionKind, Overflow }
+import style { SizeContainment, Style, Display, DisplayOutside, DisplayInside, WritingMode, Direction, Align, Float, Position, BreakBetween, Visibility, DimensionKind, Overflow, ColumnSpan, WhiteSpaceCollapse }
 import tree { Node, Measurement, NO_NODE }
 import context { outOfFlow, scrollable, overflowForAxis }
 import grid_style { GridTemplate }
@@ -24,6 +24,9 @@ pub struct BoxNode {
   pub firstForSource: bool, pub lastForSource: bool,
   pub anonymousBlock: bool, pub blockify: bool, pub independentRoot: bool,
   pub firstFormattedRun: bool,
+  // Multi-column layout: a column set lays out its one column flow child
+  // once per column (see multicol.silk).
+  pub columnSet: bool, pub columnFlow: bool,
   pub needsFragmentGeometry: bool,
   pub fragmentMonolithic: bool,
   // Propagation can depend on a descendant's computed flex lines.
@@ -51,12 +54,14 @@ pub struct BoxTree<'a> {
   pub grids: &'a [GridTemplate],
   pub gridNames: &'a [String],
   textStyles: List<usize>,
+  // Whether any box is a column set (see columnChildren).
+  pub columnSets: bool,
 }
 impl<'tree> BoxTree<'tree> {
   // A box tree built from these sources at an earlier revision, when no
   // change since could alter which boxes are generated.
   pub fn restore<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [GridTemplate], gridNames: &'a [String], boxes: List<BoxNode>, anonymousStyles: List<Style>, anonymousOrigins: List<usize>, anonymousText: List<bool>, firstBySource: List<usize>, lastBySource: List<usize>, copyScrolls: bool) -> BoxTree<'a> {
-    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, sources: sources, styles: styles, grids: grids, gridNames: gridNames, textStyles: List<usize>.make() }
+    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, sources: sources, styles: styles, grids: grids, gridNames: gridNames, textStyles: List<usize>.make(), columnSets: false }
     if !copyScrolls { return move result }
     let values = result.boxes.asMutSlice()
     let mut index: usize = 0
@@ -97,6 +102,11 @@ impl<'tree> BoxTree<'tree> {
     return &self.styles[node.styleIndex]
   }
 
+  // Column flows break with the fragmentation code, which reads what
+  // prepareFragmentation resolves.
+  pub fn prepareColumns(self: &mut Self) {
+    if self.columnSets { self.prepareFragmentation(WritingMode.HorizontalTb) }
+  }
   // Generated parents precede their children. Resolve continuation ancestry
   // and boundary dependencies once, not on each speculative fragment.
   pub fn prepareFragmentation(self: &mut Self, frameMode: WritingMode) {
@@ -357,7 +367,8 @@ impl<'tree> BoxTree<'tree> {
     }
     // Writing Modes 4 3.2 compares against the nearest box-generating parent;
     // contents and generated wrappers do not substitute a source parent here.
-    let independent = kind != BoxKind.Inline && (style.sizeContainment != SizeContainment.None || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || display.insideIs(DisplayInside.TableCell) || display.insideIs(DisplayInside.TableCaption) || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
+    let multicol = kind == BoxKind.Block && !measured && style.multicol()
+    let independent = kind != BoxKind.Inline && (multicol || style.sizeContainment != SizeContainment.None || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || display.insideIs(DisplayInside.TableCell) || display.insideIs(DisplayInside.TableCaption) || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
     let node = BoxNode {
       source: source, styleOwner: source, anonymousStyle: NO_NODE, styleIndex: self.sources[source].styleIndex, kind: kind,
       parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE,
@@ -366,6 +377,7 @@ impl<'tree> BoxTree<'tree> {
       interruptionFirst: NO_NODE, interruptionLast: NO_NODE,
       anonymousBlock: false, blockify: blockify, independentRoot: independent,
       firstFormattedRun: false,
+      columnSet: false, columnFlow: false,
       needsFragmentGeometry: false,
       fragmentMonolithic: false,
       beforeControl: false, dynamicBefore: false,
@@ -413,11 +425,71 @@ impl<'tree> BoxTree<'tree> {
     // Replaced content is opaque even if the source API contains descendants.
     // Measured leaves retain their provider key; construction invents no text.
     // A column's children are not rendered (CSS 2 §17.2).
-    if !replaced && !measured && !(tablePart && display.insideIs(DisplayInside.TableColumn)) {
+    if multicol {
+      run self.columnChildren(source, id, writingMode)
+    } else if !replaced && !measured && !(tablePart && display.insideIs(DisplayInside.TableColumn)) {
       let mut nested = Flow.make(id)
       run self.children(source, &mut nested, NO_NODE, writingMode)
       run self.finishFlow(&mut nested)
     }
+  }
+
+  // A multi-column container's children: runs of content in column sets,
+  // each a column set box holding one column flow box, split at spanners
+  // (`column-span: all` children), which stay the container's own children.
+  // Collapsible whitespace between spanners makes no column set.
+  effect fn columnChildren(self: &mut Self, source: usize, id: usize, writingMode: WritingMode) ! OutOfMemoryError ? &mut Allocator {
+    let collapsible = self.style(id).whiteSpaceCollapse == WhiteSpaceCollapse.Collapse
+    let mut flow = Flow.make(NO_NODE)
+    let mut child = self.sources[source].firstChild
+    while child != NO_NODE {
+      let next = self.sources[child].nextSibling
+      if self.spanner(child) {
+        if flow.container != NO_NODE {
+          run self.finishFlow(&mut flow)
+          flow = Flow.make(NO_NODE)
+        }
+        let mut outer = Flow.make(id)
+        run self.construct(child, &mut outer, NO_NODE, writingMode)
+        run self.finishFlow(&mut outer)
+      } else if flow.container != NO_NODE || !(collapsible && self.blankText(child)) {
+        if flow.container == NO_NODE { flow = Flow.make(run self.columnSet(id)) }
+        run self.construct(child, &mut flow, NO_NODE, writingMode)
+      }
+      child = next
+    }
+    if flow.container != NO_NODE { run self.finishFlow(&mut flow) }
+  }
+  fn spanner(self: &Self, source: usize) -> bool {
+    if self.sources[source].isText() { return false }
+    let style = &self.styles[self.sources[source].styleIndex]
+    return style.multicolSpan == ColumnSpan.All && !style.display.isNone() && !style.display.isContents()
+      && style.display.outsideIs(DisplayOutside.Block) && style.float == Float.None && !outOfFlow(style)
+  }
+  fn blankText(self: &Self, source: usize) -> bool {
+    if !self.sources[source].isText() { return false }
+    return match self.sources[source].text() {
+      Option<string>.Some { value } => documentWhitespace(value)
+      Option<string>.None => true
+    }
+  }
+  // Appends a column set and its column flow to `container`; returns the flow.
+  effect fn columnSet(self: &mut Self, container: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
+    let owner = self.node(container).styleOwner
+    let slot = self.anonymousStyles.length()
+    let style = runStyle(self.style(container))
+    run self.anonymousStyles.append(move style)
+    run self.anonymousOrigins.append(owner)
+    run self.anonymousText.append(false)
+    self.columnSets = true
+    let mut set = anonymous(BoxKind.Block, owner, slot)
+    set.columnSet = true
+    set.independentRoot = true
+    let setId = run self.append(set, container)
+    let mut flow = anonymous(BoxKind.Block, owner, slot)
+    flow.columnFlow = true
+    flow.independentRoot = true
+    return run self.append(flow, setId)
   }
 
   effect fn finishFlow(self: &mut Self, flow: &mut Flow) ! OutOfMemoryError ? &mut Allocator {
@@ -460,6 +532,11 @@ fn runStyle(parent: &Style) -> Style {
   let mut inlineOverflow = parent.overflowX
   if parent.writingMode != WritingMode.HorizontalTb { inlineOverflow = parent.overflowY }
   style.textOverflowEllipsis = parent.textOverflowEllipsis && inlineOverflow != Overflow.Visible
+  // Column sets read these from the same style (see columnSet).
+  style.columnCount = parent.columnCount
+  style.columnWidth = parent.columnWidth
+  style.columnGap = parent.columnGap
+  style.columnFill = parent.columnFill
   return move style
 }
 
@@ -521,6 +598,7 @@ fn anonymous(kind: BoxKind, owner: usize, slot: usize) -> BoxNode {
     interruptionFirst: NO_NODE, interruptionLast: NO_NODE,
     anonymousBlock: false, blockify: false, independentRoot: false,
     firstFormattedRun: kind == BoxKind.InlineFormatting,
+    columnSet: false, columnFlow: false,
     needsFragmentGeometry: false,
     fragmentMonolithic: false,
     beforeControl: false, dynamicBefore: false,
@@ -535,7 +613,7 @@ pub effect fn build<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [Gr
     boxes: List<BoxNode>.make(), anonymousStyles: List<Style>.make(),
     anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
     firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), sources: sources,
-    styles: styles, grids: grids, gridNames: gridNames, textStyles: List<usize>.make(),
+    styles: styles, grids: grids, gridNames: gridNames, textStyles: List<usize>.make(), columnSets: false,
   }
   run result.boxes.reserveExact(sources.length + 1)
   run result.firstBySource.reserveExact(sources.length)

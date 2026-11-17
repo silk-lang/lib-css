@@ -1,0 +1,289 @@
+// Multi-column layout (CSS Multicol 1). Box construction gives a multi-column
+// container one column set per run of content between spanners, each holding
+// one column flow (see BoxTree.columnChildren). A column set lays out its flow
+// once per column with the fragmentation code: each column is a fragmentainer
+// and holds one fragment of the flow, so content splits between columns as it
+// does between pages, with its break rules. A set nested in another
+// fragmentation context lays out as one column.
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.usize
+import silk.num.u32
+import silk.num.f32
+import silk.core.option { Option }
+import silk.core.ownership { Copy }
+import geometry { Layout, Measure, FontRequest, OptionalSize, AvailableSpace, AvailableKind, Size, Point, Rect, max, min }
+import style { Style, DimensionKind, Direction, ColumnFill }
+import tree { NO_NODE }
+import box_tree { BoxTree }
+import context { Input, ResolvedBox, childrenInput, resolve, UNBOUNDED }
+import engine { layoutNode, probeNode }
+import layout_pass { LayoutPass }
+import text { TextMeasure, TextError }
+import fragmentation { FragmentationError, Fragmentainers }
+import breaks { FragmentainerKind, BreakKinds, BreakRelaxation, nextRelaxation }
+
+// Balancing raises the column height at most this many times before it lets
+// the content overflow into more columns.
+const BALANCE_TRIES: usize = 16
+// Columns a set may add past its count when its height is fixed or forced
+// breaks ask for more.
+const MAX_COLUMNS: usize = 1000
+
+struct Columns { count: usize, width: f32, gap: f32 }
+impl Copy for Columns {}
+
+fn gapOf<M: Measure + TextMeasure>(style: &Style, measurer: &mut M, available: f32) -> f32 {
+  if style.columnGap.kind == DimensionKind.Normal {
+    let font = Measure.font(&mut measurer, FontRequest { key: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.direction })
+    return font.fontSize
+  }
+  return max(0.0, resolve(style.columnGap, available, true, 0.0))
+}
+
+// Multicol 1 §3.4: the used column count and width for an available inline size.
+fn columnsFor(style: &Style, available: f32, gap: f32) -> Columns {
+  let mut count = u32.toUsize(style.columnCount)
+  if style.columnWidth >= 0.0 {
+    let width = max(1.0, style.columnWidth)
+    let fit = f32.toUsize(f32.floor(max(0.0, available + gap) / (width + gap)))
+    let mut allowed = max(1.0, usize.toF32(fit))
+    if count == 0 || usize.toF32(count) > allowed { count = f32.toUsize(allowed) }
+  }
+  if count == 0 { count = 1 }
+  let width = max(0.0, (available - usize.toF32(count - 1) * gap) / usize.toF32(count))
+  return Columns { count: count, width: width, gap: gap }
+}
+
+// The column flow's request for one column of `columns`.
+fn flowInput(nodes: &BoxTree<'_>, set: usize, input: &Input, box: &ResolvedBox, width: f32) -> Input {
+  let parent = OptionalSize { width: width, height: 0.0, widthDefinite: true, heightDefinite: false }
+  let mut request = childrenInput(input, nodes.style(set), box, parent)
+  request.blockRoot = true
+  request.availableWidth = AvailableSpace.definite(width)
+  request.availableHeight = AvailableSpace.maxContent()
+  request.known = OptionalSize { width: width, height: 0.0, widthDefinite: true, heightDefinite: false }
+  request.intrinsicWidth = false
+  request.intrinsicHeight = false
+  request.shrinkToFit = false
+  request.bfcContentOrigin = Point { x: 0.0, y: 0.0 }
+  request.gridContext = 0
+  return request
+}
+
+fn subtreeEnd(nodes: &BoxTree<'_>, id: usize) -> usize {
+  let mut end = id + 1
+  let mut at = id
+  while true {
+    if at + 1 > end { end = at + 1 }
+    let first = nodes.node(at).firstChild
+    if first != NO_NODE { at = first
+      continue }
+    while at != id && nodes.node(at).nextSibling == NO_NODE { at = nodes.node(at).parent }
+    if at == id { break }
+    at = nodes.node(at).nextSibling
+  }
+  return end
+}
+
+// The size of a column set's contents, and with performLayout its columns.
+// A size probe lays the columns out and takes them back.
+pub effect fn layoutColumnSet<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let style = nodes.style(id)
+  let flow = nodes.node(id).firstChild
+  let mut result = Layout.zero()
+  if flow == NO_NODE {
+    result.size = Size { width: box.size.width, height: box.inset.vertical() }
+    if box.size.heightDefinite { result.size.height = box.size.height }
+    return result
+  }
+  if !box.size.widthDefinite {
+    // Multicol 1 §3.4 sizing: a column's intrinsic size, times the count, plus gaps.
+    let mut probe = flowInput(nodes, id, input, box, 0.0)
+    probe.performLayout = false
+    probe.baselines = false
+    probe.fragmentation.active = false
+    probe.intrinsicWidth = true
+    probe.known.widthDefinite = false
+    probe.availableWidth = input.availableWidth
+    run probeNode(nodes, &mut output, &mut measurer, flow, &probe)
+    let mut column = output.boxes[flow].size.width
+    let gap = gapOf(style, &mut measurer, 0.0)
+    if style.columnWidth >= 0.0 {
+      let width = max(1.0, style.columnWidth)
+      if input.availableWidth.kind == AvailableKind.MinContent { column = min(column, width) } else { column = max(column, width) }
+    }
+    let mut count = u32.toUsize(style.columnCount)
+    if count == 0 { count = 1 }
+    result.size = Size { width: column * usize.toF32(count) + gap * usize.toF32(count - 1) + box.inset.horizontal(), height: output.boxes[flow].size.height + box.inset.vertical() }
+    return result
+  }
+  let content = max(0.0, box.size.width - box.inset.horizontal())
+  let columns = columnsFor(style, content, gapOf(style, &mut measurer, content))
+  let mut limit = UNBOUNDED
+  if box.size.heightDefinite { limit = max(0.0, box.size.height - box.inset.vertical()) }
+  else if input.parent.heightDefinite { limit = input.parent.height }
+  if box.max.height < UNBOUNDED { limit = min(limit, max(0.0, box.max.height - box.inset.vertical())) }
+  let checkpoint = output.checkpoint()
+  let height = run columnsLayout(nodes, &mut output, &mut measurer, id, flow, input, box, columns, limit)
+  if !input.performLayout { output.restoreCheckpoint(checkpoint) }
+  output.closeCheckpoint(checkpoint)
+  result.size = Size { width: box.size.width, height: height + box.inset.vertical() }
+  if box.size.heightDefinite { result.size.height = box.size.height }
+  return result
+}
+
+// Lays the flow out in columns at a balanced height, at most `limit`;
+// returns the column height used.
+effect fn columnsLayout<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, set: usize, flow: usize, input: &Input, box: &ResolvedBox, columns: Columns, limit: f32) -> f32 ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let base = flowInput(nodes, set, input, box, columns.width)
+  // The flow in one column: its height, to balance from.
+  let mut probe = base
+  probe.performLayout = false
+  probe.fragmentation.active = false
+  run probeNode(nodes, &mut output, &mut measurer, flow, &probe)
+  let total = output.boxes[flow].size.height
+  let style = nodes.style(set)
+  let filling = style.columnFill == ColumnFill.Auto && limit < UNBOUNDED
+  if total <= 0.0 && !filling {
+    let mut request = base
+    request.performLayout = input.performLayout
+    let mut layout = run layoutNode(nodes, &mut output, &mut measurer, flow, &request)
+    layout.location = Point { x: columnX(nodes, set, box, columns, 0), y: box.inset.top }
+    run output.store(flow, &layout, input.performLayout)
+    return 0.0
+  }
+  run output.beginColumns()
+  let end = subtreeEnd(nodes, flow)
+  let mut height = total / usize.toF32(columns.count)
+  if filling { height = limit }
+  height = max(1.0, min(height, limit))
+  let mut tries: usize = 0
+  while true {
+    let attempt = output.checkpoint()
+    let last = filling || height >= limit || tries >= BALANCE_TRIES
+    let mut allowed = columns.count
+    if last { allowed = MAX_COLUMNS }
+    let placed = run fillColumns(nodes, &mut output, &mut measurer, set, flow, &base, box, columns, height, allowed)
+    // Unbreakable content taller than the columns overflows them: raise the
+    // height to hold it, as long as the height may grow.
+    let fits = placed.reach <= height + 0.01
+    if placed.complete && !fits && !last {
+      output.restoreCheckpoint(attempt)
+      output.closeCheckpoint(attempt)
+      height = min(limit, placed.reach)
+      tries = tries + 1
+      continue
+    }
+    if placed.complete || last {
+      output.closeCheckpoint(attempt)
+      output.resumes.resetRange(flow, end)
+      return height
+    }
+    output.restoreCheckpoint(attempt)
+    output.closeCheckpoint(attempt)
+    // Raise the height by the content left over, shared between the columns.
+    let shortage = max(1.0, max(0.0, total - placed.used) / usize.toF32(columns.count))
+    height = min(limit, height + shortage)
+    if placed.used >= total && total > 0.0 { height = min(limit, max(height, placed.tallest + 1.0)) }
+    tries = tries + 1
+  }
+  return height
+}
+
+struct Placed { complete: bool, used: f32, tallest: f32, reach: f32 }
+impl Copy for Placed {}
+
+fn columnX(nodes: &BoxTree<'_>, set: usize, box: &ResolvedBox, columns: Columns, index: usize) -> f32 {
+  let step = usize.toF32(index) * (columns.width + columns.gap)
+  if nodes.style(set).direction == Direction.Rtl {
+    return box.size.width - box.inset.right - columns.width - step
+  }
+  return box.inset.left + step
+}
+
+// Lays out up to `allowed` columns of `height`; whether the flow finished.
+effect fn fillColumns<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, set: usize, flow: usize, base: &Input, box: &ResolvedBox, columns: Columns, height: f32, allowed: usize) -> Placed ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let savedFrame = output.frame
+  let parent = output.fragmentParent
+  let mut frames = Fragmentainers.empty()
+  frames.kind = FragmentainerKind.Column
+  frames.writingMode = nodes.style(set).writingMode
+  frames.direction = nodes.style(set).direction
+  frames.uniform = Option<Rect>.Some { value: Rect { x: 0.0, y: 0.0, width: columns.width, height: height } }
+  frames.repeatStep = Option<Point>.Some { value: Point { x: columns.width + columns.gap, y: 0.0 } }
+  let savedFrames = Intrinsic.replace(output.frames, move frames)
+  let mut kinds = BreakKinds.none()
+  kinds.add(FragmentainerKind.Column)
+  let mut result = Placed { complete: false, used: 0.0, tallest: 0.0, reach: 0.0 }
+  let mut index: usize = 0
+  while index < allowed {
+    output.frame = index
+    output.fragmentParent = parent
+    let state = output.resumes.get(flow)
+    if state.notBeforeFrame <= index {
+      let mut request = base.*
+      // Text breaks across columns only in a laid out pass; a probe's columns
+      // are taken back by layoutColumnSet's checkpoint.
+      request.performLayout = true
+      request.fragmentation.active = true
+      request.fragmentation.offset = 0.0
+      request.fragmentation.limit = height
+      request.fragmentation.kind = FragmentainerKind.Column
+      request.fragmentation.contextKinds = kinds
+      request.fragmentation.boundaryKinds = kinds
+      request.fragmentation.contextStart = index == 0
+      request.fragmentation.marginStart = true
+      request.fragmentation.marginEnd = true
+      request.fragmentation.canBreakBefore = false
+      request.fragmentation.relaxation = BreakRelaxation.Strict
+      request.fragmentation.forcedStart = state.beforeHandled && state.requested.kinds.any() && !state.started
+      let placed = run fitColumn(nodes, &mut output, &mut measurer, flow, &request)
+      if placed {
+        let mut layout = output.boxes[flow]
+        result.used = result.used + layout.size.height
+        result.tallest = max(result.tallest, layout.size.height)
+        result.reach = max(result.reach, layout.scrollableOverflow.y + layout.scrollableOverflow.height)
+        layout.location = Point { x: columnX(nodes, set, box, columns, index), y: box.inset.top }
+        layout.size.height = height
+        run output.store(flow, &layout, true)
+      }
+    }
+    if output.resumes.get(flow).contentComplete {
+      result.complete = true
+      break
+    }
+    index = index + 1
+  }
+  output.frames = move savedFrames
+  output.frame = savedFrame
+  output.fragmentParent = parent
+  return result
+}
+
+// One column of the flow, relaxing break rules when nothing fits (Break3 §4.4);
+// false when the column stays empty.
+effect fn fitColumn<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, flow: usize, input: &Input) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let checkpoint = output.checkpoint()
+  let mut request = input.*
+  while true {
+    drop run layoutNode(nodes, &mut output, &mut measurer, flow, &request)
+    let state = output.resumes.get(flow)
+    if !state.blocked {
+      output.closeCheckpoint(checkpoint)
+      return true
+    }
+    let forced = state.before.forced.active(request.fragmentation.activeKinds())
+    output.restoreCheckpoint(checkpoint)
+    if forced.kinds.any() && !state.started && !state.beforeHandled {
+      run output.defer(flow, forced)
+      output.closeCheckpoint(checkpoint)
+      return false
+    }
+    if request.fragmentation.relaxation == BreakRelaxation.Avoidance {
+      output.closeCheckpoint(checkpoint)
+      return false
+    }
+    request.fragmentation.relaxation = nextRelaxation(request.fragmentation.relaxation)
+  }
+  return false
+}

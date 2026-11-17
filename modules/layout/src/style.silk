@@ -41,6 +41,8 @@ pub import properties.computed {
   MarginBreak,
   BreakBetween,
   BreakInside,
+  ColumnFill,
+  ColumnSpan,
 }
 import silk.core.ownership { Copy }
 import silk.core.equal { Equal }
@@ -98,8 +100,13 @@ pub struct Style {
   pub visibility: Visibility,
   pub aspectRatio: f32, pub aspectRatioAuto: bool, pub replaced: bool,
   // CSS 2 §17. A table reads these from its own style; `borderSpacing` is in px.
+  // Multicol 1, kept beside them so the small fields pack: `columnCount` 0 is `auto`,
+  // `columnWidth` below 0 is `auto`, else a px length. `columnGap` is shared with flex and
+  // grid; `normal` is 1em here.
   pub tableLayout: TableLayout, pub borderCollapse: BorderCollapse, pub captionSide: CaptionSide,
+  pub columnFill: ColumnFill, pub multicolSpan: ColumnSpan,
   pub borderSpacingX: f32, pub borderSpacingY: f32,
+  pub columnCount: u32, pub columnWidth: f32,
   // A cell's columns and rows, and a column's columns, from the host's `colspan`,
   // `rowspan` and `span` attributes. A row span of 0 reaches the end of the row group.
   pub columnSpan: usize, pub rowSpan: usize,
@@ -129,6 +136,12 @@ impl Style {
     }
     return self.direction
   }
+  // Whether the box is a multi-column container: a block container with a
+  // column count or width (Multicol 1 §2).
+  pub fn multicol(self: &Self) -> bool {
+    if self.columnCount == 0 && self.columnWidth < 0.0 { return false }
+    return !self.replaced && (self.display.insideIs(DisplayInside.Flow) || self.display.insideIs(DisplayInside.FlowRoot))
+  }
   pub fn usesCentralBaseline(self: &Self) -> bool {
     return (self.writingMode == WritingMode.VerticalRl || self.writingMode == WritingMode.VerticalLr)
       && self.textOrientation != TextOrientation.Sideways
@@ -155,6 +168,7 @@ impl Style {
       marginBreak: MarginBreak.Auto,
       breakBefore: BreakBetween.Auto, breakAfter: BreakBetween.Auto, breakInside: BreakInside.Auto,
       orphans: 2, widows: 2,
+      columnCount: 0, columnWidth: -1.0, columnFill: ColumnFill.Balance, multicolSpan: ColumnSpan.None,
       maxLines: 0, blockEllipsis: false, textOverflowEllipsis: false,
       flexDirection: FlexDirection.Row, flexWrap: FlexWrap.NoWrap,
       flexGrow: 0.0, flexShrink: 1.0, flexBasis: Dimension.auto(), order: 0,
