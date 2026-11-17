@@ -1,7 +1,7 @@
 //! Indexed, per-element stylesheet matching. The host owns declarations and value computation.
 import silk.num.u32
 import cascade { Priority, Candidate }
-import element { ElementTree, MatchContext }
+import element { ElementTree, MatchContext, PseudoTarget }
 import selectors { SelectorList, Specificity, Dependency, Sharing }
 import selectors
 import selector_index { CandidateIndex }
@@ -192,6 +192,17 @@ impl Resolver {
     }
     run context.spend(inline.length)
     run candidates.appendSlice(inline)
+    // A state of the element can still change its pseudo-elements through rules left out here.
+    if context.pseudo == PseudoTarget.None {
+      let later = self.index.pseudoOnly()
+      i = 0
+      while i < later.length {
+        if self.entries.asSlice()[later[i]].enabled || (starting && self.starting.asSlice()[later[i]]) {
+          states = u32.bitOr(states, self.states.asSlice()[later[i]])
+        }
+        i = i + 1
+      }
+    }
     self.candidates = move candidates
     self.matched = move matched
     self.selectedStates = states

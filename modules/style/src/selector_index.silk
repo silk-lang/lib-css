@@ -2,7 +2,7 @@
 //! Sorted fingerprints keep lookup logarithmic even for adversarial collisions. Every collision
 //! remains a candidate, and discovery shares the exact matcher's document-wide work budget.
 import selectors { SelectorList, SubjectKind, SubjectKey }
-import element { ElementTree, MatchContext }
+import element { ElementTree, MatchContext, PseudoTarget }
 import tokens { TokenBuffer, CssError }
 import silk.collections.hash { Hash }
 import silk.collections.list { List }
@@ -46,6 +46,7 @@ fn kindBit(kind: SubjectKind) -> u8 {
     SubjectKind.Class => 2
     SubjectKind.LocalName => 4
     SubjectKind.Any => 0
+    SubjectKind.Never => 0
   }
 }
 
@@ -74,6 +75,8 @@ fn space(byte: u8) -> bool {
 pub struct CandidateIndex {
   entries: List<Entry>,
   fallback: List<usize>,
+  /// Rules with an unkeyed arm on a pseudo-element: candidates only when one is being matched.
+  pseudo: List<usize>,
   seen: List<bool>,
   selected: List<usize>,
   indexedRules: usize,
@@ -85,6 +88,7 @@ impl CandidateIndex {
     return CandidateIndex {
       entries: List<Entry>.make(),
       fallback: List<usize>.make(),
+      pseudo: List<usize>.make(),
       seen: List<bool>.make(),
       selected: List<usize>.make(),
       indexedRules: 0,
@@ -100,6 +104,8 @@ impl CandidateIndex {
     run entries.appendSlice(self.entries.asSlice())
     let mut fallback = run List<usize>.makeWithCapacity(self.fallback.length())
     run fallback.appendSlice(self.fallback.asSlice())
+    let mut pseudo = run List<usize>.makeWithCapacity(self.pseudo.length())
+    run pseudo.appendSlice(self.pseudo.asSlice())
     let mut seen = run List<bool>.makeWithCapacity(self.seen.length())
     let mut i: usize = 0
     while i < self.seen.length() {
@@ -109,6 +115,7 @@ impl CandidateIndex {
     return CandidateIndex {
       entries: move entries,
       fallback: move fallback,
+      pseudo: move pseudo,
       seen: move seen,
       selected: List<usize>.make(),
       indexedRules: self.indexedRules,
@@ -124,6 +131,7 @@ impl CandidateIndex {
     self.indexedRules = usize.MAX
     self.entries.truncate(0)
     self.fallback.truncate(0)
+    self.pseudo.truncate(0)
     self.seen.truncate(0)
     self.selected.truncate(0)
     self.kinds = 0
@@ -137,8 +145,14 @@ impl CandidateIndex {
     run self.seen.append(false)
     let start = self.entries.length()
     let previousKinds = self.kinds
+    let mut unkeyedPseudo = false
     let mut keys = selectors.subjectKeys()
     while let Option<SubjectKey>.Some { value } = keys.next() {
+      if value.kind == SubjectKind.Never { continue }
+      if value.kind == SubjectKind.Any && value.target != PseudoTarget.None {
+        unkeyedPseudo = true
+        continue
+      }
       if value.kind == SubjectKind.Any {
         // One unkeyed arm makes the entire rule a candidate for every element.
         self.entries.truncate(start)
@@ -151,7 +165,11 @@ impl CandidateIndex {
       )
       self.kinds = u8.bitOr(self.kinds, kindBit(value.kind))
     }
+    if unkeyedPseudo { run self.pseudo.append(rule) }
   }
+
+  /// Rules `collect` leaves out while an element itself, not a pseudo-element, is matched.
+  pub fn pseudoOnly(self: &Self) -> &[usize] { return self.pseudo.asSlice() }
 
   pub effect fn finish(self: &mut Self) -> ()
     ! OutOfMemoryError
@@ -224,6 +242,14 @@ impl CandidateIndex {
       let rule = self.fallback.asSlice()[i]
       run self.select(rule, &mut context.*)
       i = i + 1
+    }
+    if context.pseudo != PseudoTarget.None {
+      i = 0
+      while i < self.pseudo.length() {
+        let rule = self.pseudo.asSlice()[i]
+        run self.select(rule, &mut context.*)
+        i = i + 1
+      }
     }
     if self.entries.length() == 0 {
       return
