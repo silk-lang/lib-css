@@ -189,6 +189,31 @@ fn invalid() -> Linear {
   return Linear { pixels: 0.0, percent: 0.0, scalar: false, valid: false }
 }
 
+/// `part * factor`, where a part that is not there stays zero under an infinite factor.
+fn scaled(part: f32, factor: f32) -> f32 {
+  if part == 0.0 {
+    return 0.0
+  }
+  return part * factor
+}
+
+/// The length an infinite one is clamped to, in CSS pixels: 2^25, as browsers do.
+const LARGEST_LENGTH: f32 = 33554432.0
+
+/// `pixels` as a length geometry can use: an infinite one is the largest there is, a NaN zero.
+fn finite(pixels: f32) -> f32 {
+  if pixels != pixels {
+    return 0.0
+  }
+  if pixels > LARGEST_LENGTH {
+    return LARGEST_LENGTH
+  }
+  if pixels < 0.0 - LARGEST_LENGTH {
+    return 0.0 - LARGEST_LENGTH
+  }
+  return pixels
+}
+
 fn linear(value: &Value, context: &Context) -> Linear {
   match &value.* {
     Value.Unit { value: amount, unit } => {
@@ -244,10 +269,10 @@ fn linear(value: &Value, context: &Context) -> Linear {
           MathOperator.Product => {
             if next.scalar {
               total.pixels = total.pixels * next.pixels
-              total.percent = total.percent * next.pixels
+              total.percent = scaled(total.percent, next.pixels)
             } else if total.scalar {
               let factor = total.pixels
-              total = Linear { pixels: next.pixels * factor, percent: next.percent * factor, scalar: false, valid: true }
+              total = Linear { pixels: next.pixels * factor, percent: scaled(next.percent, factor), scalar: false, valid: true }
             } else {
               return invalid()
             }
@@ -312,7 +337,7 @@ pub fn number(value: &Value) -> Option<f32> {
 pub fn length(value: &Value, context: &Context) -> Option<f32> {
   let reduced = linear(value, context)
   if reduced.valid && reduced.percent == 0.0 && (!reduced.scalar || reduced.pixels == 0.0) {
-    return Option<f32>.some(reduced.pixels)
+    return Option<f32>.some(finite(reduced.pixels))
   }
   return Option<f32>.None
 }
@@ -344,9 +369,9 @@ pub fn dimension(value: &Value, context: &Context) -> Option<Dimension> {
     return Option<Dimension>.None
   }
   if reduced.percent != 0.0 {
-    return Option<Dimension>.some(Dimension.calc(reduced.pixels, reduced.percent))
+    return Option<Dimension>.some(Dimension.calc(finite(reduced.pixels), reduced.percent))
   }
-  return Option<Dimension>.some(Dimension.px(reduced.pixels))
+  return Option<Dimension>.some(Dimension.px(finite(reduced.pixels)))
 }
 
 /// A computed size as written: lengths in `px`, percentages 0 to 100.
