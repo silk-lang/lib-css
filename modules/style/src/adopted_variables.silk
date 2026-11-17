@@ -8,11 +8,17 @@ import variables { VariableStore, ScopeId, RegistrationError }
 import variables
 import scope_cache { Cache }
 import values { Wide, Mode }
-import tokens { Buffers, TokenBuffer, Span, Limits, CssError }
+import tokens { Buffers, TokenBuffer, Span, Limits, CssError, equal }
 import input { Input, TokenRef }
 import cssom_serialization
 import silk.collections.bytes { Bytes }
 import silk.collections.list { List }
+import silk.collections.hash_map { HashMap }
+import silk.collections.hash { Hash }
+import silk.collections.slice { Slice }
+import silk.core.ownership { Copy }
+import silk.num.u8
+import silk.num.usize
 import silk.core.option { Option }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 
@@ -22,7 +28,15 @@ pub struct InlineCustom<'name, 'tokens> {
   pub priority: Priority,
 }
 
+struct InlineEntry { declaration: usize, next: usize }
+impl Copy for InlineEntry {}
+
+/// Distinct inline custom declarations one epoch retains; past it the host restyles from the root.
+const INLINE_LIMIT: usize = 4096
+
 pub struct Inputs {
+  inline: List<InlineEntry>,
+  inlineHeads: HashMap<u64, usize>,
   scopes: Cache,
   retained: bool,
   baseBuffers: usize,
@@ -107,7 +121,7 @@ impl Inputs {
     }
     let baseBuffers = buffers.owned().length
     let baseCatalog = catalog.length()
-    return Inputs { scopes: Cache.make(), retained: true, baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
+    return Inputs { inline: List<InlineEntry>.make(), inlineHeads: HashMap<u64, usize>.make(Hash.seed(1093)), scopes: Cache.make(), retained: true, baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
   }
 
   /// Repeating the same scope inputs cannot grow storage until this becomes false.
@@ -116,7 +130,6 @@ impl Inputs {
   /// Builds only the custom-property part of the cascade; ordinary declarations do not add work.
   pub effect fn scope(self: &mut Self, matches: &[MatchedCandidate], inline: &[InlineCustom<'_, '_>], parent: Option<ScopeId>, limits: &Limits) -> ScopeId
     ! CssError | OutOfMemoryError ? &mut Allocator {
-    if inline.length != 0 { self.retained = false }
     let mut candidates = List<Candidate>.make()
     let mut i: usize = 0
     while i < matches.length {
@@ -132,29 +145,65 @@ impl Inputs {
     while i < inline.length {
       let item = &inline[i]
       if declaration_values.customName(item.name) {
-        let mut buffer = run item.tokens.copy()
-        let range = buffer.all()
-        let specified = match cascade.wide(&Input.Contiguous { buffer: &buffer, range: range }) {
-          Option<Wide>.Some { value } => Specified.Wide { keyword: value }
-          _ => Specified.Pending { range: range, mode: Mode.Css }
-        }
-        let start = buffer.data.length()
-        run buffer.data.append(item.name)
-        let name = Name { buffer: self.buffers.length(), span: Span { start: start, end: buffer.data.length() } }
         let mut priority = item.priority
         priority.inline = true
-        run candidates.append(Candidate { declaration: self.catalog.length(), priority: priority })
-        run self.catalog.append(Declaration { target: Target.Custom { name: name }, specified: specified, buffer: name.buffer, important: priority.important })
-        run self.buffers.append(move buffer)
+        let declaration = run self.inlineDeclaration(item.name, item.tokens, priority.important)
+        run candidates.append(Candidate { declaration: declaration, priority: priority })
       }
       i = i + 1
     }
-    if inline.length == 0 {
-      if let Option<ScopeId>.Some { value } = self.scopes.find(parent, candidates.asSlice(), limits) { return value }
-    }
+    if let Option<ScopeId>.Some { value } = self.scopes.find(parent, candidates.asSlice(), limits) { return value }
     let scope = run self.variables.build(self.buffers.view(), self.catalog.asSlice(), candidates.asSlice(), parent, limits)
-    if inline.length == 0 { run self.scopes.insert(parent, move candidates, limits, scope) }
+    run self.scopes.insert(parent, move candidates, limits, scope)
     return scope
+  }
+
+  /// The catalog entry of an inline custom property, one for each distinct name, value and
+  /// importance, so that equal inline inputs find the scope built for them before.
+  effect fn inlineDeclaration(self: &mut Self, name: &[u8], tokens: &TokenBuffer, important: bool) -> usize
+    ! OutOfMemoryError ? &mut Allocator {
+    let value = tokens.data.asSlice()
+    let mut hash = Hash.mix(&Hash.seed(1097), if important { 1 } else { 0 })
+    let mut i: usize = 0
+    while i < value.length {
+      hash = Hash.combine(hash, u8.toU64(value[i]))
+      i = i + 1
+    }
+    i = 0
+    while i < name.length {
+      hash = Hash.combine(hash, u8.toU64(name[i]))
+      i = i + 1
+    }
+    let mut at = match self.inlineHeads.get(hash) { Option.Some { value: found } => found _ => usize.MAX }
+    while at != usize.MAX {
+      let entry = self.inline.asSlice()[at]
+      let declaration = &self.catalog.asSlice()[entry.declaration]
+      let stored = &self.buffers.one(declaration.buffer)[0]
+      // The stored buffer is the value's data followed by the name.
+      let data = stored.data.asSlice()
+      if declaration.important == important && stored.sourceLength == tokens.sourceLength && data.length == value.length + name.length
+        && equal(Slice.view<u8>(data, 0, value.length), value) && equal(Slice.view<u8>(data, value.length, name.length), name) {
+        return entry.declaration
+      }
+      at = entry.next
+    }
+    if self.inline.length() >= INLINE_LIMIT { self.retained = false }
+    let mut buffer = run tokens.copy()
+    let range = buffer.all()
+    let specified = match cascade.wide(&Input.Contiguous { buffer: &buffer, range: range }) {
+      Option<Wide>.Some { value: keyword } => Specified.Wide { keyword: keyword }
+      _ => Specified.Pending { range: range, mode: Mode.Css }
+    }
+    let start = buffer.data.length()
+    run buffer.data.append(name)
+    let key = Name { buffer: self.buffers.length(), span: Span { start: start, end: buffer.data.length() } }
+    let declaration = self.catalog.length()
+    run self.catalog.append(Declaration { target: Target.Custom { name: key }, specified: specified, buffer: key.buffer, important: important })
+    run self.buffers.append(move buffer)
+    let next = match self.inlineHeads.get(hash) { Option.Some { value: found } => found _ => usize.MAX }
+    drop run self.inlineHeads.insert(hash, self.inline.length())
+    run self.inline.append(InlineEntry { declaration: declaration, next: next })
+    return declaration
   }
 
   pub fn resetScopes(self: &mut Self) -> () {
@@ -163,6 +212,8 @@ impl Inputs {
     self.variables.resetScopes()
     self.buffers.truncateOwned(self.baseBuffers)
     self.catalog.truncate(self.baseCatalog)
+    self.inline.clear()
+    self.inlineHeads.clear()
   }
 
   /// A pending declaration after substitution. None is invalid at computed-value time.

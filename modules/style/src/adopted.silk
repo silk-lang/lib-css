@@ -319,6 +319,7 @@ impl StyleSheets {
     self.matched.clear()
     self.selectedStates = 0
     context.containers.clear()
+    context.clearWatches()
     let mut candidates = List<Candidate>.make()
     let mut matched = List<MatchedRule>.make()
     let mut states: u32 = 0
