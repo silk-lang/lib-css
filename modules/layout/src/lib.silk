@@ -29,6 +29,7 @@ pub import style {
   BaselineSource,
   TextAlign,
   TextWrap,
+  TextWrapStyle,
   BoxDecorationBreak
 }
 pub import style { WhiteSpaceCollapse, TabSize, TextJustify, TextIndent }
