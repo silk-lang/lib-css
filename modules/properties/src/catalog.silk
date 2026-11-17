@@ -445,9 +445,11 @@ pub enum(u16) Property {
   ShapeOutside,
   ShapeImageThreshold,
   FieldSizing,
+  BackgroundPositionX,
+  BackgroundPositionY,
 }
 
-pub const COUNT: usize = 442
+pub const COUNT: usize = 444
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -893,6 +895,8 @@ pub fn all() -> [Property; COUNT] {
     Property.ShapeOutside,
     Property.ShapeImageThreshold,
     Property.FieldSizing,
+    Property.BackgroundPositionX,
+    Property.BackgroundPositionY,
   ]
 }
 
@@ -1340,6 +1344,8 @@ pub fn index(property: Property) -> usize {
     Property.ShapeOutside => 439
     Property.ShapeImageThreshold => 440
     Property.FieldSizing => 441
+    Property.BackgroundPositionX => 442
+    Property.BackgroundPositionY => 443
   }
 }
 
@@ -1787,6 +1793,8 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.ShapeOutside => b"shape-outside"
     Property.ShapeImageThreshold => b"shape-image-threshold"
     Property.FieldSizing => b"field-sizing"
+    Property.BackgroundPositionX => b"background-position-x"
+    Property.BackgroundPositionY => b"background-position-y"
   }
 }
 
@@ -2977,6 +2985,12 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     21 => {
+      if first == 98 && insensitive(name, b"background-position-x") {
+        return Option<Property>.some(Property.BackgroundPositionX)
+      }
+      if first == 98 && insensitive(name, b"background-position-y") {
+        return Option<Property>.some(Property.BackgroundPositionY)
+      }
       if first == 98 && insensitive(name, b"background-blend-mode") {
         return Option<Property>.some(Property.BackgroundBlendMode)
       }
@@ -3653,6 +3667,8 @@ pub fn inherited(property: Property) -> bool {
     Property.ShapeOutside => false
     Property.ShapeImageThreshold => false
     Property.FieldSizing => false
+    Property.BackgroundPositionX => false
+    Property.BackgroundPositionY => false
   }
 }
 
@@ -4102,6 +4118,8 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.ShapeOutside => b"none"
     Property.ShapeImageThreshold => b"0"
     Property.FieldSizing => b"fixed"
+    Property.BackgroundPositionX => b"0%"
+    Property.BackgroundPositionY => b"0%"
   }
 }
 
@@ -4136,7 +4154,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 365
+    Property.All => 367
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5677,6 +5695,12 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 364 {
         return Property.FieldSizing
+      }
+      if index == 365 {
+        return Property.BackgroundPositionX
+      }
+      if index == 366 {
+        return Property.BackgroundPositionY
       }
     }
     Property.WhiteSpace => {

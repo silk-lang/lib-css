@@ -267,3 +267,28 @@ test effect fn containerShorthandProjectsTypedContainmentAndNames() ! CssError |
   let standalone = run written.declarations(b"container-name: currentcolor; container-name: red") |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &standalone.asSlice()[0].value { Value.Text { css } => sameText(css.asSlice(), b"currentcolor") _ => false }, "standalone names do not become context-dependent colors")
 }
+
+effect fn dropped(source: Property, css: &[u8], target: Property) -> bool
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let declaration = Declaration { property: source, value: run written.value(css), important: false }
+  return (run written.longhand(&declaration, target)).isNone()
+}
+
+effect fn backgroundBody() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let layered = b"linear-gradient(red, red) 0 0 / 10px 10px no-repeat, blue linear-gradient(blue, blue)"
+  run Testing.expect(run projection(Property.Background, layered, Property.BackgroundSize, b"10px 10px, auto"), "one size a layer")
+  run Testing.expect(run projection(Property.Background, layered, Property.BackgroundPosition, b"0 0, 0% 0%"), "one position a layer")
+  run Testing.expect(run projection(Property.Background, layered, Property.BackgroundRepeat, b"no-repeat, repeat"), "one repeat a layer")
+  run Testing.expect(run projection(Property.Background, layered, Property.BackgroundColor, b"rgb(0, 0, 255)"), "the color comes from the last layer")
+  run Testing.expect(run projection(Property.Background, b"center / cover", Property.BackgroundSize, b"cover"), "a keyword size")
+  run Testing.expect(run projection(Property.Background, b"left 5px top / 50% auto", Property.BackgroundPosition, b"left 5px top"), "the position before the size")
+  run Testing.expect(run projection(Property.Background, b"left 5px top / 50% auto", Property.BackgroundSize, b"50% auto"), "a two-value size")
+  run Testing.expect(run dropped(Property.Background, b"red, blue", Property.BackgroundColor), "a color only in the last layer")
+  run Testing.expect(run dropped(Property.Background, b"no-repeat / 10px", Property.BackgroundSize), "a size follows a position")
+  run Testing.expect(run dropped(Property.Background, b"0 no-repeat 0", Property.BackgroundPosition), "a position is one run")
+}
+
+test effect fn backgroundShorthandTakesLayersAndSizes() -> () ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run backgroundBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}

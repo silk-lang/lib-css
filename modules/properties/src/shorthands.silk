@@ -3,7 +3,7 @@
 //! `longhand` answers what one longhand gets from a value written for its shorthand, such as
 //! `margin-left` from `margin: 1px 2px`. A longhand the value leaves out gets its initial
 //! value. The grammars are the common forms, not the whole of each spec: `background` takes
-//! one layer without a size, and `grid` also takes an `auto-flow` axis; area-string templates are not expanded.
+//! keyword-spelled components only (no `repeat-x` or `local`), and `grid` also takes an `auto-flow` axis; area-string templates are not expanded.
 //! A value outside those forms has no expansion, and the caller drops the declaration.
 import catalog { Property }
 import catalog
@@ -16,6 +16,7 @@ import silk.core.option { Option }
 import silk.core.equal { Equal }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.f32
+import silk.num.usize
 
 /// Whether `property` is a shorthand this module expands.
 pub fn expands(property: Property) -> bool {
@@ -940,23 +941,138 @@ effect fn grid(value: &Value, index: usize, automatic: bool) -> Option<Value> ! 
   return Option<Value>.some(run values.clone(&parts.asSlice()[index]))
 }
 
-// `background`: one layer of a color, an image, a position, repeat keywords, an attachment
-// and one or two boxes, in any order. A layer list and the `position / size` form are not
-// expanded. Longhands in catalog order: image, position, size, repeat, attachment, origin,
-// clip, color.
+// `background`: comma-separated layers, each an image, a position with an optional `/ size`,
+// repeat keywords, an attachment and one or two boxes, in any order; the last layer may also
+// hold the color. Longhands in catalog order: image, position, size, repeat, attachment,
+// origin, clip, color. Each longhand but the color gets one value a layer, comma separated.
 effect fn background(value: &Value, index: usize) -> Option<Value>
   ! OutOfMemoryError
   ? &mut Allocator {
-  let count = spaced(value)
   if isText(value) {
     return Option<Value>.None
   }
+  match &value.* {
+    Value.Sequence { separator, values: items } => {
+      if separator == Separator.Comma {
+        let layers = items.asSlice()
+        let mut found = List<Value>.make()
+        let mut k: usize = 0
+        while k < layers.length {
+          match run backgroundLayer(&layers[k], index, k + 1 == layers.length) {
+            Option<Value>.Some { value: part } => {
+              run found.append(move part)
+            }
+            Option<Value>.None => {
+              return Option<Value>.None
+            }
+          }
+          k = k + 1
+        }
+        if index == 7 {
+          return found.pop()
+        }
+        return Option<Value>.some(Value.Sequence { separator: Separator.Comma, values: move found })
+      }
+    }
+    _ => {}
+  }
+  return run backgroundLayer(value, index, true)
+}
+
+// Whether `value` can be a component of `background-size`.
+fn sizeComponent(value: &Value) -> bool {
+  return match &value.* {
+    Value.Unit { .. } => true
+    Value.Math { .. } => true
+    Value.Keyword { value: keyword } => keyword == Keyword.Auto || keyword == Keyword.Cover
+      || keyword == Keyword.Contain
+    _ => false
+  }
+}
+
+// One `background` layer's value for longhand `index`; `last` when the layer may hold the color.
+effect fn backgroundLayer(value: &Value, index: usize, last: bool) -> Option<Value>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  if isText(value) {
+    return Option<Value>.None
+  }
+  // The components, with the ones after a `/` from `slash` on.
+  let mut parts = List<Value>.make()
+  let mut slash = usize.MAX
+  match &value.* {
+    Value.Sequence { separator, values: halves } => {
+      if separator == Separator.Slash {
+        if halves.length() != 2 {
+          return Option<Value>.None
+        }
+        let before = &halves.asSlice()[0]
+        let after = &halves.asSlice()[1]
+        let mut i: usize = 0
+        while i < spaced(before) {
+          run parts.append(run spacedAt(before, i))
+          i = i + 1
+        }
+        slash = parts.length()
+        i = 0
+        while i < spaced(after) {
+          run parts.append(run spacedAt(after, i))
+          i = i + 1
+        }
+      } else if separator == Separator.Comma {
+        return Option<Value>.None
+      }
+    }
+    _ => {}
+  }
+  if parts.length() == 0 {
+    let mut i: usize = 0
+    while i < spaced(value) {
+      run parts.append(run spacedAt(value, i))
+      i = i + 1
+    }
+  }
   let mut counts: [usize; 8] = [0; 8]
-  let limits: [usize; 8] = [1, 4, 0, 2, 1, 2, 0, 1]
+  let limits: [usize; 8] = [1, 4, 1, 2, 1, 2, 0, 1]
   let mut found = List<Value>.make()
+  let mut previous: usize = 8
+  let count = parts.length()
   let mut i: usize = 0
   while i < count {
-    let part = run spacedAt(value, i)
+    if i == slash {
+      // A size follows the position it is written after: one or two components.
+      if previous != 1 {
+        return Option<Value>.None
+      }
+      let mut size = List<Value>.make()
+      while i < count && size.length() < 2 && sizeComponent(&parts.asSlice()[i]) {
+        run size.append(run values.clone(&parts.asSlice()[i]))
+        i = i + 1
+      }
+      if size.length() == 0 {
+        return Option<Value>.None
+      }
+      if size.length() == 2 {
+        let second = &size.asSlice()[1]
+        let first = &size.asSlice()[0]
+        if isKeyword(first, Keyword.Cover) || isKeyword(first, Keyword.Contain)
+          || isKeyword(second, Keyword.Cover)
+          || isKeyword(second, Keyword.Contain) {
+          return Option<Value>.None
+        }
+      }
+      counts[2] = 1
+      previous = 2
+      if index == 2 {
+        if size.length() == 1 {
+          run found.append(size.remove(0))
+        } else {
+          run found.append(values.sequence(move size))
+        }
+      }
+      continue
+    }
+    let part = run values.clone(&parts.asSlice()[i])
     let kind: usize = match &part {
       Value.Color { .. } => 7
       Value.Function { .. } => 0
@@ -970,7 +1086,8 @@ effect fn background(value: &Value, index: usize) -> Option<Value>
           || keyword == Keyword.Center {
           1
         } else if keyword == Keyword.Repeat || keyword == Keyword.NoRepeat
-          || keyword == Keyword.Round {
+          || keyword == Keyword.Round
+          || keyword == Keyword.Space {
           3
         } else if keyword == Keyword.Scroll || keyword == Keyword.Fixed {
           4
@@ -985,10 +1102,18 @@ effect fn background(value: &Value, index: usize) -> Option<Value>
         return Option<Value>.None
       }
     }
+    if kind == 7 && !last {
+      return Option<Value>.None
+    }
+    // A position is one run of components.
+    if kind == 1 && counts[1] > 0 && previous != 1 {
+      return Option<Value>.None
+    }
     counts[kind] = counts[kind] + 1
     if counts[kind] > limits[kind] {
       return Option<Value>.None
     }
+    previous = kind
     if kind == 5 {
       // The first box is the origin and the last one the clip.
       if index == 5 && counts[5] == 1 {
