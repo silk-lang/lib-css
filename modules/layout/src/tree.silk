@@ -112,6 +112,7 @@ fn sameGeneration(a: &Style, b: &Style) -> bool {
   if a.display.outsideIs(DisplayOutside.Block) != b.display.outsideIs(DisplayOutside.Block) || a.display.outsideIs(DisplayOutside.Inline) != b.display.outsideIs(DisplayOutside.Inline) { return false }
   if a.display.insideIs(DisplayInside.Flow) != b.display.insideIs(DisplayInside.Flow) || a.display.insideIs(DisplayInside.FlowRoot) != b.display.insideIs(DisplayInside.FlowRoot) || a.display.insideIs(DisplayInside.Flex) != b.display.insideIs(DisplayInside.Flex) { return false }
   if a.display.insideIs(DisplayInside.Grid) != b.display.insideIs(DisplayInside.Grid) { return false }
+  if a.multicol() != b.multicol() || a.columnSpan != b.columnSpan { return false }
   return a.replaced == b.replaced && a.position == b.position && a.float == b.float && a.writingMode == b.writingMode && a.alignContent == b.alignContent && a.overflowX == b.overflowX && a.overflowY == b.overflowY
 }
 // Box construction drops whitespace-only text between flex and grid items.
@@ -681,6 +682,7 @@ pub struct LayoutTree {
   pub anonymousStyles: List<Style>,
   pub anonymousOrigins: List<usize>, pub anonymousText: List<bool>,
   pub firstBySource: List<usize>, pub lastBySource: List<usize>,
+  pub keptColumnSets: bool,
   pub fragments: FragmentArena,
   pub viewportOverflow: Rect,
   // Spare storage for laying out a changed subtree alone (see the early
@@ -703,7 +705,7 @@ impl LayoutTree {
       boxes: List<Layout>.make(), boxNodes: List<BoxNode>.make(),
       anonymousStyles: List<Style>.make(),
       anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
-      firstBySource: List<usize>.make(), lastBySource: List<usize>.make(),
+      firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), keptColumnSets: false,
       fragments: FragmentArena.make(), viewportOverflow: Rect.zero(),
       scratchBoxes: List<Layout>.make(), scratchFragments: FragmentArena.make(), cutoffMisses: List<CutoffMiss>.make(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(),
     }
@@ -767,6 +769,7 @@ impl LayoutTree {
     self.anonymousText = move constructed.anonymousText
     self.firstBySource = move constructed.firstBySource
     self.lastBySource = move constructed.lastBySource
+    self.keptColumnSets = constructed.columnSets
   }
   pub effect fn getBox(self: &Self, id: BoxId) -> Layout ! InvalidBox {
     if id.index >= self.boxes.length() { fail InvalidBox { index: id.index } }

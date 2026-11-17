@@ -24,6 +24,7 @@ import fragments { FragmentKind, FragmentArena, Fragment }
 import inline_layout { layoutInline, InlineScratch }
 import text { TextMeasure, TextError }
 import fragment_box as FragmentBox
+import multicol { layoutColumnSet }
 import fragmentation { FragmentationError, BoundaryProbe }
 import axes { Axes }
 
@@ -239,6 +240,7 @@ effect fn contentAlgorithm<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   if nodes.style(id).replaced { return replacedContents(nodes.style(id), &request, &resolved, natural) }
   if isFlex(nodes.style(id)) { return run layoutFlex(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if isGrid(nodes.style(id)) { return run layoutGrid(nodes, &mut output, &mut measurer, id, &request, &resolved) }
+  if nodes.node(id).columnSet && output.frame == NO_NODE { return run layoutColumnSet(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   return run layoutBlock(nodes, &mut output, &mut measurer, id, nodes.style(id), &request, &resolved, &mut bfc)
 }
 
@@ -2142,6 +2144,7 @@ effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since:
   let mut scrolled = List<usize>.make()
   let logged = run tree.scrolledNodes(output.keptScrolls, &mut scrolled)
   let mut nodes = BoxTree.restore(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), move boxes, move styles, move origins, move texts, move first, move last, !logged)
+  nodes.columnSets = output.keptColumnSets
   let mut at: usize = 0
   while at < scrolled.length() {
     nodes.refreshScroll(scrolled.get(at))
@@ -2804,7 +2807,8 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   let onlyMarked = tree.revision() >= since && tree.revision() - since == tree.markRevision() - output.keptMarks
   let boxesStand = !kept && output.boxNodes.length() != 0 && onlyMarked && tree.scrollRevision() == output.keptScrolls
   output.cache.gridMemos.settle(boxesStand)
-  let nodes = run boxesFor(tree, &mut output, since, restoringKept || boxesStand)
+  let mut nodes = run boxesFor(tree, &mut output, since, restoringKept || boxesStand)
+  nodes.prepareColumns()
   let restoring = restoringKept
   let sameBoxes = restoring || (kept && Incremental.sameBoxes(output.boxNodes.asSlice(), nodes.boxes.asSlice()))
   // The previous output becomes the snapshot reused subtrees are copied from,

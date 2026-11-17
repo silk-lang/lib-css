@@ -22,3 +22,4 @@ import grid_fragment_tests
 import tree_tests
 
 import containment_tests
+import multicol_tests
