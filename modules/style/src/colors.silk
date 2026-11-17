@@ -2007,6 +2007,17 @@ fn mixSpace(source: &Input<'_>, cursor: &mut Cursor) -> Option<Space> {
   return Option<Space>.None
 }
 
+/// Reads a gradient's `<color-interpolation-method>` (`in <space> [<hue> hue]`) when it is
+/// next. None: it is there but invalid. The tree still interpolates gradients in sRGB.
+pub fn interpolationMethod(source: &Input<'_>, cursor: &mut Cursor) -> Option<bool> {
+  if !cursor.ident(source, b"in") { return Option<bool>.some(false) }
+  let space = match mixSpace(source, &mut cursor.*) { Option<Space>.Some { value } => value _ => { return Option<bool>.None } }
+  let hue = cursor.ident(source, b"shorter") || cursor.ident(source, b"longer")
+    || cursor.ident(source, b"increasing") || cursor.ident(source, b"decreasing")
+  if hue && (!polarSpace(space) || !cursor.ident(source, b"hue")) { return Option<bool>.None }
+  return Option<bool>.some(true)
+}
+
 effect fn mixWeight(source: &Input<'_>, cursor: &mut Cursor) -> Option<f64>
   ! OutOfMemoryError ? &mut Allocator {
   let mut probe = cursor.*

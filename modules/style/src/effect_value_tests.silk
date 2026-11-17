@@ -212,11 +212,28 @@ effect fn gradientCases() -> ()
   run accepts(Property.MaskImage, b"linear-gradient(red 0% 20%, blue)", true)
   run accepts(Property.MaskImage, b"linear-gradient(red 0% 20% 30%, blue)", false)
   run accepts(Property.MaskImage, b"conic-gradient(red, blue)", true)
-  run accepts(Property.MaskImage, b"conic-gradient(from 45deg at 10px 20%, red 0 25%, blue 0.5turn)", true)
-  run accepts(Property.MaskImage, b"repeating-conic-gradient(at left, red 0deg 10deg, blue 10deg 20deg)", true)
+  run accepts(
+    Property.MaskImage,
+    b"conic-gradient(from 45deg at 10px 20%, red 0 25%, blue 0.5turn)",
+    true,
+  )
+  run accepts(
+    Property.MaskImage,
+    b"repeating-conic-gradient(at left, red 0deg 10deg, blue 10deg 20deg)",
+    true,
+  )
   run accepts(Property.MaskImage, b"conic-gradient(from 1px, red, blue)", false)
   run accepts(Property.MaskImage, b"conic-gradient(red 10px, blue)", false)
   run accepts(Property.MaskImage, b"conic-gradient(red)", false)
+  run accepts(Property.MaskImage, b"linear-gradient(to bottom right in oklab, red, blue)", true)
+  run accepts(Property.MaskImage, b"linear-gradient(in lab, red, red)", true)
+  run accepts(Property.MaskImage, b"linear-gradient(in oklch longer hue 45deg, red, blue)", true)
+  run accepts(Property.MaskImage, b"linear-gradient(in srgb longer hue, red, blue)", false)
+  run accepts(Property.MaskImage, b"linear-gradient(in nowhere, red, blue)", false)
+  run accepts(Property.MaskImage, b"linear-gradient(in oklab red, blue)", false)
+  run accepts(Property.MaskImage, b"radial-gradient(in oklab circle at top, red, blue)", true)
+  run accepts(Property.MaskImage, b"radial-gradient(circle at top in hsl, red, blue)", true)
+  run accepts(Property.MaskImage, b"conic-gradient(from 45deg in oklch, red, blue)", true)
 }
 
 // https://www.w3.org/TR/css-shapes-1/#supported-basic-shapes
