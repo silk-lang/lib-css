@@ -3070,6 +3070,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     23 => {
+      if first == 45 && insensitive(name, b"-webkit-background-clip") {
+        return Option<Property>.some(Property.BackgroundClip)
+      }
       if first == 102 && insensitive(name, b"font-variant-east-asian") {
         return Option<Property>.some(Property.FontVariantEastAsian)
       }
