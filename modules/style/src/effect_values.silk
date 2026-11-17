@@ -124,7 +124,12 @@ pub union Image {
   },
   /// `conic-gradient(from <angle> at <position>, ...)`: stop and hint positions are angles or
   /// percentages of a full turn.
-  Conic { pub repeating: bool, pub angle: ExprId, pub position: Position, pub stops: List<GradientStop> },
+  Conic {
+    pub repeating: bool,
+    pub angle: ExprId,
+    pub position: Position,
+    pub stops: List<GradientStop>
+  },
 }
 
 pub struct MaskLayer {
@@ -996,6 +1001,12 @@ effect fn imageInner(
   if !radial {
     let mut direction = Direction.Corner { x: Edge.Center, y: Edge.End }
     let mut header = false
+    let mut method = match colors.interpolationMethod(input, &mut cursor.*) {
+      Option<bool>.Some { value } => value
+      _ => {
+        return Option<Image>.None
+      }
+    }
     if cursor.ident(input, b"to") {
       header = true
       let mut x = Edge.Center
@@ -1028,7 +1039,15 @@ effect fn imageInner(
         _ => {}
       }
     }
-    if header && !cursor.comma(input) {
+    if !method {
+      method = match colors.interpolationMethod(input, &mut cursor.*) {
+        Option<bool>.Some { value } => value
+        _ => {
+          return Option<Image>.None
+        }
+      }
+    }
+    if (header || method) && !cursor.comma(input) {
       return Option<Image>.None
     }
     let list = match run stops(&mut store.*, input, &mut cursor.*, false) {
@@ -1046,7 +1065,22 @@ effect fn imageInner(
   let mut hasSize = false
   let mut header = false
   let mut size = RadialSize.Extent { extent: Extent.FarthestCorner }
+  let mut method = false
   while true {
+    if !method {
+      match colors.interpolationMethod(input, &mut cursor.*) {
+        Option<bool>.Some { value } => {
+          if value {
+            method = true
+            header = true
+            continue
+          }
+        }
+        _ => {
+          return Option<Image>.None
+        }
+      }
+    }
     if !hasShape && cursor.ident(input, b"circle") {
       circle = true
       hasShape = true
@@ -1094,6 +1128,18 @@ effect fn imageInner(
     }
     header = true
   }
+  if !method {
+    match colors.interpolationMethod(input, &mut cursor.*) {
+      Option<bool>.Some { value } => {
+        if value {
+          header = true
+        }
+      }
+      _ => {
+        return Option<Image>.None
+      }
+    }
+  }
   if header && !cursor.comma(input) {
     return Option<Image>.None
   }
@@ -1123,7 +1169,13 @@ effect fn conic(
 ) -> Option<Image>
   ! OutOfMemoryError
   ? &mut Allocator {
-  let mut header = false
+  let mut method = match colors.interpolationMethod(input, &mut cursor.*) {
+    Option<bool>.Some { value } => value
+    _ => {
+      return Option<Image>.None
+    }
+  }
+  let mut header = method
   let mut angle = run dimensions.literal(&mut store.*, 0.0, Unit.Deg)
   if cursor.ident(input, b"from") {
     angle = match run angleWithZero(&mut store.*, input, &mut cursor.*, false) {
@@ -1143,6 +1195,17 @@ effect fn conic(
       }
     }
     header = true
+  }
+  if !method {
+    method = match colors.interpolationMethod(input, &mut cursor.*) {
+      Option<bool>.Some { value } => value
+      _ => {
+        return Option<Image>.None
+      }
+    }
+    if method {
+      header = true
+    }
   }
   if header && !cursor.comma(input) {
     return Option<Image>.None
