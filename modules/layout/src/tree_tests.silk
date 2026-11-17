@@ -6,7 +6,7 @@ import silk.core.result { Result }
 import silk.text.string { String }
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Dimension, Display, DisplayOutside, DisplayInside }
+import style { Style, SizeValue, Display, DisplayOutside, DisplayInside }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize }
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import tree { Tree, LayoutTree, NodeId, InvalidNode, NO_NODE }
@@ -53,7 +53,7 @@ impl TextMeasure for BoxHost {
 
 fn row(height: f32) -> Style {
   let mut result = Style.make()
-  result.height = Dimension.px(height)
+  result.height = SizeValue.px(height)
   return move result
 }
 fn flexRow() -> Style {
@@ -158,7 +158,7 @@ effect fn keptLayoutFollowsEdits() ! OutOfMemoryError | TextError | Fragmentatio
   let b = run tree.append(root, row(20.0))
   let line = run tree.append(root, flexRow())
   let mut item = row(5.0)
-  item.width = Dimension.px(40.0)
+  item.width = SizeValue.px(40.0)
   let x = run tree.append(line, move item)
   let mut output = LayoutTree.make()
   let mut host = BoxHost {}

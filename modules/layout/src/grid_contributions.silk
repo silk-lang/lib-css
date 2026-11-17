@@ -12,9 +12,9 @@ import geometry {
   min,
   clamp
 }
-import style { Style, Dimension, DimensionKind, BoxSizing, WritingMode, FlexWrap, FlexDirection }
+import style { Style, SizeValue, DimensionKind, BoxSizing, WritingMode, FlexWrap, FlexDirection }
 import box_tree { BoxTree }
-import context { Input, ResolvedBox, resolves, isFlex, isGrid, scrollable, overflowForAxis, UNBOUNDED }
+import context { Input, ResolvedBox, sizeResolves, isFlex, isGrid, scrollable, overflowForAxis, UNBOUNDED }
 import engine { normalizeKey, probeFresh, shapedBox, emptyContentWidth }
 import layout_pass { LayoutPass, CacheKind }
 import text { TextMeasure, TextError }
@@ -68,40 +68,40 @@ fn edges(value: ResolvedEdges, horizontal: bool) -> f32 {
   return value.vertical()
 }
 
-fn preferred(style: &Style, horizontal: bool) -> Dimension {
+fn preferred(style: &Style, horizontal: bool) -> SizeValue {
   if horizontal {
     return style.width
   }
   return style.height
 }
 
-fn minimum(style: &Style, horizontal: bool) -> Dimension {
+fn minimum(style: &Style, horizontal: bool) -> SizeValue {
   if horizontal {
     return style.minWidth
   }
   return style.minHeight
 }
 
-fn maximum(style: &Style, horizontal: bool) -> Dimension {
+fn maximum(style: &Style, horizontal: bool) -> SizeValue {
   if horizontal {
     return style.maxWidth
   }
   return style.maxHeight
 }
 
-fn percentage(value: Dimension) -> bool {
+fn percentage(value: SizeValue) -> bool {
   return value.relative()
 }
 
-fn needsMin(value: Dimension) -> bool {
+fn needsMin(value: SizeValue) -> bool {
   return value.kind == DimensionKind.MinContent || value.kind == DimensionKind.FitContent
 }
 
-fn needsMax(value: Dimension) -> bool {
+fn needsMax(value: SizeValue) -> bool {
   return value.kind == DimensionKind.MaxContent || value.kind == DimensionKind.FitContent
 }
 
-fn intrinsicValue(value: Dimension, fallback: f32, smallest: f32, largest: f32, fit: f32) -> f32 {
+fn intrinsicValue(value: SizeValue, fallback: f32, smallest: f32, largest: f32, fit: f32) -> f32 {
   if value.kind == DimensionKind.MinContent {
     return smallest
   }
@@ -210,7 +210,7 @@ pub fn contributionBaselineInput(
 
   // Definite authored preferred sizes did not use an intrinsic probe at all.
   // Respect that property instead of forcing the capped contribution as known.
-  if resolves(size, definite(input.parent, horizontal)) {
+  if sizeResolves(size, definite(input.parent, horizontal)) {
     request = input.*
     request.minimum = input.effectiveMinimum()
     request.performLayout = false
@@ -283,7 +283,7 @@ fn minimumBox(output: &LayoutPass<'_, '_>, style: &Style, id: usize, input: &Inp
 
 // A minimum or maximum that is a length or absent: no percentage or content keyword.
 @inlineAlways
-fn plainLimit(value: Dimension) -> bool {
+fn plainLimit(value: SizeValue) -> bool {
   return value.kind == DimensionKind.Length || value.kind == DimensionKind.Auto || value.kind == DimensionKind.None
 }
 
@@ -441,10 +441,10 @@ pub effect fn measureContributionEdges<'pass, 'source, M: Measure + TextMeasure>
   )
   let mut crossMinimum = crossInset
   let mut crossMaximum = UNBOUNDED
-  if resolves(crossMinDimension, crossBasisDefinite) {
+  if sizeResolves(crossMinDimension, crossBasisDefinite) {
     crossMinimum = axisSize(box.min, !horizontal)
   }
-  if resolves(crossMaxDimension, crossBasisDefinite) {
+  if sizeResolves(crossMaxDimension, crossBasisDefinite) {
     crossMaximum = axisSize(box.max, !horizontal)
   }
   if autoMinimum {
@@ -474,7 +474,7 @@ pub effect fn measureContributionEdges<'pass, 'source, M: Measure + TextMeasure>
     }
 
     // Grid 6.6 caps suggestions by definite maxima, not intrinsic maxima.
-    if resolves(maxDimension, basisDefinite) {
+    if sizeResolves(maxDimension, basisDefinite) {
       suggestion = min(suggestion, axisSize(box.max, horizontal))
     }
     if style.replaced {
@@ -535,14 +535,14 @@ pub effect fn measureContributionEdges<'pass, 'source, M: Measure + TextMeasure>
       crossInset,
       borderRatio,
     )
-    if resolves(maxDimension, basisDefinite) {
+    if sizeResolves(maxDimension, basisDefinite) {
       transferredMinimum = min(transferredMinimum, axisSize(box.max, horizontal))
     }
     let mut transferredMaximum = max(
       transferredMinimum,
       transfer(crossMaximum, ratio, horizontal, inset, crossInset, borderRatio),
     )
-    if resolves(minDimension, basisDefinite) {
+    if sizeResolves(minDimension, basisDefinite) {
       transferredMaximum = max(transferredMaximum, axisSize(box.min, horizontal))
     }
     minContribution = clamp(minContribution, transferredMinimum, transferredMaximum)
@@ -608,7 +608,7 @@ pub fn plainContribution(style: &Style, box: &ResolvedBox, horizontal: bool, aut
   if definite(box.size, horizontal) { content = optionalSize(box.size, horizontal) }
   if autoMinimum {
     let mut suggestion = min(content, max(inset, fixedMaximum - margin))
-    if resolves(maximum(style, horizontal), false) { suggestion = min(suggestion, usedMaximum) }
+    if sizeResolves(maximum(style, horizontal), false) { suggestion = min(suggestion, usedMaximum) }
     usedMinimum = max(inset, suggestion)
   }
   let mut minContribution = clamp(content, usedMinimum, usedMaximum) + margin

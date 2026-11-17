@@ -4,6 +4,7 @@
 //! for that type, which is how a caller ignores an invalid declaration.
 import computed {
   Dimension,
+  SizeValue,
   DimensionKind,
   Display,
   DisplayOutside,
@@ -398,9 +399,9 @@ pub fn dimension(value: &Value, context: &Context) -> Option<Dimension> {
 /// A width, height, minimum, maximum or flex basis: a `dimension`, or a comparison that needs
 /// the percentage basis: `min()` or `max()` of lengths against a length plus a percentage, such
 /// as `min(100% - 20px, 600px)`, and `clamp()` of a percentage between two lengths.
-pub fn size(value: &Value, context: &Context) -> Option<Dimension> {
+pub fn size(value: &Value, context: &Context) -> Option<SizeValue> {
   if let Option<Dimension>.Some { value: found } = dimension(value, context) {
-    return Option<Dimension>.some(found)
+    return Option<SizeValue>.some(SizeValue.of(found))
   }
   if let Value.Math { operator, values } = &value.* {
     let items = values.asSlice()
@@ -410,17 +411,17 @@ pub fn size(value: &Value, context: &Context) -> Option<Dimension> {
       let upper = linear(&items[2], context)
       if lower.valid && middle.valid && upper.valid && !lower.scalar && !middle.scalar && !upper.scalar
         && lower.percent == 0.0 && upper.percent == 0.0 && middle.pixels == 0.0 {
-        return Option<Dimension>.some(clamped(finite(lower.pixels), middle.percent, finite(upper.pixels)))
+        return Option<SizeValue>.some(clamped(finite(lower.pixels), middle.percent, finite(upper.pixels)))
       }
-      return Option<Dimension>.None
+      return Option<SizeValue>.None
     }
     let least = operator == MathOperator.Min
     if !least && operator != MathOperator.Max {
-      return Option<Dimension>.None
+      return Option<SizeValue>.None
     }
     let mut bound: f32 = 0.0
     let mut bounded = false
-    let mut mixed = Dimension.auto()
+    let mut mixed = SizeValue.auto()
     let mut i: usize = 0
     while i < items.length {
       let term = linear(&items[i], context)
@@ -430,11 +431,11 @@ pub fn size(value: &Value, context: &Context) -> Option<Dimension> {
         bounded = true
       } else {
         // One argument may need the basis: a length plus a percentage, or the other comparison.
-        let found = if term.valid { Option<Dimension>.some(Dimension.calc(finite(term.pixels), term.percent)) } else { size(&items[i], context) }
+        let found = if term.valid { Option<SizeValue>.some(SizeValue.calc(finite(term.pixels), term.percent)) } else { size(&items[i], context) }
         match found {
           Option.Some { value: next } => {
             if term.scalar || !next.relative() {
-              return Option<Dimension>.None
+              return Option<SizeValue>.None
             }
             if mixed.kind == DimensionKind.Auto {
               mixed = next
@@ -442,42 +443,42 @@ pub fn size(value: &Value, context: &Context) -> Option<Dimension> {
               // The basis of a size is never negative, so percentages compare as numbers.
               if (next.percent < mixed.percent) == least { mixed.percent = next.percent }
             } else {
-              return Option<Dimension>.None
+              return Option<SizeValue>.None
             }
           }
           Option.None => {
-            return Option<Dimension>.None
+            return Option<SizeValue>.None
           }
         }
       }
       i = i + 1
     }
     if !bounded {
-      return if mixed.kind == DimensionKind.Auto { Option<Dimension>.None } else { Option<Dimension>.some(mixed) }
+      return if mixed.kind == DimensionKind.Auto { Option<SizeValue>.None } else { Option<SizeValue>.some(mixed) }
     }
     if mixed.kind == DimensionKind.Calc {
-      return Option<Dimension>.some(if least { Dimension.least(bound, mixed.value, mixed.percent) } else { Dimension.most(bound, mixed.value, mixed.percent) })
+      return Option<SizeValue>.some(if least { SizeValue.least(bound, mixed.value, mixed.percent) } else { SizeValue.most(bound, mixed.value, mixed.percent) })
     }
     // max(MIN, min(VAL, MAX)) is clamp(MIN, VAL, MAX); min(MAX, max(VAL, MIN)) differs only
     // where MIN exceeds MAX, and there it is MAX.
     if !least && mixed.kind == DimensionKind.Least && mixed.value == 0.0 {
-      return Option<Dimension>.some(clamped(bound, mixed.percent, mixed.bound))
+      return Option<SizeValue>.some(clamped(bound, mixed.percent, mixed.bound))
     }
     if least && mixed.kind == DimensionKind.Most && mixed.value == 0.0 {
-      return Option<Dimension>.some(if mixed.bound > bound { Dimension.px(bound) } else { Dimension.clamp(mixed.bound, mixed.percent, bound) })
+      return Option<SizeValue>.some(if mixed.bound > bound { SizeValue.px(bound) } else { SizeValue.clamp(mixed.bound, mixed.percent, bound) })
     }
   }
-  return Option<Dimension>.None
+  return Option<SizeValue>.None
 }
 
 // clamp(MIN, VAL, MAX) is max(MIN, min(VAL, MAX)): MIN wins when it exceeds MAX.
-fn clamped(lower: f32, percent: f32, upper: f32) -> Dimension {
-  if lower >= upper { return Dimension.px(lower) }
-  return Dimension.clamp(lower, percent, upper)
+fn clamped(lower: f32, percent: f32, upper: f32) -> SizeValue {
+  if lower >= upper { return SizeValue.px(lower) }
+  return SizeValue.clamp(lower, percent, upper)
 }
 
 // The argument of min() or max() that needs the basis: a percentage, with its length if any.
-effect fn basisTerm(value: Dimension) -> Value ! OutOfMemoryError ? &mut Allocator {
+effect fn basisTerm(value: SizeValue) -> Value ! OutOfMemoryError ? &mut Allocator {
   if value.value == 0.0 { return Value.Unit { value: value.percent * 100.0, unit: Unit.Percent } }
   let mut terms = List<Value>.make()
   run terms.append(Value.Unit { value: value.value, unit: Unit.Px })
@@ -487,6 +488,11 @@ effect fn basisTerm(value: Dimension) -> Value ! OutOfMemoryError ? &mut Allocat
 
 /// A computed size as written: lengths in `px`, percentages 0 to 100.
 pub effect fn fromDimension(value: Dimension) -> Value ! OutOfMemoryError ? &mut Allocator {
+  return run fromSize(SizeValue.of(value))
+}
+
+/// A computed size as written, with the comparisons only a size holds.
+pub effect fn fromSize(value: SizeValue) -> Value ! OutOfMemoryError ? &mut Allocator {
   match value.kind {
     DimensionKind.Auto => {
       return Value.Keyword { value: Keyword.Auto }

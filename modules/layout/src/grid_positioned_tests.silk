@@ -19,6 +19,7 @@ import text {
 import style {
   Style,
   Dimension,
+  SizeValue,
   Edges,
   Display,
   DisplayOutside,
@@ -133,8 +134,8 @@ fn gridStyle() -> Style {
   let mut style = Style.make()
   style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Grid }
   style.position = Position.Relative
-  style.width = Dimension.px(300.0)
-  style.height = Dimension.px(200.0)
+  style.width = SizeValue.px(300.0)
+  style.height = SizeValue.px(200.0)
   style.columnGap = Dimension.px(10.0)
   style.rowGap = Dimension.px(20.0)
   return move style
@@ -340,7 +341,7 @@ effect fn structuralEdit()
   let mut tree = run Tree.make(Style.make())
   let root = tree.root()
   let mut earlierStyle = Style.make()
-  earlierStyle.height = Dimension.px(20.0)
+  earlierStyle.height = SizeValue.px(20.0)
   let earlier = run tree.append(root, move earlierStyle)
   let firstGrid = run tree.append(root, gridStyle())
   run tracks(&mut tree, firstGrid, 80.0, 120.0, 50.0, 90.0)
@@ -355,7 +356,7 @@ effect fn structuralEdit()
   run expectRect(&mut output, first, 90.0, 90.0, 120.0, 90.0)
   run expectRect(&mut output, second, 50.0, 270.0, 160.0, 110.0)
   let mut addedStyle = Style.make()
-  addedStyle.height = Dimension.px(0.0)
+  addedStyle.height = SizeValue.px(0.0)
   let added = run tree.append(earlier, move addedStyle)
   drop added
   run layout(&tree, &mut output)
@@ -389,12 +390,12 @@ effect fn modeAndPositionEdit()
   ? &mut Allocator {
   let mut rootStyle = Style.make()
   rootStyle.position = Position.Relative
-  rootStyle.width = Dimension.px(500.0)
-  rootStyle.height = Dimension.px(400.0)
+  rootStyle.width = SizeValue.px(500.0)
+  rootStyle.height = SizeValue.px(400.0)
   let mut tree = run Tree.make(move rootStyle)
   let root = tree.root()
   let mut spacerStyle = Style.make()
-  spacerStyle.height = Dimension.px(20.0)
+  spacerStyle.height = SizeValue.px(20.0)
   let spacer = run tree.append(root, move spacerStyle)
   drop spacer
   let grid = run tree.append(root, gridStyle())
@@ -464,11 +465,11 @@ effect fn fixedGridPages()
   let mut tree = run Tree.make(Style.make())
   let root = tree.root()
   let mut firstStyle = Style.make()
-  firstStyle.height = Dimension.px(10.0)
+  firstStyle.height = SizeValue.px(10.0)
   let first = run tree.append(root, move firstStyle)
   drop first
   let mut secondStyle = Style.make()
-  secondStyle.height = Dimension.px(10.0)
+  secondStyle.height = SizeValue.px(10.0)
   secondStyle.breakBefore = BreakBetween.Page
   let second = run tree.append(root, move secondStyle)
   drop second
@@ -490,8 +491,8 @@ effect fn fixedGridPages()
   // This normal-flow item is wholly outside the reachable inline interval;
   // its 500px height must not enlarge the other axis's auto boundary.
   let mut unreachableStyle = Style.make()
-  unreachableStyle.width = Dimension.px(10.0)
-  unreachableStyle.height = Dimension.px(500.0)
+  unreachableStyle.width = SizeValue.px(10.0)
+  unreachableStyle.height = SizeValue.px(500.0)
   unreachableStyle.margin.left = Dimension.px(-200.0)
   let unreachable = run tree.append(fixed, move unreachableStyle)
   drop unreachable

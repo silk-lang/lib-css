@@ -8,7 +8,7 @@ import geometry {
   FontRequest, FontMetrics, ScrollbarRequest, ScrollbarMetrics
 }
 import style {
-  Style, WritingMode, Direction, Dimension, Align,
+  Style, WritingMode, Direction, SizeValue, Align,
   Display, DisplayOutside, DisplayInside
 }
 import grid_tracks { TrackState, TrackContribution }
@@ -105,13 +105,13 @@ test effect fn gridBaselineOrientationAndOrthogonalSynthesis()
 test effect fn gridBaselineCycleRecognizesIndefiniteFlex()
   ! AssertionError<'static> {
   let mut style = Style.make()
-  style.height = Dimension.pct(0.5)
+  style.height = SizeValue.pct(0.5)
   let tracks: [TrackState; 1] = [TrackState.flexible(0.0, 1.0)]
   run Testing.expect(
     cyclicSize(&style, false, &tracks, 0, 1, false),
     "percentage in indefinite flex is cyclic",
   )
-  style.height = Dimension.px(12.0)
+  style.height = SizeValue.px(12.0)
   run Testing.expect(
     !cyclicSize(&style, false, &tracks, 0, 1, false),
     "fixed size has no baseline sizing cycle",
@@ -147,8 +147,8 @@ test effect fn gridBaselineExportEndpointsAndGridOrder()
 test effect fn gridBaselineCapturePreservesIntrinsicContexts()
   ! AssertionError<'static> {
   let mut style = Style.make()
-  style.minWidth = Dimension.px(90.0)
-  style.maxWidth = Dimension.px(100.0)
+  style.minWidth = SizeValue.px(90.0)
+  style.maxWidth = SizeValue.px(100.0)
   let mut request = Input.make(OptionalSize.none())
   request.known.height = 40.0
   request.known.heightDefinite = true
@@ -176,7 +176,7 @@ test effect fn gridBaselineCapturePreservesIntrinsicContexts()
     smallest.baselines && smallest.intrinsicWidth && !smallest.performLayout,
     "intrinsic capture requests baseline-producing probes only",
   )
-  style.width = Dimension.px(80.0)
+  style.width = SizeValue.px(80.0)
   let fixed = contributionBaselineInput(&request, &style, true, 1)
   run Testing.expect(
     !fixed.intrinsicWidth && !fixed.known.widthDefinite,
@@ -412,7 +412,7 @@ effect fn hoistedBaselineEligibility()
   template.rows.subgrid = true
   run tree.setGrid(nested, move template)
   let mut childStyle = Style.make()
-  childStyle.height = Dimension.pct(0.5)
+  childStyle.height = SizeValue.pct(0.5)
   let child = run tree.append(nested, move childStyle)
   let boxes = run Boxes.build(tree.nodes.asSlice(), tree.styles.asSlice(),
     tree.grids.asSlice(), tree.gridNames.asSlice(), WritingMode.HorizontalTb, Direction.Ltr)

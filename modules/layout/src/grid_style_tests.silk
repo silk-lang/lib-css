@@ -1,7 +1,7 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
-import style { Style, Display, DisplayOutside, DisplayInside, Dimension, BoxSizing, Edges }
+import style { Style, Display, DisplayOutside, DisplayInside, Dimension, SizeValue, BoxSizing, Edges }
 import tree { Tree, InvalidNode }
 import grid_style {
   GridTemplate,
@@ -137,16 +137,16 @@ test effect fn gridItemInsetsThroughContentsRemainOuterChanges()
   let contents = run tree.append(root, move contentsStyle)
     |> Effect.provideMut<Allocator>(&mut allocator)
   let mut itemStyle = Style.make()
-  itemStyle.width = Dimension.px(100.0)
-  itemStyle.height = Dimension.px(100.0)
+  itemStyle.width = SizeValue.px(100.0)
+  itemStyle.height = SizeValue.px(100.0)
   itemStyle.boxSizing = BoxSizing.BorderBox
   itemStyle.flexShrink = 0.0
   let item = run tree.append(contents, move itemStyle)
     |> Effect.provideMut<Allocator>(&mut allocator)
   let before = tree.outerChangedAt(item.index)
   let mut changed = Style.make()
-  changed.width = Dimension.px(100.0)
-  changed.height = Dimension.px(100.0)
+  changed.width = SizeValue.px(100.0)
+  changed.height = SizeValue.px(100.0)
   changed.boxSizing = BoxSizing.BorderBox
   changed.flexShrink = 0.0
   changed.padding = Edges.all(Dimension.px(10.0))

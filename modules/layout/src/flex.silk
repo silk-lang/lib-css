@@ -6,10 +6,10 @@ import silk.num.usize
 import silk.num.f32
 import silk.num.f64
 import geometry { Measure, Layout, BaselineSet, FontRequest, Size, Point, OptionalSize, AvailableSpace, AvailableKind, ResolvedEdges, max, min, clamp, abs }
-import style { Style, Dimension, DimensionKind, Direction, WritingMode, TextOrientation, FlexDirection, FlexWrap, Align, OverflowAlignment, BoxSizing, Visibility, MarginBreak, BoxDecorationBreak }
+import style { Style, SizeValue, DimensionKind, Direction, WritingMode, TextOrientation, FlexDirection, FlexWrap, Align, OverflowAlignment, BoxSizing, Visibility, MarginBreak, BoxDecorationBreak }
 import tree { NO_NODE, Measurement }
 import box_tree { BoxTree }
-import context { Input, ResolvedBox, resolveBox, childrenInput, resolve, resolves, outOfFlow, isFlex, scrollable, overflowForAxis, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, childrenInput, resolve, resolveSize, sizeResolves, outOfFlow, isFlex, scrollable, overflowForAxis, UNBOUNDED }
 import engine { plainWidth, widthIgnoresHeight, crossIgnoresMain, layoutNode, layoutNodeInPlace, layoutEmptyLeafInPlace, plainMeasuredBox, probeFresh, normalizeKey, constraintFreeProbe, sizeEmptyBox, emptyIntrinsicWidth, shapedBox, ITEM_OUT_OF_FLOW, ITEM_ORDERED }
 import layout_pass { LayoutPass, CacheKind }
 import layout_cache { LayoutCache }
@@ -49,7 +49,7 @@ fn optionalSize(size: OptionalSize, horizontal: bool) -> f32 { if horizontal { r
   return size.height }
 fn definite(size: OptionalSize, horizontal: bool) -> bool { if horizontal { return size.widthDefinite }
   return size.heightDefinite }
-fn axisDimension(style: &Style, horizontal: bool) -> Dimension { if horizontal { return style.width }
+fn axisDimension(style: &Style, horizontal: bool) -> SizeValue { if horizontal { return style.width }
   return style.height }
 fn edgeStart(edges: ResolvedEdges, horizontal: bool, reverse: bool) -> f32 {
   if horizontal { if reverse { return edges.right }
@@ -329,16 +329,16 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
   let parentMain = optionalSize(childInput.parent, horizontal)
   let parentDefinite = definite(childInput.parent, horizontal)
   let preferred = axisDimension(style, horizontal)
-  let preferredDefinite = resolves(preferred, parentDefinite)
+  let preferredDefinite = sizeResolves(preferred, parentDefinite)
   let mut add = item.inset
   if style.boxSizing == BoxSizing.BorderBox { add = 0.0 }
-  let preferredSize = resolve(preferred, parentMain, parentDefinite, 0.0) + add
+  let preferredSize = resolveSize(preferred, parentMain, parentDefinite, 0.0) + add
   let mut basis = style.flexBasis
   if basis.kind == DimensionKind.Auto { basis = preferred }
-  let basisDefinite = resolves(basis, parentDefinite)
+  let basisDefinite = sizeResolves(basis, parentDefinite)
   // A resolved cyclic percentage is usable without making its flex base
   // definite under §9.8. Keep that distinction for descendant percentages.
-  item.mainDefinite = containerMainDefinite || resolves(basis, containerMainDefinite)
+  item.mainDefinite = containerMainDefinite || sizeResolves(basis, containerMainDefinite)
   let mut crossDefinite = definite(box.size, !horizontal)
   let mut crossSize = optionalSize(box.size, !horizontal)
   // §9.2 step 3B transfers the used cross size. Only main-axis constraints
@@ -371,7 +371,7 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
   // base is at least that large, the minimum cannot change the hypothetical
   // size or a growing line; only a shrinking line reads it, so measure the
   // content suggestion then (deferredMinimum) instead of probing every item.
-  let base = resolve(basis, parentMain, parentDefinite, 0.0) + add
+  let base = resolveSize(basis, parentMain, parentDefinite, 0.0) + add
   let lengthBase = preferredDefinite && basisDefinite && basis.kind == DimensionKind.Length && base >= max(item.inset, preferredSize)
   // A content-based flex base is the max-content size, which is at least the
   // min-content size the content suggestion measures.
@@ -448,7 +448,7 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
     item.minimum = max(item.inset, min(minimum, item.maximum))
   }
   item.base = maxContent
-  if basisDefinite { item.base = resolve(basis, parentMain, parentDefinite, 0.0) + add }
+  if basisDefinite { item.base = resolveSize(basis, parentMain, parentDefinite, 0.0) + add }
   else if basis.kind == DimensionKind.MinContent { item.base = minContent }
   else if basis.kind == DimensionKind.FitContent && mainConstraint.kind == AvailableKind.Definite { item.base = clamp(mainConstraint.value - item.marginStart - item.marginEnd, minContent, maxContent) }
   else if ratio > 0.0 && crossDefinite && basis.kind != DimensionKind.MaxContent {

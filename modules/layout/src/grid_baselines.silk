@@ -4,7 +4,7 @@ import silk.core.ownership { Copy }
 import silk.num.i32
 import silk.num.usize
 import geometry { Layout, BaselineSet, FontRequest, Measure, Size, Point, max, min }
-import style { Style, WritingMode, Direction, Align, Dimension, DimensionKind }
+import style { Style, WritingMode, Direction, Align, SizeValue, DimensionKind }
 import axes { Axes }
 import context { Input, UNBOUNDED }
 import box_tree { BoxTree }
@@ -256,7 +256,7 @@ pub fn groupEnd(style: &Style, parent: &Style, columns: bool, last: bool) -> boo
   return last != oppositeSelfStart(style, parent, &axis, columns)
 }
 
-fn percentage(value: Dimension) -> bool {
+fn percentage(value: SizeValue) -> bool {
   return value.relative()
 }
 
