@@ -1,11 +1,18 @@
 //! Conditional Rules 3 queries and Cascade 4 import conditions over shared token Input.
 import input { Input, TokenView, TokenRef }
 import tokens { Kind, TokenRange, Limits, CssError, CssErrorKind }
+import tokens
 import condition_cursor { Structure }
 import condition_cursor
 import declaration_values
+import selectors
 import properties { Property }
 import properties
+import css_properties.convert
+import css_properties.keyword_enums
+import css_properties.keywords
+import css_properties.keywords { Keyword }
+import css_properties.values as written_values
 import values { Store, ValueId, Mode }
 import values
 import silk.collections.slice { Slice }
@@ -94,6 +101,63 @@ effect fn typed(
       }
     }
   }
+}
+
+// `display`, `overflow`, `width` and `height` are read by apps through css-properties, whose
+// keywords are wider than this module's SVG grammars (`flex`, `grid`, `clip`, two overflow
+// axes, `fit-content`). Answer from the grammar apps use, so @supports agrees with the tree.
+fn layoutKeywords(input: &Input<'_>, property: Property, start: usize, end: usize) -> Option<bool> {
+  if property == Property.Width || property == Property.Height {
+    // Their SVG grammar has no intrinsic sizes; everything else it reads the same.
+    let at = condition_cursor.skip(input, start, end)
+    let intrinsic = condition_cursor.ident(input, at, b"min-content")
+      || condition_cursor.ident(input, at, b"max-content")
+      || condition_cursor.ident(input, at, b"fit-content")
+    if intrinsic && condition_cursor.skip(input, at + 1, end) == end {
+      return Option<bool>.some(true)
+    }
+    return Option<bool>.None
+  }
+  let limit: usize = if property == Property.Overflow {
+    2
+  } else if property == Property.Display || property == Property.OverflowX
+    || property == Property.OverflowY {
+    1
+  } else {
+    return Option<bool>.None
+  }
+  let mut count: usize = 0
+  let mut at = condition_cursor.skip(input, start, end)
+  while at < end {
+    let word = match &input.at(at) {
+      Option<TokenView>.Some { value } => match &value.token.kind {
+        Kind.Ident { text } => keywords.lookup(value.text(text))
+        _ => Option<Keyword>.None
+      }
+      _ => Option<Keyword>.None
+    }
+    let keyword = match word {
+      Option<Keyword>.Some { value } => value
+      _ => {
+        return Option<bool>.None
+      }
+    }
+    if keyword == Keyword.Initial || keyword == Keyword.Inherit || keyword == Keyword.Unset
+      || keyword == Keyword.Revert || keyword == Keyword.RevertLayer {
+      return Option<bool>.None
+    }
+    let known = if property == Property.Display {
+      convert.display(&written_values.keyword(keyword)).isSome()
+    } else {
+      keyword_enums.overflowOf(keyword).isSome()
+    }
+    count = count + 1
+    if !known || count > limit {
+      return Option<bool>.some(false)
+    }
+    at = condition_cursor.skip(input, at + 1, end)
+  }
+  return Option<bool>.some(count > 0)
 }
 
 // The name and colon have already been recognized. !important is syntax, not
@@ -185,6 +249,9 @@ effect fn declaration(
   if validation.hasVariables {
     return truth(true)
   }
+  if let Option<bool>.Some { value: answer } = layoutKeywords(input, property, first, last) {
+    return truth(answer)
+  }
   return truth(run typed(input, &mut store.*, property, first, last))
 }
 
@@ -227,6 +294,38 @@ effect fn declarationQuery(
     _ => {}
   }
   return invalid()
+}
+
+// https://www.w3.org/TR/css-conditional-4/#typedef-supports-selector-fn
+// A selector is supported when it parses; one complex selector, not a list.
+effect fn selectorSupported(input: &Input<'_>, start: usize, end: usize) -> bool
+  ! CssError | OutOfMemoryError
+  ? &mut Allocator {
+  let mut at = start
+  while at < end {
+    if let Option<TokenView>.Some { value } = &input.at(at) {
+      let comma = match &value.token.kind {
+        Kind.Comma => true
+        _ => false
+      }
+      if comma {
+        return false
+      }
+    }
+    at = at + 1
+  }
+  return match &input.* {
+    Input.Contiguous { buffer, range } => {
+      let parsed = run selectors.parse(
+        buffer,
+        TokenRange { start: range.start + start, end: range.start + end },
+        &[],
+        &Limits.make(),
+      )
+      parsed.isSome()
+    }
+    _ => false
+  }
 }
 
 // Each operand spends one unit. All token scans skip whole indexed components;
@@ -273,6 +372,16 @@ effect fn operand(
     end
   }
   if !parentheses {
+    let selector = match &input.at(opening) {
+      Option<TokenView>.Some { value } => match &value.token.kind {
+        Kind.Function { name } => tokens.insensitive(value.text(name), b"selector")
+        _ => false
+      }
+      _ => false
+    }
+    if selector {
+      return truth(run selectorSupported(input, opening + 1, close))
+    }
     return truth(false)
   }
   let inner = condition_cursor.skip(input, opening + 1, close)

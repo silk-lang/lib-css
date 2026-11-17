@@ -199,6 +199,8 @@ pub fn overflowOf(value: Keyword) -> Option<Overflow> {
     Keyword.Hidden => Option<Overflow>.some(Overflow.Hidden)
     Keyword.Scroll => Option<Overflow>.some(Overflow.Scroll)
     Keyword.Auto => Option<Overflow>.some(Overflow.Auto)
+    // A legacy alias that computes to `auto`.
+    Keyword.Overlay => Option<Overflow>.some(Overflow.Auto)
     _ => Option<Overflow>.None
   }
 }
