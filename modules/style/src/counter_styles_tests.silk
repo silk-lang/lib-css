@@ -1,0 +1,63 @@
+import counter_styles { CounterStyle }
+import counter_styles
+import tokens { equal }
+import silk.collections.bytes { Bytes }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+effect fn formatted(value: i64, style: CounterStyle) -> Bytes ! OutOfMemoryError ? &mut Allocator {
+  let mut out = Bytes.make()
+  run counter_styles.format(value, style, &mut out)
+  return move out
+}
+
+test effect fn counterStylesWriteThePredefinedRepresentations() -> ()
+  ! OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let values: [i64; 14] = [1, 12, -3, 7, 3999, 4000, 1, 26, 27, 702, 0, 1, 25, 3]
+  let styles = [CounterStyle.Decimal, CounterStyle.Decimal, CounterStyle.Decimal, CounterStyle.DecimalLeadingZero, CounterStyle.UpperRoman, CounterStyle.LowerRoman,
+    CounterStyle.LowerAlpha, CounterStyle.LowerAlpha, CounterStyle.UpperAlpha, CounterStyle.LowerAlpha, CounterStyle.LowerAlpha, CounterStyle.LowerGreek, CounterStyle.LowerGreek, CounterStyle.Disc]
+  let expected = [b"1", b"12", b"-3", b"07", b"MMMCMXCIX", b"4000", b"a", b"z", b"AA", b"zz", b"0", b"\xce\xb1", b"\xce\xb1\xce\xb1", b"\xe2\x80\xa2"]
+  let mut i: usize = 0
+  while i < values.length {
+    let text = run formatted(values[i], styles[i]) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(equal(text.asSlice(), expected[i]), "counter representation")
+    i = i + 1
+  }
+  // Greek skips the final sigma: the 18th letter is sigma (U+03C3), the 24th omega.
+  let sigma = run formatted(18, CounterStyle.LowerGreek) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(equal(sigma.asSlice(), b"\xcf\x83"), "greek sigma")
+  let omega = run formatted(24, CounterStyle.LowerGreek) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(equal(omega.asSlice(), b"\xcf\x89"), "greek omega")
+  let mut marker = Bytes.make()
+  run counter_styles.marker(4, CounterStyle.LowerRoman, &mut marker) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(equal(marker.asSlice(), b"iv. "), "ordinal markers end with a period and a space")
+  let mut symbol = Bytes.make()
+  run counter_styles.marker(4, CounterStyle.Square, &mut symbol) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(equal(symbol.asSlice(), b"\xe2\x96\xaa "), "symbol markers end with a space")
+  let lower = counter_styles.named(b"Lower-Latin")
+  run Testing.expect(match lower { Option.Some { value } => value == CounterStyle.LowerAlpha _ => false }, "lower-latin is lower-alpha")
+  run Testing.expect(counter_styles.named(b"hebrew").isNone(), "styles that are not built in are unknown")
+}
+
+test effect fn counterListsReadNamesAndIntegers() -> ()
+  ! OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let list = run counter_styles.changes(b"chapter section 3 list-item -2", 1) |> Effect.provideMut<Allocator>(&mut allocator)
+  let items = list.asSlice()
+  run Testing.expect(items.length == 3, "three counters")
+  run Testing.expect(equal(items[0].name.asSlice(), b"chapter") && items[0].value == 1, "a name without an integer takes the default")
+  run Testing.expect(equal(items[1].name.asSlice(), b"section") && items[1].value == 3, "an integer follows its name")
+  run Testing.expect(equal(items[2].name.asSlice(), b"list-item") && items[2].value == -2, "negative integers")
+  let reversed = run counter_styles.changes(b"reversed(list-item) 4", 0) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(reversed.length() == 1 && reversed.asSlice()[0].value == 4, "reversed() resets as a plain reset")
+  let sources = [b"none", b"inherit", b"3", b"a 1.5", b"none 2"]
+  let mut i: usize = 0
+  while i < sources.length {
+    let empty = run counter_styles.changes(sources[i], 0) |> Effect.provideMut<Allocator>(&mut allocator)
+    run Testing.expect(empty.length() == 0, "none, keywords and malformed lists change no counter")
+    i = i + 1
+  }
+}

@@ -1,0 +1,52 @@
+//! Outside list markers (CSS Lists 3 §3.2). The host generates the `::marker` box as the list
+//! item's first child with `outsideMarker`; it is out of flow, so the item's own layout does
+//! not see it. Once the item is laid out it places the marker against its inline-start border
+//! edge, with the marker's first baseline on the item's first baseline, which can be a line
+//! of a block descendant (`li > p`). An item without a line puts the marker at its content top.
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import geometry { Layout, Measure, OptionalSize, AvailableSpace, Point, ResolvedEdges, max }
+import style { Direction, WritingMode }
+import tree { NO_NODE }
+import box_tree { BoxTree }
+import context { Input, ResolvedBox, childrenInput }
+import engine { layoutNode }
+import layout_pass { LayoutPass }
+import text { TextMeasure, TextError }
+import fragmentation { FragmentationError }
+
+/// Lays out and places the outside marker of block `id`, if its first child is one, after the
+/// final layout `result` of the block's contents. Fragmented and intrinsic passes leave it.
+@inlineNever
+pub effect fn placeMarker<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, result: &Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let marker = nodes.node(id).firstChild
+  if marker == NO_NODE || !nodes.style(marker).outsideMarker { return }
+  if !input.performLayout || input.fragmentation.active { return }
+  let style = nodes.style(id)
+  let horizontal = style.writingMode == WritingMode.HorizontalTb
+  let mut parent = OptionalSize.none()
+  if horizontal {
+    parent.width = max(0.0, result.size.width - box.inset.horizontal())
+    parent.widthDefinite = true
+  } else {
+    parent.height = max(0.0, result.size.height - box.inset.vertical())
+    parent.heightDefinite = true
+  }
+  let mut request = childrenInput(&input, style, &box, parent)
+  request.availableWidth = if horizontal { AvailableSpace.definite(parent.width) } else { AvailableSpace.maxContent() }
+  request.availableHeight = if horizontal { AvailableSpace.maxContent() } else { AvailableSpace.definite(parent.height) }
+  request.shrinkToFit = true
+  request.blockRoot = true
+  let layout = run layoutNode(nodes, &mut output, &mut measurer, marker, &request)
+  let rtl = style.usedDirection() == Direction.Rtl
+  let mut location = Point { x: 0.0, y: 0.0 }
+  if horizontal {
+    location.x = if rtl { result.size.width } else { -layout.size.width }
+    location.y = box.inset.top
+    if result.hasFirstBaseline && layout.hasFirstBaseline { location.y = result.firstBaselines.alphabetic - layout.firstBaselines.alphabetic }
+  } else {
+    // Vertical writing modes: the inline start is the top, the block start a side.
+    location.y = if rtl { result.size.height } else { -layout.size.height }
+    location.x = if style.writingMode == WritingMode.VerticalRl { result.size.width - box.inset.right - layout.size.width } else { box.inset.left }
+  }
+  run output.place(marker, location, ResolvedEdges.zero(), false, true)
+}

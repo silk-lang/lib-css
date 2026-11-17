@@ -7,7 +7,7 @@ import style { Style, Position, DimensionKind, Direction, WritingMode, Align, Fl
 import tree { NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, SettledRange }
-import context { Input, ResolvedBox, resolveBox, childrenInput, withGutter, resolve, resolves, outOfFlow, isFlex, isGrid, scrollable, usedOverflowForAxis, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, childrenInput, withGutter, resolve, resolves, outOfFlow, absolutelyPositioned, isFlex, isGrid, scrollable, usedOverflowForAxis, UNBOUNDED }
 import engine { layoutNode, layoutNodeInPlace, layoutInBfc, flowMarginRect, resolveFragmentBox, shapedBox }
 import layout_pass { LayoutPass, FullBoxGeometry, CacheKind, REUSE_INDEPENDENT }
 import layout_cache { FACT_ANCHORED, PositionedRun }
@@ -329,7 +329,7 @@ fn containingRect(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, v
   return output.fragments.values.asSlice()[fragment].paddingRect.translated(flowPosition(output, fragment))
 }
 fn usedInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, viewport: OptionalSize) -> Input {
-  let positioned = outOfFlow(nodes.style(id))
+  let positioned = absolutelyPositioned(nodes.style(id))
   let mut parent = generatedParent(nodes, id)
   if positioned { parent = absoluteContainingBlock(nodes, id) }
   let mut input = Input.make(viewport)
@@ -1963,7 +1963,7 @@ fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: 
     }
     if id != NO_NODE {
       let style = nodes.style(id)
-      positioned = outOfFlow(style)
+      positioned = absolutelyPositioned(style)
       fixed = style.position == Position.Fixed && kind == FragmentKind.Box
       if kind == FragmentKind.Box {
         // A single physical fragment has unambiguous scalar used metrics.
@@ -2216,7 +2216,7 @@ pub effect fn positionVisits(nodes: &BoxTree<'_>, result: &mut List<usize>) -> b
     while id != NO_NODE {
       let node = nodes.node(id)
       let style = nodes.style(id)
-      let mut visit = id == 0 || outOfFlow(style) || style.position == Position.Relative || style.position == Position.Sticky
+      let mut visit = id == 0 || absolutelyPositioned(style) || style.position == Position.Relative || style.position == Position.Sticky
         || (node.firstForSource && node.interruptionFirst != NO_NODE)
       if !visit && node.kind != BoxKind.Inline {
         visit = scrollable(usedOverflowForAxis(style, true)) || scrollable(usedOverflowForAxis(style, false)) || generatedParent(nodes, id) == NO_NODE
@@ -2426,7 +2426,7 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
       run interruptions(nodes, &mut output, id)
     }
     if nodes.node(id).firstChild != NO_NODE && (scrollable(usedOverflowForAxis(style, true)) || scrollable(usedOverflowForAxis(style, false))) { plainParents = false }
-    if outOfFlow(style) {
+    if absolutelyPositioned(style) {
       if style.position == Position.Fixed { plainParents = false }
       let word = u64.bitOr(output.outOfFlowBoxes.get(id / 64), u64.shiftLeft(1, usize.toU64(id % 64)))
       output.outOfFlowBoxes.set(id / 64, word)
@@ -2604,7 +2604,7 @@ pub effect fn positionFragmentedTree<'pass, 'source, M: Measure + TextMeasure>(n
     while id != NO_NODE {
       if !fixedTree(nodes, id) {
         if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst != NO_NODE { run interruptions(nodes, &mut output, id) }
-        if outOfFlow(nodes.style(id)) { run absolute(nodes, &mut output, &mut measurer, id, viewport, true, &viewportStyle) }
+        if absolutelyPositioned(nodes.style(id)) { run absolute(nodes, &mut output, &mut measurer, id, viewport, true, &viewportStyle) }
       }
       id = nodes.node(id).nextContinuation
     }
@@ -2637,7 +2637,7 @@ pub effect fn positionFragmentedTree<'pass, 'source, M: Measure + TextMeasure>(n
       while id != NO_NODE {
         if fixedTree(nodes, id) {
           if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst != NO_NODE { run interruptions(nodes, &mut output, id) }
-          if outOfFlow(nodes.style(id)) { run absolute(nodes, &mut output, &mut measurer, id, pageViewport, true, &viewportStyle) }
+          if absolutelyPositioned(nodes.style(id)) { run absolute(nodes, &mut output, &mut measurer, id, pageViewport, true, &viewportStyle) }
         }
         id = nodes.node(id).nextContinuation
       }

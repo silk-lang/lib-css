@@ -90,7 +90,7 @@ fn maximum(style: &Style, horizontal: bool) -> Dimension {
 }
 
 fn percentage(value: Dimension) -> bool {
-  return value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc
+  return value.relative()
 }
 
 fn needsMin(value: Dimension) -> bool {

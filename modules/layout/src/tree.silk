@@ -57,7 +57,7 @@ impl Node {
     }
   }
 }
-fn sameDimension(a: Dimension, b: Dimension) -> bool { return a.kind == b.kind && a.value == b.value && a.percent == b.percent }
+fn sameDimension(a: Dimension, b: Dimension) -> bool { return a.kind == b.kind && a.value == b.value && a.percent == b.percent && a.bound == b.bound }
 fn sameEdges(a: &Edges, b: &Edges) -> bool {
   return sameDimension(a.top, b.top) && sameDimension(a.right, b.right) && sameDimension(a.bottom, b.bottom) && sameDimension(a.left, b.left)
 }

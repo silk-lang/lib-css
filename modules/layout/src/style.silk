@@ -60,6 +60,9 @@ impl Equal for SizeContainment {
 pub struct Style {
   pub display: Display,
   pub sizeContainment: SizeContainment,
+  // CSS Lists 3 §3.2: an outside `::marker` box. It is out of flow; its list item, the
+  // parent, places it beside its first line box (see `markers.silk`).
+  pub outsideMarker: bool,
   // Tree-managed handle, never a transferable template value. setStyle preserves
   // it; use Tree.setGrid to replace/reset owned grid data.
   pub grid: usize,
@@ -150,6 +153,7 @@ impl Style {
     return Style {
       display: Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flow },
       sizeContainment: SizeContainment.None,
+      outsideMarker: false,
       grid: 0,
       width: Dimension.auto(), height: Dimension.auto(),
       minWidth: Dimension.auto(), minHeight: Dimension.auto(),
