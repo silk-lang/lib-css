@@ -10,7 +10,7 @@ import silk.geometry.insets { Insets }
 // Keeping a percentage coefficient distinguishes 0% from 0px in indefinite axes.
 /// `Least` is `min(value, percent)` and `Most` is `max(value, percent)`, a length against a
 /// percentage, for sizes only: `width: min(100%, 600px)`.
-pub enum DimensionKind { Auto, Length, Percent, Calc, MinContent, MaxContent, FitContent, Content, None, Normal, Least, Most }
+pub enum DimensionKind { Auto, Length, Percent, Calc, Least, Most, MinContent, MaxContent, FitContent, Content, None, Normal }
 pub struct Dimension { pub kind: DimensionKind, pub value: f32, pub percent: f32 }
 impl Copy for Dimension {}
 impl Equal for Dimension {
