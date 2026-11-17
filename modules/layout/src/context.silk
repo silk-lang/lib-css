@@ -1,6 +1,6 @@
 import silk.core.ownership { Copy }
 import style { SizeContainment }
-import geometry { OptionalSize, AvailableSpace, Size, Point, ResolvedEdges, ScrollbarMetrics, max, clamp }
+import geometry { OptionalSize, AvailableSpace, Size, Point, ResolvedEdges, ScrollbarMetrics, max, min, clamp }
 import style { Dimension, DimensionKind, Edges, Style, BoxSizing, Position, Display, DisplayInside, DisplayOutside, Overflow, ScrollbarWidth, ScrollbarGutter, Float, WritingMode, TextOrientation, Direction, Align, OverflowAlignment, VerticalAlignKind }
 import fragmentation { FragmentInput }
 
@@ -97,11 +97,15 @@ pub fn scrollbarGutter(style: &Style, metrics: ScrollbarMetrics, horizontal: boo
   return result
 }
 pub fn resolves(value: Dimension, definite: bool) -> bool {
-  return value.kind == DimensionKind.Length || ((value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc) && definite)
+  return value.kind == DimensionKind.Length || (definite && value.relative())
 }
 pub fn resolve(value: Dimension, basis: f32, definite: bool, fallback: f32) -> f32 {
   if value.kind == DimensionKind.Length { return value.value }
-  if definite && (value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc) { return value.value + value.percent * basis }
+  if definite {
+    if value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc { return value.value + value.percent * basis }
+    if value.kind == DimensionKind.Least { return min(value.value, value.percent * basis) }
+    if value.kind == DimensionKind.Most { return max(value.value, value.percent * basis) }
+  }
   return fallback
 }
 pub fn edges(value: Edges, basis: f32, definite: bool) -> ResolvedEdges {
@@ -119,6 +123,8 @@ pub fn edges(value: Edges, basis: f32, definite: bool) -> ResolvedEdges {
 fn minimumLength(value: Dimension, basis: f32, definite: bool) -> f32 {
   let mut used: f32 = 0.0
   if definite { used = basis }
+  if value.kind == DimensionKind.Least { return min(value.value, value.percent * used) }
+  if value.kind == DimensionKind.Most { return max(value.value, value.percent * used) }
   return value.value + value.percent * used
 }
 @inlineAlways
@@ -333,7 +339,7 @@ pub fn selfCollapsingSize(style: &Style, parent: OptionalSize, inlineDefinite: b
     parentBlock = parent.width
     parentBlockDefinite = parent.widthDefinite
   }
-  let automaticBlock = preferredBlock.kind == DimensionKind.Auto || ((preferredBlock.kind == DimensionKind.Percent || preferredBlock.kind == DimensionKind.Calc) && !parentBlockDefinite)
+  let automaticBlock = preferredBlock.kind == DimensionKind.Auto || (preferredBlock.relative() && !parentBlockDefinite)
   // CSS 2.1 §8.3.1 uses the computed height, not a max-size-clamped zero.
   // Sizing 4 §4.2.1 excludes a ratio-dependent automatic block size.
   return resolve(preferredBlock, parentBlock, parentBlockDefinite, -1.0) == 0.0 || (automaticBlock && !(style.aspectRatio > 0.0 && inlineDefinite))

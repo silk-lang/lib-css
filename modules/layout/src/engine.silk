@@ -595,7 +595,7 @@ fn orthogonalAvailable(input: &Input, available: AvailableSpace, horizontal: boo
 
 @inlineAlways
 fn percentLike(value: Dimension) -> bool {
-  return value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc
+  return value.relative()
 }
 
 fn percentEdges(value: &Edges) -> bool {
@@ -1622,8 +1622,8 @@ effect fn prepareSizing<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
   // their available inline space is indefinite. Do not change input.parent.
   let horizontal = style.writingMode == WritingMode.HorizontalTb
   let orthogonal = horizontal != parentInlineHorizontal && !style.replaced
-  let autoWidth = style.width.kind == DimensionKind.Auto || ((style.width.kind == DimensionKind.Percent || style.width.kind == DimensionKind.Calc) && !input.parent.widthDefinite)
-  let autoHeight = style.height.kind == DimensionKind.Auto || ((style.height.kind == DimensionKind.Percent || style.height.kind == DimensionKind.Calc) && !input.parent.heightDefinite)
+  let autoWidth = style.width.kind == DimensionKind.Auto || (style.width.relative() && !input.parent.widthDefinite)
+  let autoHeight = style.height.kind == DimensionKind.Auto || (style.height.relative() && !input.parent.heightDefinite)
   if inherited & 1 == 0 && orthogonal && horizontal && !input.intrinsicWidth && (autoWidth || style.width.kind == DimensionKind.FitContent) && sizing.request.availableWidth.kind == AvailableKind.MaxContent && input.parent.widthDefinite {
     sizing.request.availableWidth = AvailableSpace.definite(input.parent.width)
   }
