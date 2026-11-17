@@ -149,6 +149,12 @@ pub struct MatchContext {
   /// Shared across a document's matching work; exhaustion is CssError.MatchLimit, never false.
   pub remainingSteps: usize,
   pub containers: List<ContainerDependency>,
+  /// What matching read since the caller last cleared it: `selectors.READS_*` bits for the
+  /// element being matched and its siblings, the same bits shifted left by
+  /// `selectors.READS_ABOVE` for its ancestors and theirs. Failed tests count.
+  pub reads: u32,
+  /// Whether the element under test is an ancestor of the one being matched.
+  pub above: bool,
 }
 
 impl MatchContext {
@@ -161,6 +167,8 @@ impl MatchContext {
       shadowHost: NO_ELEMENT,
       remainingSteps: 64000000,
       containers: List<ContainerDependency>.make(),
+      reads: 0,
+      above: false,
     }
   }
 

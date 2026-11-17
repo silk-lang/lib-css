@@ -6,7 +6,7 @@ import registration { Parsed }
 import registration
 import resolver { Rule as MatchRule }
 import cascade { Priority, Origin }
-import tokens { TokenBuffer, TokenRange, Kind, Limits, CssError, CssErrorKind, equal, insensitive }
+import tokens { TokenBuffer, TokenRange, Span, Kind, Limits, CssError, CssErrorKind, equal, insensitive }
 import lexer
 import syntax { Rule, RuleKind }
 import syntax
@@ -21,7 +21,6 @@ import colors
 import supports
 import values { Store }
 import written
-import cssom_serialization
 import container_queries
 import condition_cursor
 import declaration_values
@@ -471,9 +470,21 @@ effect fn keyframeOffsets(source: &TokenBuffer, range: TokenRange) -> List<f64>
   return move out
 }
 
+/// The tokens of `range` as the sheet spelled them. Serialized tokens are not the same
+/// selector: `2n+1` is a dimension and a number whose sign only the spelling keeps.
+effect fn spelling(source: &TokenBuffer, range: TokenRange) -> Bytes
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut out = Bytes.make()
+  if range.start < range.end {
+    let tokens = source.tokens.asSlice()
+    run out.append(source.text(Span { start: tokens[range.start].source.start, end: tokens[range.end - 1].source.end }))
+  }
+  return move out
+}
+
 effect fn nestedSelector(source: &TokenBuffer, range: TokenRange, parent: &[u8]) -> Bytes
   ! OutOfMemoryError ? &mut Allocator {
-  if parent.length == 0 { return run cssom_serialization.components(source, range) }
+  if parent.length == 0 { return run spelling(source, range) }
   let mut out = Bytes.make()
   let mut start = range.start
   let mut at = start
@@ -503,7 +514,7 @@ effect fn nestedArm(source: &TokenBuffer, range: TokenRange, parent: &[u8]) -> B
     if let Kind.Delim { scalar } = source.tokens.asSlice()[i].kind {
       if scalar != 38 { i = i + 1
         continue }
-      let before = run cssom_serialization.components(source, TokenRange { start: start, end: i })
+      let before = run spelling(source, TokenRange { start: start, end: i })
       run out.append(before.asSlice())
       run out.append(b":is(")
       run out.append(parent)
@@ -518,7 +529,7 @@ effect fn nestedArm(source: &TokenBuffer, range: TokenRange, parent: &[u8]) -> B
     run out.append(parent)
     run out.append(b") ")
   }
-  let rest = run cssom_serialization.components(source, TokenRange { start: start, end: range.end })
+  let rest = run spelling(source, TokenRange { start: start, end: range.end })
   run out.append(rest.asSlice())
   return move out
 }

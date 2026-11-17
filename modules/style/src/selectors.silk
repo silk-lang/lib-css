@@ -20,6 +20,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.option { Option }
 import silk.num.usize
 import silk.num.u8
+import silk.num.u32
 import silk.num.f64
 import silk.num.i64
 
@@ -279,6 +280,65 @@ pub const READS_INDEX: u32 = 4
 pub const READS_SIBLINGS: u32 = 8
 /// `:has()`.
 pub const READS_DESCENDANTS: u32 = 16
+/// How far `MatchContext.reads` shifts the bits of a test made on an ancestor.
+pub const READS_ABOVE: u32 = 8
+
+const PERIOD_LIMIT: usize = 64
+
+/// What elements have to agree on, in numbers, before one's match holds for another whose
+/// own name, attributes and state are the same. Every figure is an upper bound.
+pub struct Sharing {
+  /// How many elements before it the `+` and `~` steps of one selector can test.
+  pub siblings: usize,
+  /// Indexes this far apart pass the same `:nth-*()` tests once past `lead` and `tail`.
+  /// Zero when there is no such distance: an `of` list, or a period over 64.
+  pub period: usize,
+  /// The highest index from the start that an index test tells from the ones after it.
+  pub lead: usize,
+  /// The same, counted from the end.
+  pub tail: usize,
+  /// Whether a test with a period counts from the end, so that the number of siblings matters.
+  pub fromEnd: bool,
+}
+
+impl Copy for Sharing {}
+
+fn gcd(a: usize, b: usize) -> usize {
+  let mut x = a
+  let mut y = b
+  while y != 0 {
+    let rest = x % y
+    x = y
+    y = rest
+  }
+  return x
+}
+
+impl Sharing {
+  pub fn none() -> Sharing { return Sharing { siblings: 0, period: 1, lead: 0, tail: 0, fromEnd: false } }
+
+  /// The bounds that hold for the selectors of both.
+  pub fn with(self: Self, other: Sharing) -> Sharing {
+    let mut period: usize = 0
+    if self.period != 0 && other.period != 0 {
+      period = self.period / gcd(self.period, other.period) * other.period
+      if period > PERIOD_LIMIT { period = 0 }
+    }
+    return Sharing {
+      siblings: if self.siblings > other.siblings { self.siblings } else { other.siblings },
+      period: period,
+      lead: if self.lead > other.lead { self.lead } else { other.lead },
+      tail: if self.tail > other.tail { self.tail } else { other.tail },
+      fromEnd: self.fromEnd || other.fromEnd,
+    }
+  }
+}
+
+fn magnitude(value: f64) -> usize {
+  let positive = if value < 0.0 { 0.0 - value } else { value }
+  // A step or offset this large is one no period or run of siblings reaches.
+  return if positive > 1000000.0 { 1000000 } else { i64.toUsize(f64.toI64(positive)) }
+}
 
 impl SelectorList {
   /// The `READS_*` bits of every compound and nested selector, including failed logical arms.
@@ -299,6 +359,40 @@ impl SelectorList {
           if pseudo == Pseudo.Empty { result = result | READS_EMPTY }
           else if pseudo == Pseudo.FirstChild || pseudo == Pseudo.LastChild || pseudo == Pseudo.OnlyChild { result = result | READS_EDGE }
           else if pseudo == Pseudo.FirstType || pseudo == Pseudo.LastType || pseudo == Pseudo.OnlyType { result = result | READS_INDEX }
+        }
+        _ => {}
+      }
+      i = i + 1
+    }
+    return result
+  }
+
+  /// The `Sharing` bounds of every compound and nested selector of the list.
+  pub fn sharing(self: &Self) -> Sharing {
+    let mut result = Sharing.none()
+    let mut i: usize = 0
+    while i < self.compounds.length() {
+      let relation = self.compounds.asSlice()[i].relation
+      if relation == Combinator.Adjacent || relation == Combinator.Sibling { result.siblings = result.siblings + 1 }
+      i = i + 1
+    }
+    i = 0
+    while i < self.simples.length() {
+      match &self.simples.asSlice()[i].test {
+        Test.Nth { a, b, reverse, list, .. } => {
+          let step = magnitude(a)
+          let mut one = Sharing.none()
+          if list != NONE || step > PERIOD_LIMIT { one.period = 0 }
+          else if step != 0 {
+            one.period = step
+            one.fromEnd = reverse && step > 1
+          }
+          if reverse { one.tail = magnitude(b) } else { one.lead = magnitude(b) }
+          result = result.with(one)
+        }
+        Test.State { pseudo } => {
+          if pseudo == Pseudo.FirstType || pseudo == Pseudo.OnlyType { if result.lead == 0 { result.lead = 1 } }
+          if pseudo == Pseudo.LastType || pseudo == Pseudo.OnlyType { if result.tail == 0 { result.tail = 1 } }
         }
         _ => {}
       }
@@ -2080,6 +2174,11 @@ pub effect fn matchElementRecorded<T: ElementTree>(
   return RecordedMatch { specificity: result, positional: positional }
 }
 
+@inlineAlways
+fn note(context: &mut MatchContext, bit: u32) -> () {
+  context.reads = context.reads | (if context.above { u32.shiftLeft(bit, READS_ABOVE) } else { bit })
+}
+
 fn subjectTarget(ast: &SelectorList, compound: usize) -> PseudoTarget {
   return ast.compounds.asSlice()[compound].target
 }
@@ -2257,6 +2356,8 @@ effect fn matchComplex<T: ElementTree>(
     return run anchored(tree, node, anchor, compound.relation, &mut context.*)
   }
   let siblings = compound.relation == Combinator.Adjacent || compound.relation == Combinator.Sibling
+  let below = context.above
+  if siblings { note(&mut context.*, READS_SIBLINGS) } else { context.above = true }
   let mut candidate = if siblings {
     run scopedSibling(tree, node, false, &mut context.*)
   } else {
@@ -2274,6 +2375,7 @@ effect fn matchComplex<T: ElementTree>(
       &mut context.*,
       depth + 1,
     ) {
+      context.above = below
       return true
     }
     if compound.relation == Combinator.Child || compound.relation == Combinator.Adjacent {
@@ -2285,6 +2387,7 @@ effect fn matchComplex<T: ElementTree>(
       scopedParent(tree, candidate, context.shadowHost)
     }
   }
+  context.above = below
   return false
 }
 
@@ -2388,6 +2491,7 @@ effect fn matchNormal<T: ElementTree>(
     matchesAny(ast, buffer, tree, list, node, NONE, &mut normal, depth),
   )
   context.remainingSteps = normal.remainingSteps
+  context.reads = context.reads | normal.reads
   match &result {
     Result<bool, CssError>.Success { value } => {
       return value
@@ -2495,7 +2599,12 @@ effect fn matchTest<T: ElementTree>(
         return false
       }
       if kind == FunctionKind.Has {
-        return run hasRelative(ast, buffer, tree, list, node, &mut context.*, depth)
+        note(&mut context.*, READS_DESCENDANTS)
+        // The argument's own steps climb from a descendant: they are not about ancestors.
+        let below = context.above
+        let found = run hasRelative(ast, buffer, tree, list, node, &mut context.*, depth)
+        context.above = below
+        return found
       }
       let matched = run matchesAny(ast, buffer, tree, list, node, NONE, &mut context.*, depth)
       return if kind == FunctionKind.Not {
@@ -2505,6 +2614,7 @@ effect fn matchTest<T: ElementTree>(
       }
     }
     Test.Nth { a, b, reverse, ofType, list } => {
+      note(&mut context.*, READS_INDEX)
       if list != NONE
         && !run matchesAny(ast, buffer, tree, list, node, NONE, &mut context.*, depth) {
         return false
@@ -2758,6 +2868,7 @@ effect fn matchState<T: ElementTree>(
     return ElementTree.isRoot(tree, node)
   }
   if state == Pseudo.Empty {
+    note(&mut context.*, READS_EMPTY)
     return ElementTree.isEmpty(tree, node)
   }
   if state == Pseudo.Scope {
@@ -2781,6 +2892,7 @@ effect fn matchState<T: ElementTree>(
     || state == Pseudo.OnlyType
   let last = state == Pseudo.LastChild || state == Pseudo.OnlyChild || state == Pseudo.LastType
     || state == Pseudo.OnlyType
+  if first || last { note(&mut context.*, if typed { READS_INDEX } else { READS_EDGE }) }
   if first {
     let mut candidate = run scopedSibling(tree, node, false, &mut context.*)
     while candidate != NO_ELEMENT {
