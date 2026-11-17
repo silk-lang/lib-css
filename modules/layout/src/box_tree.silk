@@ -8,6 +8,8 @@ import style { SizeContainment, Style, Display, DisplayOutside, DisplayInside, W
 import tree { Node, Measurement, NO_NODE }
 import context { outOfFlow, scrollable, overflowForAxis }
 import grid_style { GridTemplate }
+import silk.num.u32
+import shapes { FloatShape }
 
 // A Table lays out its row groups, rows, column groups, columns, cells and captions
 // itself (table.silk); a TablePart (row group, row or column group) only places its
@@ -53,6 +55,8 @@ pub struct BoxTree<'a> {
   pub styles: &'a [Style],
   pub grids: &'a [GridTemplate],
   pub gridNames: &'a [String],
+  // The tree's `shape-outside` areas, by `Style.shape` (see Tree.setShape).
+  pub shapes: &'a [FloatShape],
   textStyles: List<usize>,
   // Whether any box is a column set (see columnChildren).
   pub columnSets: bool,
@@ -61,7 +65,7 @@ impl<'tree> BoxTree<'tree> {
   // A box tree built from these sources at an earlier revision, when no
   // change since could alter which boxes are generated.
   pub fn restore<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [GridTemplate], gridNames: &'a [String], boxes: List<BoxNode>, anonymousStyles: List<Style>, anonymousOrigins: List<usize>, anonymousText: List<bool>, firstBySource: List<usize>, lastBySource: List<usize>, copyScrolls: bool) -> BoxTree<'a> {
-    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, sources: sources, styles: styles, grids: grids, gridNames: gridNames, textStyles: List<usize>.make(), columnSets: false }
+    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, sources: sources, styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false }
     if !copyScrolls { return move result }
     let values = result.boxes.asMutSlice()
     let mut index: usize = 0
@@ -96,6 +100,12 @@ impl<'tree> BoxTree<'tree> {
   @inlineAlways
   pub fn node(self: &Self, id: usize) -> &BoxNode { return &self.boxes.asSlice()[id] }
   @inlineAlways
+  // The `shape-outside` area of box `id`, if it has one.
+  pub fn shape(self: &Self, id: usize) -> Option<&FloatShape> {
+    let handle = u32.toUsize(self.style(id).shape)
+    if handle == 0 || handle >= self.shapes.length { return Option<&FloatShape>.None }
+    return Option<&FloatShape>.some(&self.shapes[handle])
+  }
   pub fn style(self: &Self, id: usize) -> &Style {
     let node = self.node(id)
     if node.anonymousStyle != NO_NODE { return &self.anonymousStyles.asSlice()[node.anonymousStyle] }
@@ -613,7 +623,7 @@ pub effect fn build<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [Gr
     boxes: List<BoxNode>.make(), anonymousStyles: List<Style>.make(),
     anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
     firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), sources: sources,
-    styles: styles, grids: grids, gridNames: gridNames, textStyles: List<usize>.make(), columnSets: false,
+    styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false,
   }
   run result.boxes.reserveExact(sources.length + 1)
   run result.firstBySource.reserveExact(sources.length)

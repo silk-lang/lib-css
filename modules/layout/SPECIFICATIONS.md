@@ -262,6 +262,10 @@ Limits: a multicolumn container inside another one or inside printed pages lays 
 
 [Lists 3 §3.2](https://drafts.csswg.org/css-lists-3/#list-style-position-property): the host generates the `::marker` box and its text (counters are a host concern). An inside marker is an ordinary inline box. An outside marker is the list item's first child with `outsideMarker`; it is out of flow, takes no part in the item's sizing, and after the item's contents are laid out `markers.silk` lays it out shrink-to-fit and places it with its inline end at the item's inline-start border edge and its first baseline on the item's first baseline, which may be a line of a block descendant (`li > p`). Without a baseline it sits at the item's content top. Limits: a fragmented item (in columns or pages) does not place its marker; the marker adds to no ancestor's intrinsic size.
 
+### Float shapes
+
+[Shapes 1 §3](https://drafts.csswg.org/css-shapes-1/#shape-outside-property): `Tree.setShape` gives a float a `shape-outside` area (`circle()`, `ellipse()`, `inset()`, `polygon()` or a reference box with its border radii, plus `shape-margin`). Line boxes beside the float wrap around the area, widened by the margin and cut to the margin box; where the area is empty for a line, the line takes the full measure. Floats still place each other and block formatting roots by their margin boxes. A line that does not fit beside a curve tries again one line lower. Ten Chrome fixtures (`shape-outside-*`) cover each kind, reference boxes and margins. Limits: `shape-margin` around a polygon is sampled along each edge, not exact; vertical writing modes are mapped but not checked against Chrome (the fixture text profile is horizontal only); images (`shape-image-threshold`) are not supported.
+
 ### Verified browser differences
 
 The following reduced cases were executed against Chrome `155.0.8059.85`, revision `0e66b94549a8bd85f03fbdf189b752d6e7b63c32`. The specification-derived results are intentional; the differential harness still reports mismatches rather than silently excluding them.
