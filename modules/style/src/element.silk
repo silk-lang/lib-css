@@ -6,6 +6,7 @@ import tokens { CssError, CssErrorKind }
 import tokens
 import silk.core.ownership { Copy }
 import silk.collections.list { List }
+import silk.collections.slice { Slice }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 
 pub const NO_ELEMENT: usize = usize.MAX
@@ -139,6 +140,23 @@ pub struct ContainerDependency {
 }
 impl Copy for ContainerDependency {}
 
+/// An element a match asked something that its own subtree can change without the element's
+/// own identity or state changing: the host flags it and restyles it when that happens.
+pub struct Watch {
+  pub node: usize,
+  pub bits: u32,
+}
+impl Copy for Watch {}
+
+/// `:has()` was evaluated with this element as its anchor.
+pub const WATCH_HAS: u32 = 1
+/// One of those `:has()` arguments starts with `+` or `~`: it reads the anchor's later siblings.
+pub const WATCH_HAS_SIBLINGS: u32 = 2
+/// `:focus-within` was evaluated on this element.
+pub const WATCH_FOCUS_WITHIN: u32 = 4
+
+const WATCH_LIMIT: usize = 8
+
 pub struct MatchContext {
   pub scope: usize,
   pub target: usize,
@@ -155,6 +173,10 @@ pub struct MatchContext {
   pub reads: u32,
   /// Whether the element under test is an ancestor of the one being matched.
   pub above: bool,
+  watches: [Watch; 8],
+  watchCount: usize,
+  /// More elements were watched than `watched` holds: the host must assume any element was.
+  pub watchOverflow: bool,
 }
 
 impl MatchContext {
@@ -169,7 +191,37 @@ impl MatchContext {
       containers: List<ContainerDependency>.make(),
       reads: 0,
       above: false,
+      watches: [Watch { node: NO_ELEMENT, bits: 0 }; 8],
+      watchCount: 0,
+      watchOverflow: false,
     }
+  }
+
+  /// The elements watched since `clearWatches`, each once.
+  pub fn watched(self: &Self) -> &[Watch] {
+    return Slice.view<Watch>(&self.watches, 0, self.watchCount)
+  }
+
+  pub fn clearWatches(self: &mut Self) -> () {
+    self.watchCount = 0
+    self.watchOverflow = false
+  }
+
+  pub fn watch(self: &mut Self, node: usize, bits: u32) -> () {
+    let mut i: usize = 0
+    while i < self.watchCount {
+      if self.watches[i].node == node {
+        self.watches[i].bits = self.watches[i].bits | bits
+        return ()
+      }
+      i = i + 1
+    }
+    if self.watchCount == WATCH_LIMIT {
+      self.watchOverflow = true
+      return ()
+    }
+    self.watches[self.watchCount] = Watch { node: node, bits: bits }
+    self.watchCount = self.watchCount + 1
   }
 
   pub fn containerResult(self: &Self, sheet: u32, condition: usize) -> Option<bool> {

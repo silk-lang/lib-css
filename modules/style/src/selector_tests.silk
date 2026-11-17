@@ -586,6 +586,38 @@ test effect fn hostStatesMatchThroughCombinatorsAndLogicalSelectors() -> ()
   run checkState(b":optional", 2, true, 0, 1, 0, element.OPTIONAL)
 }
 
+effect fn watchOf(source: &[u8], node: usize, watched: usize) -> u32
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(source, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  let tree = Tree { states: 0 }
+  let mut context = MatchContext.make(1, 2)
+  match &parsed {
+    Option<SelectorList>.Some { value } => { drop run selectors.matchElement(&value, &buffer, &tree, node, &mut context) }
+    _ => { run Testing.expect(false, "selector must parse") }
+  }
+  run Testing.expect(!context.watchOverflow, "a few watched elements fit")
+  let entries = context.watched()
+  let mut i: usize = 0
+  while i < entries.length {
+    if entries[i].node == watched { return entries[i].bits }
+    i = i + 1
+  }
+  return 0
+}
+
+test effect fn matchingReportsHasAnchorsAndFocusWithinElements() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  run Testing.expect((run watchOf(b"g:has(> rect)", 1, 1)) == element.WATCH_HAS, "the subject of :has() is its anchor")
+  run Testing.expect((run watchOf(b"rect:has(+ circle)", 2, 2)) == (element.WATCH_HAS | element.WATCH_HAS_SIBLINGS), "a sibling argument reads past the anchor's subtree")
+  run Testing.expect((run watchOf(b"g:has(> .absent) > circle", 3, 1)) == element.WATCH_HAS && (run watchOf(b"g:has(> .absent) > circle", 3, 3)) == 0, "a failed :has() on an ancestor is still watched there")
+  run Testing.expect((run watchOf(b"rect:has(circle)", 3, 3)) == 0 && (run watchOf(b":has(circle).absent", 2, 2)) == 0 && (run watchOf(b":focus-within.absent", 2, 2)) == 0, "a compound whose other tests fail watches nothing, in any order")
+  run Testing.expect((run watchOf(b"g:focus-within > rect", 2, 1)) == element.WATCH_FOCUS_WITHIN && (run watchOf(b"g:focus-within > rect", 2, 2)) == 0, ":focus-within is watched on the element it was asked of")
+  run Testing.expect((run watchOf(b"g:has(:focus-within)", 1, 1)) == element.WATCH_HAS && (run watchOf(b"g:has(:focus-within)", 1, 2)) == element.WATCH_FOCUS_WITHIN, "states read inside :has() are watched on the candidates")
+}
+
 test effect fn invalidationKeysIncludeRelationalAndFailedLogicalArms() -> ()
   ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()

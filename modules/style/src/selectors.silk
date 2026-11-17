@@ -2340,11 +2340,23 @@ effect fn matchComplex<T: ElementTree>(
       return false
     }
   }
+  // Tests that are watched wait until the others pass, so that only elements the rest of the
+  // compound selects are reported; `:has()` is also the costliest test.
+  let mut watched = false
   let mut simple = compound.first
   while simple != NONE {
     run spend(&mut context.*)
     let entry = &ast.simples.asSlice()[simple]
-    if !run matchTest(ast, buffer, tree, &entry.test, node, &mut context.*, depth + 1) {
+    if watches(&entry.test) { watched = true }
+    else if !run matchTest(ast, buffer, tree, &entry.test, node, &mut context.*, depth + 1) {
+      return false
+    }
+    simple = entry.next
+  }
+  simple = if watched { compound.first } else { NONE }
+  while simple != NONE {
+    let entry = &ast.simples.asSlice()[simple]
+    if watches(&entry.test) && !run matchTest(ast, buffer, tree, &entry.test, node, &mut context.*, depth + 1) {
       return false
     }
     simple = entry.next
@@ -2425,8 +2437,30 @@ effect fn anchored<T: ElementTree>(
   return false
 }
 
-// Relative selectors are evaluated right-to-left against candidates in the anchor's
-// following-sibling subtrees and own subtree. Traversal is iterative and allocation-free.
+fn watches(test: &Test) -> bool {
+  return match &test.* {
+    Test.Function { kind, .. } => kind == FunctionKind.Has
+    Test.State { pseudo } => pseudo == Pseudo.FocusWithin
+    _ => false
+  }
+}
+
+/// Whether an arm of the relative selector list `list` starts with `+` or `~`.
+fn readsSiblings(ast: &SelectorList, list: usize) -> bool {
+  let mut arm = list
+  while arm != NONE {
+    let entry = &ast.arms.asSlice()[arm]
+    let mut compound = &ast.compounds.asSlice()[entry.tail]
+    while compound.previous != NONE { compound = &ast.compounds.asSlice()[compound.previous] }
+    if compound.relation == Combinator.Adjacent || compound.relation == Combinator.Sibling { return true }
+    arm = entry.next
+  }
+  return false
+}
+
+// Relative selectors are evaluated right-to-left against candidates in the anchor's own
+// subtree and, when an argument starts with `+` or `~` (`siblings`), in its following
+// siblings' subtrees: no other argument can match there. Traversal is iterative and allocation-free.
 // Testing the left edge against the anchor prevents unrelated descendants from matching.
 effect fn hasRelative<T: ElementTree>(
   ast: &SelectorList,
@@ -2434,6 +2468,7 @@ effect fn hasRelative<T: ElementTree>(
   tree: &T,
   list: usize,
   anchor: usize,
+  siblings: bool,
   context: &mut MatchContext,
   depth: usize,
 ) -> bool
@@ -2466,6 +2501,7 @@ effect fn hasRelative<T: ElementTree>(
         candidate = next
       }
     }
+    if !siblings { return false }
     subtree = run scopedSibling(tree, subtree, true, &mut context.*)
   }
   return false
@@ -2492,6 +2528,13 @@ effect fn matchNormal<T: ElementTree>(
   )
   context.remainingSteps = normal.remainingSteps
   context.reads = context.reads | normal.reads
+  let nested = normal.watched()
+  let mut at: usize = 0
+  while at < nested.length {
+    context.watch(nested[at].node, nested[at].bits)
+    at = at + 1
+  }
+  if normal.watchOverflow { context.watchOverflow = true }
   match &result {
     Result<bool, CssError>.Success { value } => {
       return value
@@ -2600,9 +2643,11 @@ effect fn matchTest<T: ElementTree>(
       }
       if kind == FunctionKind.Has {
         note(&mut context.*, READS_DESCENDANTS)
+        let siblings = readsSiblings(ast, list)
+        context.watch(node, if siblings { element.WATCH_HAS | element.WATCH_HAS_SIBLINGS } else { element.WATCH_HAS })
         // The argument's own steps climb from a descendant: they are not about ancestors.
         let below = context.above
-        let found = run hasRelative(ast, buffer, tree, list, node, &mut context.*, depth)
+        let found = run hasRelative(ast, buffer, tree, list, node, siblings, &mut context.*, depth)
         context.above = below
         return found
       }
@@ -2885,6 +2930,7 @@ effect fn matchState<T: ElementTree>(
   }
   let mask = stateMask(state)
   if mask != 0 {
+    if state == Pseudo.FocusWithin { context.watch(node, element.WATCH_FOCUS_WITHIN) }
     return ElementTree.state(tree, node).contains(mask)
   }
   let typed = state == Pseudo.FirstType || state == Pseudo.LastType || state == Pseudo.OnlyType
