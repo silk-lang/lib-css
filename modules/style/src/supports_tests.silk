@@ -142,10 +142,8 @@ test effect fn booleanGrammarDoesNotShortCircuitValidation() -> ()
 // https://www.w3.org/TR/css-syntax-3/#typedef-any-value
 // https://www.w3.org/TR/mediaqueries-5/#typedef-general-enclosed
 // https://www.w3.org/TR/2022/CR-css-conditional-3-20220113/#typedef-supports-in-parens
-test effect fn generalEnclosedIsFalseNotSelectorSupport() -> ()
+test effect fn generalEnclosedIsFalse() -> ()
   ! AssertionError<'static> | CssError | OutOfMemoryError {
-  run query(b"selector(svg)", false)
-  run query(b"not selector(svg)", true)
   run query(b"not future()", true)
   run query(b"not ()", true)
   run query(b"not (42 !;)", true)
@@ -433,4 +431,36 @@ test effect fn malformedExpandedReferencesNeverBecomeSupported() -> ()
     !acceptedA && !acceptedB && !acceptedC,
     "invalid expanded references and explicit EOF are not conditions",
   )
+}
+
+
+// https://www.w3.org/TR/css-conditional-4/#typedef-supports-selector-fn
+test effect fn selectorFunctionAsksTheSelectorParser() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  run query(b"selector(svg)", true)
+  run query(b"selector(.a > .b:hover)", true)
+  run query(b"selector(:has(> img))", true)
+  run query(b"not selector(.a)", false)
+  run query(b"selector(:no-such-state)", false)
+  run query(b"selector(.a, .b)", false)
+  run query(b"selector(.a) and (fill: red)", true)
+}
+
+// Apps read these through css-properties, whose keywords are wider than the SVG grammars.
+test effect fn layoutPropertiesAnswerWithTheKeywordsAppsRead() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  run query(b"(display: flex)", true)
+  run query(b"(display: inline-grid)", true)
+  run query(b"(display: contents)", true)
+  run query(b"(display: inherit)", true)
+  run query(b"(display: block flex)", false)
+  run query(b"(display: nonsense)", false)
+  run query(b"(overflow: clip)", true)
+  run query(b"(overflow: hidden auto)", true)
+  run query(b"(overflow: overlay)", true)
+  run query(b"(overflow: hidden auto scroll)", false)
+  run query(b"(overflow-x: hidden auto)", false)
+  run query(b"(width: fit-content)", true)
+  run query(b"(height: 50%)", true)
+  run query(b"(width: wide)", false)
 }

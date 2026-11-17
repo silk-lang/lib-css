@@ -142,6 +142,14 @@ effect fn appShorthands() -> () ! AssertionError<'static> | OutOfMemoryError ? &
   run expectLonghand(Property.Grid, &both, Property.GridAutoRows, b"", "both axes cannot be automatic")
   let contain = values.keyword(Keyword.Contain)
   run expectLonghand(Property.OverscrollBehavior, &contain, Property.OverscrollBehaviorY, b"contain", "overscroll-behavior both axes")
+  let mut axes = List<Value>.make()
+  run axes.append(values.keyword(Keyword.Hidden))
+  run axes.append(values.keyword(Keyword.Auto))
+  let overflow = values.sequence(move axes)
+  run expectLonghand(Property.Overflow, &overflow, Property.OverflowX, b"hidden", "overflow's first value is overflow-x")
+  run expectLonghand(Property.Overflow, &overflow, Property.OverflowY, b"auto", "overflow's second value is overflow-y")
+  let clip = values.keyword(Keyword.Clip)
+  run expectLonghand(Property.Overflow, &clip, Property.OverflowY, b"clip", "one overflow value sets both axes")
 }
 
 test effect fn appShorthandsExpand() -> () ! AssertionError<'static> | OutOfMemoryError {
