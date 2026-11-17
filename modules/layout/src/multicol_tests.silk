@@ -144,7 +144,7 @@ effect fn widthsSpansAndFill() ! OutOfMemoryError | TextError | FragmentationErr
   let a = run leaf(&mut tree, container, 10)
   let b = run leaf(&mut tree, container, 10)
   let mut spanStyle = Style.make()
-  spanStyle.columnSpan = ColumnSpan.All
+  spanStyle.multicolSpan = ColumnSpan.All
   let spanner = run tree.append(container, spanStyle)
   run tree.setMeasurement(spanner, 5)
   let c = run leaf(&mut tree, container, 10)

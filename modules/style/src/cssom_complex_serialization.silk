@@ -429,6 +429,34 @@ effect fn appendImageImpl(
       run stops(computed, &mut out.*, store, &items)
       run out.append(b")")
     }
+    Image.Conic { repeating, angle, position: at, stops: items } => {
+      run out.append(
+        if repeating {
+          b"repeating-conic-gradient("
+        } else {
+          b"conic-gradient("
+        },
+      )
+      let mut header = false
+      if !literal(store, angle, 0.0) {
+        run out.append(b"from ")
+        run expr(computed, &mut out.*, store, angle)
+        header = true
+      }
+      if !centered(store, at) {
+        if header {
+          run out.append(b" ")
+        }
+        run out.append(b"at ")
+        run appendPositionImpl(computed, &mut out.*, store, at)
+        header = true
+      }
+      if header {
+        run out.append(b", ")
+      }
+      run stops(computed, &mut out.*, store, &items)
+      run out.append(b")")
+    }
   }
 }
 
