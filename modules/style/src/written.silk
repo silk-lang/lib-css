@@ -30,6 +30,7 @@ import silk.collections.slice { Slice }
 import silk.color.rgba { Rgba }
 import silk.core.option { Option }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.f32
 import silk.num.f64
 
 const COMMA: u8 = 0
@@ -719,6 +720,26 @@ effect fn operand(buffer: &TokenBuffer, start: usize, end: usize, out: &mut List
     Kind.Number { .. } => {}
     Kind.Percentage { .. } => {}
     Kind.Dimension { .. } => {}
+    // The numeric constants of a math function.
+    Kind.Ident { text } => {
+      if first + 1 != last {
+        return false
+      }
+      let name = buffer.text(text)
+      let constant: f32 = if tokens.insensitive(name, b"infinity") {
+        f32.INFINITY
+      } else if tokens.insensitive(name, b"-infinity") {
+        0.0 - f32.INFINITY
+      } else if tokens.insensitive(name, b"pi") {
+        3.1415927
+      } else if tokens.insensitive(name, b"e") {
+        2.7182817
+      } else {
+        return false
+      }
+      run out.append(Value.Unit { value: constant, unit: Unit.Number })
+      return true
+    }
     _ => {
       return false
     }

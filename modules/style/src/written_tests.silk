@@ -141,6 +141,25 @@ effect fn blocks() -> () ! AssertionError<'static> | CssError | OutOfMemoryError
       },
       "a parsed value converts to a computed one",
     )
+    let endless = run written.declarations(b"border-top-left-radius: calc(infinity * 1px); width: calc(-infinity * 1px + 50%)")
+    let wide = endless.asSlice()
+    run Testing.expect(wide.length == 2, "math constants parse")
+    if wide.length == 2 {
+      run Testing.expect(
+        match &convert.length(&wide[0].value, &context) {
+          Option<f32>.Some { value } => value == 33554432.0
+          _ => false
+        },
+        "an infinite length is the largest length",
+      )
+      run Testing.expect(
+        match &convert.dimension(&wide[1].value, &context) {
+          Option<Dimension>.Some { value } => value.kind == DimensionKind.Calc && value.value == -33554432.0
+          _ => false
+        },
+        "and stays finite beside a percentage",
+      )
+    }
   }
 }
 
