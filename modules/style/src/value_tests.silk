@@ -50,6 +50,10 @@ test effect fn paintFallbackAndWholeValueValidation() -> ()
     "CSS-wide keyword is a complete value",
   )
   run Testing.expect(
+    run accepts(Property.Fill, b"revert-layer", Mode.Css) |> Effect.provideMut<Allocator>(&mut allocator),
+    "layer rollback is a CSS-wide value",
+  )
+  run Testing.expect(
     !run accepts(Property.Fill, b"initial red", Mode.Css)
       |> Effect.provideMut<Allocator>(&mut allocator),
     "CSS-wide keyword cannot combine",

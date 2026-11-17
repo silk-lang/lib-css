@@ -125,6 +125,21 @@ effect fn appShorthands() -> () ! AssertionError<'static> | OutOfMemoryError ? &
   run expectLonghand(Property.Columns, &columns, Property.ColumnCount, b"3", "columns count")
   run expectLonghand(Property.Columns, &columns, Property.ColumnWidth, b"200px", "columns width")
 
+  let rows = run values.text(b"auto-flow dense 20px / 100px 100px")
+  run expectLonghand(Property.Grid, &rows, Property.GridTemplateRows, b"none", "auto-flow clears explicit rows")
+  run expectLonghand(Property.Grid, &rows, Property.GridTemplateColumns, b"100px 100px", "auto-flow preserves explicit columns")
+  run expectLonghand(Property.Grid, &rows, Property.GridTemplateAreas, b"none", "auto-flow resets areas")
+  run expectLonghand(Property.Grid, &rows, Property.GridAutoRows, b"20px", "auto-flow uses implicit row sizes")
+  run expectLonghand(Property.Grid, &rows, Property.GridAutoColumns, b"auto", "auto-flow resets implicit column sizes")
+  run expectLonghand(Property.Grid, &rows, Property.GridAutoFlow, b"row dense", "auto-flow preserves density")
+  run expectLonghand(Property.GridTemplate, &rows, Property.GridTemplateColumns, b"", "grid-template does not accept auto-flow")
+  let columnFlow = run values.text(b"100px / dense AUTO-FLOW minmax(20px, 1fr)")
+  run expectLonghand(Property.Grid, &columnFlow, Property.GridTemplateRows, b"100px", "column flow preserves explicit rows")
+  run expectLonghand(Property.Grid, &columnFlow, Property.GridTemplateColumns, b"none", "column flow resets explicit columns")
+  run expectLonghand(Property.Grid, &columnFlow, Property.GridAutoColumns, b"minmax(20px, 1fr)", "column flow preserves functional track sizes")
+  run expectLonghand(Property.Grid, &columnFlow, Property.GridAutoFlow, b"column dense", "dense may precede auto-flow")
+  let both = run values.text(b"auto-flow / auto-flow")
+  run expectLonghand(Property.Grid, &both, Property.GridAutoRows, b"", "both axes cannot be automatic")
   let contain = values.keyword(Keyword.Contain)
   run expectLonghand(Property.OverscrollBehavior, &contain, Property.OverscrollBehaviorY, b"contain", "overscroll-behavior both axes")
 }
@@ -137,4 +152,20 @@ test effect fn appShorthandsExpand() -> () ! AssertionError<'static> | OutOfMemo
 test effect fn boxShorthandsExpand() -> () ! AssertionError<'static> | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run expansion() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn wideExpansion() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let inherit = values.keyword(Keyword.Inherit)
+  let rollback = values.keyword(Keyword.RevertLayer)
+  let initial = values.keyword(Keyword.Initial)
+  run expectLonghand(Property.Border, &inherit, Property.BorderLeftWidth, b"inherit", "wide border keyword reaches widths")
+  run expectLonghand(Property.Font, &initial, Property.FontSize, b"initial", "wide font does not need a font shorthand grammar")
+  run expectLonghand(Property.All, &rollback, Property.Color, b"revert-layer", "all propagates layer rollback")
+  run expectLonghand(Property.All, &rollback, Property.Direction, b"", "all still excludes direction")
+}
+
+test effect fn wideKeywordsExpandIndependentlyOfShorthandGrammar() -> ()
+  ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run wideExpansion() |> Effect.provideMut<Allocator>(&mut allocator)
 }

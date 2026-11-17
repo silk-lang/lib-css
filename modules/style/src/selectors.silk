@@ -1,13 +1,16 @@
-//! Shared Selectors 4 grammar for static XML matching and CSSOM validation.
-//! Pseudo-elements validate but never match ElementTree nodes. Nesting 1 is
+//! Shared Selectors 4 grammar for host-tree matching and CSSOM validation.
+//! Generated pseudo-elements match a separate host-supplied target. Nesting 1 is
 //! validation-only: resolving & requires a parent selector and its specificity.
 //! Pseudo suffix/argument grammar: https://drafts.csswg.org/selectors-4/#pseudo-elements
 //! https://drafts.csswg.org/css-pseudo-4/ and https://drafts.csswg.org/css-shadow-1/
+import sheet_binary { Writer as BinaryWriter, Reader as BinaryReader, DecodeError, DecodeReason }
+import sheet_tokens
 import silk.simd.u8x16
 import silk.simd.mask16
 import tokens { Span, TokenRange, TokenBuffer, Kind, Limits, CssError, CssErrorKind }
 import tokens
-import element { ElementTree, MatchContext, NO_ELEMENT }
+import element
+import element { ElementTree, MatchContext, PseudoTarget, NO_ELEMENT }
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
 import silk.core.ownership { Copy }
@@ -17,6 +20,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.option { Option }
 import silk.num.usize
 import silk.num.u8
+import silk.num.u32
 import silk.num.f64
 import silk.num.i64
 
@@ -132,6 +136,22 @@ enum Pseudo {
   Target,
   Link,
   Never,
+  Hover,
+  Active,
+  Focus,
+  FocusVisible,
+  FocusWithin,
+  Disabled,
+  Enabled,
+  Checked,
+  Indeterminate,
+  PlaceholderShown,
+  ReadOnly,
+  ReadWrite,
+  Required,
+  Optional,
+  Open,
+  PopoverOpen,
   FirstChild,
   LastChild,
   OnlyChild,
@@ -153,6 +173,8 @@ union Test {
   Class { text: Span },
   Attribute { namespace: Namespace, name: Span, value: Span, op: AttributeOp, insensitive: bool },
   State { pseudo: Pseudo },
+  Element { target: PseudoTarget },
+  ElementState { pseudo: Pseudo },
   Function { kind: FunctionKind, list: usize },
   Nth { a: f64, b: f64, reverse: bool, ofType: bool, list: usize },
   Language { range: TokenRange },
@@ -168,6 +190,7 @@ struct Simple {
 impl Copy for Simple {}
 
 struct Compound {
+  target: PseudoTarget,
   namespace: Namespace,
   name: Span,
   named: bool,
@@ -215,12 +238,16 @@ pub enum SubjectKind {
   Any,
   Id,
   Class,
-  LocalName
+  LocalName,
+  /// The arm names a pseudo-element no host has, so it matches nothing.
+  Never
 }
 
 pub struct SubjectKey {
   pub kind: SubjectKind,
   pub text: Span,
+  /// The pseudo-element the arm styles; the arm matches only when the context asks for it.
+  pub target: PseudoTarget,
 }
 
 impl Copy for SubjectKey {}
@@ -230,7 +257,226 @@ pub struct SubjectKeys<'a> {
   nextArm: usize,
 }
 
+pub enum DependencyKind { Class, Id, Attribute, State, Structure, Host }
+
+/// A conservative invalidation key in a selector program. Names address its token buffer.
+/// Sibling invalidation is bidirectional so :has(+ ...) also reaches the earlier subject.
+/// When ancestors and descendants are both set, restyle subtrees of affected ancestors.
+pub struct Dependency {
+  pub kind: DependencyKind,
+  pub name: Span,
+  pub states: u32,
+  pub descendants: bool,
+  pub siblings: bool,
+  pub ancestors: bool,
+}
+impl Copy for Dependency {}
+
+/// `SelectorList.reads` bits: what a match can depend on besides the element's own name,
+/// attributes and state and those of its ancestors.
+/// `:first-child`, `:last-child` and `:only-child`.
+pub const READS_EDGE: u32 = 1
+/// `:empty`.
+pub const READS_EMPTY: u32 = 2
+/// `:nth-*()` and the `*-of-type` pseudo-classes: the element's index among its siblings.
+pub const READS_INDEX: u32 = 4
+/// `+` and `~`: which elements precede it.
+pub const READS_SIBLINGS: u32 = 8
+/// `:has()`.
+pub const READS_DESCENDANTS: u32 = 16
+/// How far `MatchContext.reads` shifts the bits of a test made on an ancestor.
+pub const READS_ABOVE: u32 = 8
+
+const PERIOD_LIMIT: usize = 64
+
+/// What elements have to agree on, in numbers, before one's match holds for another whose
+/// own name, attributes and state are the same. Every figure is an upper bound.
+pub struct Sharing {
+  /// How many elements before it the `+` and `~` steps of one selector can test.
+  pub siblings: usize,
+  /// Indexes this far apart pass the same `:nth-*()` tests once past `lead` and `tail`.
+  /// Zero when there is no such distance: an `of` list, or a period over 64.
+  pub period: usize,
+  /// The highest index from the start that an index test tells from the ones after it.
+  pub lead: usize,
+  /// The same, counted from the end.
+  pub tail: usize,
+  /// Whether a test with a period counts from the end, so that the number of siblings matters.
+  pub fromEnd: bool,
+}
+
+impl Copy for Sharing {}
+
+fn gcd(a: usize, b: usize) -> usize {
+  let mut x = a
+  let mut y = b
+  while y != 0 {
+    let rest = x % y
+    x = y
+    y = rest
+  }
+  return x
+}
+
+impl Sharing {
+  pub fn none() -> Sharing { return Sharing { siblings: 0, period: 1, lead: 0, tail: 0, fromEnd: false } }
+
+  /// The bounds that hold for the selectors of both.
+  pub fn with(self: Self, other: Sharing) -> Sharing {
+    let mut period: usize = 0
+    if self.period != 0 && other.period != 0 {
+      period = self.period / gcd(self.period, other.period) * other.period
+      if period > PERIOD_LIMIT { period = 0 }
+    }
+    return Sharing {
+      siblings: if self.siblings > other.siblings { self.siblings } else { other.siblings },
+      period: period,
+      lead: if self.lead > other.lead { self.lead } else { other.lead },
+      tail: if self.tail > other.tail { self.tail } else { other.tail },
+      fromEnd: self.fromEnd || other.fromEnd,
+    }
+  }
+}
+
+fn magnitude(value: f64) -> usize {
+  let positive = if value < 0.0 { 0.0 - value } else { value }
+  // A step or offset this large is one no period or run of siblings reaches.
+  return if positive > 1000000.0 { 1000000 } else { i64.toUsize(f64.toI64(positive)) }
+}
+
 impl SelectorList {
+  /// The `READS_*` bits of every compound and nested selector, including failed logical arms.
+  pub fn reads(self: &Self) -> u32 {
+    let mut result: u32 = 0
+    let mut i: usize = 0
+    while i < self.compounds.length() {
+      let relation = self.compounds.asSlice()[i].relation
+      if relation == Combinator.Adjacent || relation == Combinator.Sibling { result = result | READS_SIBLINGS }
+      i = i + 1
+    }
+    i = 0
+    while i < self.simples.length() {
+      match &self.simples.asSlice()[i].test {
+        Test.Function { kind, .. } => { if kind == FunctionKind.Has { result = result | READS_DESCENDANTS } }
+        Test.Nth { .. } => { result = result | READS_INDEX }
+        Test.State { pseudo } => {
+          if pseudo == Pseudo.Empty { result = result | READS_EMPTY }
+          else if pseudo == Pseudo.FirstChild || pseudo == Pseudo.LastChild || pseudo == Pseudo.OnlyChild { result = result | READS_EDGE }
+          else if pseudo == Pseudo.FirstType || pseudo == Pseudo.LastType || pseudo == Pseudo.OnlyType { result = result | READS_INDEX }
+        }
+        _ => {}
+      }
+      i = i + 1
+    }
+    return result
+  }
+
+  /// The `Sharing` bounds of every compound and nested selector of the list.
+  pub fn sharing(self: &Self) -> Sharing {
+    let mut result = Sharing.none()
+    let mut i: usize = 0
+    while i < self.compounds.length() {
+      let relation = self.compounds.asSlice()[i].relation
+      if relation == Combinator.Adjacent || relation == Combinator.Sibling { result.siblings = result.siblings + 1 }
+      i = i + 1
+    }
+    i = 0
+    while i < self.simples.length() {
+      match &self.simples.asSlice()[i].test {
+        Test.Nth { a, b, reverse, list, .. } => {
+          let step = magnitude(a)
+          let mut one = Sharing.none()
+          if list != NONE || step > PERIOD_LIMIT { one.period = 0 }
+          else if step != 0 {
+            one.period = step
+            one.fromEnd = reverse && step > 1
+          }
+          if reverse { one.tail = magnitude(b) } else { one.lead = magnitude(b) }
+          result = result.with(one)
+        }
+        Test.State { pseudo } => {
+          if pseudo == Pseudo.FirstType || pseudo == Pseudo.OnlyType { if result.lead == 0 { result.lead = 1 } }
+          if pseudo == Pseudo.LastType || pseudo == Pseudo.OnlyType { if result.tail == 0 { result.tail = 1 } }
+        }
+        _ => {}
+      }
+      i = i + 1
+    }
+    return result
+  }
+
+  /// Builds invalidation keys once for this program, including failed logical arms.
+  /// Relational rules deliberately use coarse reach; simple class rules stay local.
+  pub effect fn dependencies(self: &Self) -> List<Dependency>
+    ! OutOfMemoryError ? &mut Allocator {
+    let mut descendants = false
+    let mut siblings = false
+    let mut ancestors = false
+    let mut structural = false
+    let mut i: usize = 0
+    while i < self.compounds.length() {
+      let relation = self.compounds.asSlice()[i].relation
+      if relation == Combinator.Descendant || relation == Combinator.Child { descendants = true }
+      if relation == Combinator.Adjacent || relation == Combinator.Sibling { siblings = true }
+      if relation != Combinator.None { structural = true }
+      i = i + 1
+    }
+    i = 0
+    while i < self.simples.length() {
+      if let Test.Function { kind, .. } = self.simples.asSlice()[i].test {
+        if kind == FunctionKind.Has { ancestors = true
+          structural = true }
+      }
+      if let Test.Nth { list, .. } = self.simples.asSlice()[i].test {
+        if list != NONE { siblings = true }
+      }
+      i = i + 1
+    }
+    let mut out = List<Dependency>.make()
+    i = 0
+    while i < self.simples.length() {
+      let mut name = emptySpan()
+      let mut states: u32 = 0
+      let mut keep = true
+      let kind = match &self.simples.asSlice()[i].test {
+        Test.Class { text } => { name = text
+          DependencyKind.Class }
+        Test.Id { text } => { name = text
+          DependencyKind.Id }
+        Test.Attribute { name: text, .. } => { name = text
+          DependencyKind.Attribute }
+        Test.State { pseudo } => {
+          states = stateMask(pseudo)
+          if states != 0 { DependencyKind.State }
+          else if pseudo == Pseudo.Empty || pseudo == Pseudo.FirstChild || pseudo == Pseudo.LastChild
+            || pseudo == Pseudo.OnlyChild || pseudo == Pseudo.FirstType || pseudo == Pseudo.LastType || pseudo == Pseudo.OnlyType {
+            structural = true
+            DependencyKind.Structure
+          } else { keep = pseudo != Pseudo.Never
+          DependencyKind.Host }
+        }
+        Test.ElementState { pseudo } => { states = stateMask(pseudo)
+          DependencyKind.State }
+        Test.Nth { .. } => { structural = true
+          DependencyKind.Structure }
+        Test.Language { .. } => { descendants = true
+          DependencyKind.Host }
+        _ => { keep = false
+          DependencyKind.Host }
+      }
+      if keep {
+        run out.append(Dependency { kind: kind, name: name, states: states,
+          descendants: descendants, siblings: siblings, ancestors: ancestors })
+      }
+      i = i + 1
+    }
+    if structural {
+      run out.append(Dependency { kind: DependencyKind.Structure, name: emptySpan(), states: 0,
+        descendants: descendants, siblings: siblings, ancestors: ancestors })
+    }
+    return move out
+  }
+
   pub effect fn copy(self: &Self) -> SelectorList
     ! OutOfMemoryError
     ? &mut Allocator {
@@ -253,6 +499,35 @@ impl SelectorList {
   /// One conservative key per top-level arm. Functional-only subjects remain unkeyed.
   pub fn subjectKeys<'a>(self: &'a Self) -> SubjectKeys<'a> {
     return SubjectKeys<'a> { selectors: self, nextArm: self.head }
+  }
+
+  pub fn hasPseudoElements(self: &Self) -> bool {
+    let mut i: usize = 0
+    while i < self.simples.length() {
+      if let Test.Element { .. } = self.simples.asSlice()[i].test { return true }
+      i = i + 1
+    }
+    return false
+  }
+
+  pub fn hasPseudoTarget(self: &Self, target: PseudoTarget) -> bool {
+    let mut i: usize = 0
+    while i < self.simples.length() {
+      if let Test.Element { target: found } = self.simples.asSlice()[i].test {
+        if found == target { return true }
+      }
+      i = i + 1
+    }
+    return false
+  }
+
+  pub fn hasPseudoStates(self: &Self) -> bool {
+    let mut i: usize = 0
+    while i < self.simples.length() {
+      if let Test.ElementState { .. } = self.simples.asSlice()[i].test { return true }
+      i = i + 1
+    }
+    return false
   }
 }
 
@@ -287,6 +562,7 @@ fn localCompound(ast: &SelectorList, index: usize, depth: usize) -> bool {
       Test.Id { .. } => true
       Test.Class { .. } => true
       Test.Attribute { .. } => true
+      Test.Element { .. } => true
       Test.State { pseudo } => pseudo == Pseudo.Link || pseudo == Pseudo.Empty
         || pseudo == Pseudo.Never
       Test.Function { kind, list } => (kind == FunctionKind.Is || kind == FunctionKind.Not)
@@ -316,17 +592,25 @@ impl<'a> SubjectKeys<'a> {
         SubjectKind.Any
       },
       text: compound.name,
+      target: compound.target,
     }
+    let mut id = false
     let mut simple = compound.first
     while simple != NONE {
       let entry = &self.selectors.simples.asSlice()[simple]
       match &entry.test {
         Test.Id { text } => {
-          return Option<SubjectKey>.Some { value: SubjectKey { kind: SubjectKind.Id, text: text }, }
+          if !id { key = SubjectKey { kind: SubjectKind.Id, text: text, target: compound.target } }
+          id = true
         }
         Test.Class { text } => {
-          if key.kind != SubjectKind.Class {
-            key = SubjectKey { kind: SubjectKind.Class, text: text }
+          if !id && key.kind != SubjectKind.Class {
+            key = SubjectKey { kind: SubjectKind.Class, text: text, target: compound.target }
+          }
+        }
+        Test.State { pseudo } => {
+          if pseudo == Pseudo.Never {
+            return Option<SubjectKey>.Some { value: SubjectKey { kind: SubjectKind.Never, text: compound.name, target: compound.target } }
           }
         }
         _ => {}
@@ -742,6 +1026,7 @@ effect fn parseArm(
     let compound = ast.compounds.length()
     run ast.compounds.append(
       Compound {
+        target: PseudoTarget.None,
         namespace: if name.valid {
           name.namespace
         } else {
@@ -851,7 +1136,12 @@ effect fn parseArm(
                 }
                 pseudoElement = kind
                 specificity.types = specificity.types + 1
-                run appendSimple(&mut ast.*, compound, Test.State { pseudo: Pseudo.Never })
+                let target = element.pseudoTarget(word)
+                if target != PseudoTarget.None {
+                  let compounds = ast.compounds.asMutSlice()
+                  compounds[compound].target = target
+                  run appendSimple(&mut ast.*, compound, Test.Element { target: target })
+                } else { run appendSimple(&mut ast.*, compound, Test.State { pseudo: Pseudo.Never }) }
               } else {
                 if !allowedPseudoClass(pseudoElement, word, false) {
                   return rejected()
@@ -859,7 +1149,8 @@ effect fn parseArm(
                 let state = pseudo(word)
                 match &state {
                   Option<Pseudo>.Some { value } => {
-                    run appendSimple(&mut ast.*, compound, Test.State { pseudo: value })
+                    if pseudoElement != PseudoElement.None { run appendSimple(&mut ast.*, compound, Test.ElementState { pseudo: value }) }
+                    else { run appendSimple(&mut ast.*, compound, Test.State { pseudo: value }) }
                   }
                   _ => {
                     return rejected()
@@ -1146,6 +1437,15 @@ fn pseudoElementKind(word: &[u8]) -> PseudoElement {
     || tokens.insensitive(word, b"details-content") {
     return PseudoElement.ElementBacked
   }
+  if tokens.insensitive(word, b"-webkit-scrollbar")
+    || tokens.insensitive(word, b"-webkit-scrollbar-thumb")
+    || tokens.insensitive(word, b"-webkit-scrollbar-track")
+    || tokens.insensitive(word, b"-webkit-scrollbar-track-piece")
+    || tokens.insensitive(word, b"-webkit-scrollbar-button")
+    || tokens.insensitive(word, b"-webkit-scrollbar-corner")
+    || tokens.insensitive(word, b"-webkit-resizer") {
+    return PseudoElement.TreeAbiding
+  }
   if tokens.insensitive(word, b"search-text") {
     return PseudoElement.SearchText
   }
@@ -1315,26 +1615,61 @@ fn pseudo(word: &[u8]) -> Option<Pseudo> {
   if tokens.insensitive(word, b"only-of-type") {
     return Option<Pseudo>.Some { value: Pseudo.OnlyType }
   }
-  if tokens.insensitive(word, b"hover") || tokens.insensitive(word, b"active")
-    || tokens.insensitive(word, b"focus")
-    || tokens.insensitive(word, b"focus-visible")
-    || tokens.insensitive(word, b"focus-within")
-    || tokens.insensitive(word, b"visited")
-    || tokens.insensitive(word, b"enabled")
-    || tokens.insensitive(word, b"disabled")
-    || tokens.insensitive(word, b"checked")
-    || tokens.insensitive(word, b"indeterminate")
+  if tokens.insensitive(word, b"hover") {
+    return Option<Pseudo>.some(Pseudo.Hover)
+  }
+  if tokens.insensitive(word, b"active") {
+    return Option<Pseudo>.some(Pseudo.Active)
+  }
+  if tokens.insensitive(word, b"focus") {
+    return Option<Pseudo>.some(Pseudo.Focus)
+  }
+  if tokens.insensitive(word, b"focus-visible") {
+    return Option<Pseudo>.some(Pseudo.FocusVisible)
+  }
+  if tokens.insensitive(word, b"focus-within") {
+    return Option<Pseudo>.some(Pseudo.FocusWithin)
+  }
+  if tokens.insensitive(word, b"disabled") {
+    return Option<Pseudo>.some(Pseudo.Disabled)
+  }
+  if tokens.insensitive(word, b"enabled") {
+    return Option<Pseudo>.some(Pseudo.Enabled)
+  }
+  if tokens.insensitive(word, b"checked") {
+    return Option<Pseudo>.some(Pseudo.Checked)
+  }
+  if tokens.insensitive(word, b"indeterminate") {
+    return Option<Pseudo>.some(Pseudo.Indeterminate)
+  }
+  if tokens.insensitive(word, b"placeholder-shown") {
+    return Option<Pseudo>.some(Pseudo.PlaceholderShown)
+  }
+  if tokens.insensitive(word, b"read-only") {
+    return Option<Pseudo>.some(Pseudo.ReadOnly)
+  }
+  if tokens.insensitive(word, b"read-write") {
+    return Option<Pseudo>.some(Pseudo.ReadWrite)
+  }
+  if tokens.insensitive(word, b"required") {
+    return Option<Pseudo>.some(Pseudo.Required)
+  }
+  if tokens.insensitive(word, b"optional") {
+    return Option<Pseudo>.some(Pseudo.Optional)
+  }
+  if tokens.insensitive(word, b"open") {
+    return Option<Pseudo>.some(Pseudo.Open)
+  }
+  if tokens.insensitive(word, b"popover-open") {
+    return Option<Pseudo>.some(Pseudo.PopoverOpen)
+  }
+  if tokens.insensitive(word, b"visited")
     || tokens.insensitive(word, b"unchecked")
-    || tokens.insensitive(word, b"read-only")
-    || tokens.insensitive(word, b"read-write")
-    || tokens.insensitive(word, b"placeholder-shown")
     || tokens.insensitive(word, b"default")
     || tokens.insensitive(word, b"valid")
     || tokens.insensitive(word, b"invalid")
     || tokens.insensitive(word, b"in-range")
     || tokens.insensitive(word, b"out-of-range")
-    || tokens.insensitive(word, b"required")
-    || tokens.insensitive(word, b"optional")
     || tokens.insensitive(word, b"user-valid")
     || tokens.insensitive(word, b"user-invalid")
     || tokens.insensitive(word, b"autofill")
@@ -1782,7 +2117,8 @@ pub effect fn matchElement<T: ElementTree>(
   while arm != NONE {
     run spend(&mut context.*)
     let entry = &selectors.arms.asSlice()[arm]
-    if run matchComplex(selectors, buffer, tree, entry.tail, node, NONE, &mut context.*, 0) {
+    if subjectTarget(selectors, entry.tail) == context.pseudo
+      && run matchComplex(selectors, buffer, tree, entry.tail, node, NONE, &mut context.*, 0) {
       let best = match &result {
         Option<Specificity>.Some { value } => maximum(value, entry.specificity)
         _ => entry.specificity
@@ -1837,7 +2173,8 @@ pub effect fn matchElementRecorded<T: ElementTree>(
             &mut context.*,
           ))
     }
-    if run matchComplex(selectors, buffer, tree, entry.tail, node, NONE, &mut context.*, 0) {
+    if subjectTarget(selectors, entry.tail) == context.pseudo
+      && run matchComplex(selectors, buffer, tree, entry.tail, node, NONE, &mut context.*, 0) {
       let best = match &result {
         Option<Specificity>.Some { value } => maximum(value, entry.specificity)
         _ => entry.specificity
@@ -1847,6 +2184,15 @@ pub effect fn matchElementRecorded<T: ElementTree>(
     arm = entry.next
   }
   return RecordedMatch { specificity: result, positional: positional }
+}
+
+@inlineAlways
+fn note(context: &mut MatchContext, bit: u32) -> () {
+  context.reads = context.reads | (if context.above { u32.shiftLeft(bit, READS_ABOVE) } else { bit })
+}
+
+fn subjectTarget(ast: &SelectorList, compound: usize) -> PseudoTarget {
+  return ast.compounds.asSlice()[compound].target
 }
 
 effect fn matchesAny<T: ElementTree>(
@@ -2006,11 +2352,23 @@ effect fn matchComplex<T: ElementTree>(
       return false
     }
   }
+  // Tests that are watched wait until the others pass, so that only elements the rest of the
+  // compound selects are reported; `:has()` is also the costliest test.
+  let mut watched = false
   let mut simple = compound.first
   while simple != NONE {
     run spend(&mut context.*)
     let entry = &ast.simples.asSlice()[simple]
-    if !run matchTest(ast, buffer, tree, &entry.test, node, &mut context.*, depth + 1) {
+    if watches(&entry.test) { watched = true }
+    else if !run matchTest(ast, buffer, tree, &entry.test, node, &mut context.*, depth + 1) {
+      return false
+    }
+    simple = entry.next
+  }
+  simple = if watched { compound.first } else { NONE }
+  while simple != NONE {
+    let entry = &ast.simples.asSlice()[simple]
+    if watches(&entry.test) && !run matchTest(ast, buffer, tree, &entry.test, node, &mut context.*, depth + 1) {
       return false
     }
     simple = entry.next
@@ -2022,6 +2380,8 @@ effect fn matchComplex<T: ElementTree>(
     return run anchored(tree, node, anchor, compound.relation, &mut context.*)
   }
   let siblings = compound.relation == Combinator.Adjacent || compound.relation == Combinator.Sibling
+  let below = context.above
+  if siblings { note(&mut context.*, READS_SIBLINGS) } else { context.above = true }
   let mut candidate = if siblings {
     run scopedSibling(tree, node, false, &mut context.*)
   } else {
@@ -2039,6 +2399,7 @@ effect fn matchComplex<T: ElementTree>(
       &mut context.*,
       depth + 1,
     ) {
+      context.above = below
       return true
     }
     if compound.relation == Combinator.Child || compound.relation == Combinator.Adjacent {
@@ -2050,6 +2411,7 @@ effect fn matchComplex<T: ElementTree>(
       scopedParent(tree, candidate, context.shadowHost)
     }
   }
+  context.above = below
   return false
 }
 
@@ -2087,8 +2449,30 @@ effect fn anchored<T: ElementTree>(
   return false
 }
 
-// Relative selectors are evaluated right-to-left against candidates in the anchor's
-// following-sibling subtrees and own subtree. Traversal is iterative and allocation-free.
+fn watches(test: &Test) -> bool {
+  return match &test.* {
+    Test.Function { kind, .. } => kind == FunctionKind.Has
+    Test.State { pseudo } => pseudo == Pseudo.FocusWithin
+    _ => false
+  }
+}
+
+/// Whether an arm of the relative selector list `list` starts with `+` or `~`.
+fn readsSiblings(ast: &SelectorList, list: usize) -> bool {
+  let mut arm = list
+  while arm != NONE {
+    let entry = &ast.arms.asSlice()[arm]
+    let mut compound = &ast.compounds.asSlice()[entry.tail]
+    while compound.previous != NONE { compound = &ast.compounds.asSlice()[compound.previous] }
+    if compound.relation == Combinator.Adjacent || compound.relation == Combinator.Sibling { return true }
+    arm = entry.next
+  }
+  return false
+}
+
+// Relative selectors are evaluated right-to-left against candidates in the anchor's own
+// subtree and, when an argument starts with `+` or `~` (`siblings`), in its following
+// siblings' subtrees: no other argument can match there. Traversal is iterative and allocation-free.
 // Testing the left edge against the anchor prevents unrelated descendants from matching.
 effect fn hasRelative<T: ElementTree>(
   ast: &SelectorList,
@@ -2096,6 +2480,7 @@ effect fn hasRelative<T: ElementTree>(
   tree: &T,
   list: usize,
   anchor: usize,
+  siblings: bool,
   context: &mut MatchContext,
   depth: usize,
 ) -> bool
@@ -2128,6 +2513,7 @@ effect fn hasRelative<T: ElementTree>(
         candidate = next
       }
     }
+    if !siblings { return false }
     subtree = run scopedSibling(tree, subtree, true, &mut context.*)
   }
   return false
@@ -2146,16 +2532,21 @@ effect fn matchNormal<T: ElementTree>(
   depth: usize,
 ) -> bool
   ! CssError {
-  let mut normal = MatchContext {
-    scope: context.scope,
-    target: context.target,
-    shadowHost: ElementTree.containingHost(tree, node),
-    remainingSteps: context.remainingSteps,
-  }
+  let mut normal = MatchContext.make(context.scope, context.target)
+  normal.shadowHost = ElementTree.containingHost(tree, node)
+  normal.remainingSteps = context.remainingSteps
   let result = run Effect.result(
     matchesAny(ast, buffer, tree, list, node, NONE, &mut normal, depth),
   )
   context.remainingSteps = normal.remainingSteps
+  context.reads = context.reads | normal.reads
+  let nested = normal.watched()
+  let mut at: usize = 0
+  while at < nested.length {
+    context.watch(nested[at].node, nested[at].bits)
+    at = at + 1
+  }
+  if normal.watchOverflow { context.watchOverflow = true }
   match &result {
     Result<bool, CssError>.Success { value } => {
       return value
@@ -2239,6 +2630,11 @@ effect fn matchTest<T: ElementTree>(
     Test.State { pseudo: state } => {
       return run matchState(tree, node, state, &mut context.*)
     }
+    Test.Element { target } => { return target == context.pseudo }
+    Test.ElementState { pseudo } => {
+      let mask = stateMask(pseudo)
+      return mask != 0 && context.pseudo != PseudoTarget.None && context.pseudoStates.contains(mask)
+    }
     Test.Function { kind, list } => {
       if kind == FunctionKind.Host || kind == FunctionKind.HostContext {
         if context.shadowHost == NO_ELEMENT || node != context.shadowHost {
@@ -2258,7 +2654,14 @@ effect fn matchTest<T: ElementTree>(
         return false
       }
       if kind == FunctionKind.Has {
-        return run hasRelative(ast, buffer, tree, list, node, &mut context.*, depth)
+        note(&mut context.*, READS_DESCENDANTS)
+        let siblings = readsSiblings(ast, list)
+        context.watch(node, if siblings { element.WATCH_HAS | element.WATCH_HAS_SIBLINGS } else { element.WATCH_HAS })
+        // The argument's own steps climb from a descendant: they are not about ancestors.
+        let below = context.above
+        let found = run hasRelative(ast, buffer, tree, list, node, siblings, &mut context.*, depth)
+        context.above = below
+        return found
       }
       let matched = run matchesAny(ast, buffer, tree, list, node, NONE, &mut context.*, depth)
       return if kind == FunctionKind.Not {
@@ -2268,6 +2671,7 @@ effect fn matchTest<T: ElementTree>(
       }
     }
     Test.Nth { a, b, reverse, ofType, list } => {
+      note(&mut context.*, READS_INDEX)
       if list != NONE
         && !run matchesAny(ast, buffer, tree, list, node, NONE, &mut context.*, depth) {
         return false
@@ -2485,6 +2889,28 @@ effect fn attributeMatches(
   return false
 }
 
+fn stateMask(state: Pseudo) -> u32 {
+  return match state {
+    Pseudo.Hover => element.HOVER
+    Pseudo.Active => element.ACTIVE
+    Pseudo.Focus => element.FOCUS
+    Pseudo.FocusVisible => element.FOCUS_VISIBLE
+    Pseudo.FocusWithin => element.FOCUS_WITHIN
+    Pseudo.Disabled => element.DISABLED
+    Pseudo.Enabled => element.ENABLED
+    Pseudo.Checked => element.CHECKED
+    Pseudo.Indeterminate => element.INDETERMINATE
+    Pseudo.PlaceholderShown => element.PLACEHOLDER_SHOWN
+    Pseudo.ReadOnly => element.READ_ONLY
+    Pseudo.ReadWrite => element.READ_WRITE
+    Pseudo.Required => element.REQUIRED
+    Pseudo.Optional => element.OPTIONAL
+    Pseudo.Open => element.OPEN
+    Pseudo.PopoverOpen => element.POPOVER_OPEN
+    _ => 0
+  }
+}
+
 effect fn matchState<T: ElementTree>(
   tree: &T,
   node: usize,
@@ -2499,6 +2925,7 @@ effect fn matchState<T: ElementTree>(
     return ElementTree.isRoot(tree, node)
   }
   if state == Pseudo.Empty {
+    note(&mut context.*, READS_EMPTY)
     return ElementTree.isEmpty(tree, node)
   }
   if state == Pseudo.Scope {
@@ -2513,11 +2940,17 @@ effect fn matchState<T: ElementTree>(
   if state == Pseudo.Never {
     return false
   }
+  let mask = stateMask(state)
+  if mask != 0 {
+    if state == Pseudo.FocusWithin { context.watch(node, element.WATCH_FOCUS_WITHIN) }
+    return ElementTree.state(tree, node).contains(mask)
+  }
   let typed = state == Pseudo.FirstType || state == Pseudo.LastType || state == Pseudo.OnlyType
   let first = state == Pseudo.FirstChild || state == Pseudo.OnlyChild || state == Pseudo.FirstType
     || state == Pseudo.OnlyType
   let last = state == Pseudo.LastChild || state == Pseudo.OnlyChild || state == Pseudo.LastType
     || state == Pseudo.OnlyType
+  if first || last { note(&mut context.*, if typed { READS_INDEX } else { READS_EDGE }) }
   if first {
     let mut candidate = run scopedSibling(tree, node, false, &mut context.*)
     while candidate != NO_ELEMENT {
@@ -2612,4 +3045,459 @@ effect fn languageMatches(language: &[u8], range: &[u8], context: &mut MatchCont
     }
   }
   return true
+}
+
+effect fn writeNamespaceMode(writer: &mut BinaryWriter, value: NamespaceMode) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.byte(match value {
+    NamespaceMode.Any => 0
+    NamespaceMode.Exact => 1
+  })
+}
+
+effect fn readNamespaceMode(reader: &mut BinaryReader<'_>) -> NamespaceMode
+  ! DecodeError {
+  return match run reader.byte() {
+    0 => NamespaceMode.Any
+    1 => NamespaceMode.Exact
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+}
+
+effect fn writeCombinator(writer: &mut BinaryWriter, value: Combinator) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.byte(match value {
+    Combinator.None => 0
+    Combinator.Descendant => 1
+    Combinator.Child => 2
+    Combinator.Adjacent => 3
+    Combinator.Sibling => 4
+  })
+}
+
+effect fn readCombinator(reader: &mut BinaryReader<'_>) -> Combinator
+  ! DecodeError {
+  return match run reader.byte() {
+    0 => Combinator.None
+    1 => Combinator.Descendant
+    2 => Combinator.Child
+    3 => Combinator.Adjacent
+    4 => Combinator.Sibling
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+}
+
+effect fn writeAttributeOp(writer: &mut BinaryWriter, value: AttributeOp) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.byte(match value {
+    AttributeOp.Present => 0
+    AttributeOp.Equal => 1
+    AttributeOp.Word => 2
+    AttributeOp.Hyphen => 3
+    AttributeOp.Prefix => 4
+    AttributeOp.Suffix => 5
+    AttributeOp.Contains => 6
+  })
+}
+
+effect fn readAttributeOp(reader: &mut BinaryReader<'_>) -> AttributeOp
+  ! DecodeError {
+  return match run reader.byte() {
+    0 => AttributeOp.Present
+    1 => AttributeOp.Equal
+    2 => AttributeOp.Word
+    3 => AttributeOp.Hyphen
+    4 => AttributeOp.Prefix
+    5 => AttributeOp.Suffix
+    6 => AttributeOp.Contains
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+}
+
+effect fn writePseudo(writer: &mut BinaryWriter, value: Pseudo) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.byte(match value {
+    Pseudo.Host => 0
+    Pseudo.Root => 1
+    Pseudo.Empty => 2
+    Pseudo.Scope => 3
+    Pseudo.Target => 4
+    Pseudo.Link => 5
+    Pseudo.Never => 6
+    Pseudo.Hover => 7
+    Pseudo.Active => 8
+    Pseudo.Focus => 9
+    Pseudo.FocusVisible => 10
+    Pseudo.FocusWithin => 11
+    Pseudo.Disabled => 12
+    Pseudo.Enabled => 13
+    Pseudo.Checked => 14
+    Pseudo.Indeterminate => 15
+    Pseudo.PlaceholderShown => 16
+    Pseudo.ReadOnly => 17
+    Pseudo.ReadWrite => 18
+    Pseudo.Required => 19
+    Pseudo.Optional => 20
+    Pseudo.Open => 21
+    Pseudo.PopoverOpen => 22
+    Pseudo.FirstChild => 23
+    Pseudo.LastChild => 24
+    Pseudo.OnlyChild => 25
+    Pseudo.FirstType => 26
+    Pseudo.LastType => 27
+    Pseudo.OnlyType => 28
+  })
+}
+
+effect fn readPseudo(reader: &mut BinaryReader<'_>) -> Pseudo
+  ! DecodeError {
+  return match run reader.byte() {
+    0 => Pseudo.Host
+    1 => Pseudo.Root
+    2 => Pseudo.Empty
+    3 => Pseudo.Scope
+    4 => Pseudo.Target
+    5 => Pseudo.Link
+    6 => Pseudo.Never
+    7 => Pseudo.Hover
+    8 => Pseudo.Active
+    9 => Pseudo.Focus
+    10 => Pseudo.FocusVisible
+    11 => Pseudo.FocusWithin
+    12 => Pseudo.Disabled
+    13 => Pseudo.Enabled
+    14 => Pseudo.Checked
+    15 => Pseudo.Indeterminate
+    16 => Pseudo.PlaceholderShown
+    17 => Pseudo.ReadOnly
+    18 => Pseudo.ReadWrite
+    19 => Pseudo.Required
+    20 => Pseudo.Optional
+    21 => Pseudo.Open
+    22 => Pseudo.PopoverOpen
+    23 => Pseudo.FirstChild
+    24 => Pseudo.LastChild
+    25 => Pseudo.OnlyChild
+    26 => Pseudo.FirstType
+    27 => Pseudo.LastType
+    28 => Pseudo.OnlyType
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+}
+
+effect fn writeFunctionKind(writer: &mut BinaryWriter, value: FunctionKind) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.byte(match value {
+    FunctionKind.Is => 0
+    FunctionKind.Not => 1
+    FunctionKind.Has => 2
+    FunctionKind.Host => 3
+    FunctionKind.HostContext => 4
+  })
+}
+
+effect fn readFunctionKind(reader: &mut BinaryReader<'_>) -> FunctionKind
+  ! DecodeError {
+  return match run reader.byte() {
+    0 => FunctionKind.Is
+    1 => FunctionKind.Not
+    2 => FunctionKind.Has
+    3 => FunctionKind.Host
+    4 => FunctionKind.HostContext
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+}
+
+effect fn writeNamespace(writer: &mut BinaryWriter, buffer: &TokenBuffer, value: &Namespace) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writeNamespaceMode(&mut writer.*, value.mode)
+  run writer.data(buffer.text(value.uri))
+}
+
+effect fn readNamespace(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> Namespace
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  return Namespace {
+    mode: run readNamespaceMode(&mut reader.*),
+    uri: run sheet_tokens.readText(&mut reader.*, &mut buffer.*),
+  }
+}
+
+effect fn writeSpecificity(writer: &mut BinaryWriter, buffer: &TokenBuffer, value: &Specificity) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.index(value.ids)
+  run writer.index(value.classes)
+  run writer.index(value.types)
+}
+
+effect fn readSpecificity(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> Specificity
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  return Specificity {
+    ids: run reader.index(),
+    classes: run reader.index(),
+    types: run reader.index(),
+  }
+}
+
+effect fn writeTokenRange(writer: &mut BinaryWriter, buffer: &TokenBuffer, value: &TokenRange) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.index(value.start)
+  run writer.index(value.end)
+}
+
+effect fn readTokenRange(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> TokenRange
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  return TokenRange {
+    start: run reader.index(),
+    end: run reader.index(),
+  }
+}
+
+effect fn writeSimple(writer: &mut BinaryWriter, buffer: &TokenBuffer, value: &Simple) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writeTest(&mut writer.*, buffer, &value.test)
+  run writer.index(value.next)
+}
+
+effect fn readSimple(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> Simple
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  return Simple {
+    test: run readTest(&mut reader.*, &mut buffer.*),
+    next: run reader.index(),
+  }
+}
+
+effect fn writeCompound(writer: &mut BinaryWriter, buffer: &TokenBuffer, value: &Compound) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writeNamespace(&mut writer.*, buffer, &value.namespace)
+  run writer.data(buffer.text(value.name))
+  run writer.flag(value.named)
+  run writer.flag(value.explicitType)
+  run writer.flag(value.hostEligible)
+  run writer.index(value.first)
+  run writer.index(value.previous)
+  run writeCombinator(&mut writer.*, value.relation)
+}
+
+effect fn readCompound(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer, targets: &[PseudoTarget]) -> Compound
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  let mut result = Compound {
+    target: PseudoTarget.None,
+    namespace: run readNamespace(&mut reader.*, &mut buffer.*),
+    name: run sheet_tokens.readText(&mut reader.*, &mut buffer.*),
+    named: run reader.flag(),
+    explicitType: run reader.flag(),
+    hostEligible: run reader.flag(),
+    first: run reader.index(),
+    previous: run reader.index(),
+    relation: run readCombinator(&mut reader.*),
+  }
+  if result.first != NONE {
+    if result.first >= targets.length { run reader.invalid() }
+    result.target = targets[result.first]
+  }
+  return result
+}
+
+effect fn writeArm(writer: &mut BinaryWriter, buffer: &TokenBuffer, value: &Arm) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  run writer.index(value.tail)
+  run writer.index(value.next)
+  run writeSpecificity(&mut writer.*, buffer, &value.specificity)
+}
+
+effect fn readArm(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> Arm
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  return Arm {
+    tail: run reader.index(),
+    next: run reader.index(),
+    specificity: run readSpecificity(&mut reader.*, &mut buffer.*),
+  }
+}
+
+effect fn writeTest(writer: &mut BinaryWriter, buffer: &TokenBuffer, test: &Test) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  match &test.* {
+    Test.Id { text } => {
+      run writer.byte(0)
+      run writer.data(buffer.text(text))
+    }
+    Test.Class { text } => {
+      run writer.byte(1)
+      run writer.data(buffer.text(text))
+    }
+    Test.Attribute { namespace, name, value, op, insensitive } => {
+      run writer.byte(2)
+      run writeNamespace(&mut writer.*, buffer, &namespace)
+      run writer.data(buffer.text(name))
+      run writer.data(buffer.text(value))
+      run writeAttributeOp(&mut writer.*, op)
+      run writer.flag(insensitive)
+    }
+    Test.State { pseudo } => {
+      run writer.byte(3)
+      run writePseudo(&mut writer.*, pseudo)
+    }
+    Test.Function { kind, list } => {
+      run writer.byte(4)
+      run writeFunctionKind(&mut writer.*, kind)
+      run writer.index(list)
+    }
+    Test.Nth { a, b, reverse, ofType, list } => {
+      run writer.byte(5)
+      run writer.number(a)
+      run writer.number(b)
+      run writer.flag(reverse)
+      run writer.flag(ofType)
+      run writer.index(list)
+    }
+    Test.Language { range } => {
+      run writer.byte(6)
+      run writeTokenRange(&mut writer.*, buffer, &range)
+    }
+    Test.Element { target } => {
+      run writer.byte(7)
+      run writer.byte(match target { PseudoTarget.None => 0 PseudoTarget.Before => 1 PseudoTarget.After => 2
+        PseudoTarget.Placeholder => 3 PseudoTarget.Selection => 4 PseudoTarget.Scrollbar => 5
+        PseudoTarget.ScrollbarThumb => 6 PseudoTarget.ScrollbarTrack => 7 })
+    }
+    Test.ElementState { pseudo } => {
+      run writer.byte(8)
+      run writePseudo(&mut writer.*, pseudo)
+    }
+  }
+}
+
+effect fn readTest(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> Test
+  ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  return match run reader.byte() {
+    0 => Test.Id { text: run sheet_tokens.readText(&mut reader.*, &mut buffer.*) }
+    1 => Test.Class { text: run sheet_tokens.readText(&mut reader.*, &mut buffer.*) }
+    2 => Test.Attribute { namespace: run readNamespace(&mut reader.*, &mut buffer.*), name: run sheet_tokens.readText(&mut reader.*, &mut buffer.*), value: run sheet_tokens.readText(&mut reader.*, &mut buffer.*), op: run readAttributeOp(&mut reader.*), insensitive: run reader.flag() }
+    3 => Test.State { pseudo: run readPseudo(&mut reader.*) }
+    4 => Test.Function { kind: run readFunctionKind(&mut reader.*), list: run reader.index() }
+    5 => Test.Nth { a: run reader.number(), b: run reader.number(), reverse: run reader.flag(), ofType: run reader.flag(), list: run reader.index() }
+    6 => Test.Language { range: run readTokenRange(&mut reader.*, &mut buffer.*) }
+    7 => Test.Element { target: match run reader.byte() {
+      1 => PseudoTarget.Before
+      2 => PseudoTarget.After
+      3 => PseudoTarget.Placeholder
+      4 => PseudoTarget.Selection
+      5 => PseudoTarget.Scrollbar
+      6 => PseudoTarget.ScrollbarThumb
+      7 => PseudoTarget.ScrollbarTrack
+      _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+    } }
+    8 => Test.ElementState { pseudo: run readPseudo(&mut reader.*) }
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+}
+
+impl SelectorList {
+  /// Writes a matcher program. The enclosing sheet supplies its version and catalog fingerprint.
+  pub effect fn encodeProgram(self: &Self, buffer: &TokenBuffer, writer: &mut BinaryWriter) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    run writer.index(self.head)
+    run writer.index(self.maxDepth)
+    run writer.flag(self.validationOnly)
+    run writer.index(self.simples.length())
+    let mut simplesAt: usize = 0
+    while simplesAt < self.simples.length() {
+      run writeSimple(&mut writer.*, buffer, &self.simples.asSlice()[simplesAt])
+      simplesAt = simplesAt + 1
+    }
+    run writer.index(self.compounds.length())
+    let mut compoundsAt: usize = 0
+    while compoundsAt < self.compounds.length() {
+      run writeCompound(&mut writer.*, buffer, &self.compounds.asSlice()[compoundsAt])
+      compoundsAt = compoundsAt + 1
+    }
+    run writer.index(self.arms.length())
+    let mut armsAt: usize = 0
+    while armsAt < self.arms.length() {
+      run writeArm(&mut writer.*, buffer, &self.arms.asSlice()[armsAt])
+      armsAt = armsAt + 1
+    }
+  }
+
+  /// Reads a matcher program without invoking the tokenizer or selector parser.
+  /// Decoded text is appended to buffer; language ranges address its existing token stream.
+  pub effect fn decodeProgram(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer, limits: &Limits) -> SelectorList
+    ! DecodeError | OutOfMemoryError ? &mut Allocator {
+    let head = run reader.index()
+    let maxDepth = run reader.index()
+    let validationOnly = run reader.flag()
+    if maxDepth > limits.maxDepth || validationOnly { run reader.invalid() }
+    let simplesCount = run reader.count(limits.maxTokens)
+    let mut simples = List<Simple>.make()
+    let mut targets = List<PseudoTarget>.make()
+    let mut simplesAt: usize = 0
+    while simplesAt < simplesCount {
+      let simple = run readSimple(&mut reader.*, &mut buffer.*)
+      if simple.next != NONE && simple.next >= simplesAt { run reader.invalid() }
+      let target = match simple.test {
+        Test.Element { target } => target
+        _ => if simple.next == NONE { PseudoTarget.None } else { targets.asSlice()[simple.next] }
+      }
+      run targets.append(target)
+      run simples.append(simple)
+      simplesAt = simplesAt + 1
+    }
+    let compoundsCount = run reader.count(limits.maxTokens)
+    let mut compounds = List<Compound>.make()
+    let mut compoundsAt: usize = 0
+    while compoundsAt < compoundsCount {
+      run compounds.append(run readCompound(&mut reader.*, &mut buffer.*, targets.asSlice()))
+      compoundsAt = compoundsAt + 1
+    }
+    let armsCount = run reader.count(limits.maxTokens)
+    let mut arms = List<Arm>.make()
+    let mut armsAt: usize = 0
+    while armsAt < armsCount {
+      run arms.append(run readArm(&mut reader.*, &mut buffer.*))
+      armsAt = armsAt + 1
+    }
+    let result = SelectorList {
+      simples: move simples, compounds: move compounds, arms: move arms,
+      head: head, maxDepth: maxDepth, validationOnly: false,
+    }
+    if !result.validProgram(&buffer.*) { run reader.invalid() }
+    return move result
+  }
+
+  fn validProgram(self: &Self, buffer: &TokenBuffer) -> bool {
+    if self.head >= self.arms.length() { return false }
+    let mut i: usize = 0
+    while i < self.simples.length() {
+      let simple = self.simples.asSlice()[i]
+      if simple.next != NONE && simple.next >= i { return false }
+      match &simple.test {
+        Test.Function { list, .. } => {
+          if list != NONE && list >= self.arms.length() { return false }
+        }
+        Test.Nth { list, .. } => {
+          if list != NONE && list >= self.arms.length() { return false }
+        }
+        Test.Language { range } => {
+          if range.start > range.end || range.end > buffer.all().end { return false }
+        }
+        _ => {}
+      }
+      i = i + 1
+    }
+    i = 0
+    while i < self.compounds.length() {
+      let compound = self.compounds.asSlice()[i]
+      if compound.first != NONE && compound.first >= self.simples.length() { return false }
+      if compound.previous != NONE && compound.previous >= i { return false }
+      i = i + 1
+    }
+    i = 0
+    while i < self.arms.length() {
+      let arm = self.arms.asSlice()[i]
+      if arm.tail >= self.compounds.length() { return false }
+      if arm.next != NONE && (arm.next <= i || arm.next >= self.arms.length()) { return false }
+      i = i + 1
+    }
+    return true
+  }
 }

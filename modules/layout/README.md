@@ -10,6 +10,13 @@ Full CSS conformance is the goal, not the verified status today.
 [SPECIFICATIONS.md](SPECIFICATIONS.md) lists the normative references, what is implemented and
 the known gaps.
 
+`Style.sizeContainment` accepts `None`, `InlineSize`, or `Size`. Contained axes size as
+empty while descendants still lay out and contribute overflow. Explicit grid tracks and gaps
+remain; replaced content loses its natural dimensions on contained axes and its natural aspect
+ratio. Both modes establish an independent formatting context without becoming a positioned
+containing block. `Size` is monolithic in fragmentation; `InlineSize` can fragment in its block
+axis. The host remains responsible for container names, query selection and restyling after layout.
+
 ## Example
 
 ```silk

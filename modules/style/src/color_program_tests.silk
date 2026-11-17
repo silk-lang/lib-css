@@ -1,0 +1,80 @@
+import colors { Color, Context as ColorContext }
+import values { Store, Mode, Value, ValueId, ComputeContext, Paint }
+import values
+import dimensions { Context }
+import properties { Property }
+import text_values { TextValue }
+import input { Input }
+import lexer
+import tokens { Limits, CssError }
+import silk.core.option { Option }
+import silk.core.effect { Effect }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+effect fn check(store: &mut Store<'_>, id: ValueId) -> ()
+  ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let fonts = [TextValue.make(Property.Font), TextValue.make(Property.Font), TextValue.make(Property.Font),
+    TextValue.make(Property.Font), TextValue.make(Property.Font), TextValue.make(Property.Font)]
+  let red = Color.srgb(1.0, 0.0, 0.0, 1.0)
+  let palette = ColorContext.make(red, [red; 19])
+  let dimensions = Context.make(300.0, 150.0, 16.0)
+  let computed = run values.compute(&mut store.*, id, &ComputeContext { dimensions: &dimensions, colors: &palette, systemFonts: &fonts })
+  run Testing.expect(match &store.get(computed).* {
+    Value.Paint { paint: Paint.Color { color } } => color.channels[0] == 1.0 && color.alpha == 0.5
+    _ => false
+  }, "native color mix resolves against host currentcolor with premultiplied alpha")
+}
+
+test effect fn colorProgramsSurviveStoreSharingCopyAndParseRollback() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let buffer = run lexer.tokenize(b"color-mix(in srgb, currentcolor, transparent)", &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let source = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  let mut store = Store.make()
+  let id = match run values.parse(&mut store, Property.Fill, &source, Mode.Css) |> Effect.provideMut<Allocator>(&mut allocator) {
+    Option<ValueId>.Some { value } => value
+    _ => { run Testing.expect(false, "native fill parser accepts contextual mix")
+      return
+    }
+  }
+  run Testing.expect(store.shareable() && store.copyable(), "color expression arenas support immutable sharing and copying")
+  let mut copied = run store.copy() |> Effect.provideMut<Allocator>(&mut allocator)
+  run check(&mut copied, id) |> Effect.provideMut<Allocator>(&mut allocator)
+  let layered = Store.over(&store)
+  if let Option<Store>.Some { value } = move layered {
+    let mut overlay = move value
+    run check(&mut overlay, id) |> Effect.provideMut<Allocator>(&mut allocator)
+  } else { run Testing.expect(false, "overlay can borrow color program arena") }
+  let mark = store.mark()
+  drop run values.parse(&mut store, Property.Fill, &source, Mode.Css) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(store.colorPrograms.length() == 2, "second parse appends program")
+  store.truncate(mark)
+  run Testing.expect(store.colorPrograms.length() == 1, "rollback truncates color arena alongside value arena")
+  run check(&mut store, id) |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+import colors { ColorProgram }
+import value_cursor { Cursor }
+import colors
+
+test effect fn systemColorsFreezeAtComputedTimeWhileCurrentColorRemainsDeferred() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let buffer = run lexer.tokenize(b"color-mix(in srgb, currentcolor, Canvas)", &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let source = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  let mut cursor = Cursor.make(&source)
+  let parsed = run colors.parseProgram(&source, &mut cursor) |> Effect.provideMut<Allocator>(&mut allocator)
+  if let Option<ColorProgram>.Some { value } = move parsed {
+    let red = Color.srgb(1.0, 0.0, 0.0, 1.0)
+    let computed = run value.resolveSystem(&ColorContext.make(Color.current(), [red; 19])) |> Effect.provideMut<Allocator>(&mut allocator)
+    if let Option<ColorProgram>.Some { value: program } = move computed {
+      let blue = Color.srgb(0.0, 0.0, 1.0, 1.0)
+      let used = program.evaluate(&ColorContext.make(blue, [blue; 19]))
+      run Testing.expect(match &used {
+        Option<Color>.Some { value: result } => result.channels[0] == 0.5 && result.channels[2] == 0.5
+        _ => false
+      }, "system red stays computed while currentcolor resolves against the element's blue")
+    } else { run Testing.expect(false, "system leaf produces computed program") }
+  } else { run Testing.expect(false, "valid color expression") }
+}

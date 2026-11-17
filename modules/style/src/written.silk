@@ -11,6 +11,9 @@ import css_properties.keywords as keywords
 import css_properties.keywords { Keyword }
 import css_properties.values as values
 import css_properties.values { Value, Declaration, Unit, MathOperator, Separator }
+import css_properties.shorthands
+import values as parsed_values
+import values { Store, ValueId, Mode }
 import colors
 import colors { Color, Identity }
 import cssom_declaration { StyleDeclaration }
@@ -42,6 +45,28 @@ pub effect fn value(css: &[u8]) -> Value ! CssError | OutOfMemoryError ? &mut Al
   return run valueIn(&buffer, range.start, range.end)
 }
 
+/// Property-aware shaping preserves custom identifiers that happen to name colors.
+pub effect fn propertyValue(property: Property, css: &[u8]) -> Value ! CssError | OutOfMemoryError ? &mut Allocator {
+  let buffer = run lexer.tokenize(css, &Limits.make())
+  let range = buffer.all()
+  return run propertyValueIn(property, &buffer, range.start, range.end)
+}
+pub effect fn propertyValueIn(property: Property, buffer: &TokenBuffer, start: usize, end: usize) -> Value ! OutOfMemoryError ? &mut Allocator {
+  if property != Property.ContainerName && property != Property.Container { return run valueIn(buffer, start, end) }
+  let first = skipSpace(buffer, start, end)
+  let last = trimEnd(buffer, first, end)
+  if first + 1 == last {
+    if let Kind.Ident { text } = buffer.tokens.asSlice()[first].kind {
+      if let Option<Keyword>.Some { value: keyword } = keywords.lookup(buffer.text(text)) {
+        if keyword == Keyword.Initial || keyword == Keyword.Inherit || keyword == Keyword.Unset || keyword == Keyword.Revert || keyword == Keyword.RevertLayer || keyword == Keyword.None {
+          return values.keyword(keyword)
+        }
+      }
+    }
+  }
+  return run values.text(sourceText(buffer, first, last))
+}
+
 /// `value` with CSS text read into shapes where it has them. Other values are copied.
 pub effect fn resolve(written: &Value) -> Value ! CssError | OutOfMemoryError ? &mut Allocator {
   match &written.* {
@@ -71,7 +96,7 @@ pub effect fn declarations(css: &[u8]) -> List<Declaration>
     match &catalog.lookup(buffer.text(item.name)) {
       Option<Property>.Some { value: property } => {
         if skipSpace(&buffer, item.value.start, item.value.end) < item.value.end {
-          let shaped = run valueIn(&buffer, item.value.start, item.value.end)
+          let shaped = run propertyValueIn(property, &buffer, item.value.start, item.value.end)
           run out.append(Declaration { property: property, value: move shaped, important: item.important })
         }
       }
@@ -95,7 +120,7 @@ pub effect fn fromStyle(style: &StyleDeclaration) -> List<Declaration>
       Option<Property>.Some { value: property } => {
         let text = run style.getPropertyValue(name)
         if text.asSlice().length > 0 {
-          let parsed = run value(text.asSlice())
+          let parsed = run propertyValue(property, text.asSlice())
           run out.append(
             Declaration {
               property: property,
@@ -110,6 +135,81 @@ pub effect fn fromStyle(style: &StyleDeclaration) -> List<Declaration>
     i = i + 1
   }
   return move out
+}
+
+/// Project a written shorthand to one longhand. Box values use their typed
+/// expansion; complex text/effect/animation values use the shared CSS grammars.
+/// None means this declaration has no valid value for the requested longhand.
+pub effect fn longhand(declaration: &Declaration, target: Property) -> Option<Value>
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  if declaration.property == target { return Option<Value>.some(run values.clone(&declaration.value)) }
+  let mut at: usize = 0
+  let count = catalog.longhandCount(declaration.property)
+  while at < count && catalog.longhandAt(declaration.property, at) != target { at = at + 1 }
+  if at == count { return Option<Value>.None }
+  if declaration.property == Property.Container {
+    if let Value.Keyword { value: word } = &declaration.value {
+      if word == Keyword.Initial || word == Keyword.Inherit || word == Keyword.Unset || word == Keyword.Revert || word == Keyword.RevertLayer {
+        return Option<Value>.some(run values.clone(&declaration.value))
+      }
+    }
+    return run containerLonghand(&declaration.value, target)
+  }
+  let expanded = run shorthands.longhand(declaration.property, &declaration.value, target)
+  if let Option<Value>.Some { value: found } = move expanded { return Option<Value>.some(move found) }
+  let text = run values.cssText(&declaration.value)
+  let buffer = run lexer.tokenize(text.asSlice(), &Limits.make())
+  let input = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  let mut store = Store.make()
+  if let Option<ValueId>.Some { value: parsed } = &(run parsed_values.parse(&mut store, declaration.property, &input, Mode.Css)) {
+    let css = run cssom_value_serialization.value(&store, parsed, declaration.property, target)
+    if css.length() != 0 { return Option<Value>.some(run value(css.asSlice())) }
+  }
+  return Option<Value>.None
+}
+
+effect fn containerLonghand(specified: &Value, target: Property) -> Option<Value> ! CssError | OutOfMemoryError ? &mut Allocator {
+  let text = run values.cssText(specified)
+  let buffer = run lexer.tokenize(text.asSlice(), &Limits.make())
+  let range = buffer.all()
+  let mut slash = range.end
+  let mut names: usize = 0
+  let mut none = false
+  let mut i = range.start
+  while i < range.end {
+    match buffer.tokens.asSlice()[i].kind {
+      Kind.Whitespace => {}
+      Kind.Delim { scalar } => {
+        if scalar != 47 || slash != range.end || names == 0 { return Option<Value>.None }
+        slash = i
+      }
+      Kind.Ident { text: word } => {
+        if slash == range.end {
+          let name = buffer.text(word)
+          if tokens.insensitive(name, b"and") || tokens.insensitive(name, b"or") || tokens.insensitive(name, b"not") || tokens.insensitive(name, b"default")
+            || tokens.insensitive(name, b"initial") || tokens.insensitive(name, b"inherit") || tokens.insensitive(name, b"unset") || tokens.insensitive(name, b"revert") || tokens.insensitive(name, b"revert-layer") { return Option<Value>.None }
+          none = none || tokens.insensitive(name, b"none")
+          names = names + 1
+        }
+      }
+      _ => { return Option<Value>.None }
+    }
+    i = i + 1
+  }
+  if names == 0 || none && names != 1 { return Option<Value>.None }
+  let mut kind = Keyword.Normal
+  if slash != range.end {
+    let first = skipSpace(&buffer, slash + 1, range.end)
+    if first >= range.end || skipSpace(&buffer, first + 1, range.end) != range.end { return Option<Value>.None }
+    if let Kind.Ident { text: word } = buffer.tokens.asSlice()[first].kind {
+      let name = buffer.text(word)
+      if tokens.insensitive(name, b"size") { kind = Keyword.Size }
+      else if tokens.insensitive(name, b"inline-size") { kind = Keyword.InlineSize }
+      else if !tokens.insensitive(name, b"normal") { return Option<Value>.None }
+    } else { return Option<Value>.None }
+  }
+  if target == Property.ContainerType { return Option<Value>.some(values.keyword(kind)) }
+  return Option<Value>.some(run propertyValueIn(Property.ContainerName, &buffer, range.start, slash))
 }
 
 /// The computed value of `property` in a style the cascade built, as a written value ready
@@ -139,7 +239,7 @@ pub effect fn computedValue(engine: &Engine<'_>, style: StyleId, property: Prope
 }
 
 /// The value in the tokens `start..end`: its shape, or the source text when it has none.
-effect fn valueIn(buffer: &TokenBuffer, start: usize, end: usize) -> Value
+pub effect fn valueIn(buffer: &TokenBuffer, start: usize, end: usize) -> Value
   ! OutOfMemoryError
   ? &mut Allocator {
   let first = skipSpace(buffer, start, end)

@@ -10,10 +10,10 @@ WebGPU, or a particular UI tree.
 - **Syntax:** decoding stylesheet bytes with the WHATWG encodings, the CSS Syntax 3 tokenizer,
   and rule and declaration parsing with error recovery.
 - **Selectors:** Selectors 4 with specificity. Matching runs against any tree that implements
-  `ElementTree`, including shadow trees. An optional index finds candidate rules by ID, class
-  and name.
-- **Cascade:** origins, `!important`, specificity and order, inheritance, and custom properties
-  with `var()` substitution (Cascade 4 and Variables 1).
+  `ElementTree`, including shadow trees and host-reported interactive states. An optional index
+  finds candidate rules by ID, class and name.
+- **Cascade:** origins, `!important`, nested layer order, specificity and order, inheritance, and
+  custom properties with `var()` substitution (Cascade 5 and Variables 1).
 - **Conditions:** `@media` (Media Queries 4, evaluated with three-valued logic), `@supports`,
   and import conditions.
 - **Values:** lengths and `calc()` expressions, colours (Color 4, including system colours),
@@ -223,3 +223,95 @@ SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" silk test --manifest-path module
 ## License
 
 MIT or Apache-2.0.
+
+## Compiled stylesheet foundation
+
+`compile.compile(css, options)` produces a `sheet.Sheet` from CSS bytes. It compiles selectors
+and shared typed declarations, preserves custom-property and variable token programs, resolves
+nesting, flattens layer order, evaluates `@supports`, and retains media/container/starting
+conditions, validated `@property` registrations, and `@font-face`/`@keyframes` metadata. It does not run CSS processors.
+
+`Sheet.encode()` writes the internal `SILKCSS` byte format. `Sheet.decode(bytes, limits)` reads
+parsed programs without invoking the CSS tokenizer or selector parser. The format is versioned
+and checks the property-catalog fingerprint; it has no cross-version compatibility promise.
+Keyframe definitions retain numeric offsets, shared declarations, layer ranks and conditions;
+`StyleSheets.keyframes(name)` chooses the active definition in adoption order.
+Decoded buffers contain token text but no original stylesheet source. Written values without a
+shared typed shape still carry their value text. Subject indexes and conservative invalidation
+keys are rebuilt from the decoded selector programs.
+
+The per-element `Resolver` uses the subject index, reads current `ElementTree.state` bits, and
+returns cascade candidates and matched rule identities. `Resolver.invalidation` exposes name,
+state, structural, descendant, sibling, and ancestor dependencies. Static hosts can omit the
+state operation; its default returns no interactive states. `sheet_conditions.update` evaluates
+retained media conditions against a host environment and reports whether rule eligibility changed.
+
+`MatchContext.pseudo` selects the originating element's `::before` or `::after` target;
+its default `None` matches ordinary elements. Normal rule arms do not match generated targets,
+and mixed selector lists retain the specificity of the matching arm. `pseudoStates` supplies
+states on the pseudo-element itself, separately from origin states before the `::before` or
+`::after` selector. These targets survive binary round trips in the compiled format.
+The low-level matcher supports these state suffixes, but the stylesheet compiler diagnoses and
+drops rules containing them, matching Chromium 151 (which rejects `::before:hover` and
+`::before:active`). Origin-state selectors such as `:hover::before` remain supported.
+
+`generated_content.parse(input)` returns keywords or an ordered list of strings and `attr()`
+references, including empty strings and string fallbacks. The compiler reports and drops
+unsupported content forms such as counters, quote controls, images, and alternative text.
+Creating boxes, reading attributes, inheritance, hit testing and accessibility are host work.
+
+`registration` validates the supported `@property` syntax: `*`, `<length>`, `<length-percentage>`,
+`<color>`, `<number>`, `<percentage>`, and `<angle>`. `VariableStore.register` installs definitions
+before scopes are built; later registrations replace earlier definitions with the same name.
+Scopes apply registered initial values, `inherits: false`, syntax checks after substitution,
+and invalid-value defaults. Changing registrations requires rebuilding the scopes. The variable
+store still retains token values; canonicalizing relative typed values at their defining element
+requires host integration.
+
+Hosts resolve pending values, install active registrations, consume animation/font metadata,
+and integrate invalidation with their tree. Size container conditions have an opt-in host contract:
+`ElementTree.container(node, name, axes, pseudo)` selects the nearest eligible ancestor and
+supplies its content-box size and font/writing metrics in `Environment.querySize`/`initial`.
+`StyleSheets.resolve` applies those conditions per element; direct resolver users must use
+`resolveFiltered` with `sheet_conditions.Filter`. Global condition updates deliberately ignore
+container conditions for name-defining rules such as `@keyframes`. Query lists select ancestors
+independently, nested conditions must all match, and a missing container never matches `not`.
+Format version 6 stores decoded container names, required axes, and postfix boolean programs.
+Decoding and per-element matching do not parse the query grammar. Feature operands retain tokens
+so relative values are evaluated against the selected container; ordinary boolean evaluation
+uses an inline stack, with bounded spill storage for deeply nested conditions.
+Each resolution resets `MatchContext.containers` and records the reached conditions after
+selector matching, including false results. Shared conditions are evaluated once per resolution.
+Hosts retain those records with the element and pseudo target, then call
+`StyleSheets.containersChanged` after layout to detect truth changes without rematching selectors.
+Hosts that omit the operation have no eligible containers. Valid size queries compile without
+unsupported diagnostics. Invalid container grammar drops the rule; style and scroll-state
+queries retain unknown truth and produce an unsupported-condition diagnostic.
+Diagnostics aggregate dropped features; `Options.strict` rejects a sheet with diagnostics.
+
+Container length units (`cqw`, `cqh`, `cqi`, `cqb`, `cqmin`, `cqmax`) parse, serialize,
+participate in dimensional math, and survive compiled-sheet round trips. `dimensions.Context`
+provides independent optional container sizes for physical and logical axes, falling back to
+the small viewport for missing inputs. Hosts select the appropriate ancestors; logical unit
+axes follow the styled element's writing mode. These relative lengths are valid registered
+property values, but cannot be typed `@property` initial values because they depend on context.
+Units are encoded by CSS spelling, so these additions do not change the binary layout.
+
+`colors.parseProgram` handles nested `color-mix()` with deferred `currentcolor` and system colors.
+It supports the standard rectangular and polar spaces, normalized percentages, premultiplied
+alpha, hue interpolation methods, and missing components. Standalone sheet color expressions
+are encoded as bounded programs, and native color/paint values use the same evaluator.
+Contextual mixes inside compound text/effect values still need integration.
+
+The fixture tests cover Tailwind 4.3.5 and handwritten CSS, binary round trips, malformed data,
+state matching, layer precedence, nesting, and condition changes. They do not establish rendering
+parity with Chromium.
+
+`adopted.StyleSheets` owns compiled sheets in a root's adoption order. Replacing
+an id retains its position; removing a sheet rebuilds first-appearance layer
+order from the surviving sheets. Matching combines indexes from each sheet,
+resolves named layers across sheets, reads importance per declaration, and
+includes caller-supplied inline priorities. Its ordered candidates reference
+the original compiled declarations, and matched rules retain sheet ids.
+Condition updates report whether eligibility changed. It performs no stylesheet
+text parsing; value computation remains the host's responsibility.

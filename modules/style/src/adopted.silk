@@ -1,0 +1,381 @@
+//! Root-owned compiled sheets: adoption order, cross-sheet layers and indexed matching.
+//! This module consumes compiled data and never calls the stylesheet compiler or lexer.
+import silk.num.u32
+import sheet { Sheet, Declaration }
+import sheet_conditions
+import adopted_variables { Inputs, InlineCustom }
+import variables { ScopeId, RegistrationError }
+import silk.core.option { Option }
+import silk.mem.box { Box }
+import layers { Layers, UNLAYERED }
+import cascade { Priority, Origin }
+import cascade
+import element { ElementTree, MatchContext, ContainerDependency, PseudoTarget }
+import resolver { ResolverError }
+import tokens { BufferView, Limits, CssError, equal }
+import media_features { Environment }
+import silk.collections.list { List }
+import silk.core.ownership { Copy }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.usize
+
+pub enum AdoptionError { DuplicateId, UnknownId, InvalidOrder }
+pub union Source {
+  Sheet { pub sheet: usize, pub declaration: usize },
+  Inline { pub declaration: usize },
+}
+impl Copy for Source {}
+pub struct Candidate { pub source: Source, pub priority: Priority }
+impl Copy for Candidate {}
+pub struct MatchedRule { pub sheet: u32, pub rule: usize }
+impl Copy for MatchedRule {}
+
+pub struct KeyframesRef { pub sheet: usize, pub rule: usize }
+impl Copy for KeyframesRef {}
+
+pub struct FontFaceRef { pub sheet: usize, pub rule: usize, pub priority: Priority }
+impl Copy for FontFaceRef {}
+
+pub struct AdoptedSheet {
+  pub id: u32,
+  pub sheet: Sheet,
+  // Maps a local flattened rank to the root's flattened rank.
+  layers: List<usize>,
+}
+
+pub struct StyleSheets {
+  entries: List<AdoptedSheet>,
+  layers: Layers,
+  output: List<Candidate>,
+  matched: List<MatchedRule>,
+  selectedStates: u32,
+  variables: Option<Box<Inputs>>,
+}
+
+fn important(declaration: &Declaration) -> bool {
+  return match &declaration.* {
+    Declaration.Typed { important, .. } => important
+    Declaration.Pending { important, .. } => important
+    Declaration.Custom { important, .. } => important
+    Declaration.ColorExpression { important, .. } => important
+  }
+}
+
+impl StyleSheets {
+  pub fn make() -> StyleSheets {
+    return StyleSheets { entries: List<AdoptedSheet>.make(), layers: Layers.make(),
+      output: List<Candidate>.make(), matched: List<MatchedRule>.make(), selectedStates: 0, variables: Option<Box<Inputs>>.None }
+  }
+  pub fn length(self: &Self) -> usize { return self.entries.length() }
+  pub fn sheets(self: &Self) -> &[AdoptedSheet] { return self.entries.asSlice() }
+  pub fn candidates(self: &Self) -> &[Candidate] { return self.output.asSlice() }
+  pub fn matches(self: &Self) -> &[MatchedRule] { return self.matched.asSlice() }
+  pub fn stateDependencies(self: &Self) -> u32 { return self.selectedStates }
+  pub effect fn containersChanged<T: ElementTree>(self: &Self, dependencies: &[ContainerDependency], tree: &T,
+    node: usize, pseudo: PseudoTarget) -> bool ! CssError | OutOfMemoryError ? &mut Allocator {
+    let mut i: usize = 0
+    while i < dependencies.length {
+      let dependency = dependencies[i]
+      let index = self.index(dependency.sheet)
+      if index == usize.MAX { return true }
+      let sheet = &self.entries.asSlice()[index].sheet
+      if dependency.condition >= sheet.conditions.length() { return true }
+      let condition = sheet.conditions.asSlice()[dependency.condition]
+      if (run sheet_conditions.containerMatches(sheet.buffers.asSlice(), condition, sheet.containerPrograms.asSlice(), tree, node, pseudo)) != dependency.matched { return true }
+      i = i + 1
+    }
+    return false
+  }
+  pub fn canRetainScopes(self: &Self) -> bool {
+    let inputs = self.variableInputs()
+    return inputs.length != 0 && inputs[0].canRetainScopes()
+  }
+  pub fn index(self: &Self, id: u32) -> usize {
+    let mut i: usize = 0
+    while i < self.entries.length() {
+      if self.entries.asSlice()[i].id == id { return i }
+      i = i + 1
+    }
+    return usize.MAX
+  }
+
+  pub fn keyframes(self: &Self, name: &[u8]) -> Option<KeyframesRef> {
+    let mut found = Option<KeyframesRef>.None
+    let mut best = Priority.make(Origin.Author, 0)
+    let mut order: usize = 0
+    let mut sheet: usize = 0
+    while sheet < self.entries.length() {
+      let entry = &self.entries.asSlice()[sheet]
+      let mut rule: usize = 0
+      while rule < entry.sheet.keyframes.length() {
+        let candidate = &entry.sheet.keyframes.asSlice()[rule]
+        if candidate.enabled && equal(candidate.name.asSlice(), name) {
+          let mut priority = Priority.make(Origin.Author, order)
+          priority.layer = if candidate.layer == UNLAYERED { UNLAYERED } else { entry.layers.asSlice()[candidate.layer] }
+          if found.isNone() || cascade.compare(priority, best) >= 0 {
+            best = priority
+            found = Option<KeyframesRef>.some(KeyframesRef { sheet: sheet, rule: rule })
+          }
+        }
+        rule = rule + 1
+        order = order + 1
+      }
+      sheet = sheet + 1
+    }
+    return found
+  }
+
+  pub effect fn fontFaces(self: &Self) -> List<FontFaceRef> ! OutOfMemoryError ? &mut Allocator {
+    let mut result = List<FontFaceRef>.make()
+    let mut order: usize = 0
+    let mut sheet: usize = 0
+    while sheet < self.entries.length() {
+      let entry = &self.entries.asSlice()[sheet]
+      let mut rule: usize = 0
+      while rule < entry.sheet.fontFaces.length() {
+        let candidate = &entry.sheet.fontFaces.asSlice()[rule]
+        if candidate.enabled {
+          let mut priority = Priority.make(Origin.Author, order)
+          priority.layer = if candidate.layer == UNLAYERED { UNLAYERED } else { entry.layers.asSlice()[candidate.layer] }
+          run result.append(FontFaceRef { sheet: sheet, rule: rule, priority: priority })
+          let mut at = result.length() - 1
+          while at > 0 && cascade.compare(result.get(at).priority, result.get(at - 1).priority) < 0 {
+            let entries = result.asMutSlice()
+            let previous = entries[at - 1]
+            entries[at - 1] = entries[at]
+            entries[at] = previous
+            at = at - 1
+          }
+        }
+        rule = rule + 1
+        order = order + 1
+      }
+      sheet = sheet + 1
+    }
+    return move result
+  }
+
+  /// Adopts at the end. Duplicate ids are rejected rather than changing source order.
+  pub effect fn adopt(self: &mut Self, id: u32, sheet: Sheet) -> ()
+    ! AdoptionError | OutOfMemoryError ? &mut Allocator {
+    if self.index(id) != usize.MAX { fail AdoptionError.DuplicateId }
+    run self.entries.append(AdoptedSheet { id: id, sheet: move sheet, layers: List<usize>.make() })
+    run self.rebuildLayers()
+  }
+
+  /// Replacement keeps its original adoption position.
+  pub effect fn replace(self: &mut Self, id: u32, sheet: Sheet) -> ()
+    ! AdoptionError | OutOfMemoryError ? &mut Allocator {
+    let index = self.index(id)
+    if index == usize.MAX { fail AdoptionError.UnknownId }
+    let entries = self.entries.asMutSlice()
+    entries[index].sheet = move sheet
+    run self.rebuildLayers()
+  }
+
+  pub effect fn reorder(self: &mut Self, ids: &[u32]) -> ()
+    ! AdoptionError | OutOfMemoryError ? &mut Allocator {
+    if ids.length != self.entries.length() { fail AdoptionError.InvalidOrder }
+    let mut i: usize = 0
+    while i < ids.length {
+      if self.index(ids[i]) == usize.MAX { fail AdoptionError.UnknownId }
+      let mut before: usize = 0
+      while before < i {
+        if ids[before] == ids[i] { fail AdoptionError.DuplicateId }
+        before = before + 1
+      }
+      i = i + 1
+    }
+    let mut ordered = List<AdoptedSheet>.make()
+    run ordered.reserve(ids.length)
+    i = 0
+    while i < ids.length {
+      let at = self.index(ids[i])
+      run ordered.append(self.entries.remove(at))
+      i = i + 1
+    }
+    self.entries = move ordered
+    run self.rebuildLayers()
+  }
+
+  /// Removing an absent id is a no-op.
+  pub effect fn remove(self: &mut Self, id: u32) -> bool ! OutOfMemoryError ? &mut Allocator {
+    let index = self.index(id)
+    if index == usize.MAX { return false }
+    drop self.entries.remove(index)
+    run self.rebuildLayers()
+    return true
+  }
+
+  effect fn rebuildLayers(self: &mut Self) -> () ! OutOfMemoryError ? &mut Allocator {
+    self.variables = Option<Box<Inputs>>.None
+    self.layers = Layers.make()
+    self.output.clear()
+    self.matched.clear()
+    self.selectedStates = 0
+    let entries = self.entries.asMutSlice()
+    let mut i: usize = 0
+    while i < entries.length {
+      let entry = &mut entries[i]
+      entry.layers.clear()
+      let mut identities = List<usize>.make()
+      let mut at: usize = 0
+      while at < entry.sheet.layers.length() {
+        run entry.layers.append(0)
+        let localParent = entry.sheet.layers.parent(at)
+        let parent = if localParent == UNLAYERED { UNLAYERED } else { identities.asSlice()[localParent] }
+        run identities.append(run self.layers.register(parent, entry.sheet.layers.name(at)))
+        at = at + 1
+      }
+      at = 0
+      while at < identities.length() {
+        let map = entry.layers.asMutSlice()
+        map[entry.sheet.layers.rank(at)] = identities.asSlice()[at]
+        at = at + 1
+      }
+      i = i + 1
+    }
+    i = 0
+    while i < entries.length {
+      let ranks = entries[i].layers.asMutSlice()
+      let mut at: usize = 0
+      while at < ranks.length {
+        ranks[at] = self.layers.rank(ranks[at])
+        at = at + 1
+      }
+      i = i + 1
+    }
+  }
+
+  /// Re-evaluates retained conditions; true only if rule or registration eligibility changed.
+  pub effect fn environment(self: &mut Self, environment: &Environment, starting: bool, limits: &Limits) -> bool
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    let mut changed = false
+    let entries = self.entries.asMutSlice()
+    let mut i: usize = 0
+    while i < entries.length {
+      let flipped = run sheet_conditions.update(&mut entries[i].sheet, environment, starting, limits)
+      changed = changed || flipped
+      i = i + 1
+    }
+    if changed { self.variables = Option<Box<Inputs>>.None }
+    return changed
+  }
+
+  /// Builds the matched element's variable scope. Scope ids belong to this adoption/environment epoch.
+  pub effect fn variableScope(self: &mut Self, parent: Option<ScopeId>, limits: &Limits) -> ScopeId
+    ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
+    return run self.variableScopeWith(parent, &[], limits)
+  }
+
+  pub effect fn variableScopeWith(self: &mut Self, parent: Option<ScopeId>, inline: &[InlineCustom<'_, '_>], limits: &Limits) -> ScopeId
+    ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
+    if self.variables.isNone() {
+      self.variables = Option<Box<Inputs>>.some(run Box<Inputs>.make(run Inputs.make(self.entries.asSlice(), limits)))
+    }
+    match &mut self.variables {
+      Option<Box<Inputs>>.Some { value } => { let inputs = value.getMut()
+        return run inputs[0].scope(self.output.asSlice(), inline, parent, limits) }
+      Option<Box<Inputs>>.None => Intrinsic.trap("variable inputs were initialized")
+    }
+  }
+
+  pub fn resetScopes(self: &mut Self) -> () {
+    if let Option<Box<Inputs>>.Some { value } = &mut self.variables {
+      let inputs = value.getMut()
+      inputs[0].resetScopes()
+    }
+  }
+
+  pub fn variableInputs(self: &Self) -> &[Inputs] {
+    return match &self.variables {
+      Option<Box<Inputs>>.Some { value } => value.get()
+      Option<Box<Inputs>>.None => &[]
+    }
+  }
+
+  pub fn hasStarting(self: &Self) -> bool {
+    let mut i: usize = 0
+    while i < self.entries.length() {
+      if self.entries.asSlice()[i].sheet.resolver.hasStarting() { return true }
+      i = i + 1
+    }
+    return false
+  }
+
+  /// Matches one element, adding active style-object declarations with their inline priorities.
+  /// Output is in ascending cascade order. Importance belongs to each declaration, not its rule.
+  /// A failed match exposes no stale or partial output.
+  pub effect fn resolve<T: ElementTree>(self: &mut Self, tree: &T, node: usize,
+    inline: &[Priority], context: &mut MatchContext) -> ()
+    ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+    run self.resolveWith(tree, node, inline, &mut context, false)
+  }
+
+  pub effect fn resolveWith<T: ElementTree>(self: &mut Self, tree: &T, node: usize,
+    inline: &[Priority], context: &mut MatchContext, starting: bool) -> ()
+    ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+    self.output.clear()
+    self.matched.clear()
+    self.selectedStates = 0
+    context.containers.clear()
+    context.clearWatches()
+    let mut candidates = List<Candidate>.make()
+    let mut matched = List<MatchedRule>.make()
+    let mut states: u32 = 0
+    let mut order: usize = 0
+    let entries = self.entries.asMutSlice()
+    let mut i: usize = 0
+    while i < entries.length {
+      let entry = &mut entries[i]
+      let filter = sheet_conditions.Filter { tree: tree, node: node, sheet: entry.id, buffers: entry.sheet.buffers.asSlice(),
+        conditions: entry.sheet.conditions.asSlice(), programs: entry.sheet.containerPrograms.asSlice(), rules: entry.sheet.ruleConditions.asSlice() }
+      run entry.sheet.resolver.resolveFiltered(BufferView.of(entry.sheet.buffers.asSlice()), tree, node, &[], &mut context, starting, &filter)
+      states = u32.bitOr(states, entry.sheet.resolver.stateDependencies())
+      let found = entry.sheet.resolver.declarations()
+      let mut at: usize = 0
+      while at < found.length {
+        let item = found[at]
+        let mut priority = item.priority
+        priority.important = important(&entry.sheet.declarations.asSlice()[item.declaration])
+        priority.order = order + item.declaration
+        if priority.layer != UNLAYERED { priority.layer = entry.layers.asSlice()[priority.layer] }
+        run candidates.append(Candidate { source: Source.Sheet { sheet: i, declaration: item.declaration }, priority: priority })
+        at = at + 1
+      }
+      let rules = entry.sheet.resolver.matches()
+      at = 0
+      while at < rules.length {
+        run matched.append(MatchedRule { sheet: entry.id, rule: rules[at].rule })
+        at = at + 1
+      }
+      order = order + entry.sheet.declarations.length()
+      i = i + 1
+    }
+    run context.spend(inline.length)
+    i = 0
+    while i < inline.length {
+      let mut priority = inline[i]
+      priority.order = order + i
+      run candidates.append(Candidate { source: Source.Inline { declaration: i }, priority: priority })
+      i = i + 1
+    }
+    // Usually tens of candidates per element. Insertion sort preserves source order on ties.
+    let items = candidates.asMutSlice()
+    i = 1
+    while i < items.length {
+      let selected = items[i]
+      let mut at = i
+      while at > 0 && cascade.compare(items[at - 1].priority, selected.priority) > 0 {
+        run context.spend(1)
+        items[at] = items[at - 1]
+        at = at - 1
+      }
+      items[at] = selected
+      i = i + 1
+    }
+    self.output = move candidates
+    self.matched = move matched
+    self.selectedStates = states
+  }
+}

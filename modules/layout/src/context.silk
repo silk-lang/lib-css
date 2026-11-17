@@ -1,4 +1,5 @@
 import silk.core.ownership { Copy }
+import style { SizeContainment }
 import geometry { OptionalSize, AvailableSpace, Size, Point, ResolvedEdges, ScrollbarMetrics, max, clamp }
 import style { Dimension, DimensionKind, Edges, Style, BoxSizing, Position, Display, DisplayInside, DisplayOutside, Overflow, ScrollbarWidth, ScrollbarGutter, Float, WritingMode, TextOrientation, Direction, Align, OverflowAlignment }
 import fragmentation { FragmentInput }
@@ -248,7 +249,7 @@ pub fn usedOverflowForAxis(style: &Style, horizontal: bool) -> Overflow {
 }
 pub fn establishesContext(style: &Style, input: &Input) -> bool {
   let display = effectiveDisplay(style, &input)
-  return display.insideIs(DisplayInside.Flex) || display.insideIs(DisplayInside.Grid) || style.alignContent != Align.Normal || (style.float != Float.None && !input.blockify) || display.insideIs(DisplayInside.FlowRoot) || outOfFlow(style) || scrollable(style.overflowX) || scrollable(style.overflowY)
+  return style.sizeContainment != SizeContainment.None || display.insideIs(DisplayInside.Flex) || display.insideIs(DisplayInside.Grid) || style.alignContent != Align.Normal || (style.float != Float.None && !input.blockify) || display.insideIs(DisplayInside.FlowRoot) || outOfFlow(style) || scrollable(style.overflowX) || scrollable(style.overflowY)
 }
 
 // CSS 2.1 §10.3.3: auto margins absorb positive free space; the containing

@@ -1,0 +1,170 @@
+import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
+import tokens { Limits, insensitive }
+import silk.core.ownership { Copy }
+import silk.collections.slice { Slice }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.text.string { String }
+import silk.num.f64
+
+/// Portable compiled descriptors: no font decoder, I/O, or URL parser is needed to compile CSS.
+pub struct Range { pub min: f64, pub max: f64 }
+impl Copy for Range {}
+pub union FaceStyle { Normal, Italic, Oblique { pub min: f64, pub max: f64 } }
+impl Copy for FaceStyle {}
+pub union FaceSource {
+  Url { pub url: String, pub format: Bytes, pub tech: Bytes },
+  Local { pub name: Bytes },
+}
+pub enum FontDisplay { Auto, Block, Swap, Fallback, Optional }
+pub struct UnicodeRange { pub start: u32, pub end: u32 }
+impl Copy for UnicodeRange {}
+pub struct FontFaceRule {
+  pub family: Bytes,
+  pub sources: List<FaceSource>,
+  pub weight: Option<Range>,
+  pub width: Option<Range>,
+  pub style: Option<FaceStyle>,
+  pub ranges: List<UnicodeRange>,
+  pub display: FontDisplay,
+}
+
+pub struct Face {
+  pub rule: FontFaceRule,
+  pub condition: usize,
+  pub layer: usize,
+  pub enabled: bool,
+}
+
+pub fn loadable(format: &[u8], tech: &[u8]) -> bool {
+  let formats = [b"woff2", b"woff", b"truetype", b"opentype", b"collection", b"woff2-variations", b"woff-variations", b"truetype-variations", b"opentype-variations"]
+  let mut known = format.length == 0
+  let mut i: usize = 0
+  while i < formats.length { known = known || insensitive(format,formats[i]) i = i + 1 }
+  if !known { return false }
+  let unsupported = [b"incremental", b"graphite"]
+  i = 0
+  while i < unsupported.length {
+    let word = unsupported[i]
+    let mut at: usize = 0
+    while at + word.length <= tech.length {
+      if insensitive(Slice.view<u8>(tech,at,word.length),word) { return false }
+      at = at + 1
+    }
+    i = i + 1
+  }
+  return true
+}
+
+effect fn writeRange(writer: &mut Writer, value: Option<Range>) ! OutOfMemoryError ? &mut Allocator {
+  run writer.flag(value.isSome())
+  if let Option.Some { value: range } = value { run writer.number(range.min) run writer.number(range.max) }
+}
+
+effect fn readRange(reader: &mut Reader<'_>, low: f64, high: f64) -> Option<Range> ! DecodeError {
+  if !(run reader.flag()) { return Option<Range>.None }
+  let min = run reader.number()
+  let max = run reader.number()
+  if !f64.isFinite(min) || !f64.isFinite(max) || min < low || max > high || min > max { run reader.invalid() }
+  return Option<Range>.some(Range { min: min, max: max })
+}
+
+effect fn readText(reader: &mut Reader<'_>) -> String ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  return match String.fromUtf8(run reader.data()) {
+    Result.Success { value } => run String.copy(value)
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+}
+
+pub effect fn encode(rule: &FontFaceRule, writer: &mut Writer) ! OutOfMemoryError ? &mut Allocator {
+  run writer.data(rule.family.asSlice())
+  run writeRange(&mut writer, rule.weight)
+  run writeRange(&mut writer, rule.width)
+  match rule.style {
+    Option.Some { value: FaceStyle.Normal } => run writer.byte(1)
+    Option.Some { value: FaceStyle.Italic } => run writer.byte(2)
+    Option.Some { value: FaceStyle.Oblique { min, max } } => { run writer.byte(3) run writer.number(min) run writer.number(max) }
+    _ => run writer.byte(0)
+  }
+  run writer.byte(match rule.display { FontDisplay.Auto => 0 FontDisplay.Block => 1 FontDisplay.Swap => 2 FontDisplay.Fallback => 3 FontDisplay.Optional => 4 })
+  run writer.index(rule.ranges.length())
+  let mut i: usize = 0
+  while i < rule.ranges.length() {
+    let range = rule.ranges.asSlice()[i]
+    run writer.word(range.start)
+    run writer.word(range.end)
+    i = i + 1
+  }
+  run writer.index(rule.sources.length())
+  i = 0
+  while i < rule.sources.length() {
+    match &rule.sources.asSlice()[i] {
+      FaceSource.Url { url, format, tech } => {
+        run writer.byte(0)
+        run writer.data(String.utf8Bytes(String.view(&url)))
+        run writer.data(format.asSlice())
+        run writer.data(tech.asSlice())
+      }
+      FaceSource.Local { name } => { run writer.byte(1) run writer.data(name.asSlice()) }
+    }
+    i = i + 1
+  }
+}
+
+pub effect fn decode(reader: &mut Reader<'_>, limits: &Limits) -> FontFaceRule ! DecodeError | OutOfMemoryError ? &mut Allocator {
+  let family = run readText(&mut reader)
+  let weight = run readRange(&mut reader, 1.0, 1000.0)
+  let width = run readRange(&mut reader, 0.0, f64.MAX)
+  let tag = run reader.byte()
+  let style = match tag {
+    0 => Option<FaceStyle>.None
+    1 => Option<FaceStyle>.some(FaceStyle.Normal)
+    2 => Option<FaceStyle>.some(FaceStyle.Italic)
+    3 => {
+      let min = run reader.number()
+      let max = run reader.number()
+      if !f64.isFinite(min) || !f64.isFinite(max) || min < -90.0 || max > 90.0 || min > max { run reader.invalid() }
+      Option<FaceStyle>.some(FaceStyle.Oblique { min: min, max: max })
+    }
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+  let display = match run reader.byte() {
+    0 => FontDisplay.Auto 1 => FontDisplay.Block 2 => FontDisplay.Swap 3 => FontDisplay.Fallback 4 => FontDisplay.Optional
+    _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+  }
+  let mut ranges = List<UnicodeRange>.make()
+  let count = run reader.count(limits.maxTokens)
+  let mut i: usize = 0
+  while i < count {
+    let start = run reader.word()
+    let end = run reader.word()
+    if start > end || end > 0x10FFFF { run reader.invalid() }
+    run ranges.append(UnicodeRange { start: start, end: end })
+    i = i + 1
+  }
+  let mut sources = List<FaceSource>.make()
+  let sourceCount = run reader.count(limits.maxTokens)
+  if sourceCount == 0 { run reader.invalid() }
+  i = 0
+  while i < sourceCount {
+    match run reader.byte() {
+      0 => {
+        let url = run readText(&mut reader)
+        let format = run Bytes.copy(run reader.data())
+        let tech = run Bytes.copy(run reader.data())
+        run sources.append(FaceSource.Url { url: move url, format: move format, tech: move tech })
+      }
+      1 => {
+        let name = run readText(&mut reader)
+        run sources.append(FaceSource.Local { name: run Bytes.copy(String.utf8Bytes(String.view(&name))) })
+      }
+      _ => run reader.invalid()
+    }
+    i = i + 1
+  }
+  return FontFaceRule { family: run Bytes.copy(String.utf8Bytes(String.view(&family))), weight: weight, width: width, style: style,
+    display: display, ranges: move ranges, sources: move sources }
+}

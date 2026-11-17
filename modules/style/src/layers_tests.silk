@@ -1,0 +1,25 @@
+import layers { Layers, UNLAYERED }
+import silk.core.effect { Effect }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.testing.testing { Testing, AssertionError }
+
+test effect fn nestedLayersStayTogetherAndRepeatedNamesKeepTheirPosition() -> ()
+  ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut layers = Layers.make()
+  let a = run layers.register(UNLAYERED, "a") |> Effect.provideMut<Allocator>(&mut allocator)
+  let b = run layers.register(UNLAYERED, "b") |> Effect.provideMut<Allocator>(&mut allocator)
+  let bx = run layers.register(b, "x") |> Effect.provideMut<Allocator>(&mut allocator)
+  let ax = run layers.register(a, "x") |> Effect.provideMut<Allocator>(&mut allocator)
+  let ay = run layers.register(a, "y") |> Effect.provideMut<Allocator>(&mut allocator)
+  let axx = run layers.register(ax, "x") |> Effect.provideMut<Allocator>(&mut allocator)
+  let repeated = run layers.register(a, "x") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(repeated == ax && layers.length() == 6, "repeated layer reuses identity")
+  run Testing.expect(layers.rank(axx) == 0 && layers.rank(ax) == 1, "parent follows its sublayers")
+  run Testing.expect(layers.rank(ay) == 2 && layers.rank(a) == 3, "sublayers precede parent rules")
+  run Testing.expect(layers.rank(bx) == 4 && layers.rank(b) == 5, "later root layers follow the entire earlier layer")
+  run Testing.expect(layers.rank(UNLAYERED) == UNLAYERED, "unlayered remains last")
+  let first = run layers.register(UNLAYERED, "") |> Effect.provideMut<Allocator>(&mut allocator)
+  let second = run layers.register(UNLAYERED, "") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(first != second && layers.rank(first) < layers.rank(second), "anonymous layers never merge")
+}
