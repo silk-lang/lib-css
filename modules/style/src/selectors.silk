@@ -238,12 +238,16 @@ pub enum SubjectKind {
   Any,
   Id,
   Class,
-  LocalName
+  LocalName,
+  /// The arm names a pseudo-element no host has, so it matches nothing.
+  Never
 }
 
 pub struct SubjectKey {
   pub kind: SubjectKind,
   pub text: Span,
+  /// The pseudo-element the arm styles; the arm matches only when the context asks for it.
+  pub target: PseudoTarget,
 }
 
 impl Copy for SubjectKey {}
@@ -588,17 +592,25 @@ impl<'a> SubjectKeys<'a> {
         SubjectKind.Any
       },
       text: compound.name,
+      target: compound.target,
     }
+    let mut id = false
     let mut simple = compound.first
     while simple != NONE {
       let entry = &self.selectors.simples.asSlice()[simple]
       match &entry.test {
         Test.Id { text } => {
-          return Option<SubjectKey>.Some { value: SubjectKey { kind: SubjectKind.Id, text: text }, }
+          if !id { key = SubjectKey { kind: SubjectKind.Id, text: text, target: compound.target } }
+          id = true
         }
         Test.Class { text } => {
-          if key.kind != SubjectKind.Class {
-            key = SubjectKey { kind: SubjectKind.Class, text: text }
+          if !id && key.kind != SubjectKind.Class {
+            key = SubjectKey { kind: SubjectKind.Class, text: text, target: compound.target }
+          }
+        }
+        Test.State { pseudo } => {
+          if pseudo == Pseudo.Never {
+            return Option<SubjectKey>.Some { value: SubjectKey { kind: SubjectKind.Never, text: compound.name, target: compound.target } }
           }
         }
         _ => {}
