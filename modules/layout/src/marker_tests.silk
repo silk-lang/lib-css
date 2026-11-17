@@ -1,0 +1,147 @@
+import fragmentation { FragmentationError }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.collections.list { List }
+import silk.num.usize
+import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.testing.testing { Testing, AssertionError }
+import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize }
+import style { Style, Dimension, Direction, Display, DisplayOutside, DisplayInside, Float }
+import tree { Tree, LayoutTree, InvalidNode, NodeId }
+import engine { compute }
+
+// Measured leaves are `key` pixels tall and as wide as offered; fonts are 10px.
+struct Leaves {}
+impl Measure for Leaves {
+  fn font(provider: &mut Self, request: FontRequest) -> FontMetrics {
+    drop provider
+    drop request
+    let mut font = FontMetrics.zero()
+    font.fontSize = 10.0
+    return font
+  }
+  fn scrollbars(provider: &mut Self, request: ScrollbarRequest) -> ScrollbarMetrics {
+    drop provider
+    drop request
+    return ScrollbarMetrics.zero()
+  }
+  fn natural(provider: &mut Self, key: usize) -> NaturalDimensions {
+    drop provider
+    drop key
+    return NaturalDimensions.none()
+  }
+  fn measure(provider: &mut Self, key: usize, request: MeasureRequest<'_>) -> Measured {
+    drop provider
+    let mut width: f32 = 30.0
+    if request.known.widthDefinite { width = request.known.width }
+    let height = usize.toF32(key)
+    return Measured { size: Size { width: width, height: height }, scrollableOverflow: Rect { x: 0.0, y: 0.0, width: width, height: height }, contentBlockSize: height, firstBaselines: BaselineSet.uniform(height), lastBaselines: BaselineSet.uniform(height), hasBaseline: true, hasLineBoxes: false }
+  }
+}
+impl TextMeasure for Leaves {
+  fn beginTextLayout(provider: &mut Self) { drop provider }
+  effect fn analyze(provider: &mut Self, context: TextContext<'_, '_>, output: &mut List<TextBreak>) -> TextAnalysis ! OutOfMemoryError | TextError ? &mut Allocator {
+    drop provider
+    drop output
+    fail TextError { source: context.tokens[0].source, message: "box-only fixture does not support text" }
+  }
+  effect fn shape(provider: &mut Self, request: TextShapeRequest<'_, '_>, output: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator {
+    drop provider
+    drop output
+    fail TextError { source: request.context.tokens[0].source, message: "box-only fixture does not support text" }
+  }
+}
+
+effect fn leaf(tree: &mut Tree, parent: NodeId, height: usize) -> NodeId ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let id = run tree.append(parent, Style.make())
+  run tree.setMeasurement(id, height)
+  return id
+}
+effect fn rectOf(output: &LayoutTree, id: NodeId) -> Rect ! InvalidNode {
+  let mut rects = run output.sourceRects(id)
+  return match move rects.next() { Option<Rect>.Some { value } => value
+    Option<Rect>.None => Rect.zero() }
+}
+effect fn expectAt(output: &LayoutTree, id: NodeId, x: f32, y: f32, label: string<'static>) ! InvalidNode | AssertionError<'static> {
+  let rect = run rectOf(output, id)
+  run Testing.expect(rect.x == x && rect.y == y, label)
+}
+
+fn markerStyle() -> Style {
+  let mut style = Style.make()
+  style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.FlowRoot }
+  style.outsideMarker = true
+  return move style
+}
+
+// A 200px list `ul` with 40px start padding holding `li` items whose first child is a marker of
+// one 30px-wide leaf, 10px tall with its baseline at its bottom.
+effect fn item(tree: &mut Tree, list: NodeId, style: Style) -> NodeId ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let li = run tree.append(list, move style)
+  let marker = run tree.append(li, markerStyle())
+  drop run leaf(&mut tree.*, marker, 10)
+  return li
+}
+
+effect fn outsideMarkers() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let rootId = tree.root()
+  let mut listStyle = Style.make()
+  listStyle.width = Dimension.px(200.0)
+  listStyle.padding.left = Dimension.px(40.0)
+  listStyle.padding.right = Dimension.px(40.0)
+  let list = run tree.append(rootId, listStyle)
+  // li > p: the marker sits beside the paragraph's first line, which is 20px tall.
+  let first = run item(&mut tree, list, Style.make())
+  let mut paragraph = Style.make()
+  paragraph.padding.top = Dimension.px(5.0)
+  let p = run tree.append(first, paragraph)
+  let line = run leaf(&mut tree, p, 20)
+  // A text-only item: its own line.
+  let second = run item(&mut tree, list, Style.make())
+  let text = run leaf(&mut tree, second, 30)
+  // An empty item: the marker at the top of its content box.
+  let mut padded = Style.make()
+  padded.padding.top = Dimension.px(4.0)
+  let third = run item(&mut tree, list, padded)
+  // Right to left: the marker is past the inline-start edge, on the right.
+  let mut rtl = Style.make()
+  rtl.direction = Direction.Rtl
+  let fourth = run item(&mut tree, list, rtl)
+  drop run leaf(&mut tree, fourth, 10)
+  let mut output = LayoutTree.make()
+  let mut host = Leaves {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 300.0))
+  let firstMarker = NodeId { index: first.index + 1 }
+  run expectAt(&output, firstMarker, 10.0, 15.0, "the marker ends at the item's start edge, on the paragraph's baseline")
+  run expectAt(&output, p, 40.0, 0.0, "the marker takes no room in the item")
+  run expectAt(&output, line, 40.0, 5.0, "nor in its paragraph")
+  let firstRect = run rectOf(&output, first)
+  run Testing.expect(firstRect.height == 25.0, "nor in the item's height")
+  run expectAt(&output, NodeId { index: second.index + 1 }, 10.0, 45.0, "a text-only item's marker is on its line's baseline")
+  run expectAt(&output, text, 40.0, 25.0, "the item's content stays at its start")
+  run expectAt(&output, NodeId { index: third.index + 1 }, 10.0, 59.0, "an item with no line puts the marker at its content top")
+  let thirdRect = run rectOf(&output, third)
+  run Testing.expect(thirdRect.height == 4.0, "and an empty item stays empty")
+  run expectAt(&output, NodeId { index: fourth.index + 1 }, 240.0, 59.0, "right to left, the marker is past the right edge")
+  // Changing the marker relays it out where it belongs.
+  run tree.setMeasurement(NodeId { index: second.index + 2 }, 16)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 300.0))
+  run expectAt(&output, NodeId { index: second.index + 1 }, 10.0, 39.0, "a taller marker moves up to keep the baselines lined up")
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut host, OptionalSize.definite(300.0, 300.0))
+  run expectAt(&fresh, NodeId { index: second.index + 1 }, 10.0, 39.0, "fresh layout matches")
+  // Markers add nothing to the intrinsic width of a shrink-to-fit item.
+  let mut floating = Style.make()
+  floating.float = Float.Left
+  let floated = run item(&mut tree, rootId, floating)
+  drop run leaf(&mut tree, floated, 10)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 300.0))
+  let floatRect = run rectOf(&output, floated)
+  run Testing.expect(floatRect.width == 30.0, "a float's width is its content's, not its marker's too")
+}
+test effect fn outsideMarkersSitBesideTheFirstLine() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run outsideMarkers() |> Effect.provideMut<Allocator>(&mut allocator)
+}

@@ -38,11 +38,26 @@ test effect fn generatedContentPreservesStringsAttributesAndFallbacks() -> ()
 test effect fn generatedContentRejectsUnsupportedAndMalformedForms() -> ()
   ! CssError | OutOfMemoryError | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
-  let sources = [b"", b"counter(item)", b"counters(item,'.')", b"url(icon.png)", b"open-quote", b"'text' / 'alternative'", b"attr()", b"attr(data-x px)", b"attr(data-x, 3)", b"none ''", b"attr(x) garbage", b"123"]
+  let sources = [b"", b"counter(none)", b"counters(item)", b"counter(item, 'x')", b"url(icon.png)", b"open-quote", b"'text' / 'alternative'", b"attr()", b"attr(data-x px)", b"attr(data-x, 3)", b"none ''", b"attr(x) garbage", b"123"]
   let mut i: usize = 0
   while i < sources.length {
     let result = run parse(sources[i]) |> Effect.provideMut<Allocator>(&mut allocator)
     run Testing.expect(result.isNone(), "unsupported content must not silently produce a partial string")
     i = i + 1
   }
+}
+
+test effect fn generatedContentReadsCounterFunctions() -> ()
+  ! CssError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let parsed = run parse(b"counter(item) '.' counters(section, '.', upper-roman) counter(x, lower-alpha)") |> Effect.provideMut<Allocator>(&mut allocator)
+  let content = match &parsed {
+    Option<Content>.Some { value: Content.Items { values } } => values.asSlice()
+    _ => { run Testing.expect(false, "content with counters parses")
+      return () }
+  }
+  run Testing.expect(content.length == 4, "counters keep their place among strings")
+  run Testing.expect(match &content[0] { Item.Counter { name, separator, style, nested } => equal(name.asSlice(), b"item") && separator.length() == 0 && style.length() == 0 && !nested _ => false }, "counter() with the default style")
+  run Testing.expect(match &content[2] { Item.Counter { name, separator, style, nested } => equal(name.asSlice(), b"section") && equal(separator.asSlice(), b".") && equal(style.asSlice(), b"upper-roman") && nested _ => false }, "counters() with a separator and style")
+  run Testing.expect(match &content[3] { Item.Counter { style, nested, .. } => equal(style.asSlice(), b"lower-alpha") && !nested _ => false }, "counter() with a style")
 }

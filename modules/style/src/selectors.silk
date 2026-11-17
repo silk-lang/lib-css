@@ -3410,7 +3410,7 @@ effect fn writeTest(writer: &mut BinaryWriter, buffer: &TokenBuffer, test: &Test
       run writer.byte(7)
       run writer.byte(match target { PseudoTarget.None => 0 PseudoTarget.Before => 1 PseudoTarget.After => 2
         PseudoTarget.Placeholder => 3 PseudoTarget.Selection => 4 PseudoTarget.Scrollbar => 5
-        PseudoTarget.ScrollbarThumb => 6 PseudoTarget.ScrollbarTrack => 7 })
+        PseudoTarget.ScrollbarThumb => 6 PseudoTarget.ScrollbarTrack => 7 PseudoTarget.Marker => 8 })
     }
     Test.ElementState { pseudo } => {
       run writer.byte(8)
@@ -3437,6 +3437,7 @@ effect fn readTest(reader: &mut BinaryReader<'_>, buffer: &mut TokenBuffer) -> T
       5 => PseudoTarget.Scrollbar
       6 => PseudoTarget.ScrollbarThumb
       7 => PseudoTarget.ScrollbarTrack
+      8 => PseudoTarget.Marker
       _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
     } }
     8 => Test.ElementState { pseudo: run readPseudo(&mut reader.*) }

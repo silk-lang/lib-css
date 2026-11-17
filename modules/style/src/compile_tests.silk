@@ -334,7 +334,7 @@ test effect fn compiledGeneratedSelectorsRoundTripWithoutNormalRuleLeakage() -> 
 test effect fn unsupportedGeneratedContentIsReportedAndDropped() -> ()
   ! AssertionError<'static> | CompileError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
-  let css = b".button::before{content:'fallback';content:counter(item);content:url(icon.png)}"
+  let css = b".button::before{content:'fallback';content:open-quote;content:url(icon.png)}"
   let sheet = run compile.compile(css, &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(sheet.diagnostics.length() == 1 && sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Unsupported && sheet.diagnostics.asSlice()[0].count == 2, "unsupported content forms aggregate diagnostics")
   run Testing.expect(sheet.declarations.length() == 1, "unsupported declarations leave the supported fallback")
@@ -418,6 +418,8 @@ effect fn checkPartSheet(sheet: &mut Sheet) -> ()
 test effect fn compiledPartTargetsRoundTripAndStayIsolated() -> ()
   ! AssertionError<'static> | CompileError | DecodeError | ResolverError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
+  let markers = run compile.compile(b"li::marker{color:red;content:counters(list-item, '.') ' '}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(markers.diagnostics.length() == 0, "::marker and counters() compile without diagnostics")
   let mut sheet = run compile.compile(b".button::placeholder{color:red}.button::selection{color:blue}.button::-webkit-scrollbar{width:8px}.button:hover::-webkit-scrollbar-thumb{background-color:red}.button::-webkit-scrollbar-track{background-color:blue}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(sheet.diagnostics.length() == 0, "host part selectors compile without diagnostics")
   run checkPartSheet(&mut sheet) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -429,7 +431,7 @@ test effect fn compiledPartTargetsRoundTripAndStayIsolated() -> ()
 test effect fn unavailablePseudoElementsAreDiagnosedWithoutDroppingValidListArms() -> ()
   ! AssertionError<'static> | CompileError | ResolverError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
-  let css = b".button::marker,.button{color:red}.button::marker{color:blue}.button::backdrop{color:red}.button::file-selector-button{color:red}.button::-webkit-scrollbar-button{color:red}.button:first-line{color:red}.button::part(label){color:red}"
+  let css = b".button::target-text,.button{color:red}.button::target-text{color:blue}.button::backdrop{color:red}.button::file-selector-button{color:red}.button::-webkit-scrollbar-button{color:red}.button:first-line{color:red}.button::part(label){color:red}"
   let mut sheet = run compile.compile(css, &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(sheet.diagnostics.length() == 6 && sheet.diagnostics.asSlice()[0].count == 2, "each unavailable target is diagnosed and repeated targets are aggregated")
   let mut i: usize = 0

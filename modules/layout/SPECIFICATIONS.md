@@ -258,6 +258,10 @@ Flex shrinking uses the allotted inner flex base before subtracting gutters from
 
 Limits: a multicolumn container inside another one or inside printed pages lays out as one column; `column-span` applies only to direct children; vertical writing modes do not split into columns; widows and orphans at column breaks are untested; a size probe of a column set lays its columns out and takes them back.
 
+### List markers
+
+[Lists 3 §3.2](https://drafts.csswg.org/css-lists-3/#list-style-position-property): the host generates the `::marker` box and its text (counters are a host concern). An inside marker is an ordinary inline box. An outside marker is the list item's first child with `outsideMarker`; it is out of flow, takes no part in the item's sizing, and after the item's contents are laid out `markers.silk` lays it out shrink-to-fit and places it with its inline end at the item's inline-start border edge and its first baseline on the item's first baseline, which may be a line of a block descendant (`li > p`). Without a baseline it sits at the item's content top. Limits: a fragmented item (in columns or pages) does not place its marker; the marker adds to no ancestor's intrinsic size.
+
 ### Verified browser differences
 
 The following reduced cases were executed against Chrome `155.0.8059.85`, revision `0e66b94549a8bd85f03fbdf189b752d6e7b63c32`. The specification-derived results are intentional; the differential harness still reports mismatches rather than silently excluding them.

@@ -3,7 +3,7 @@ import silk.num.usize
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
 import style { SizeContainment, Style, Display, Dimension, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
-import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, absolutelyPositioned, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
 import flex { layoutFlex, emptyFlexSize, FlexScratch }
 import grid { layoutGrid, layoutEmptyGrid }
@@ -26,6 +26,7 @@ import inline_layout { layoutInline, InlineScratch }
 import text { TextMeasure, TextError }
 import fragment_box as FragmentBox
 import multicol { layoutColumnSet }
+import markers { placeMarker }
 import fragmentation { FragmentationError, BoundaryProbe }
 import axes { Axes }
 
@@ -244,7 +245,10 @@ effect fn contentAlgorithm<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   if nodes.node(id).columnSet && output.frame == NO_NODE { return run layoutColumnSet(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if nodes.node(id).kind == BoxKind.Table { return run layoutTable(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if nodes.node(id).kind == BoxKind.TablePart { return run layoutTablePart(nodes, &mut output, &mut measurer, id, &request, &resolved) }
-  return run layoutBlock(nodes, &mut output, &mut measurer, id, nodes.style(id), &request, &resolved, &mut bfc)
+  let result = run layoutBlock(nodes, &mut output, &mut measurer, id, nodes.style(id), &request, &resolved, &mut bfc)
+  let first = nodes.node(id).firstChild
+  if first != NO_NODE && nodes.style(first).outsideMarker { run placeMarker(nodes, &mut output, &mut measurer, id, &request, &resolved, &result) }
+  return result
 }
 
 // layoutReplaced, kept out of line: replaced boxes are rare on the content path.
@@ -386,12 +390,13 @@ fn plainWidthOf(nodes: &BoxTree<'_>, shapes: &[u16], widths: &mut [f32], base: &
 
 // Whether a box has no in-flow children: absolutely positioned children take
 // no part in its sizing (CSS2 §10.6.7, Flexbox §4.1), so its probes size it
-// as if childless. Its final layout still places them.
+// as if childless. Its final layout still places them. An outside marker is
+// placed by the box's own layout, so it keeps the box off the empty paths.
 fn noInFlowChildren(nodes: &BoxTree<'_>, id: usize) -> bool {
   let mut child = nodes.node(id).firstChild
   while child != NO_NODE {
     let node = nodes.node(child)
-    if node.kind == BoxKind.Text || node.kind == BoxKind.Inline || node.kind == BoxKind.InlineFormatting || !outOfFlow(nodes.style(child)) { return false }
+    if node.kind == BoxKind.Text || node.kind == BoxKind.Inline || node.kind == BoxKind.InlineFormatting || !absolutelyPositioned(nodes.style(child)) { return false }
     child = node.nextSibling
   }
   return true
@@ -461,7 +466,7 @@ impl FlowMargins {
 @inlineAlways
 fn flowMarginIn(nodes: &BoxTree<'_>, parent: &FlowMargins, child: usize, layout: &Layout) -> Rect {
   let style = nodes.style(child)
-  if !layout.hasBox() || outOfFlow(style) { return Rect.zero() }
+  if !layout.hasBox() || absolutelyPositioned(style) { return Rect.zero() }
   let mut margin = layout.usedMargin
   if parent.declared {
     // Optional block margins use declared lengths, with resolved auto margins.
