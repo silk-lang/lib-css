@@ -31,9 +31,11 @@ import silk.core.effect { Effect }
 import silk.collections.slice { Slice }
 import silk.color.rgba { Rgba }
 import silk.core.option { Option }
+import silk.core.ownership { Copy }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.f32
 import silk.num.f64
+import silk.text.string { String }
 
 const COMMA: u8 = 0
 const SLASH: u8 = 1
@@ -158,6 +160,13 @@ pub effect fn longhand(declaration: &Declaration, target: Property) -> Option<Va
     }
     return run containerLonghand(&declaration.value, target)
   }
+  if declaration.property == Property.Background {
+    if let Value.Text { css } = &declaration.value {
+      if let Option<Value>.Some { value: found } = move run backgroundWords(css.asSlice(), target) {
+        return Option<Value>.some(move found)
+      }
+    }
+  }
   let expanded = run shorthands.longhand(declaration.property, &declaration.value, target)
   if let Option<Value>.Some { value: found } = move expanded { return Option<Value>.some(move found) }
   let text = run values.cssText(&declaration.value)
@@ -169,6 +178,161 @@ pub effect fn longhand(declaration: &Declaration, target: Property) -> Option<Va
     if css.length() != 0 { return Option<Value>.some(run value(css.asSlice())) }
   }
   return Option<Value>.None
+}
+
+fn wordByte(byte: u8) -> bool {
+  return (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57)
+    || byte == 45
+    || byte == 95
+    || byte >= 128
+}
+
+// What a `background` layer spelled that the shared model has no shape for.
+struct LayerWords {
+  /// Whether it has `local`.
+  local: bool,
+  /// Its `url()` image, empty without one.
+  image: Bytes,
+}
+
+// The end of the comma-separated item of `text` that starts at `at`.
+fn itemEnd(text: &[u8], at: usize) -> usize {
+  let mut depth: usize = 0
+  let mut quote: u8 = 0
+  let mut i = at
+  while i < text.length {
+    let byte = text[i]
+    if quote != 0 {
+      if byte == 92 { i = i + 1 } else if byte == quote { quote = 0 }
+    } else if byte == 34 || byte == 39 {
+      quote = byte
+    } else if byte == 40 {
+      depth = depth + 1
+    } else if byte == 41 {
+      if depth > 0 { depth = depth - 1 }
+    } else if depth == 0 && byte == 44 {
+      return i
+    }
+    i = i + 1
+  }
+  return text.length
+}
+
+// A `background` value that spells a `url()` image, `repeat-x`, `repeat-y` or `local`,
+// which the shared model has no shape for: read with `none`, the two-value repeats and
+// `scroll` in their places, then with the images and `local` put back in their layers of
+// `background-image` and `background-attachment`. None when it has none of them.
+effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let mut plain = Bytes.make()
+  let mut layers = List<LayerWords>.make()
+  let mut current = LayerWords { local: false, image: Bytes.make() }
+  let mut changed = false
+  let mut i: usize = 0
+  while i < css.length {
+    let byte = css[i]
+    if byte == 44 {
+      run layers.append(Intrinsic.replace(current, LayerWords { local: false, image: Bytes.make() }))
+    } else if byte == 34 || byte == 39 || byte == 40 {
+      // A string or a block the shared model reads or refuses whole.
+      let mut end = i + 1
+      let mut depth: usize = if byte == 40 { 1 } else { 0 }
+      let mut quote: u8 = if byte == 40 { 0 } else { byte }
+      while end < css.length && (depth > 0 || quote != 0) {
+        let inner = css[end]
+        if quote != 0 {
+          if inner == 92 { end = end + 1 } else if inner == quote { quote = 0 }
+        } else if inner == 34 || inner == 39 {
+          quote = inner
+        } else if inner == 40 {
+          depth = depth + 1
+        } else if inner == 41 {
+          depth = depth - 1
+        }
+        end = end + 1
+      }
+      if end > css.length { end = css.length }
+      run Bytes.append(&mut plain, Slice.view(css, i, end - i))
+      i = end
+      continue
+    } else if wordByte(byte) {
+      let mut end = i
+      while end < css.length && wordByte(css[end]) { end = end + 1 }
+      let word = Slice.view(css, i, end - i)
+      let called = end < css.length && css[end] == 40
+      if called && tokens.insensitive(word, b"url") {
+        if current.image.length() != 0 { return Option<Value>.None }
+        let close = itemEnd(css, end)
+        let mut stop = end + 1
+        let mut quote: u8 = 0
+        while stop < close && (quote != 0 || css[stop] != 41) {
+          if quote != 0 {
+            if css[stop] == 92 { stop = stop + 1 } else if css[stop] == quote { quote = 0 }
+          } else if css[stop] == 34 || css[stop] == 39 {
+            quote = css[stop]
+          }
+          stop = stop + 1
+        }
+        if stop >= css.length { return Option<Value>.None }
+        current.image = run Bytes.copy(Slice.view(css, i, stop + 1 - i))
+        // A gradient holds the image's place: `none` could also be written beside it.
+        run Bytes.append(&mut plain, b"linear-gradient(red, red)")
+        changed = true
+        i = stop + 1
+        continue
+      }
+      if !called && tokens.insensitive(word, b"repeat-x") {
+        run Bytes.append(&mut plain, b"repeat no-repeat")
+        changed = true
+      } else if !called && tokens.insensitive(word, b"repeat-y") {
+        run Bytes.append(&mut plain, b"no-repeat repeat")
+        changed = true
+      } else if !called && tokens.insensitive(word, b"local") {
+        run Bytes.append(&mut plain, b"scroll")
+        current.local = true
+        changed = true
+      } else {
+        run Bytes.append(&mut plain, word)
+      }
+      i = end
+      continue
+    }
+    run Bytes.append(&mut plain, Slice.view(css, i, 1))
+    i = i + 1
+  }
+  if !changed { return Option<Value>.None }
+  run layers.append(move current)
+  let shaped = run value(plain.asSlice())
+  let found = run shorthands.longhand(Property.Background, &shaped, target)
+  let image = target == Property.BackgroundImage
+  if !(image || target == Property.BackgroundAttachment) { return move found }
+  let listed = match move found {
+    Option<Value>.Some { value: listed } => move listed
+    Option<Value>.None => { return Option<Value>.None }
+  }
+  // One item a layer, with what the layer spelled put back.
+  let spelled = run values.cssText(&listed)
+  let text = spelled.asSlice()
+  let mut out = Bytes.make()
+  let mut layer: usize = 0
+  let mut at: usize = 0
+  while at <= text.length {
+    let end = itemEnd(text, at)
+    if layer > 0 { run Bytes.append(&mut out, b", ") }
+    let words = &layers.asSlice()[if layer < layers.length() { layer } else { layers.length() - 1 }]
+    if image && words.image.length() != 0 {
+      run Bytes.append(&mut out, words.image.asSlice())
+    } else if !image && words.local {
+      run Bytes.append(&mut out, b"local")
+    } else {
+      let mut from = at
+      while from < end && text[from] == 32 { from = from + 1 }
+      run Bytes.append(&mut out, Slice.view(text, from, end - from))
+    }
+    layer = layer + 1
+    at = end + 1
+  }
+  return Option<Value>.some(run value(out.asSlice()))
 }
 
 effect fn containerLonghand(specified: &Value, target: Property) -> Option<Value> ! CssError | OutOfMemoryError ? &mut Allocator {
@@ -586,6 +750,8 @@ effect fn component(buffer: &TokenBuffer, at: usize, end: usize, out: &mut List<
         run mathList(buffer, at + 1, close, MathOperator.Max, &mut out.*)
       } else if tokens.insensitive(spelled, b"clamp") {
         run mathList(buffer, at + 1, close, MathOperator.Clamp, &mut out.*)
+      } else if foldable(spelled) {
+        run folded(buffer, spelled, at + 1, close, &mut out.*)
       } else if run color(buffer, at, after, &mut out.*) {
         true
       } else {
@@ -700,6 +866,229 @@ effect fn mathList(
     at = stop + 1
   }
   run out.append(Value.Math { operator: operator, values: move arguments })
+  return true
+}
+
+// The math functions read here when their arguments are constants, as one number or
+// dimension: the trigonometric, exponential, sign and stepped-value functions.
+const FOLDABLE: [string<'static>; 17] = [
+  "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "pow", "sqrt", "hypot", "log", "exp",
+  "abs", "sign", "mod", "rem", "round",
+]
+
+fn foldable(name: &[u8]) -> bool {
+  let mut i: usize = 0
+  while i < FOLDABLE.length {
+    if tokens.insensitive(name, String.utf8Bytes(FOLDABLE[i])) { return true }
+    i = i + 1
+  }
+  return false
+}
+
+// A constant: a number, or an amount of one unit. Angles are in degrees.
+struct Constant {
+  value: f32,
+  unit: Unit,
+}
+
+impl Copy for Constant {}
+
+fn degrees(value: f32, unit: Unit) -> Option<f32> {
+  return match unit {
+    Unit.Deg => Option<f32>.some(value)
+    Unit.Grad => Option<f32>.some(value * 0.9)
+    Unit.Rad => Option<f32>.some(value * 57.29578)
+    Unit.Turn => Option<f32>.some(value * 360.0)
+    _ => Option<f32>.None
+  }
+}
+
+// The constant `value` is, when it is one without knowing a font or a box.
+fn constantOf(value: &Value) -> Option<Constant> {
+  match &value.* {
+    Value.Unit { value: amount, unit } => {
+      if let Option<f32>.Some { value: turned } = degrees(amount, unit) {
+        return Option<Constant>.some(Constant { value: turned, unit: Unit.Deg })
+      }
+      return Option<Constant>.some(Constant { value: amount, unit: unit })
+    }
+    Value.Math { operator, values: items } => {
+      let list = items.asSlice()
+      if list.length == 0 { return Option<Constant>.None }
+      let first = match constantOf(&list[0]) {
+        Option<Constant>.Some { value: found } => found
+        Option<Constant>.None => { return Option<Constant>.None }
+      }
+      if operator == MathOperator.Negate {
+        return Option<Constant>.some(Constant { value: 0.0 - first.value, unit: first.unit })
+      }
+      if operator == MathOperator.Invert {
+        if first.unit != Unit.Number || first.value == 0.0 { return Option<Constant>.None }
+        return Option<Constant>.some(Constant { value: 1.0 / first.value, unit: Unit.Number })
+      }
+      let mut total = first
+      let mut i: usize = 1
+      while i < list.length {
+        let next = match constantOf(&list[i]) {
+          Option<Constant>.Some { value: found } => found
+          Option<Constant>.None => { return Option<Constant>.None }
+        }
+        if operator == MathOperator.Product {
+          if total.unit != Unit.Number && next.unit != Unit.Number { return Option<Constant>.None }
+          total = Constant { value: total.value * next.value, unit: if total.unit == Unit.Number { next.unit } else { total.unit } }
+        } else {
+          if next.unit != total.unit { return Option<Constant>.None }
+          if operator == MathOperator.Sum {
+            total.value = total.value + next.value
+          } else if operator == MathOperator.Min {
+            total.value = f32.min(total.value, next.value)
+          } else if operator == MathOperator.Max {
+            total.value = f32.max(total.value, next.value)
+          } else {
+            // clamp(low, value, high): the value held between the two.
+            if list.length != 3 { return Option<Constant>.None }
+            if i == 1 { total.value = f32.max(total.value, next.value) } else { total.value = f32.min(total.value, next.value) }
+          }
+        }
+        i = i + 1
+      }
+      return Option<Constant>.some(total)
+    }
+    _ => {}
+  }
+  return Option<Constant>.None
+}
+
+// `value` to a multiple of `step`: 0 nearest, 1 up, 2 down, 3 toward zero.
+fn stepped(value: f32, step: f32, strategy: u8) -> f32 {
+  if step == 0.0 { return f32.NAN }
+  let ratio = value / step
+  let whole = if strategy == 1 {
+    f32.ceil(ratio)
+  } else if strategy == 2 {
+    f32.floor(ratio)
+  } else if strategy == 3 {
+    f32.trunc(ratio)
+  } else {
+    f32.floor(ratio + 0.5)
+  }
+  return whole * step
+}
+
+/// Appends the value of the math function `name` over the arguments in `start..end`, when
+/// they are constants: `sin(30deg)` is `0.5`, `pow(2, 3)` is `8` and `round(up, 13px, 4px)`
+/// is `16px`. False for arguments that depend on a font or a box.
+effect fn folded(buffer: &TokenBuffer, name: &[u8], start: usize, end: usize, out: &mut List<Value>) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut at = start
+  let mut strategy: u8 = 0
+  if tokens.insensitive(name, b"round") {
+    let first = skipSpace(buffer, start, end)
+    if first < end {
+      if let Kind.Ident { text } = buffer.tokens.asSlice()[first].kind {
+        let word = buffer.text(text)
+        let chosen: u8 = if tokens.insensitive(word, b"nearest") {
+          0
+        } else if tokens.insensitive(word, b"up") {
+          1
+        } else if tokens.insensitive(word, b"down") {
+          2
+        } else if tokens.insensitive(word, b"to-zero") {
+          3
+        } else {
+          4
+        }
+        if chosen < 4 {
+          let stop = find(buffer, start, end, COMMA)
+          if stop == end || trimEnd(buffer, first, stop) != first + 1 { return false }
+          strategy = chosen
+          at = stop + 1
+        }
+      }
+    }
+  }
+  let mut arguments = List<Constant>.make()
+  while at <= end {
+    let stop = find(buffer, at, end, COMMA)
+    let mut shaped = List<Value>.make()
+    if !run sum(buffer, at, stop, &mut shaped) { return false }
+    match constantOf(&shaped.asSlice()[0]) {
+      Option<Constant>.Some { value: found } => { run arguments.append(found) }
+      Option<Constant>.None => { return false }
+    }
+    at = stop + 1
+  }
+  let list = arguments.asSlice()
+  if list.length == 0 { return false }
+  let a = list[0]
+  let plain = a.unit == Unit.Number
+  let mut result = Constant { value: 0.0, unit: Unit.Number }
+  if tokens.insensitive(name, b"sin") || tokens.insensitive(name, b"cos") || tokens.insensitive(name, b"tan") {
+    if list.length != 1 || !(plain || a.unit == Unit.Deg) { return false }
+    let radians = if plain { a.value } else { a.value * 0.017453292 }
+    result.value = if tokens.insensitive(name, b"sin") {
+      f32.sin(radians)
+    } else if tokens.insensitive(name, b"cos") {
+      f32.cos(radians)
+    } else {
+      f32.tan(radians)
+    }
+  } else if tokens.insensitive(name, b"asin") || tokens.insensitive(name, b"acos") || tokens.insensitive(name, b"atan") {
+    if list.length != 1 || !plain { return false }
+    let radians = if tokens.insensitive(name, b"asin") {
+      f32.asin(a.value)
+    } else if tokens.insensitive(name, b"acos") {
+      f32.acos(a.value)
+    } else {
+      f32.atan(a.value)
+    }
+    result = Constant { value: radians * 57.29578, unit: Unit.Deg }
+  } else if tokens.insensitive(name, b"atan2") {
+    if list.length != 2 || list[1].unit != a.unit { return false }
+    result = Constant { value: f32.atan2(a.value, list[1].value) * 57.29578, unit: Unit.Deg }
+  } else if tokens.insensitive(name, b"pow") {
+    if list.length != 2 || !plain || list[1].unit != Unit.Number { return false }
+    result.value = f32.pow(a.value, list[1].value)
+  } else if tokens.insensitive(name, b"sqrt") || tokens.insensitive(name, b"exp") {
+    if list.length != 1 || !plain { return false }
+    result.value = if tokens.insensitive(name, b"sqrt") { f32.sqrt(a.value) } else { f32.exp(a.value) }
+  } else if tokens.insensitive(name, b"log") {
+    if list.length > 2 || !plain { return false }
+    result.value = f32.log(a.value)
+    if list.length == 2 {
+      if list[1].unit != Unit.Number { return false }
+      result.value = result.value / f32.log(list[1].value)
+    }
+  } else if tokens.insensitive(name, b"hypot") {
+    let mut squares: f32 = 0.0
+    let mut i: usize = 0
+    while i < list.length {
+      if list[i].unit != a.unit { return false }
+      squares = squares + list[i].value * list[i].value
+      i = i + 1
+    }
+    result = Constant { value: f32.sqrt(squares), unit: a.unit }
+  } else if tokens.insensitive(name, b"abs") {
+    if list.length != 1 { return false }
+    result = Constant { value: f32.abs(a.value), unit: a.unit }
+  } else if tokens.insensitive(name, b"sign") {
+    if list.length != 1 { return false }
+    result.value = if a.value > 0.0 { 1.0 } else if a.value < 0.0 { 0.0 - 1.0 } else { 0.0 }
+  } else if tokens.insensitive(name, b"mod") || tokens.insensitive(name, b"rem") {
+    if list.length != 2 || list[1].unit != a.unit || list[1].value == 0.0 { return false }
+    let step = list[1].value
+    let whole = if tokens.insensitive(name, b"mod") { f32.floor(a.value / step) } else { f32.trunc(a.value / step) }
+    result = Constant { value: a.value - whole * step, unit: a.unit }
+  } else {
+    // round(strategy?, value, step?): the step is 1 for a number.
+    if list.length > 2 || (list.length == 1 && !plain) { return false }
+    if list.length == 2 && list[1].unit != a.unit { return false }
+    let step: f32 = if list.length == 2 { list[1].value } else { 1.0 }
+    result = Constant { value: stepped(a.value, step, strategy), unit: a.unit }
+  }
+  if result.value != result.value { return false }
+  run out.append(Value.Unit { value: result.value, unit: result.unit })
   return true
 }
 
@@ -826,7 +1215,8 @@ effect fn operand(buffer: &TokenBuffer, start: usize, end: usize, out: &mut List
         return run sum(buffer, first + 1, close, &mut out.*)
       }
       if !tokens.insensitive(spelled, b"min") && !tokens.insensitive(spelled, b"max")
-        && !tokens.insensitive(spelled, b"clamp") {
+        && !tokens.insensitive(spelled, b"clamp")
+        && !foldable(spelled) {
         return false
       }
       let next = run component(buffer, first, last, &mut out.*)

@@ -3,7 +3,7 @@
 //! `longhand` answers what one longhand gets from a value written for its shorthand, such as
 //! `margin-left` from `margin: 1px 2px`. A longhand the value leaves out gets its initial
 //! value. The grammars are the common forms, not the whole of each spec: `background` takes
-//! keyword-spelled components only (no `repeat-x` or `local`), and `grid` also takes an `auto-flow` axis; area-string templates are not expanded.
+//! keyword-spelled components only (css-style's `written.longhand` reads `url()` images, `repeat-x`, `repeat-y` and `local` before it asks here), and `grid` also takes an `auto-flow` axis; area-string templates are not expanded.
 //! A value outside those forms has no expansion, and the caller drops the declaration.
 import catalog { Property }
 import catalog
