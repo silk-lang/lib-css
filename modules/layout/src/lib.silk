@@ -104,6 +104,7 @@ pub import tree {
   SourceContent
 }
 pub import box_tree { BoxKind, BoxNode }
+pub import shapes { FloatShape, ShapeKind, ShapeBox, ShapeRadius }
 pub import fragments {
   FragmentKind,
   FragmentId,

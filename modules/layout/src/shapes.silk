@@ -1,0 +1,399 @@
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.collections.list { List }
+import silk.core.ownership { Copy }
+import silk.num.f32
+import silk.num.u32
+import silk.num.u8
+import silk.num.usize
+import silk.num.u64
+import geometry { Point, Size, ResolvedEdges, Layout, max, min, clamp }
+import style { Dimension, DimensionKind }
+import axes { Axes }
+
+// CSS Shapes 1 §3.1: what `shape-outside` gives a float to wrap lines around.
+pub enum ShapeKind { None, Box, Circle, Ellipse, Inset, Polygon }
+// The reference box a shape's percentages and position resolve against.
+pub enum ShapeBox { MarginBox, BorderBox, PaddingBox, ContentBox }
+// A circle or ellipse radius: a length or percentage in `values`, or a side keyword.
+pub enum ShapeRadius { Length, ClosestSide, FarthestSide }
+
+// A `shape-outside` value, with percentages unresolved. `values` holds, by kind:
+// Box: the border radii (x of the top left, top right, bottom right and bottom left
+// corners, then their y), percentages of the border box.
+// Circle: radius, center x, center y. Ellipse: radius x, radius y, center x, center y.
+// Inset: top, right, bottom, left, then corner radii as for Box, of the reference box.
+// Polygon: x and y of each point.
+// `margin` is `shape-margin`, a percentage of the containing block's inline size.
+pub struct FloatShape {
+  pub kind: ShapeKind, pub reference: ShapeBox,
+  pub radiusX: ShapeRadius, pub radiusY: ShapeRadius,
+  pub margin: Dimension,
+  pub values: List<Dimension>,
+}
+impl FloatShape {
+  pub fn make() -> FloatShape {
+    return FloatShape { kind: ShapeKind.None, reference: ShapeBox.MarginBox, radiusX: ShapeRadius.Length, radiusY: ShapeRadius.Length, margin: Dimension.px(0.0), values: List<Dimension>.make() }
+  }
+  pub fn isNone(self: &Self) -> bool { return self.kind == ShapeKind.None }
+  pub fn same(self: &Self, other: &FloatShape) -> bool {
+    if self.kind != other.kind || self.reference != other.reference || self.radiusX != other.radiusX || self.radiusY != other.radiusY { return false }
+    if !sameDimension(self.margin, other.margin) || self.values.length() != other.values.length() { return false }
+    let a = self.values.asSlice()
+    let b = other.values.asSlice()
+    let mut i: usize = 0
+    while i < a.length {
+      if !sameDimension(a[i], b[i]) { return false }
+      i = i + 1
+    }
+    return true
+  }
+  pub effect fn copy(self: &Self) -> FloatShape ! OutOfMemoryError ? &mut Allocator {
+    let mut values = List<Dimension>.make()
+    run values.appendSlice(self.values.asSlice())
+    return FloatShape { kind: self.kind, reference: self.reference, radiusX: self.radiusX, radiusY: self.radiusY, margin: self.margin, values: move values }
+  }
+}
+fn sameDimension(a: Dimension, b: Dimension) -> bool { return a.kind == b.kind && a.value == b.value && a.percent == b.percent }
+
+const SHAPE_NONE: u8 = 0
+const SHAPE_ELLIPSE: u8 = 1
+const SHAPE_RECT: u8 = 2
+const SHAPE_POLYGON: u8 = 3
+
+// A float area in logical coordinates (line axis x, block axis y) relative to the
+// float's margin box, before `margin` widens it. Ellipse: the box (x0, y0)-(x1, y1).
+// Rect: the box and its corner radii (x of top-left, top-right, bottom-right,
+// bottom-left, then y). Polygon: `count` points from `start` of the formatting
+// context's point list.
+pub struct ResolvedShape {
+  pub kind: u8,
+  pub margin: f32,
+  pub x0: f32, pub y0: f32, pub x1: f32, pub y1: f32,
+  pub radii: [f32; 8],
+  pub start: u32, pub count: u32,
+}
+impl Copy for ResolvedShape {}
+impl ResolvedShape {
+  pub fn none(start: u32) -> ResolvedShape {
+    return ResolvedShape { kind: SHAPE_NONE, margin: 0.0, x0: 0.0, y0: 0.0, x1: 0.0, y1: 0.0, radii: [0.0; 8], start: start, count: 0 }
+  }
+  pub fn shaped(self: &Self) -> bool { return self.kind != SHAPE_NONE }
+  // A nonzero digest of the geometry, so a layout kept beside a float can tell
+  // whether the float's area changed.
+  pub fn key(self: &Self, points: &[Point]) -> u32 {
+    let mut hash = OFFSET
+    hash = u64.wrappingMultiply(u64.bitXor(hash, u8.toU64(self.kind)), PRIME)
+    hash = mix(hash, self.margin)
+    hash = mix(hash, self.x0)
+    hash = mix(hash, self.y0)
+    hash = mix(hash, self.x1)
+    hash = mix(hash, self.y1)
+    let mut i: usize = 0
+    while i < 8 {
+      hash = mix(hash, self.radii[i])
+      i = i + 1
+    }
+    let end = u32.toUsize(self.start + self.count)
+    i = u32.toUsize(self.start)
+    while i < end {
+      hash = mix(hash, points[i].x)
+      hash = mix(hash, points[i].y)
+      i = i + 1
+    }
+    return u64.toU32(u64.bitAnd(u64.bitXor(hash, u64.shiftRight(hash, 32)), 0xffffffff)) | 1
+  }
+  // The line-axis extent of the float area, widened by `margin` and cut to the
+  // `width` by `height` margin box, over block offsets `a` to `b`.
+  pub fn span(self: &Self, points: &[Point], a: f32, b: f32, width: f32, height: f32) -> Span {
+    let top = max(a, 0.0)
+    let bottom = min(b, height)
+    if bottom < top { return Span.none() }
+    let m = self.margin
+    let mut low: f32 = 1.0e30
+    let mut high: f32 = -1.0e30
+    if self.kind == SHAPE_ELLIPSE {
+      let rx = (self.x1 - self.x0) * 0.5 + m
+      let ry = (self.y1 - self.y0) * 0.5 + m
+      if rx <= 0.0 || ry <= 0.0 { return Span.none() }
+      let cx = (self.x0 + self.x1) * 0.5
+      let cy = (self.y0 + self.y1) * 0.5
+      if bottom < cy - ry || top > cy + ry { return Span.none() }
+      let t = (clamp(cy, top, bottom) - cy) / ry
+      let half = rx * f32.sqrt(max(0.0, 1.0 - t * t))
+      low = cx - half
+      high = cx + half
+    } else if self.kind == SHAPE_RECT {
+      let left = self.x0 - m
+      let right = self.x1 + m
+      let upper = self.y0 - m
+      let lower = self.y1 + m
+      if right < left || lower < upper || bottom < upper || top > lower { return Span.none() }
+      let mut r = self.radii
+      if m > 0.0 {
+        let mut i: usize = 0
+        while i < 8 {
+          r[i] = r[i] + m
+          i = i + 1
+        }
+      }
+      low = left + cornerInset(top, bottom, upper, lower, r[0], r[4], r[3], r[7])
+      high = right - cornerInset(top, bottom, upper, lower, r[1], r[5], r[2], r[6])
+    } else if self.kind == SHAPE_POLYGON {
+      if self.count < 3 { return Span.none() }
+      let first = u32.toUsize(self.start)
+      let count = u32.toUsize(self.count)
+      let mut i: usize = 0
+      while i < count {
+        let p = points[first + i]
+        let q = points[first + (i + 1) % count]
+        let from = min(p.y, q.y) - m
+        let to = max(p.y, q.y) + m
+        if to >= top - m && from <= bottom + m {
+          // The part of the edge within `margin` of the band, sampled; exact when
+          // `margin` is 0, where the ends of the clipped edge bound it.
+          let lo = max(top - m, min(p.y, q.y))
+          let hi = min(bottom + m, max(p.y, q.y))
+          let steps: usize = if m > 0.0 { 8 } else { 1 }
+          let mut s: usize = 0
+          while s <= steps {
+            let y: f32 = if hi > lo { lo + (hi - lo) * usizeF32(s) / usizeF32(steps) } else { lo }
+            let x: f32 = if q.y != p.y { p.x + (q.x - p.x) * (y - p.y) / (q.y - p.y) } else if s == 0 { p.x } else { q.x }
+            let d = max(0.0, max(top - y, y - bottom))
+            if d <= m {
+              let w: f32 = if m > 0.0 { f32.sqrt(max(0.0, m * m - d * d)) } else { 0.0 }
+              low = min(low, x - w)
+              high = max(high, x + w)
+            }
+            s = s + 1
+          }
+        }
+        i = i + 1
+      }
+      if high < low { return Span.none() }
+    } else {
+      return Span.none()
+    }
+    if high < 0.0 || low > width { return Span.none() }
+    return Span { empty: false, low: max(low, 0.0), high: min(high, width) }
+  }
+}
+fn usizeF32(value: usize) -> f32 { return u32.toF32(usize.toU32(value)) }
+
+// The least distance a rounded rectangle's side keeps from its straight edge over
+// block offsets `top` to `bottom`, given the radii of its upper and lower corners.
+fn cornerInset(top: f32, bottom: f32, upper: f32, lower: f32, upperX: f32, upperY: f32, lowerX: f32, lowerY: f32) -> f32 {
+  let flatTop = upper + upperY
+  let flatBottom = lower - lowerY
+  if bottom < flatTop && upperY > 0.0 {
+    let t = (flatTop - bottom) / upperY
+    return upperX * (1.0 - f32.sqrt(max(0.0, 1.0 - t * t)))
+  }
+  if top > flatBottom && lowerY > 0.0 {
+    let t = (top - flatBottom) / lowerY
+    return lowerX * (1.0 - f32.sqrt(max(0.0, 1.0 - t * t)))
+  }
+  return 0.0
+}
+
+pub struct Span { pub empty: bool, pub low: f32, pub high: f32 }
+impl Copy for Span {}
+impl Span {
+  pub fn none() -> Span { return Span { empty: true, low: 0.0, high: 0.0 } }
+}
+
+const OFFSET: u64 = 14695981039346656037
+const PRIME: u64 = 1099511628211
+fn mix(hash: u64, value: f32) -> u64 { return u64.wrappingMultiply(u64.bitXor(hash, u32.toU64(f32.toBits(value))), PRIME) }
+
+// The float's box in physical coordinates: its border-box size and resolved
+// margin, border and padding, and the inline size `shape-margin` percentages use.
+pub struct ShapeFrame {
+  pub size: Size,
+  pub margin: ResolvedEdges, pub border: ResolvedEdges, pub padding: ResolvedEdges,
+  pub basis: f32,
+  pub axes: Axes,
+}
+impl Copy for ShapeFrame {}
+
+impl ShapeFrame {
+  // The frame of a float laid out as `layout`, with logical border-box `size` and
+  // `margin` in a formatting context whose axes are `axes`.
+  pub fn of(layout: &Layout, size: Size, margin: ResolvedEdges, axes: Axes, basis: f32) -> ShapeFrame {
+    let physical = axes.size(size)
+    let padding = layout.paddingRect()
+    let content = layout.contentRect()
+    let border = ResolvedEdges { left: padding.x, top: padding.y, right: max(0.0, physical.width - padding.x - padding.width), bottom: max(0.0, physical.height - padding.y - padding.height) }
+    let inner = ResolvedEdges { left: content.x - padding.x, top: content.y - padding.y, right: max(0.0, padding.x + padding.width - content.x - content.width), bottom: max(0.0, padding.y + padding.height - content.y - content.height) }
+    return ShapeFrame { size: physical, margin: axes.physicalEdges(margin), border: border, padding: inner, basis: basis, axes: axes }
+  }
+}
+
+fn resolved(value: Dimension, basis: f32) -> f32 {
+  if value.kind == DimensionKind.Length { return value.value }
+  if value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc { return value.value + value.percent * basis }
+  return 0.0
+}
+
+// Resolves `shape` for a float placed in `frame`, appending polygon points to
+// `points` at `start`.
+pub effect fn resolveShape(shape: &FloatShape, frame: ShapeFrame, points: &mut List<Point>, start: u32) -> ResolvedShape ! OutOfMemoryError ? &mut Allocator {
+  let mut result = ResolvedShape.none(start)
+  if shape.kind == ShapeKind.None { return result }
+  let m = frame.margin
+  let b = frame.border
+  let p = frame.padding
+  // The margin box, physical, with its origin at its top left corner.
+  let width = frame.size.width + m.left + m.right
+  let height = frame.size.height + m.top + m.bottom
+  let mut box = Edges4 { left: 0.0, top: 0.0, right: width, bottom: height }
+  if shape.reference != ShapeBox.MarginBox { box = box.inset(m) }
+  if shape.reference == ShapeBox.PaddingBox || shape.reference == ShapeBox.ContentBox { box = box.inset(b) }
+  if shape.reference == ShapeBox.ContentBox { box = box.inset(p) }
+  let w = max(0.0, box.right - box.left)
+  let h = max(0.0, box.bottom - box.top)
+  let values = shape.values.asSlice()
+  result.margin = max(0.0, resolved(shape.margin, frame.basis))
+  if shape.kind == ShapeKind.Circle || shape.kind == ShapeKind.Ellipse {
+    let circle = shape.kind == ShapeKind.Circle
+    let at: usize = if circle { 1 } else { 2 }
+    if values.length < at + 2 { return result }
+    let cx = box.left + resolved(values[at], w)
+    let cy = box.top + resolved(values[at + 1], h)
+    let nearX = min(f32.abs(cx - box.left), f32.abs(box.right - cx))
+    let farX = max(f32.abs(cx - box.left), f32.abs(box.right - cx))
+    let nearY = min(f32.abs(cy - box.top), f32.abs(box.bottom - cy))
+    let farY = max(f32.abs(cy - box.top), f32.abs(box.bottom - cy))
+    let mut rx: f32 = 0.0
+    let mut ry: f32 = 0.0
+    if circle {
+      rx = if shape.radiusX == ShapeRadius.ClosestSide { min(nearX, nearY) }
+        else if shape.radiusX == ShapeRadius.FarthestSide { max(farX, farY) }
+        else { resolved(values[0], f32.sqrt(w * w + h * h) / f32.sqrt(2.0)) }
+      ry = rx
+    } else {
+      rx = if shape.radiusX == ShapeRadius.ClosestSide { nearX } else if shape.radiusX == ShapeRadius.FarthestSide { farX } else { resolved(values[0], w) }
+      ry = if shape.radiusY == ShapeRadius.ClosestSide { nearY } else if shape.radiusY == ShapeRadius.FarthestSide { farY } else { resolved(values[1], h) }
+    }
+    rx = max(0.0, rx)
+    ry = max(0.0, ry)
+    let center = logical(frame.axes, width, height, cx, cy)
+    if frame.axes.vertical {
+      let swap = rx
+      rx = ry
+      ry = swap
+    }
+    result.kind = SHAPE_ELLIPSE
+    result.x0 = center.x - rx
+    result.x1 = center.x + rx
+    result.y0 = center.y - ry
+    result.y1 = center.y + ry
+    return result
+  }
+  if shape.kind == ShapeKind.Polygon {
+    let count = values.length / 2
+    points.truncate(u32.toUsize(start))
+    let mut i: usize = 0
+    while i < count {
+      let x = box.left + resolved(values[2 * i], w)
+      let y = box.top + resolved(values[2 * i + 1], h)
+      run points.append(logical(frame.axes, width, height, x, y))
+      i = i + 1
+    }
+    result.kind = SHAPE_POLYGON
+    result.count = usize.toU32(count)
+    return result
+  }
+  // Box and inset: a rounded rectangle.
+  let mut rect = box
+  let mut radii: [f32; 8] = [0.0; 8]
+  if shape.kind == ShapeKind.Inset {
+    if values.length < 12 { return result }
+    rect = Edges4 { top: box.top + resolved(values[0], h), right: box.right - resolved(values[1], w), bottom: box.bottom - resolved(values[2], h), left: box.left + resolved(values[3], w) }
+    let mut i: usize = 0
+    while i < 4 {
+      radii[i] = max(0.0, resolved(values[4 + i], w))
+      radii[4 + i] = max(0.0, resolved(values[8 + i], h))
+      i = i + 1
+    }
+  } else {
+    if values.length < 8 { return result }
+    let bw = frame.size.width
+    let bh = frame.size.height
+    // CSS Backgrounds 3 §5.3: the border radii grow by the margin outside the
+    // border box and shrink by the border and padding inside it.
+    let grow: [f32; 8] = [m.left, m.right, m.right, m.left, m.top, m.top, m.bottom, m.bottom]
+    let shrinkB: [f32; 8] = [b.left, b.right, b.right, b.left, b.top, b.top, b.bottom, b.bottom]
+    let shrinkP: [f32; 8] = [p.left, p.right, p.right, p.left, p.top, p.top, p.bottom, p.bottom]
+    let mut i: usize = 0
+    while i < 8 {
+      let mut r = max(0.0, resolved(values[i], if i < 4 { bw } else { bh }))
+      if shape.reference == ShapeBox.MarginBox { if r > 0.0 { r = r + grow[i] } }
+      if shape.reference == ShapeBox.PaddingBox || shape.reference == ShapeBox.ContentBox { r = max(0.0, r - shrinkB[i]) }
+      if shape.reference == ShapeBox.ContentBox { r = max(0.0, r - shrinkP[i]) }
+      radii[i] = r
+      i = i + 1
+    }
+  }
+  // CSS Backgrounds 3 §5.5: radii that overlap scale down together.
+  let rw = max(0.0, rect.right - rect.left)
+  let rh = max(0.0, rect.bottom - rect.top)
+  let mut f: f32 = 1.0
+  f = fit(f, rw, radii[0] + radii[1])
+  f = fit(f, rw, radii[3] + radii[2])
+  f = fit(f, rh, radii[4] + radii[7])
+  f = fit(f, rh, radii[5] + radii[6])
+  if f < 1.0 {
+    let mut i: usize = 0
+    while i < 8 {
+      radii[i] = radii[i] * f
+      i = i + 1
+    }
+  }
+  // Corners top left, top right, bottom right, bottom left, mapped to logical ones.
+  let a = logical(frame.axes, width, height, rect.left, rect.top)
+  let c = logical(frame.axes, width, height, rect.right, rect.bottom)
+  result.kind = SHAPE_RECT
+  result.x0 = min(a.x, c.x)
+  result.x1 = max(a.x, c.x)
+  result.y0 = min(a.y, c.y)
+  result.y1 = max(a.y, c.y)
+  let xs: [f32; 4] = [rect.left, rect.right, rect.right, rect.left]
+  let ys: [f32; 4] = [rect.top, rect.top, rect.bottom, rect.bottom]
+  let mut k: usize = 0
+  while k < 4 {
+    let corner = logical(frame.axes, width, height, xs[k], ys[k])
+    let right = corner.x > result.x0
+    let lower = corner.y > result.y0
+    let index: usize = if !lower && !right { 0 } else if !lower { 1 } else if right { 2 } else { 3 }
+    if frame.axes.vertical {
+      result.radii[index] = radii[4 + k]
+      result.radii[4 + index] = radii[k]
+    } else {
+      result.radii[index] = radii[k]
+      result.radii[4 + index] = radii[4 + k]
+    }
+    k = k + 1
+  }
+  return result
+}
+fn fit(factor: f32, side: f32, sum: f32) -> f32 {
+  if sum > side && sum > 0.0 { return min(factor, side / sum) }
+  return factor
+}
+
+struct Edges4 { left: f32, top: f32, right: f32, bottom: f32 }
+impl Copy for Edges4 {}
+impl Edges4 {
+  fn inset(self: &Self, by: ResolvedEdges) -> Edges4 {
+    return Edges4 { left: self.left + by.left, top: self.top + by.top, right: self.right - by.right, bottom: self.bottom - by.bottom }
+  }
+}
+
+// A physical point in a `width` by `height` margin box, in the formatting
+// context's line (x) and block (y) axes from the box's line-left, block-start corner.
+fn logical(axes: Axes, width: f32, height: f32, x: f32, y: f32) -> Point {
+  if !axes.vertical { return Point { x: x, y: y } }
+  let line = if axes.reverseLine { height - y } else { y }
+  let block = if axes.reverseBlock { width - x } else { x }
+  return Point { x: line, y: block }
+}
