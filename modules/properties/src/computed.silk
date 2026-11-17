@@ -36,7 +36,9 @@ impl Edges {
 // CSS Display 3 §2: participation in the parent and layout of descendants
 // are independent. Box-suppression values have neither outside nor inside.
 pub enum DisplayOutside { Block, Inline }
-pub enum DisplayInside { Flow, FlowRoot, Flex, Grid }
+// CSS Display 3 §2.4: the layout-internal table values are kept as inner display types of
+// block-level boxes, so `outsideIs(Block)` holds for them.
+pub enum DisplayInside { Flow, FlowRoot, Flex, Grid, Table, TableRowGroup, TableHeaderGroup, TableFooterGroup, TableRow, TableColumnGroup, TableColumn, TableCell, TableCaption }
 pub union Display {
   Box { pub outside: DisplayOutside, pub inside: DisplayInside },
   None,
@@ -77,12 +79,21 @@ impl Display {
       _ => false
     }
   }
+  // A layout-internal table box: a row group, row, column (group), cell or caption.
+  pub fn isTablePart(self: &Self) -> bool {
+    return match self.* {
+      Display.Box { outside: _, inside } => inside != DisplayInside.Flow && inside != DisplayInside.FlowRoot && inside != DisplayInside.Flex && inside != DisplayInside.Grid && inside != DisplayInside.Table
+      _ => false
+    }
+  }
   pub fn blockified(self: &Self) -> Display {
     return match self.* {
       Display.Box { outside, inside } => {
         let mut inner = inside
         // §2.7 preserves CSS2's inline-block -> block computed-value rule.
         if outside == DisplayOutside.Inline && inside == DisplayInside.FlowRoot { inner = DisplayInside.Flow }
+        // Layout-internal table boxes blockify to block.
+        if self.isTablePart() { inner = DisplayInside.Flow }
         return Display.Box { outside: DisplayOutside.Block, inside: inner }
       }
       Display.None => Display.None
@@ -106,6 +117,10 @@ pub enum Position { Static, Relative, Absolute, Fixed, Sticky }
 pub enum Float { None, Left, Right }
 pub enum Clear { None, Left, Right, Both }
 pub enum Visibility { Visible, Hidden, Collapse }
+// CSS 2 §17: the table properties a table reads from itself.
+pub enum TableLayout { Auto, Fixed }
+pub enum BorderCollapse { Separate, Collapse }
+pub enum CaptionSide { Top, Bottom }
 pub union LineHeight { Normal, Number { pub value: f32 }, Length { pub value: f32 } }
 impl Copy for LineHeight {}
 impl Equal for LineHeight {
@@ -551,6 +566,15 @@ impl Equal for Clear {
 }
 impl Equal for Visibility {
   fn equals(left: &Visibility, right: &Visibility) -> bool { return left.* == right.* }
+}
+impl Equal for TableLayout {
+  fn equals(left: &TableLayout, right: &TableLayout) -> bool { return left.* == right.* }
+}
+impl Equal for BorderCollapse {
+  fn equals(left: &BorderCollapse, right: &BorderCollapse) -> bool { return left.* == right.* }
+}
+impl Equal for CaptionSide {
+  fn equals(left: &CaptionSide, right: &CaptionSide) -> bool { return left.* == right.* }
 }
 impl Equal for VerticalAlignKind {
   fn equals(left: &VerticalAlignKind, right: &VerticalAlignKind) -> bool { return left.* == right.* }
