@@ -182,6 +182,7 @@ effect fn maskCases() -> ()
 // https://www.w3.org/TR/css-images-3/#linear-gradient-syntax
 // https://www.w3.org/TR/css-images-3/#radial-gradient-syntax
 // https://www.w3.org/TR/css-images-3/#color-stop-syntax
+// https://www.w3.org/TR/css-images-4/#conic-gradients
 test effect fn maskGradientGrammar() -> ()
   ! AssertionError<'static> | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
@@ -208,7 +209,14 @@ effect fn gradientCases() -> ()
   run accepts(Property.MaskImage, b"radial-gradient(circle 20%, red, blue)", false)
   run accepts(Property.MaskImage, b"radial-gradient(ellipse 10px, red, blue)", false)
   run accepts(Property.MaskImage, b"radial-gradient(-1px, red, blue)", false)
-  run accepts(Property.MaskImage, b"linear-gradient(red 0% 20%, blue)", false)
+  run accepts(Property.MaskImage, b"linear-gradient(red 0% 20%, blue)", true)
+  run accepts(Property.MaskImage, b"linear-gradient(red 0% 20% 30%, blue)", false)
+  run accepts(Property.MaskImage, b"conic-gradient(red, blue)", true)
+  run accepts(Property.MaskImage, b"conic-gradient(from 45deg at 10px 20%, red 0 25%, blue 0.5turn)", true)
+  run accepts(Property.MaskImage, b"repeating-conic-gradient(at left, red 0deg 10deg, blue 10deg 20deg)", true)
+  run accepts(Property.MaskImage, b"conic-gradient(from 1px, red, blue)", false)
+  run accepts(Property.MaskImage, b"conic-gradient(red 10px, blue)", false)
+  run accepts(Property.MaskImage, b"conic-gradient(red)", false)
 }
 
 // https://www.w3.org/TR/css-shapes-1/#supported-basic-shapes

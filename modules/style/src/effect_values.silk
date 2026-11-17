@@ -122,6 +122,9 @@ pub union Image {
     pub position: Position,
     pub stops: List<GradientStop>
   },
+  /// `conic-gradient(from <angle> at <position>, ...)`: stop and hint positions are angles or
+  /// percentages of a full turn.
+  Conic { pub repeating: bool, pub angle: ExprId, pub position: Position, pub stops: List<GradientStop> },
 }
 
 pub struct MaskLayer {
@@ -478,6 +481,12 @@ effect fn copyImage(image: &Image) -> Image
       repeating: repeating,
       circle: circle,
       size: size,
+      position: position,
+      stops: run copyStops(&stops),
+    }
+    Image.Conic { repeating, angle, position, stops } => Image.Conic {
+      repeating: repeating,
+      angle: angle,
       position: position,
       stops: run copyStops(&stops),
     }
@@ -865,9 +874,37 @@ fn validRadial(
   }
 }
 
-effect fn stops(store: &mut dimensions.Store<'_>, input: &Input<'_>, cursor: &mut Cursor) -> Option<
-  List<GradientStop>
->
+/// A stop or hint position: a length-percentage, or for a conic gradient (`angular`) an angle or
+/// a percentage of a full turn.
+effect fn stopPosition(
+  store: &mut dimensions.Store<'_>,
+  input: &Input<'_>,
+  cursor: &mut Cursor,
+  angular: bool,
+) -> Option<ExprId>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  if !angular {
+    return run numeric(&mut store.*, input, &mut cursor.*, Dimension.LengthPercentage, false, false)
+  }
+  let percent = run numeric(&mut store.*, input, &mut cursor.*, Dimension.Percentage, false, false)
+  match &percent {
+    Option<ExprId>.Some { .. } => {
+      return percent
+    }
+    _ => {}
+  }
+  return run angleWithZero(&mut store.*, input, &mut cursor.*, false)
+}
+
+/// The color stops and hints of a gradient. A stop with two positions (`red 0 50%`) is two
+/// stops of the same color.
+effect fn stops(
+  store: &mut dimensions.Store<'_>,
+  input: &Input<'_>,
+  cursor: &mut Cursor,
+  angular: bool,
+) -> Option<List<GradientStop>>
   ! OutOfMemoryError
   ? &mut Allocator {
   let mut result = List<GradientStop>.make()
@@ -877,15 +914,20 @@ effect fn stops(store: &mut dimensions.Store<'_>, input: &Input<'_>, cursor: &mu
     let color = run colors.parse(input, &mut cursor.*)
     match &color {
       Option<Color>.Some { value } => {
-        let position = run numeric(
-          &mut store.*,
-          input,
-          &mut cursor.*,
-          Dimension.LengthPercentage,
-          false,
-          false,
-        )
+        let position = run stopPosition(&mut store.*, input, &mut cursor.*, angular)
         run result.append(GradientStop.ColorStop { color: value, position: position })
+        match &position {
+          Option<ExprId>.Some { .. } => {
+            let second = run stopPosition(&mut store.*, input, &mut cursor.*, angular)
+            match &second {
+              Option<ExprId>.Some { .. } => {
+                run result.append(GradientStop.ColorStop { color: value, position: second })
+              }
+              _ => {}
+            }
+          }
+          _ => {}
+        }
         count = count + 1
         previousHint = false
       }
@@ -893,14 +935,7 @@ effect fn stops(store: &mut dimensions.Store<'_>, input: &Input<'_>, cursor: &mu
         if count == 0 || previousHint {
           return Option<List<GradientStop>>.None
         }
-        let position = match run numeric(
-          &mut store.*,
-          input,
-          &mut cursor.*,
-          Dimension.LengthPercentage,
-          false,
-          false,
-        ) {
+        let position = match run stopPosition(&mut store.*, input, &mut cursor.*, angular) {
           Option<ExprId>.Some { value } => value
           _ => {
             return Option<List<GradientStop>>.None
@@ -939,6 +974,12 @@ effect fn imageInner(
   }
   let mut repeating = false
   let mut radial = false
+  if cursor.function(input, b"conic-gradient") {
+    return run conic(&mut store.*, input, &mut cursor.*, false)
+  }
+  if cursor.function(input, b"repeating-conic-gradient") {
+    return run conic(&mut store.*, input, &mut cursor.*, true)
+  }
   if cursor.function(input, b"linear-gradient") {} else if cursor.function(
     input,
     b"repeating-linear-gradient",
@@ -990,7 +1031,7 @@ effect fn imageInner(
     if header && !cursor.comma(input) {
       return Option<Image>.None
     }
-    let list = match run stops(&mut store.*, input, &mut cursor.*) {
+    let list = match run stops(&mut store.*, input, &mut cursor.*, false) {
       Option<List<GradientStop>>.Some { value } => move value
       _ => {
         return Option<Image>.None
@@ -1056,7 +1097,7 @@ effect fn imageInner(
   if header && !cursor.comma(input) {
     return Option<Image>.None
   }
-  let list = match run stops(&mut store.*, input, &mut cursor.*) {
+  let list = match run stops(&mut store.*, input, &mut cursor.*, false) {
     Option<List<GradientStop>>.Some { value } => move value
     _ => {
       return Option<Image>.None
@@ -1070,6 +1111,50 @@ effect fn imageInner(
       position: position,
       stops: move list,
     },
+  )
+}
+
+/// The rest of `conic-gradient(` once its name is read.
+effect fn conic(
+  store: &mut dimensions.Store<'_>,
+  input: &Input<'_>,
+  cursor: &mut Cursor,
+  repeating: bool,
+) -> Option<Image>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut header = false
+  let mut angle = run dimensions.literal(&mut store.*, 0.0, Unit.Deg)
+  if cursor.ident(input, b"from") {
+    angle = match run angleWithZero(&mut store.*, input, &mut cursor.*, false) {
+      Option<ExprId>.Some { value } => value
+      _ => {
+        return Option<Image>.None
+      }
+    }
+    header = true
+  }
+  let mut position = run defaultPosition(&mut store.*, true)
+  if cursor.ident(input, b"at") {
+    position = match run transform_values.parsePosition(&mut store.*, input, &mut cursor.*, false) {
+      Option<Position>.Some { value } => value
+      _ => {
+        return Option<Image>.None
+      }
+    }
+    header = true
+  }
+  if header && !cursor.comma(input) {
+    return Option<Image>.None
+  }
+  let list = match run stops(&mut store.*, input, &mut cursor.*, true) {
+    Option<List<GradientStop>>.Some { value } => move value
+    _ => {
+      return Option<Image>.None
+    }
+  }
+  return Option<Image>.some(
+    Image.Conic { repeating: repeating, angle: angle, position: position, stops: move list },
   )
 }
 
@@ -2642,6 +2727,12 @@ pub effect fn computeImage(
       repeating: repeating,
       circle: circle,
       size: run computeRadial(&size, &mut store.*, context),
+      position: run transform_values.computePosition(&position, &mut store.*, context),
+      stops: run computeStops(&list, &mut store.*, context, colorContext),
+    }
+    Image.Conic { repeating, angle, position, stops: list } => Image.Conic {
+      repeating: repeating,
+      angle: run dimensions.compute(&mut store.*, angle, context),
       position: run transform_values.computePosition(&position, &mut store.*, context),
       stops: run computeStops(&list, &mut store.*, context, colorContext),
     }

@@ -179,6 +179,18 @@ effect fn cases() -> ()
     b"radial-gradient(rgb(255, 0, 0), rgb(0, 0, 255))",
   )
   run effectCase(
+    Property.MaskImage,
+    b"repeating-conic-gradient(from 0.25turn at 10px 20%, red 0 25%, blue 90deg)",
+    Property.MaskImage,
+    b"repeating-conic-gradient(from 0.25turn at 10px 20%, rgb(255, 0, 0) 0deg, rgb(255, 0, 0) 25%, rgb(0, 0, 255) 90deg)",
+  )
+  run effectCase(
+    Property.MaskImage,
+    b"conic-gradient(from 0deg at center, red, blue)",
+    Property.MaskImage,
+    b"conic-gradient(rgb(255, 0, 0), rgb(0, 0, 255))",
+  )
+  run effectCase(
     Property.ClipPath,
     b"inset(1px 2px 1px 2px round 3px 3px / 4px 4px)",
     Property.ClipPath,
