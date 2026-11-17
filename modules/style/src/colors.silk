@@ -2,7 +2,12 @@
 //! Specified coordinates and missing components survive until display conversion.
 import silk.collections.list { List }
 import input { Input, TokenView }
-import tokens { Kind, insensitive }
+import tokens { Kind, insensitive, CssError, Limits, TokenBuffer }
+import lexer
+import cssom_serialization as serialization
+import silk.collections.bytes { Bytes }
+import silk.collections.slice { Slice }
+import silk.core.effect { Effect }
 import value_cursor { Cursor }
 import dimensions { Store, Dimension, ExprId }
 import dimensions
@@ -478,6 +483,147 @@ fn predefined(source: &Input<'_>, cursor: &mut Cursor) -> Option<Space> {
   return Option<Space>.None
 }
 
+// The channel keywords of a relative color in `space`, in the order of its channels.
+fn channelNames(space: Space) -> [&'static [u8]; 3] {
+  return match space {
+    Space.Hsl => [b"h", b"s", b"l"]
+    Space.Hwb => [b"h", b"w", b"b"]
+    Space.Lab => [b"l", b"a", b"b"]
+    Space.Oklab => [b"l", b"a", b"b"]
+    Space.Lch => [b"l", b"c", b"h"]
+    Space.Oklch => [b"l", b"c", b"h"]
+    Space.XyzD50 => [b"x", b"y", b"z"]
+    Space.XyzD65 => [b"x", b"y", b"z"]
+    _ => [b"r", b"g", b"b"]
+  }
+}
+
+effect fn spell(out: &mut Bytes, view: &TokenView<'_>) -> () ! OutOfMemoryError ? &mut Allocator {
+  let text = view.buffer.source()
+  let span = view.token.source
+  if span.start <= span.end && span.end <= text.length {
+    run out.append(Slice.view<u8>(text, span.start, span.end - span.start))
+  }
+}
+
+effect fn noTokens(error: CssError) -> Option<TokenBuffer> {
+  drop error
+  return Option<TokenBuffer>.None
+}
+
+effect fn tokenized(css: &[u8]) -> Option<TokenBuffer> ! CssError | OutOfMemoryError ? &mut Allocator {
+  return Option<TokenBuffer>.some(run lexer.tokenize(css, &Limits.make()))
+}
+
+// https://www.w3.org/TR/css-color-5/#relative-colors
+// `rgb(from <color> r g calc(b + 20) / alpha)`: the origin converts to the function's space and
+// each channel keyword becomes that channel's number. The function is then spelled again with
+// those numbers and read as an absolute color. An origin known only later (currentcolor, a
+// system color) has no value here.
+effect fn relative(source: &Input<'_>, cursor: &mut Cursor, functionAt: usize, space: Space, generic: bool)
+  -> Option<Color>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let found = run parse(source, &mut cursor.*)
+  let origin = match found {
+    Option<Color>.Some { value } => value
+    _ => {
+      return Option<Color>.None
+    }
+  }
+  let mut target = space
+  if generic {
+    match predefined(source, &mut cursor.*) {
+      Option<Space>.Some { value } => {
+        target = value
+      }
+      _ => {
+        return Option<Color>.None
+      }
+    }
+  }
+  let converted = match convert(origin, target) {
+    Option<Color>.Some { value } => value
+    _ => {
+      return Option<Color>.None
+    }
+  }
+  let scale = if !generic && target == Space.Srgb { 255.0 } else { 1.0 }
+  let names = channelNames(target)
+  let mut css = Bytes.make()
+  match &source.at(functionAt) {
+    Option<TokenView>.Some { value } => {
+      run spell(&mut css, &value)
+    }
+    _ => {
+      return Option<Color>.None
+    }
+  }
+  if generic {
+    run css.append(spaceName(target))
+    run css.append(b" ")
+  }
+  let mut depth: usize = 0
+  while cursor.position < cursor.end {
+    let at = cursor.position
+    cursor.position = cursor.position + 1
+    let view = match source.at(at) {
+      Option<TokenView>.Some { value } => value
+      _ => {
+        return Option<Color>.None
+      }
+    }
+    let mut channel: usize = 4
+    match &view.token.kind {
+      Kind.Function { .. } => { depth = depth + 1 }
+      Kind.OpenParen => { depth = depth + 1 }
+      Kind.CloseParen => {
+        if depth == 0 {
+          run css.append(b")")
+          break
+        }
+        depth = depth - 1
+      }
+      Kind.Ident { text } => {
+        let word = view.text(text)
+        if insensitive(word, b"alpha") {
+          channel = 3
+        } else {
+          let mut i: usize = 0
+          while i < 3 {
+            if insensitive(word, names[i]) {
+              channel = i
+              break
+            }
+            i = i + 1
+          }
+        }
+      }
+      _ => {}
+    }
+    if channel == 4 {
+      run spell(&mut css, &view)
+    } else {
+      // A missing origin channel is zero when a keyword names it.
+      let number = if channel == 3 { converted.alpha } else { converted.channels[channel] * scale }
+      run serialization.appendNumber(&mut css, if number != number { 0.0 } else { number })
+    }
+  }
+  let buffer = match move run Effect.catch<CssError>(tokenized(css.asSlice()), noTokens) {
+    Option<TokenBuffer>.Some { value } => move value
+    _ => {
+      return Option<Color>.None
+    }
+  }
+  let spelled = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  let mut inner = Cursor.make(&spelled)
+  let result = run parseInner(&spelled, &mut inner)
+  if !inner.done(&spelled) {
+    return Option<Color>.None
+  }
+  return result
+}
+
 pub effect fn parse(source: &Input<'_>, cursor: &mut Cursor) -> Option<Color>
   ! OutOfMemoryError
   ? &mut Allocator {
@@ -563,6 +709,10 @@ effect fn parseInner(source: &Input<'_>, cursor: &mut Cursor) -> Option<Color>
     _ => {
       return Option<Color>.None
     }
+  }
+  let functionAt = cursor.position - 1
+  if cursor.ident(source, b"from") {
+    return run relative(source, &mut cursor.*, functionAt, space, generic)
   }
   if generic {
     let parsedSpace = predefined(source, &mut cursor.*)

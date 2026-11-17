@@ -23,6 +23,9 @@ pub import properties.computed {
   Float,
   Clear,
   Visibility,
+  TableLayout,
+  BorderCollapse,
+  CaptionSide,
   LineHeight,
   VerticalAlignKind,
   VerticalAlign,
@@ -30,6 +33,7 @@ pub import properties.computed {
   TextAlign,
   TextJustify,
   TextWrap,
+  TextWrapStyle,
   WhiteSpaceCollapse,
   TabSize,
   TextIndent,
@@ -37,6 +41,8 @@ pub import properties.computed {
   MarginBreak,
   BreakBetween,
   BreakInside,
+  ColumnFill,
+  ColumnSpan,
 }
 import silk.core.ownership { Copy }
 import silk.core.equal { Equal }
@@ -65,7 +71,7 @@ pub struct Style {
   pub direction: Direction, pub unicodeBidi: UnicodeBidi, pub writingMode: WritingMode, pub textOrientation: TextOrientation,
   pub fontKey: usize, pub lineHeight: LineHeight,
   pub verticalAlign: VerticalAlign, pub baselineSource: BaselineSource,
-  pub textAlign: TextAlign, pub textAlignLast: TextAlign, pub textWrap: TextWrap,
+  pub textAlign: TextAlign, pub textAlignLast: TextAlign, pub textWrap: TextWrap, pub textWrapStyle: TextWrapStyle,
   pub textJustify: TextJustify,
   pub textIndent: TextIndent,
   pub whiteSpaceCollapse: WhiteSpaceCollapse, pub tabSize: TabSize,
@@ -93,6 +99,17 @@ pub struct Style {
   pub position: Position, pub float: Float, pub clear: Clear,
   pub visibility: Visibility,
   pub aspectRatio: f32, pub aspectRatioAuto: bool, pub replaced: bool,
+  // CSS 2 §17. A table reads these from its own style; `borderSpacing` is in px.
+  // Multicol 1, kept beside them so the small fields pack: `columnCount` 0 is `auto`,
+  // `columnWidth` below 0 is `auto`, else a px length. `columnGap` is shared with flex and
+  // grid; `normal` is 1em here.
+  pub tableLayout: TableLayout, pub borderCollapse: BorderCollapse, pub captionSide: CaptionSide,
+  pub columnFill: ColumnFill, pub multicolSpan: ColumnSpan,
+  pub borderSpacingX: f32, pub borderSpacingY: f32,
+  pub columnCount: u32, pub columnWidth: f32,
+  // A cell's columns and rows, and a column's columns, from the host's `colspan`,
+  // `rowspan` and `span` attributes. A row span of 0 reaches the end of the row group.
+  pub columnSpan: usize, pub rowSpan: usize,
 }
 // Plain data: every field is a value or a tree-managed handle.
 impl Copy for Style {}
@@ -119,6 +136,12 @@ impl Style {
     }
     return self.direction
   }
+  // Whether the box is a multi-column container: a block container with a
+  // column count or width (Multicol 1 §2).
+  pub fn multicol(self: &Self) -> bool {
+    if self.columnCount == 0 && self.columnWidth < 0.0 { return false }
+    return !self.replaced && (self.display.insideIs(DisplayInside.Flow) || self.display.insideIs(DisplayInside.FlowRoot))
+  }
   pub fn usesCentralBaseline(self: &Self) -> bool {
     return (self.writingMode == WritingMode.VerticalRl || self.writingMode == WritingMode.VerticalLr)
       && self.textOrientation != TextOrientation.Sideways
@@ -137,7 +160,7 @@ impl Style {
       textOrientation: TextOrientation.Mixed,
       fontKey: 0, lineHeight: LineHeight.Normal,
       verticalAlign: VerticalAlign { kind: VerticalAlignKind.Baseline, shift: Dimension.px(0.0) }, baselineSource: BaselineSource.Auto,
-      textAlign: TextAlign.Start, textAlignLast: TextAlign.Auto, textWrap: TextWrap.Wrap,
+      textAlign: TextAlign.Start, textAlignLast: TextAlign.Auto, textWrap: TextWrap.Wrap, textWrapStyle: TextWrapStyle.Auto,
       textJustify: TextJustify.Auto,
       textIndent: TextIndent { value: Dimension.px(0.0), hanging: false, eachLine: false },
       whiteSpaceCollapse: WhiteSpaceCollapse.Collapse, tabSize: TabSize.Number { value: 8.0 },
@@ -145,6 +168,7 @@ impl Style {
       marginBreak: MarginBreak.Auto,
       breakBefore: BreakBetween.Auto, breakAfter: BreakBetween.Auto, breakInside: BreakInside.Auto,
       orphans: 2, widows: 2,
+      columnCount: 0, columnWidth: -1.0, columnFill: ColumnFill.Balance, multicolSpan: ColumnSpan.None,
       maxLines: 0, blockEllipsis: false, textOverflowEllipsis: false,
       flexDirection: FlexDirection.Row, flexWrap: FlexWrap.NoWrap,
       flexGrow: 0.0, flexShrink: 1.0, flexBasis: Dimension.auto(), order: 0,
@@ -158,6 +182,8 @@ impl Style {
       scrollbarWidth: ScrollbarWidth.Auto, scrollbarGutter: ScrollbarGutter.Auto,
       position: Position.Static, float: Float.None, clear: Clear.None, visibility: Visibility.Visible,
       aspectRatio: 0.0, aspectRatioAuto: false, replaced: false,
+      tableLayout: TableLayout.Auto, borderCollapse: BorderCollapse.Separate, captionSide: CaptionSide.Top,
+      borderSpacingX: 0.0, borderSpacingY: 0.0, columnSpan: 1, rowSpan: 1,
     }
   }
 }

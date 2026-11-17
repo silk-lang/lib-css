@@ -81,6 +81,9 @@ pub struct Fragmentainers<'a> {
   pub contexts: Option<&'a [FragmentainerKind]>,
   pub ancestors: Option<&'a [FragmentAncestor]>,
   pub repeatStep: Option<Point>,
+  // In place of `rects`: one geometry repeated by `repeatStep` from the first
+  // fragmentainer on, for the columns of a multi-column container.
+  pub uniform: Option<Rect>,
   pub kind: FragmentainerKind,
   pub writingMode: WritingMode,
   pub direction: Direction,
@@ -97,7 +100,7 @@ impl Copy for Fragmentainer {}
 impl<'f> Fragmentainers<'f> {
   pub fn empty<'a>() -> Fragmentainers<'a> {
     return Fragmentainers {
-      rects: Option<&'a [Rect]>.None, repeatStep: Option<Point>.None, kind: FragmentainerKind.Page,
+      rects: Option<&'a [Rect]>.None, repeatStep: Option<Point>.None, uniform: Option<Rect>.None, kind: FragmentainerKind.Page,
       contexts: Option<&'a [FragmentainerKind]>.None, ancestors: Option<&'a [FragmentAncestor]>.None,
       writingMode: WritingMode.HorizontalTb, direction: Direction.Ltr,
       firstPageRight: true, rectoOnRight: true,
@@ -132,7 +135,7 @@ impl<'f> Fragmentainers<'f> {
   @optimizeSize
   pub fn ancestor(self: &Self, index: usize, depth: usize) -> Option<FragmentAncestor> {
     let rects = match &self.rects { Option<&[Rect]>.Some { value } => value
-      Option<&[Rect]>.None => { return Option<FragmentAncestor>.None } }
+      Option<&[Rect]>.None => { return self.uniformAncestor(index) } }
     if rects.length == 0 { return Option<FragmentAncestor>.None }
     let mut row = index
     let mut repeat: usize = 0
@@ -158,6 +161,18 @@ impl<'f> Fragmentainers<'f> {
     }
     if !validRect(result.rect) { return Option<FragmentAncestor>.None }
     return Option<FragmentAncestor>.Some { value: result }
+  }
+  fn uniformAncestor(self: &Self, index: usize) -> Option<FragmentAncestor> {
+    let mut rect = match self.uniform { Option<Rect>.Some { value } => value
+      Option<Rect>.None => { return Option<FragmentAncestor>.None } }
+    match &self.repeatStep {
+      Option<Point>.Some { value } => {
+        rect.x = rect.x + value.x * usize.toF32(index)
+        rect.y = rect.y + value.y * usize.toF32(index)
+      }
+      Option<Point>.None => {}
+    }
+    return Option<FragmentAncestor>.Some { value: FragmentAncestor { index: index, rect: rect } }
   }
   pub fn page(self: &Self, index: usize) -> Option<FragmentAncestor> {
     let depth = self.nearest(FragmentainerKind.Page)
@@ -392,6 +407,17 @@ impl ResumeStore {
     }
   }
   pub fn get(self: &Self, id: usize) -> ResumeState { return self.cells.asSlice()[id].state }
+  pub fn length(self: &Self) -> usize { return self.cells.length() }
+  // Fresh states for boxes `start..end`, a column flow's subtree once its
+  // columns are laid out, so the next layout of it starts over.
+  pub fn resetRange(self: &mut Self, start: usize, end: usize) {
+    let cells = self.cells.asMutSlice()
+    let mut index = start
+    while index < end {
+      cells[index].state = ResumeState.make()
+      index = index + 1
+    }
+  }
   pub fn publication(self: &Self, id: usize, frame: usize) -> usize {
     let state = &self.cells.asSlice()[id].state
     if state.fragmentainer != frame { return NO_NODE }

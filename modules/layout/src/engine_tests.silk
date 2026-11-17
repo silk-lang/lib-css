@@ -31,6 +31,7 @@ import style {
   BoxSizing,
   TextAlign,
   TextWrap,
+  TextWrapStyle,
   Direction,
   WhiteSpaceCollapse,
   TabSize,
@@ -2353,6 +2354,42 @@ effect fn clampedWords(value: string, style: Style) -> Rect
   }
   run compute(&tree, &mut output, &mut provider, OptionalSize.definite(100.0, 100.0))
   return run output.sourceBounds(text)
+}
+
+fn balanceStyle(wrapStyle: TextWrapStyle, align: TextAlign) -> Style {
+  let mut style = Style.make()
+  style.width = Dimension.px(100.0)
+  style.textWrapStyle = wrapStyle
+  style.textAlign = align
+  return style
+}
+
+// Words are 20 wide and spaces 5: greedy lines are 95 and 20 wide, balanced ones 70 and 45.
+test effect fn balancedTextFitsTheNarrowestWidthWithTheSameLines()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let words = "aaaa bbbb cccc dddd eeee"
+  let greedy = run clampedWords(words, balanceStyle(TextWrapStyle.Auto, TextAlign.Start))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(
+    greedy.width == 95.0 && greedy.height == 20.0,
+    "fixture: greedy lines fill the first one",
+  )
+  let balanced = run clampedWords(words, balanceStyle(TextWrapStyle.Balance, TextAlign.Start))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(
+    balanced.width == 70.0 && balanced.height == 20.0,
+    "balanced lines keep the count and even out",
+  )
+  let centered = run clampedWords(words, balanceStyle(TextWrapStyle.Balance, TextAlign.Center))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(
+    centered.x == 15.0 && centered.width == 70.0,
+    "balanced lines align in the full width",
+  )
+  let single = run clampedWords("aaaa bbbb", balanceStyle(TextWrapStyle.Balance, TextAlign.Start))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(single.width == 45.0 && single.height == 10.0, "one line is left as it is")
 }
 
 fn clampStyle(lines: usize, ellipsis: bool) -> Style {

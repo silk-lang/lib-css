@@ -1,6 +1,8 @@
 //! Keyword forms of the computed keyword enums. Generated tables: one pair per enum.
 import computed {
   LineBreak,
+  ColumnFill,
+  ColumnSpan,
   Hyphens,
   BoxSizing,
   Direction,
@@ -199,6 +201,8 @@ pub fn overflowOf(value: Keyword) -> Option<Overflow> {
     Keyword.Hidden => Option<Overflow>.some(Overflow.Hidden)
     Keyword.Scroll => Option<Overflow>.some(Overflow.Scroll)
     Keyword.Auto => Option<Overflow>.some(Overflow.Auto)
+    // A legacy alias that computes to `auto`.
+    Keyword.Overlay => Option<Overflow>.some(Overflow.Auto)
     _ => Option<Overflow>.None
   }
 }
@@ -607,6 +611,23 @@ pub fn breakInsideKeyword(value: BreakInside) -> Keyword {
 }
 
 /// The computed `BreakInside` a keyword names, if it names one.
+pub fn columnFillOf(value: Keyword) -> Option<ColumnFill> {
+  return match value {
+    Keyword.Balance => Option<ColumnFill>.some(ColumnFill.Balance)
+    Keyword.Auto => Option<ColumnFill>.some(ColumnFill.Auto)
+    Keyword.BalanceAll => Option<ColumnFill>.some(ColumnFill.BalanceAll)
+    _ => Option<ColumnFill>.None
+  }
+}
+
+pub fn columnSpanOf(value: Keyword) -> Option<ColumnSpan> {
+  return match value {
+    Keyword.None => Option<ColumnSpan>.some(ColumnSpan.None)
+    Keyword.All => Option<ColumnSpan>.some(ColumnSpan.All)
+    _ => Option<ColumnSpan>.None
+  }
+}
+
 pub fn breakInsideOf(value: Keyword) -> Option<BreakInside> {
   return match value {
     Keyword.Auto => Option<BreakInside>.some(BreakInside.Auto)

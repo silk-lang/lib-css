@@ -356,6 +356,7 @@ fn hostFrames<'a>(rects: &'a [Rect]) -> Fragmentainers<'a> {
   return Fragmentainers {
     rects: Option<&'a [Rect]>.Some { value: rects },
     repeatStep: Option<Point>.None,
+    uniform: Option<Rect>.None,
     contexts: Option<&'a [FragmentainerKind]>.None,
     ancestors: Option<&'a [FragmentAncestor]>.None,
     kind: FragmentainerKind.Column,
@@ -628,6 +629,7 @@ test effect fn nestedContextRoutingUsesIdentityRatherThanKindBits()
     contexts: Option<&[FragmentainerKind]>.Some { value: &contexts },
     ancestors: Option<&[FragmentAncestor]>.Some { value: &ancestors },
     repeatStep: Option<Point>.None,
+    uniform: Option<Rect>.None,
     kind: FragmentainerKind.Column,
     writingMode: WritingMode.HorizontalTb,
     direction: Direction.Ltr,
@@ -715,6 +717,7 @@ test effect fn hostAncestryValidationRejectsChangingIdentityGeometry()
     contexts: Option.Some { value: contextSlice },
     ancestors: Option<&[FragmentAncestor]>.Some { value: &ancestors },
     repeatStep: Option<Point>.None,
+    uniform: Option<Rect>.None,
     kind: FragmentainerKind.Column,
     writingMode: WritingMode.HorizontalTb,
     direction: Direction.Ltr,

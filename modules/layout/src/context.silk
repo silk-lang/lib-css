@@ -1,7 +1,7 @@
 import silk.core.ownership { Copy }
 import style { SizeContainment }
 import geometry { OptionalSize, AvailableSpace, Size, Point, ResolvedEdges, ScrollbarMetrics, max, clamp }
-import style { Dimension, DimensionKind, Edges, Style, BoxSizing, Position, Display, DisplayInside, DisplayOutside, Overflow, ScrollbarWidth, ScrollbarGutter, Float, WritingMode, TextOrientation, Direction, Align, OverflowAlignment }
+import style { Dimension, DimensionKind, Edges, Style, BoxSizing, Position, Display, DisplayInside, DisplayOutside, Overflow, ScrollbarWidth, ScrollbarGutter, Float, WritingMode, TextOrientation, Direction, Align, OverflowAlignment, VerticalAlignKind }
 import fragmentation { FragmentInput }
 
 pub const UNBOUNDED: f32 = 1.0e30
@@ -33,6 +33,9 @@ pub struct Input {
   // Immutable inherited Grid geometry identity; zero means a standalone box.
   // Child requests reset it unless their Grid parent explicitly binds them.
   pub gridContext: usize,
+  // A digest of the placements a table gave a row group's or row's children
+  // (table.silk), so a cached part is reused only under the same placements.
+  pub tablePlan: u64,
   pub fragmentation: FragmentInput,
 }
 impl Copy for Input {}
@@ -42,7 +45,7 @@ impl Input {
     let mut height = AvailableSpace.maxContent()
     if parent.widthDefinite { width = AvailableSpace.definite(parent.width) }
     if parent.heightDefinite { height = AvailableSpace.definite(parent.height) }
-    return Input { parent: parent, initialContainingBlock: parent, parentMaxSize: Size { width: UNBOUNDED, height: UNBOUNDED }, scrollportSize: Size { width: UNBOUNDED, height: UNBOUNDED }, known: OptionalSize.none(), minimum: Size { width: 0.0, height: 0.0 }, availableWidth: width, availableHeight: height, blockRoot: false, blockify: false, atomicInline: false, intrinsicWidth: false, intrinsicHeight: false, shrinkToFit: false, indefiniteWidth: false, indefiniteHeight: false, parentWritingMode: WritingMode.HorizontalTb, parentTextOrientation: TextOrientation.Mixed, parentJustifyItems: Align.Normal, parentJustifyItemsSafety: OverflowAlignment.Default, bfcContentOrigin: Point { x: 0.0, y: 0.0 }, performLayout: true, baselines: true, fullSize: true, gridContext: 0, fragmentation: FragmentInput.continuous() }
+    return Input { parent: parent, initialContainingBlock: parent, parentMaxSize: Size { width: UNBOUNDED, height: UNBOUNDED }, scrollportSize: Size { width: UNBOUNDED, height: UNBOUNDED }, known: OptionalSize.none(), minimum: Size { width: 0.0, height: 0.0 }, availableWidth: width, availableHeight: height, blockRoot: false, blockify: false, atomicInline: false, intrinsicWidth: false, intrinsicHeight: false, shrinkToFit: false, indefiniteWidth: false, indefiniteHeight: false, parentWritingMode: WritingMode.HorizontalTb, parentTextOrientation: TextOrientation.Mixed, parentJustifyItems: Align.Normal, parentJustifyItemsSafety: OverflowAlignment.Default, bfcContentOrigin: Point { x: 0.0, y: 0.0 }, performLayout: true, baselines: true, fullSize: true, gridContext: 0, tablePlan: 0, fragmentation: FragmentInput.continuous() }
   }
   @inlineAlways
   pub fn effectiveMinimum(self: &Self) -> Size {
@@ -304,7 +307,12 @@ pub fn alignmentOffset(value: Align, safety: OverflowAlignment, reverse: bool, s
 // Align 3 §5.1.1 aligns block content as one subject. Distribution keywords
 // use their fallback rather than distributing or stretching that content.
 pub fn blockContentOffset(style: &Style, freeSpace: f32) -> f32 {
-  let align = style.alignContent
+  let mut align = style.alignContent
+  // CSS 2 §17.5.4: a cell's vertical-align places its content in the row's height.
+  if align == Align.Normal && style.display.insideIs(DisplayInside.TableCell) {
+    if style.verticalAlign.kind == VerticalAlignKind.Middle { align = Align.Center }
+    if style.verticalAlign.kind == VerticalAlignKind.Bottom { align = Align.End }
+  }
   let centered = align == Align.Center || align == Align.SpaceAround || align == Align.SpaceEvenly
   let atEnd = align == Align.End || align == Align.FlexEnd || align == Align.LastBaseline
   if !centered && !atEnd { return 0.0 }

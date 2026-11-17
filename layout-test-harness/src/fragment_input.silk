@@ -38,6 +38,7 @@ impl FragmentRequest {
     return Fragmentainers {
       rects: Option.Some { value: self.rects.asSlice() },
       repeatStep: move repeatStep,
+      uniform: Option.None,
       contexts: Option.Some { value: self.contexts.asSlice() },
       ancestors: Option.Some { value: self.ancestors.asSlice() },
       kind: self.kind,

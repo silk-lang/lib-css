@@ -189,6 +189,31 @@ fn invalid() -> Linear {
   return Linear { pixels: 0.0, percent: 0.0, scalar: false, valid: false }
 }
 
+/// `part * factor`, where a part that is not there stays zero under an infinite factor.
+fn scaled(part: f32, factor: f32) -> f32 {
+  if part == 0.0 {
+    return 0.0
+  }
+  return part * factor
+}
+
+/// The length an infinite one is clamped to, in CSS pixels: 2^25, as browsers do.
+const LARGEST_LENGTH: f32 = 33554432.0
+
+/// `pixels` as a length geometry can use: an infinite one is the largest there is, a NaN zero.
+fn finite(pixels: f32) -> f32 {
+  if pixels != pixels {
+    return 0.0
+  }
+  if pixels > LARGEST_LENGTH {
+    return LARGEST_LENGTH
+  }
+  if pixels < 0.0 - LARGEST_LENGTH {
+    return 0.0 - LARGEST_LENGTH
+  }
+  return pixels
+}
+
 fn linear(value: &Value, context: &Context) -> Linear {
   match &value.* {
     Value.Unit { value: amount, unit } => {
@@ -225,6 +250,27 @@ fn linear(value: &Value, context: &Context) -> Linear {
           total.pixels = 1.0 / total.pixels
           return total
         }
+        MathOperator.Clamp => {
+          // clamp(MIN, VAL, MAX) is max(MIN, min(VAL, MAX)): MIN wins when it exceeds MAX.
+          if items.length != 3 {
+            return invalid()
+          }
+          let preferred = linear(&items[1], context)
+          let upper = linear(&items[2], context)
+          if !preferred.valid || !upper.valid || total.percent != 0.0 || preferred.percent != 0.0
+            || upper.percent != 0.0 || preferred.scalar != total.scalar || upper.scalar != total.scalar {
+            return invalid()
+          }
+          let mut value = preferred.pixels
+          if upper.pixels < value {
+            value = upper.pixels
+          }
+          if total.pixels > value {
+            value = total.pixels
+          }
+          total.pixels = value
+          return total
+        }
         _ => {}
       }
       let mut i: usize = 1
@@ -244,10 +290,10 @@ fn linear(value: &Value, context: &Context) -> Linear {
           MathOperator.Product => {
             if next.scalar {
               total.pixels = total.pixels * next.pixels
-              total.percent = total.percent * next.pixels
+              total.percent = scaled(total.percent, next.pixels)
             } else if total.scalar {
               let factor = total.pixels
-              total = Linear { pixels: next.pixels * factor, percent: next.percent * factor, scalar: false, valid: true }
+              total = Linear { pixels: next.pixels * factor, percent: scaled(next.percent, factor), scalar: false, valid: true }
             } else {
               return invalid()
             }
@@ -312,7 +358,7 @@ pub fn number(value: &Value) -> Option<f32> {
 pub fn length(value: &Value, context: &Context) -> Option<f32> {
   let reduced = linear(value, context)
   if reduced.valid && reduced.percent == 0.0 && (!reduced.scalar || reduced.pixels == 0.0) {
-    return Option<f32>.some(reduced.pixels)
+    return Option<f32>.some(finite(reduced.pixels))
   }
   return Option<f32>.None
 }
@@ -344,9 +390,9 @@ pub fn dimension(value: &Value, context: &Context) -> Option<Dimension> {
     return Option<Dimension>.None
   }
   if reduced.percent != 0.0 {
-    return Option<Dimension>.some(Dimension.calc(reduced.pixels, reduced.percent))
+    return Option<Dimension>.some(Dimension.calc(finite(reduced.pixels), reduced.percent))
   }
-  return Option<Dimension>.some(Dimension.px(reduced.pixels))
+  return Option<Dimension>.some(Dimension.px(finite(reduced.pixels)))
 }
 
 /// A computed size as written: lengths in `px`, percentages 0 to 100.
@@ -419,6 +465,16 @@ pub fn display(value: &Value) -> Option<Display> {
       Keyword.InlineFlex => box(DisplayOutside.Inline, DisplayInside.Flex)
       Keyword.Grid => box(DisplayOutside.Block, DisplayInside.Grid)
       Keyword.InlineGrid => box(DisplayOutside.Inline, DisplayInside.Grid)
+      Keyword.Table => box(DisplayOutside.Block, DisplayInside.Table)
+      Keyword.InlineTable => box(DisplayOutside.Inline, DisplayInside.Table)
+      Keyword.TableRowGroup => box(DisplayOutside.Block, DisplayInside.TableRowGroup)
+      Keyword.TableHeaderGroup => box(DisplayOutside.Block, DisplayInside.TableHeaderGroup)
+      Keyword.TableFooterGroup => box(DisplayOutside.Block, DisplayInside.TableFooterGroup)
+      Keyword.TableRow => box(DisplayOutside.Block, DisplayInside.TableRow)
+      Keyword.TableColumnGroup => box(DisplayOutside.Block, DisplayInside.TableColumnGroup)
+      Keyword.TableColumn => box(DisplayOutside.Block, DisplayInside.TableColumn)
+      Keyword.TableCell => box(DisplayOutside.Block, DisplayInside.TableCell)
+      Keyword.TableCaption => box(DisplayOutside.Block, DisplayInside.TableCaption)
       _ => Option<Display>.None
     }
     _ => Option<Display>.None
@@ -435,6 +491,15 @@ pub fn displayKeyword(value: Display) -> Keyword {
       DisplayInside.FlowRoot => if outside == DisplayOutside.Block { Keyword.FlowRoot } else { Keyword.InlineBlock }
       DisplayInside.Flex => if outside == DisplayOutside.Block { Keyword.Flex } else { Keyword.InlineFlex }
       DisplayInside.Grid => if outside == DisplayOutside.Block { Keyword.Grid } else { Keyword.InlineGrid }
+      DisplayInside.Table => if outside == DisplayOutside.Block { Keyword.Table } else { Keyword.InlineTable }
+      DisplayInside.TableRowGroup => Keyword.TableRowGroup
+      DisplayInside.TableHeaderGroup => Keyword.TableHeaderGroup
+      DisplayInside.TableFooterGroup => Keyword.TableFooterGroup
+      DisplayInside.TableRow => Keyword.TableRow
+      DisplayInside.TableColumnGroup => Keyword.TableColumnGroup
+      DisplayInside.TableColumn => Keyword.TableColumn
+      DisplayInside.TableCell => Keyword.TableCell
+      DisplayInside.TableCaption => Keyword.TableCaption
     }
   }
 }

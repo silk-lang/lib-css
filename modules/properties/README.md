@@ -12,13 +12,13 @@ import these instead of defining their own.
 
 - **The property catalog** (`catalog`): one `Property` enum with each property's name, index,
   inheritance, initial value and shorthand expansion, taken from the pinned specifications.
-  It covers 442 properties: the SVG and text properties first, then the box properties (position
+  It covers 444 properties: the SVG and text properties first, then the box properties (position
   and insets, sizes, margin, padding, border, radius, flex, grid, gap, alignment, background,
   shadow, breaks), the two that have no standard name, `-silk-selection-color` and
   `-silk-placeholder-color`, `transition` and its longhands, and last the properties apps use
   beyond those: outline, user-select and the other css-ui ones, the logical properties,
   line-clamp, text-wrap, overscroll, scroll margin, padding and snap, containment, lists,
-  tables, multicol and border-image. `lookup` also finds legacy name aliases (`word-wrap`,
+  tables, multicol, border-image, and `background-position-x` and `-y`. `lookup` also finds legacy name aliases (`word-wrap`,
   `grid-gap`, `-webkit-appearance`) as the property they alias. `shorthands` does not expand
   `transition` or `border-image`; their consumers read the values. `css-style` re-exports the
   catalog as `properties` and cascades all of it: the first 172 with their own grammars, the

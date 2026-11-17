@@ -821,3 +821,67 @@ test effect fn matchingRecordsWhatItReadAndWhere() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   run matchReadsBody() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+// A chain 0 > 1 > 2 > 3: dir="rtl", dir="auto", dir="LTR", no dir.
+struct DirTree {}
+
+impl ElementTree for DirTree {
+  fn parent(self: &Self, node: usize) -> usize { return if node == 0 { NO_ELEMENT } else { node - 1 } }
+  fn containingHost(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn firstChild(self: &Self, node: usize) -> usize { return if node < 3 { node + 1 } else { NO_ELEMENT } }
+  fn nextSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn previousSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn localName(self: &Self, node: usize) -> &[u8] { return b"div" }
+  fn namespaceUri(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn attributeCount(self: &Self, node: usize) -> usize { return if node < 3 { 1 } else { 0 } }
+  fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"dir" }
+  fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] {
+    return if node == 0 { b"rtl" } else if node == 1 { b"auto" } else { b"LTR" }
+  }
+  fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
+  fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
+    return AttributeText<'a> { namespace: b"", name: b"dir", value: self.attributeValue(node, attribute) }
+  }
+  fn language(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn isRoot(self: &Self, node: usize) -> bool { return node == 0 }
+  fn isEmpty(self: &Self, node: usize) -> bool { return node == 3 }
+  fn isLink(self: &Self, node: usize) -> bool { return false }
+}
+
+effect fn direction(source: &[u8], node: usize, expected: bool) -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(source, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  match &parsed {
+    Option<SelectorList>.Some { value } => {
+      let tree = DirTree {}
+      let mut context = MatchContext.make(0, NO_ELEMENT)
+      let result = run selectors.matchElement(&value, &buffer, &tree, node, &mut context)
+      run Testing.expect(result.isSome() == expected, ":dir() follows the nearest ltr or rtl dir attribute")
+    }
+    _ => { run Testing.expect(false, ":dir() parses") }
+  }
+}
+
+// https://drafts.csswg.org/selectors/#the-dir-pseudo
+test effect fn dirFollowsTheNearestDirAttribute() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  run direction(b":dir(rtl)", 0, true)
+  run direction(b":dir(rtl)", 1, true)
+  run direction(b":dir(ltr)", 1, false)
+  run direction(b":dir(ltr)", 2, true)
+  run direction(b":dir(RTL)", 3, false)
+  run direction(b":dir(ltr)", 3, true)
+  run direction(b":dir(rtl) :dir(ltr)", 3, true)
+}
+
+test effect fn formStatesMatchTheirHostBits() -> ()
+  ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
+  run checkState(b":default", 2, true, 0, 1, 0, element.DEFAULT)
+  run checkState(b":in-range", 2, true, 0, 1, 0, element.IN_RANGE)
+  run checkState(b":out-of-range", 2, true, 0, 1, 0, element.OUT_OF_RANGE)
+  run checkState(b":in-range", 2, false, 0, 0, 0, element.OUT_OF_RANGE)
+}

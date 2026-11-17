@@ -88,6 +88,17 @@ effect fn math() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ?
   run shaped(b"calc(1px + 2 * 3px)", b"calc(1px + (2 * 3px))", "a product binds tighter than a sum")
   run shaped(b"calc((1px + 2px) * 3)", b"calc((1px + 2px) * 3)", "parentheses group")
   run shaped(b"calc(1px - (2px + 3px))", b"calc(1px + (-1 * (2px + 3px)))", "a negated group")
+  run shaped(b"calc(sin(30deg) * 100px)", b"calc(0.5 * 100px)", "a sine of a constant angle is a number")
+  run shaped(b"pow(2, 3)", b"8", "a power")
+  run shaped(b"calc(sqrt(16) * 1px + hypot(3px, 4px))", b"calc((4 * 1px) + 5px)", "a root and a hypotenuse")
+  run shaped(b"round(up, 13px, 4px)", b"16px", "a value stepped up")
+  run shaped(b"round(calc(10px + 3.4px), 1px)", b"13px", "a constant sum stepped to the nearest")
+  run shaped(b"mod(-7px, 4px)", b"1px", "mod takes the sign of the step")
+  run shaped(b"rem(-7px, 4px)", b"-3px", "rem takes the sign of the value")
+  run shaped(b"abs(-3em)", b"3em", "an absolute value keeps its unit")
+  run shaped(b"atan2(1px, 1px)", b"45deg", "an arc tangent is an angle")
+  run unshaped(b"sin(1em)", b"sin(1em)", "a function of the wrong type stays text")
+  run unshaped(b"round(1em, 1px)", b"round(1em, 1px)", "arguments that need a font stay text")
   run shaped(b"min(10px, 5%)", b"min(10px, 5%)", "min")
   run shaped(b"clamp(1px, 2% + 3px, 4px)", b"clamp(1px, calc(2% + 3px), 4px)", "clamp takes expressions")
   run shaped(b"calc(1px + max(2px, 3%))", b"calc(1px + max(2px, 3%))", "a nested math function")
@@ -103,6 +114,12 @@ effect fn fallbacks() -> () ! AssertionError<'static> | CssError | OutOfMemoryEr
   run unshaped(b"1px solid mystery", b"1px solid mystery", "one unknown part keeps the whole text")
   run unshaped(b"3furlong", b"3furlong", "an unknown unit")
   run unshaped(b"", b"", "nothing")
+  run shaped(b"env(safe-area-inset-top)", b"0px", "a safe area inset the host has none of")
+  run shaped(b"env(safe-area-inset-left, 20px)", b"0px", "a known name takes the host's value, not the fallback")
+  run shaped(b"env(--unknown, 12px)", b"12px", "an unknown name takes its fallback")
+  run shaped(b"calc(8px + env(safe-area-inset-bottom))", b"calc(8px + 0px)", "env() inside math")
+  run shaped(b"env(nope, env(also-nope, 1px 2px))", b"1px 2px", "a fallback can hold env()")
+  run unshaped(b"env(nope)", b"env(nope)", "an unknown name without fallback has no value")
   let text = run values.text(b"calc(1px + 2px)")
   let resolved = run written.resolve(&text)
   run Testing.expect(!isText(&resolved), "resolving text gives it a shape")
@@ -141,6 +158,25 @@ effect fn blocks() -> () ! AssertionError<'static> | CssError | OutOfMemoryError
       },
       "a parsed value converts to a computed one",
     )
+    let endless = run written.declarations(b"border-top-left-radius: calc(infinity * 1px); width: calc(-infinity * 1px + 50%)")
+    let wide = endless.asSlice()
+    run Testing.expect(wide.length == 2, "math constants parse")
+    if wide.length == 2 {
+      run Testing.expect(
+        match &convert.length(&wide[0].value, &context) {
+          Option<f32>.Some { value } => value == 33554432.0
+          _ => false
+        },
+        "an infinite length is the largest length",
+      )
+      run Testing.expect(
+        match &convert.dimension(&wide[1].value, &context) {
+          Option<Dimension>.Some { value } => value.kind == DimensionKind.Calc && value.value == -33554432.0
+          _ => false
+        },
+        "and stays finite beside a percentage",
+      )
+    }
   }
 }
 
@@ -247,4 +283,40 @@ test effect fn containerShorthandProjectsTypedContainmentAndNames() ! CssError |
   run Testing.expect(match &name { Option<Value>.Some { value: Value.Text { css } } => sameText(css.asSlice(), b"red") _ => false }, "a container name that is also a color remains an identifier")
   let standalone = run written.declarations(b"container-name: currentcolor; container-name: red") |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &standalone.asSlice()[0].value { Value.Text { css } => sameText(css.asSlice(), b"currentcolor") _ => false }, "standalone names do not become context-dependent colors")
+}
+
+effect fn dropped(source: Property, css: &[u8], target: Property) -> bool
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let declaration = Declaration { property: source, value: run written.value(css), important: false }
+  return (run written.longhand(&declaration, target)).isNone()
+}
+
+effect fn backgroundBody() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let layered = b"linear-gradient(red, red) 0 0 / 10px 10px no-repeat, blue linear-gradient(blue, blue)"
+  run Testing.expect(run projection(Property.Background, layered, Property.BackgroundSize, b"10px 10px, auto"), "one size a layer")
+  run Testing.expect(run projection(Property.Background, layered, Property.BackgroundPosition, b"0 0, 0% 0%"), "one position a layer")
+  run Testing.expect(run projection(Property.Background, layered, Property.BackgroundRepeat, b"no-repeat, repeat"), "one repeat a layer")
+  run Testing.expect(run projection(Property.Background, layered, Property.BackgroundColor, b"rgb(0, 0, 255)"), "the color comes from the last layer")
+  run Testing.expect(run projection(Property.Background, b"center / cover", Property.BackgroundSize, b"cover"), "a keyword size")
+  run Testing.expect(run projection(Property.Background, b"left 5px top / 50% auto", Property.BackgroundPosition, b"left 5px top"), "the position before the size")
+  run Testing.expect(run projection(Property.Background, b"left 5px top / 50% auto", Property.BackgroundSize, b"50% auto"), "a two-value size")
+  let pictured = b"url(a.png) center / cover no-repeat, linear-gradient(red, blue), url(\"b,).png\") blue"
+  run Testing.expect(run projection(Property.Background, pictured, Property.BackgroundImage, b"url(a.png), linear-gradient(rgb(255, 0, 0), rgb(0, 0, 255)), url(\"b,).png\")"), "url images stay in their layers")
+  run Testing.expect(run projection(Property.Background, pictured, Property.BackgroundRepeat, b"no-repeat, repeat, repeat"), "the repeats beside url images")
+  run Testing.expect(run projection(Property.Background, pictured, Property.BackgroundSize, b"cover, auto, auto"), "the sizes beside url images")
+  run Testing.expect(run projection(Property.Background, pictured, Property.BackgroundColor, b"rgb(0, 0, 255)"), "the color beside a url image")
+  run Testing.expect(run dropped(Property.Background, b"url(a.png) url(b.png)", Property.BackgroundImage), "one image a layer")
+  let worded = b"url(a.png) repeat-x local, url(\"local, repeat-y.png\") repeat-y fixed, red REPEAT-X"
+  run Testing.expect(run projection(Property.Background, worded, Property.BackgroundRepeat, b"repeat no-repeat, no-repeat repeat, repeat no-repeat"), "repeat-x and repeat-y are two-value repeats")
+  run Testing.expect(run projection(Property.Background, worded, Property.BackgroundAttachment, b"local, fixed, scroll"), "local stays in its layer")
+  run Testing.expect(run projection(Property.Background, worded, Property.BackgroundColor, b"rgb(255, 0, 0)"), "the other longhands read the rest")
+  run Testing.expect(run dropped(Property.Background, b"red repeat-x repeat", Property.BackgroundRepeat), "repeat-x is a whole repeat")
+  run Testing.expect(run dropped(Property.Background, b"red, blue", Property.BackgroundColor), "a color only in the last layer")
+  run Testing.expect(run dropped(Property.Background, b"no-repeat / 10px", Property.BackgroundSize), "a size follows a position")
+  run Testing.expect(run dropped(Property.Background, b"0 no-repeat 0", Property.BackgroundPosition), "a position is one run")
+}
+
+test effect fn backgroundShorthandTakesLayersAndSizes() -> () ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run backgroundBody() |> Effect.provideMut<Allocator>(&mut allocator)
 }

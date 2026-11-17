@@ -30,6 +30,11 @@ test effect fn everyPropertyHasOneIndexAndFindsItselfByName() -> ()
     Option<Property>.None => false
   }
   run Testing.expect(alias, "a legacy name finds the property it aliases")
+  let prefixed = match catalog.lookup(b"-webkit-background-clip") {
+    Option<Property>.Some { value } => value == Property.BackgroundClip
+    Option<Property>.None => false
+  }
+  run Testing.expect(prefixed, "a prefixed name finds the property it aliases")
 }
 
 test effect fn shorthandsExpandToLonghands() -> ()
