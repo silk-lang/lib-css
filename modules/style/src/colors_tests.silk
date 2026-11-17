@@ -402,3 +402,22 @@ test effect fn invalidColorMixDoesNotConsumeInput() -> ()
     i = i + 1
   }
 }
+
+effect fn relativeColors() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  run rgb(b"rgb(from red r g b / 50%)", 1.0, 0.0, 0.0, 0.5)
+  run rgb(b"rgb(from #336699 b g r)", 0.6, 0.4, 0.2, 1.0)
+  run rgb(b"rgb(from red calc(r / 2) g calc(b + 51) / calc(alpha * 0.25))", 127.5 / 255.0, 0.0, 0.2, 0.25)
+  run rgb(b"hsl(from red calc(h + 120) s l)", 0.0, 1.0, 0.0, 1.0)
+  run rgb(b"oklch(from blue l c h / 0.5)", 0.0, 0.0, 1.0, 0.5)
+  run rgb(b"color(from lime srgb r g b)", 0.0, 1.0, 0.0, 1.0)
+  run rgb(b"rgb(from rgb(from red g r b) r g 255)", 0.0, 1.0, 1.0, 1.0)
+  run Testing.expect((run parsed(b"rgb(from currentcolor r g b)")).isNone(), "an origin known only later has no value yet")
+  run Testing.expect((run parsed(b"rgb(from red r g)")).isNone(), "a relative color still needs every channel")
+  run Testing.expect((run parsed(b"rgb(from red x g b)")).isNone(), "rgb() has no x channel")
+}
+
+// https://www.w3.org/TR/css-color-5/#relative-colors
+test effect fn relativeColorsReadTheirOriginsChannels() -> () ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run relativeColors() |> Effect.provideMut<Allocator>(&mut allocator)
+}

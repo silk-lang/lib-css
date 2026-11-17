@@ -20,5 +20,6 @@ import grid_positioned_tests
 import grid_incremental_tests
 import grid_fragment_tests
 import tree_tests
+import table_tests
 
 import containment_tests

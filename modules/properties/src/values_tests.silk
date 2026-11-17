@@ -254,3 +254,26 @@ test effect fn fontRelativeUnitsUseHostMetrics() ! AssertionError<'static> | Out
   let mut allocator = Allocator.systemAllocatorProvider()
   run fontUnits() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+effect fn clamped(low: Value, preferred: Value, high: Value) -> Option<Dimension> ! OutOfMemoryError ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(move low)
+  run parts.append(move preferred)
+  run parts.append(move high)
+  let mut context = Context.make()
+  context.fontSize = 10.0
+  context.viewportWidth = 1000.0
+  return convert.dimension(&values.math(MathOperator.Clamp, move parts), &context)
+}
+
+effect fn clampCases() ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  run Testing.expect(isDimension(run clamped(values.unit(1.0, Unit.Em), values.unit(2.0, Unit.Vw), values.unit(30.0, Unit.Px)), Dimension.px(20.0)), "clamp() keeps a preferred value between its bounds")
+  run Testing.expect(isDimension(run clamped(values.unit(1.0, Unit.Em), values.unit(5.0, Unit.Vw), values.unit(30.0, Unit.Px)), Dimension.px(30.0)), "clamp() caps at its maximum")
+  run Testing.expect(isDimension(run clamped(values.unit(1.0, Unit.Em), values.unit(0.5, Unit.Vw), values.unit(30.0, Unit.Px)), Dimension.px(10.0)), "clamp() floors at its minimum")
+  run Testing.expect(isDimension(run clamped(values.unit(40.0, Unit.Px), values.unit(2.0, Unit.Vw), values.unit(30.0, Unit.Px)), Dimension.px(40.0)), "clamp()'s minimum wins over a smaller maximum")
+}
+
+test effect fn clampResolvesBetweenItsBounds() ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run clampCases() |> Effect.provideMut<Allocator>(&mut allocator)
+}

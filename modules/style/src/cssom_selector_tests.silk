@@ -242,7 +242,7 @@ test effect fn pseudoElementsAndDynamicStatesNeverMatchStaticElements() -> ()
   run staticMatch(b"rect::before:hover, rect::after::marker", false)
   run staticMatch(b"::part(label), ::slotted(rect), ::highlight(foo)", false)
   run staticMatch(b"::selection, ::marker, ::placeholder, ::file-selector-button", false)
-  run staticMatch(b":hover, :active, :focus, :visited, :enabled, :checked, :dir(ltr)", false)
+  run staticMatch(b":hover, :active, :focus, :visited, :enabled, :checked, :dir(rtl)", false)
   run staticMatch(b"rect, rect::before", true)
 }
 

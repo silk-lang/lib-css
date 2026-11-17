@@ -250,6 +250,27 @@ fn linear(value: &Value, context: &Context) -> Linear {
           total.pixels = 1.0 / total.pixels
           return total
         }
+        MathOperator.Clamp => {
+          // clamp(MIN, VAL, MAX) is max(MIN, min(VAL, MAX)): MIN wins when it exceeds MAX.
+          if items.length != 3 {
+            return invalid()
+          }
+          let preferred = linear(&items[1], context)
+          let upper = linear(&items[2], context)
+          if !preferred.valid || !upper.valid || total.percent != 0.0 || preferred.percent != 0.0
+            || upper.percent != 0.0 || preferred.scalar != total.scalar || upper.scalar != total.scalar {
+            return invalid()
+          }
+          let mut value = preferred.pixels
+          if upper.pixels < value {
+            value = upper.pixels
+          }
+          if total.pixels > value {
+            value = total.pixels
+          }
+          total.pixels = value
+          return total
+        }
         _ => {}
       }
       let mut i: usize = 1
@@ -444,6 +465,16 @@ pub fn display(value: &Value) -> Option<Display> {
       Keyword.InlineFlex => box(DisplayOutside.Inline, DisplayInside.Flex)
       Keyword.Grid => box(DisplayOutside.Block, DisplayInside.Grid)
       Keyword.InlineGrid => box(DisplayOutside.Inline, DisplayInside.Grid)
+      Keyword.Table => box(DisplayOutside.Block, DisplayInside.Table)
+      Keyword.InlineTable => box(DisplayOutside.Inline, DisplayInside.Table)
+      Keyword.TableRowGroup => box(DisplayOutside.Block, DisplayInside.TableRowGroup)
+      Keyword.TableHeaderGroup => box(DisplayOutside.Block, DisplayInside.TableHeaderGroup)
+      Keyword.TableFooterGroup => box(DisplayOutside.Block, DisplayInside.TableFooterGroup)
+      Keyword.TableRow => box(DisplayOutside.Block, DisplayInside.TableRow)
+      Keyword.TableColumnGroup => box(DisplayOutside.Block, DisplayInside.TableColumnGroup)
+      Keyword.TableColumn => box(DisplayOutside.Block, DisplayInside.TableColumn)
+      Keyword.TableCell => box(DisplayOutside.Block, DisplayInside.TableCell)
+      Keyword.TableCaption => box(DisplayOutside.Block, DisplayInside.TableCaption)
       _ => Option<Display>.None
     }
     _ => Option<Display>.None
@@ -460,6 +491,15 @@ pub fn displayKeyword(value: Display) -> Keyword {
       DisplayInside.FlowRoot => if outside == DisplayOutside.Block { Keyword.FlowRoot } else { Keyword.InlineBlock }
       DisplayInside.Flex => if outside == DisplayOutside.Block { Keyword.Flex } else { Keyword.InlineFlex }
       DisplayInside.Grid => if outside == DisplayOutside.Block { Keyword.Grid } else { Keyword.InlineGrid }
+      DisplayInside.Table => if outside == DisplayOutside.Block { Keyword.Table } else { Keyword.InlineTable }
+      DisplayInside.TableRowGroup => Keyword.TableRowGroup
+      DisplayInside.TableHeaderGroup => Keyword.TableHeaderGroup
+      DisplayInside.TableFooterGroup => Keyword.TableFooterGroup
+      DisplayInside.TableRow => Keyword.TableRow
+      DisplayInside.TableColumnGroup => Keyword.TableColumnGroup
+      DisplayInside.TableColumn => Keyword.TableColumn
+      DisplayInside.TableCell => Keyword.TableCell
+      DisplayInside.TableCaption => Keyword.TableCaption
     }
   }
 }

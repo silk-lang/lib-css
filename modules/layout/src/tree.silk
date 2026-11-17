@@ -5,7 +5,7 @@ import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.num.usize
 import silk.text.string { String }
-import style { Style, DisplayOutside, DisplayInside, Dimension, DimensionKind, Edges, BoxSizing }
+import style { Style, DisplayOutside, DisplayInside, Display, Dimension, DimensionKind, Edges, BoxSizing }
 import geometry { Layout, Point, Rect, OptionalSize }
 import silk.core.option { Option }
 import box_tree { BoxTree, BoxNode }
@@ -101,6 +101,7 @@ fn sameOuter(a: &Style, b: &Style) -> bool {
   if a.alignSelf != b.alignSelf || a.justifySelf != b.justifySelf || a.alignSelfSafety != b.alignSelfSafety || a.justifySelfSafety != b.justifySelfSafety { return false }
   if a.scrollbarWidth != b.scrollbarWidth || a.scrollbarGutter != b.scrollbarGutter || a.clear != b.clear || a.visibility != b.visibility { return false }
   if a.aspectRatio != b.aspectRatio || a.aspectRatioAuto != b.aspectRatioAuto { return false }
+  if a.columnSpan != b.columnSpan || a.rowSpan != b.rowSpan { return false }
   return true
 }
 
@@ -112,8 +113,10 @@ fn sameGeneration(a: &Style, b: &Style) -> bool {
   if a.display.outsideIs(DisplayOutside.Block) != b.display.outsideIs(DisplayOutside.Block) || a.display.outsideIs(DisplayOutside.Inline) != b.display.outsideIs(DisplayOutside.Inline) { return false }
   if a.display.insideIs(DisplayInside.Flow) != b.display.insideIs(DisplayInside.Flow) || a.display.insideIs(DisplayInside.FlowRoot) != b.display.insideIs(DisplayInside.FlowRoot) || a.display.insideIs(DisplayInside.Flex) != b.display.insideIs(DisplayInside.Flex) { return false }
   if a.display.insideIs(DisplayInside.Grid) != b.display.insideIs(DisplayInside.Grid) { return false }
+  if (tableDisplay(&a.display) || tableDisplay(&b.display)) && !(&a.display == &b.display) { return false }
   return a.replaced == b.replaced && a.position == b.position && a.float == b.float && a.writingMode == b.writingMode && a.alignContent == b.alignContent && a.overflowX == b.overflowX && a.overflowY == b.overflowY
 }
+fn tableDisplay(display: &Display) -> bool { return display.insideIs(DisplayInside.Table) || display.isTablePart() }
 // Box construction drops whitespace-only text between flex and grid items.
 fn whitespace(value: string) -> bool {
   let bytes = String.utf8Bytes(value)
