@@ -224,7 +224,9 @@ pub fn childrenInput(input: &Input, style: &Style, box: &ResolvedBox, parent: Op
   }
   return result
 }
-pub fn outOfFlow(style: &Style) -> bool { return style.position == Position.Absolute || style.position == Position.Fixed }
+pub fn outOfFlow(style: &Style) -> bool { return style.position == Position.Absolute || style.position == Position.Fixed || style.outsideMarker }
+// Out of flow and placed by positioning, which an outside marker is not: its list item places it.
+pub fn absolutelyPositioned(style: &Style) -> bool { return style.position == Position.Absolute || style.position == Position.Fixed }
 pub fn effectiveDisplay(style: &Style, input: &Input) -> Display {
   if input.blockify || style.float != Float.None || outOfFlow(style) { return style.display.blockified() }
   if input.atomicInline { return Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.FlowRoot } }

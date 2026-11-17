@@ -12,7 +12,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 pub const NO_ELEMENT: usize = usize.MAX
 
 /// A style target supplied by the host. Parts are not ordinary selector-tree children.
-pub enum PseudoTarget { None, Before, After, Placeholder, Selection, Scrollbar, ScrollbarThumb, ScrollbarTrack }
+pub enum PseudoTarget { None, Before, After, Placeholder, Selection, Scrollbar, ScrollbarThumb, ScrollbarTrack, Marker }
 
 /// Supported nonfunctional pseudo-elements. None means no matching host target.
 pub fn pseudoTarget(name: &[u8]) -> PseudoTarget {
@@ -23,6 +23,7 @@ pub fn pseudoTarget(name: &[u8]) -> PseudoTarget {
   if tokens.insensitive(name, b"-webkit-scrollbar") { return PseudoTarget.Scrollbar }
   if tokens.insensitive(name, b"-webkit-scrollbar-thumb") { return PseudoTarget.ScrollbarThumb }
   if tokens.insensitive(name, b"-webkit-scrollbar-track") { return PseudoTarget.ScrollbarTrack }
+  if tokens.insensitive(name, b"marker") { return PseudoTarget.Marker }
   return PseudoTarget.None
 }
 

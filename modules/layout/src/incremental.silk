@@ -1,6 +1,6 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
-import context { outOfFlow }
+import context { outOfFlow, absolutelyPositioned }
 import style { Float, Dimension, DimensionKind, Edges, Position, Style, WritingMode }
 import tree { Tree, NO_NODE }
 import box_tree { BoxTree, BoxNode, BoxKind }
@@ -351,7 +351,7 @@ pub effect fn markSubtrees(nodes: &BoxTree<'_>, facts: &mut BoxFacts) ! OutOfMem
 // An out-of-flow box may reuse its own layout, but positioning, not its
 // parent's layout, places it: a parent holding one is never copied.
 fn passedUp(nodes: &BoxTree<'_>, id: usize, level: u8) -> u8 {
-  if outOfFlow(nodes.style(id)) { return REUSE_NONE }
+  if absolutelyPositioned(nodes.style(id)) { return REUSE_NONE }
   if nodes.style(id).float != Float.None && level > REUSE_INDEPENDENT { return REUSE_INDEPENDENT }
   return level
 }

@@ -60,6 +60,7 @@ import sheet_colors_tests
 import adopted_tests
 
 import generated_content_tests
+import counter_styles_tests
 
 import container_queries_tests
 

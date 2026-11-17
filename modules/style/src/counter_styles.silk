@@ -1,0 +1,190 @@
+//! The predefined counter styles of CSS Counter Styles 3 §6 that lists use, and the
+//! `counter-reset`, `counter-increment` and `counter-set` lists. `@counter-style` is not read.
+import input { Input, TokenView }
+
+import lexer
+import tokens { Kind, Limits, CssError, TokenBuffer }
+import tokens
+import value_cursor { Cursor }
+import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
+import silk.core.option { Option }
+import silk.core.effect { Effect }
+import silk.core.result { Result }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.i64
+import silk.num.u32
+import silk.num.u64
+import silk.num.f64
+
+pub enum CounterStyle { Disc, Circle, Square, Decimal, DecimalLeadingZero, LowerRoman, UpperRoman, LowerAlpha, UpperAlpha, LowerGreek, DisclosureOpen, DisclosureClosed, None }
+
+/// The style a name selects. `lower-latin` and `upper-latin` are the alpha styles.
+pub fn named(name: &[u8]) -> Option<CounterStyle> {
+  let names = [b"disc", b"circle", b"square", b"decimal", b"decimal-leading-zero", b"lower-roman", b"upper-roman", b"lower-alpha", b"upper-alpha", b"lower-greek", b"disclosure-open", b"disclosure-closed", b"none", b"lower-latin", b"upper-latin"]
+  let styles = [CounterStyle.Disc, CounterStyle.Circle, CounterStyle.Square, CounterStyle.Decimal, CounterStyle.DecimalLeadingZero, CounterStyle.LowerRoman, CounterStyle.UpperRoman, CounterStyle.LowerAlpha, CounterStyle.UpperAlpha, CounterStyle.LowerGreek, CounterStyle.DisclosureOpen, CounterStyle.DisclosureClosed, CounterStyle.None, CounterStyle.LowerAlpha, CounterStyle.UpperAlpha]
+  let mut i: usize = 0
+  while i < names.length {
+    if tokens.insensitive(name, names[i]) { return Option<CounterStyle>.some(styles[i]) }
+    i = i + 1
+  }
+  return Option<CounterStyle>.None
+}
+
+/// A style that writes the counter's value, as opposed to one fixed symbol.
+pub fn ordinal(style: CounterStyle) -> bool {
+  return style != CounterStyle.Disc && style != CounterStyle.Circle && style != CounterStyle.Square
+    && style != CounterStyle.DisclosureOpen && style != CounterStyle.DisclosureClosed && style != CounterStyle.None
+}
+
+effect fn appendScalar(out: &mut Bytes, scalar: u32) ! OutOfMemoryError ? &mut Allocator {
+  if scalar < 0x80 { run out.append(&[u32.toU8(scalar)])
+    return () }
+  if scalar < 0x800 {
+    run out.append(&[u32.toU8(u32.bitOr(0xC0, u32.shiftRight(scalar, 6))), u32.toU8(u32.bitOr(0x80, u32.bitAnd(scalar, 0x3F)))])
+    return ()
+  }
+  run out.append(&[u32.toU8(u32.bitOr(0xE0, u32.shiftRight(scalar, 12))), u32.toU8(u32.bitOr(0x80, u32.bitAnd(u32.shiftRight(scalar, 6), 0x3F))), u32.toU8(u32.bitOr(0x80, u32.bitAnd(scalar, 0x3F)))])
+}
+
+effect fn appendDecimal(out: &mut Bytes, value: i64, width: usize) ! OutOfMemoryError ? &mut Allocator {
+  let mut magnitude = if value < 0 { i64.wrappingToU64(i64.wrappingNegate(value)) } else { i64.toU64(value) }
+  if value < 0 { run out.append(b"-") }
+  let mut digits: [u8; 24] = [0; 24]
+  let mut count: usize = 0
+  while magnitude != 0 || count == 0 {
+    digits[count] = u64.toU8(u64.remainder(magnitude, 10)) + 48
+    magnitude = magnitude / 10
+    count = count + 1
+  }
+  while count < width {
+    digits[count] = 48
+    count = count + 1
+  }
+  while count > 0 {
+    count = count - 1
+    run out.append(&[digits[count]])
+  }
+}
+
+effect fn appendRoman(out: &mut Bytes, value: i64, upper: bool) ! OutOfMemoryError ? &mut Allocator {
+  let values: [i64; 13] = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+  let lower = [b"m", b"cm", b"d", b"cd", b"c", b"xc", b"l", b"xl", b"x", b"ix", b"v", b"iv", b"i"]
+  let capital = [b"M", b"CM", b"D", b"CD", b"C", b"XC", b"L", b"XL", b"X", b"IX", b"V", b"IV", b"I"]
+  let mut rest = value
+  let mut i: usize = 0
+  while i < values.length {
+    while rest >= values[i] {
+      run out.append(if upper { capital[i] } else { lower[i] })
+      rest = rest - values[i]
+    }
+    i = i + 1
+  }
+}
+
+// Counter Styles 3 §3.1.4 alphabetic: bijective base-n, from 1.
+effect fn appendAlphabetic(out: &mut Bytes, value: i64, first: u32, count: u32, greek: bool) ! OutOfMemoryError ? &mut Allocator {
+  let mut digits: [u32; 16] = [0; 16]
+  let mut length: usize = 0
+  let mut rest = value
+  let base = u32.toI64(count)
+  while rest > 0 && length < digits.length {
+    rest = rest - 1
+    digits[length] = i64.toU32(i64.remainder(rest, base))
+    rest = rest / base
+    length = length + 1
+  }
+  while length > 0 {
+    length = length - 1
+    let mut scalar = first + digits[length]
+    // The final sigma (U+03C2) is not a Greek counter digit.
+    if greek && scalar >= 0x3C2 { scalar = scalar + 1 }
+    run appendScalar(&mut out.*, scalar)
+  }
+}
+
+/// The counter representation of `value` in `style`, without a marker's suffix. A value out
+/// of a style's range falls back to decimal (Counter Styles 3 §3.1.3).
+pub effect fn format(value: i64, style: CounterStyle, out: &mut Bytes) ! OutOfMemoryError ? &mut Allocator {
+  match style {
+    CounterStyle.Disc => { run appendScalar(&mut out.*, 0x2022) }
+    CounterStyle.Circle => { run appendScalar(&mut out.*, 0x25E6) }
+    CounterStyle.Square => { run appendScalar(&mut out.*, 0x25AA) }
+    CounterStyle.DisclosureOpen => { run appendScalar(&mut out.*, 0x25BE) }
+    CounterStyle.DisclosureClosed => { run appendScalar(&mut out.*, 0x25B8) }
+    CounterStyle.None => {}
+    CounterStyle.Decimal => { run appendDecimal(&mut out.*, value, 1) }
+    CounterStyle.DecimalLeadingZero => { run appendDecimal(&mut out.*, value, 2) }
+    CounterStyle.LowerRoman => { if value >= 1 && value <= 3999 { run appendRoman(&mut out.*, value, false) } else { run appendDecimal(&mut out.*, value, 1) } }
+    CounterStyle.UpperRoman => { if value >= 1 && value <= 3999 { run appendRoman(&mut out.*, value, true) } else { run appendDecimal(&mut out.*, value, 1) } }
+    CounterStyle.LowerAlpha => { if value >= 1 { run appendAlphabetic(&mut out.*, value, 0x61, 26, false) } else { run appendDecimal(&mut out.*, value, 1) } }
+    CounterStyle.UpperAlpha => { if value >= 1 { run appendAlphabetic(&mut out.*, value, 0x41, 26, false) } else { run appendDecimal(&mut out.*, value, 1) } }
+    CounterStyle.LowerGreek => { if value >= 1 { run appendAlphabetic(&mut out.*, value, 0x3B1, 24, true) } else { run appendDecimal(&mut out.*, value, 1) } }
+  }
+}
+
+/// A list marker's text: the representation, then `. ` for a style that counts and a space
+/// for a symbol (Counter Styles 3 §6, as browsers draw `::marker`). `none` writes nothing.
+pub effect fn marker(value: i64, style: CounterStyle, out: &mut Bytes) ! OutOfMemoryError ? &mut Allocator {
+  if style == CounterStyle.None { return () }
+  run format(value, style, &mut out.*)
+  run out.append(if ordinal(style) { b". " } else { b" " })
+}
+
+/// One entry of `counter-reset`, `counter-increment` or `counter-set`.
+pub struct CounterChange {
+  pub name: Bytes,
+  pub value: i32,
+}
+
+fn integer(input: &Input<'_>, cursor: &mut Cursor) -> Option<i32> {
+  cursor.skip(input)
+  if let Option<TokenView>.Some { value } = input.at(cursor.position) {
+    if let Kind.Number { value: number, integer } = value.token.kind {
+      if !integer { return Option<i32>.None }
+      cursor.position = cursor.position + 1
+      let clamped = f64.max(-2147483648.0, f64.min(2147483647.0, number))
+      return Option<i32>.some(f64.toI32(clamped))
+    }
+  }
+  return Option<i32>.None
+}
+
+/// The entries of a counter list's CSS text, each with `default` when it gives no integer
+/// (1 for `counter-increment`, 0 for the others). `none`, a wide keyword or a malformed list
+/// is empty. `reversed()` resets count as plain resets.
+pub effect fn changes(css: &[u8], default: i32) -> List<CounterChange> ! OutOfMemoryError ? &mut Allocator {
+  let mut out = List<CounterChange>.make()
+  let buffer = match run Effect.result(lexer.tokenize(css, &Limits.make())) {
+    Result<TokenBuffer, CssError | OutOfMemoryError>.Success { value } => move value
+    Result<TokenBuffer, CssError | OutOfMemoryError>.Failure { error: OutOfMemoryError {} } => { fail OutOfMemoryError {} }
+    _ => { return move out }
+  }
+  let input = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  let mut cursor = Cursor.make(&input)
+  while !cursor.done(&input) {
+    let reversed = cursor.function(&input, b"reversed")
+    cursor.skip(&input)
+    let mut found = Bytes.make()
+    if let Option<TokenView>.Some { value } = input.at(cursor.position) {
+      if let Kind.Ident { text } = value.token.kind {
+        found = run Bytes.copy(value.text(text))
+        cursor.position = cursor.position + 1
+      }
+    }
+    if found.length() == 0 { out.clear()
+      return move out }
+    if reversed && !cursor.close(&input) { out.clear()
+      return move out }
+    let wide = [b"none", b"initial", b"inherit", b"unset", b"revert", b"revert-layer", b"default"]
+    let mut i: usize = 0
+    while i < wide.length {
+      if tokens.insensitive(found.asSlice(), wide[i]) { out.clear()
+        return move out }
+      i = i + 1
+    }
+    let amount = match integer(&input, &mut cursor) { Option.Some { value } => value _ => default }
+    run out.append(CounterChange { name: move found, value: amount })
+  }
+  return move out
+}

@@ -24,3 +24,4 @@ import table_tests
 
 import containment_tests
 import multicol_tests
+import marker_tests

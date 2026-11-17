@@ -1,5 +1,6 @@
 import input { Input, TokenView }
 import tokens { Kind, Span }
+import tokens
 import value_cursor { Cursor }
 import css_properties.keywords { Keyword }
 import silk.collections.bytes { Bytes }
@@ -10,6 +11,9 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 pub union Item {
   Text { pub value: Bytes },
   Attribute { pub name: Bytes, pub fallback: Bytes },
+  /// `counter(name, style)`, or with `nested` `counters(name, separator, style)`. An empty
+  /// style is `decimal`.
+  Counter { pub name: Bytes, pub separator: Bytes, pub style: Bytes, pub nested: bool },
 }
 
 pub union Content {
@@ -65,6 +69,33 @@ pub effect fn parse(input: &Input<'_>) -> Option<Content>
       }
       if !cursor.close(input) { return Option<Content>.None }
       run items.append(Item.Attribute { name: run Bytes.copy(name), fallback: move fallback })
+    } else if cursor.function(input, b"counter") || cursor.function(input, b"counters") {
+      let nested = match input.at(cursor.position - 1) {
+        Option<TokenView>.Some { value } => match value.token.kind { Kind.Function { name } => value.text(name).length == 8 _ => false }
+        _ => false
+      }
+      let name = match text(input, &mut cursor, true) {
+        Option<&[u8]>.Some { value } => value
+        _ => { return Option<Content>.None }
+      }
+      if tokens.insensitive(name, b"none") { return Option<Content>.None }
+      let mut separator = Bytes.make()
+      if nested {
+        if !cursor.comma(input) { return Option<Content>.None }
+        match text(input, &mut cursor, false) {
+          Option<&[u8]>.Some { value } => { separator = run Bytes.copy(value) }
+          _ => { return Option<Content>.None }
+        }
+      }
+      let mut style = Bytes.make()
+      if cursor.comma(input) {
+        match text(input, &mut cursor, true) {
+          Option<&[u8]>.Some { value } => { style = run Bytes.copy(value) }
+          _ => { return Option<Content>.None }
+        }
+      }
+      if !cursor.close(input) { return Option<Content>.None }
+      run items.append(Item.Counter { name: run Bytes.copy(name), separator: move separator, style: move style, nested: nested })
     } else { return Option<Content>.None }
   }
   if items.length() == 0 { return Option<Content>.None }
