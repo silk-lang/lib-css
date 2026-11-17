@@ -162,16 +162,11 @@ pub struct FontFeatures {
   pub tags: [u32; 8],
   pub values: [u32; 8],
   pub count: usize,
-  /// `font-variation-settings`: its first `MAX_VARIATION_SETTINGS` axis tags and values.
-  pub axes: [u32; 6],
-  pub axisValues: [f32; 6],
-  pub axisCount: usize,
+  /// `font-variation-settings` as a handle the host defines; 0 is `normal`.
+  pub variations: u32,
 }
 
 impl Copy for FontFeatures {}
-
-/// How many `font-variation-settings` entries `FontFeatures` keeps.
-pub const MAX_VARIATION_SETTINGS: usize = 6
 
 /// How many `font-feature-settings` entries `FontFeatures` keeps.
 pub const MAX_FEATURE_SETTINGS: usize = 8
@@ -216,27 +211,18 @@ impl FontFeatures {
       tags: [0, 0, 0, 0, 0, 0, 0, 0],
       values: [0, 0, 0, 0, 0, 0, 0, 0],
       count: 0,
-      axes: [0, 0, 0, 0, 0, 0],
-      axisValues: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-      axisCount: 0,
+      variations: 0,
     }
   }
 
   /// Whether `self` and `other` ask the shaper for the same features and axis values.
   pub fn same(self: &Self, other: &FontFeatures) -> bool {
-    if self.variant != other.variant || self.count != other.count || self.axisCount != other.axisCount {
+    if self.variant != other.variant || self.count != other.count || self.variations != other.variations {
       return false
     }
     let mut i: usize = 0
     while i < self.count {
       if self.tags[i] != other.tags[i] || self.values[i] != other.values[i] {
-        return false
-      }
-      i = i + 1
-    }
-    i = 0
-    while i < self.axisCount {
-      if self.axes[i] != other.axes[i] || self.axisValues[i] != other.axisValues[i] {
         return false
       }
       i = i + 1
