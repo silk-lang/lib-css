@@ -40,6 +40,8 @@ import transform_values {
   TransformStyle,
   Backface
 }
+import colors
+import colors { HueMethod }
 import cssom_numeric_serialization as numeric
 import cssom_serialization as syntax
 import svg_geometry.geometry { Path, Segment, Point }
@@ -353,7 +355,7 @@ effect fn appendImageImpl(
       let text = run syntax.url(url.asSlice())
       run out.append(text.asSlice())
     }
-    Image.Linear { repeating, direction, stops: items } => {
+    Image.Linear { repeating, direction, stops: items, interpolation } => {
       run out.append(
         if repeating {
           b"repeating-linear-gradient("
@@ -381,13 +383,14 @@ effect fn appendImageImpl(
           }
         }
       }
+      run method(&mut out.*, interpolation, &mut header)
       if header {
         run out.append(b", ")
       }
       run stops(computed, &mut out.*, store, &items)
       run out.append(b")")
     }
-    Image.Radial { repeating, circle, size: extent, position: at, stops: items } => {
+    Image.Radial { repeating, circle, size: extent, position: at, stops: items, interpolation } => {
       run out.append(
         if repeating {
           b"repeating-radial-gradient("
@@ -423,13 +426,14 @@ effect fn appendImageImpl(
         run appendPositionImpl(computed, &mut out.*, store, at)
         header = true
       }
+      run method(&mut out.*, interpolation, &mut header)
       if header {
         run out.append(b", ")
       }
       run stops(computed, &mut out.*, store, &items)
       run out.append(b")")
     }
-    Image.Conic { repeating, angle, position: at, stops: items } => {
+    Image.Conic { repeating, angle, position: at, stops: items, interpolation } => {
       run out.append(
         if repeating {
           b"repeating-conic-gradient("
@@ -451,6 +455,7 @@ effect fn appendImageImpl(
         run appendPositionImpl(computed, &mut out.*, store, at)
         header = true
       }
+      run method(&mut out.*, interpolation, &mut header)
       if header {
         run out.append(b", ")
       }
@@ -458,6 +463,29 @@ effect fn appendImageImpl(
       run out.append(b")")
     }
   }
+}
+
+/// ` in <space> [<hue> hue]` after a gradient's other header parts, when it names one.
+effect fn method(out: &mut Bytes, interpolation: colors.Interpolation, header: &mut bool) -> ()
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  if !interpolation.given {
+    return ()
+  }
+  if header.* {
+    run out.append(b" ")
+  }
+  run out.append(b"in ")
+  run out.append(colors.spaceName(interpolation.space))
+  if colors.isPolar(interpolation.space) {
+    match interpolation.hue {
+      HueMethod.Longer => run out.append(b" longer hue")
+      HueMethod.Increasing => run out.append(b" increasing hue")
+      HueMethod.Decreasing => run out.append(b" decreasing hue")
+      HueMethod.Shorter => {}
+    }
+  }
+  header.* = true
 }
 
 fn centered(store: &values.Store<'_>, at: Position) -> bool {
