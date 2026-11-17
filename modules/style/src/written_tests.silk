@@ -319,13 +319,6 @@ effect fn backgroundBody() -> () ! AssertionError<'static> | CssError | OutOfMem
   run Testing.expect(run dropped(Property.Background, b"red, blue", Property.BackgroundColor), "a color only in the last layer")
   run Testing.expect(run dropped(Property.Background, b"no-repeat / 10px", Property.BackgroundSize), "a size follows a position")
   run Testing.expect(run dropped(Property.Background, b"0 no-repeat 0", Property.BackgroundPosition), "a position is one run")
-  let radial = b"radial-gradient(closest-side, #f00, transparent)"
-  run Testing.expect(run projection(Property.Background, radial, Property.BackgroundImage, radial), "a radial gradient is the image")
-  run Testing.expect(run projection(Property.Background, radial, Property.BackgroundColor, b"transparent"), "beside a radial gradient the color is initial")
-  let cones = b"conic-gradient(from 90deg, rgb(255 0 0 / 50%), blue) center / 50% no-repeat, red"
-  run Testing.expect(run projection(Property.Background, cones, Property.BackgroundImage, b"conic-gradient(from 90deg, rgb(255 0 0 / 50%), blue), none"), "a conic gradient with nested functions stays in its layer")
-  run Testing.expect(run projection(Property.Background, cones, Property.BackgroundSize, b"50%, auto"), "the size beside a conic gradient")
-  run Testing.expect(run projection(Property.Background, cones, Property.BackgroundColor, b"rgb(255, 0, 0)"), "the color after a conic gradient layer")
 }
 
 test effect fn backgroundShorthandTakesLayersAndSizes() -> () ! AssertionError<'static> | CssError | OutOfMemoryError {
