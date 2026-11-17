@@ -5,7 +5,7 @@ import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.num.usize
 import silk.text.string { String }
-import style { Style, DisplayOutside, DisplayInside, Display, Dimension, DimensionKind, Edges, BoxSizing }
+import style { Style, DisplayOutside, DisplayInside, Display, Dimension, SizeValue, DimensionKind, Edges, BoxSizing }
 import geometry { Layout, Point, Rect, OptionalSize }
 import silk.core.option { Option }
 import box_tree { BoxTree, BoxNode }
@@ -57,7 +57,8 @@ impl Node {
     }
   }
 }
-fn sameDimension(a: Dimension, b: Dimension) -> bool { return a.kind == b.kind && a.value == b.value && a.percent == b.percent && a.bound == b.bound }
+fn sameDimension(a: Dimension, b: Dimension) -> bool { return a.kind == b.kind && a.value == b.value && a.percent == b.percent }
+fn sameSize(a: SizeValue, b: SizeValue) -> bool { return a.kind == b.kind && a.value == b.value && a.percent == b.percent && a.bound == b.bound }
 fn sameEdges(a: &Edges, b: &Edges) -> bool {
   return sameDimension(a.top, b.top) && sameDimension(a.right, b.right) && sameDimension(a.bottom, b.bottom) && sameDimension(a.left, b.left)
 }
@@ -92,12 +93,12 @@ fn insetChange(a: &Style, b: &Style) -> bool {
 // Grid placement lives in the owned table and is compared by setGrid instead.
 fn sameOuter(a: &Style, b: &Style) -> bool {
   if !sameGeneration(a, b) { return false }
-  if !sameDimension(a.width, b.width) || !sameDimension(a.height, b.height) || !sameDimension(a.minWidth, b.minWidth) || !sameDimension(a.minHeight, b.minHeight)
-    || !sameDimension(a.maxWidth, b.maxWidth) || !sameDimension(a.maxHeight, b.maxHeight) || !sameEdges(&a.margin, &b.margin) || !sameEdges(&a.inset, &b.inset) { return false }
+  if !sameSize(a.width, b.width) || !sameSize(a.height, b.height) || !sameSize(a.minWidth, b.minWidth) || !sameSize(a.minHeight, b.minHeight)
+    || !sameSize(a.maxWidth, b.maxWidth) || !sameSize(a.maxHeight, b.maxHeight) || !sameEdges(&a.margin, &b.margin) || !sameEdges(&a.inset, &b.inset) { return false }
   if a.boxSizing != b.boxSizing || a.direction != b.direction || a.unicodeBidi != b.unicodeBidi || a.textOrientation != b.textOrientation { return false }
   if a.verticalAlign.kind != b.verticalAlign.kind || !sameDimension(a.verticalAlign.shift, b.verticalAlign.shift) || a.baselineSource != b.baselineSource { return false }
   if a.boxDecorationBreak != b.boxDecorationBreak || a.marginBreak != b.marginBreak || a.breakBefore != b.breakBefore || a.breakAfter != b.breakAfter || a.breakInside != b.breakInside || a.orphans != b.orphans || a.widows != b.widows { return false }
-  if a.flexGrow != b.flexGrow || a.flexShrink != b.flexShrink || !sameDimension(a.flexBasis, b.flexBasis) || a.order != b.order { return false }
+  if a.flexGrow != b.flexGrow || a.flexShrink != b.flexShrink || !sameSize(a.flexBasis, b.flexBasis) || a.order != b.order { return false }
   if a.alignSelf != b.alignSelf || a.justifySelf != b.justifySelf || a.alignSelfSafety != b.alignSelfSafety || a.justifySelfSafety != b.justifySelfSafety { return false }
   if a.scrollbarWidth != b.scrollbarWidth || a.scrollbarGutter != b.scrollbarGutter || a.clear != b.clear || a.visibility != b.visibility { return false }
   if a.aspectRatio != b.aspectRatio || a.aspectRatioAuto != b.aspectRatioAuto { return false }

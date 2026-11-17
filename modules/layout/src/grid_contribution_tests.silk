@@ -35,6 +35,7 @@ import style {
   DisplayOutside,
   DisplayInside,
   Dimension,
+  SizeValue,
   DimensionKind,
   WritingMode,
   Direction,
@@ -260,7 +261,7 @@ test effect fn gridSpecifiedSuggestionCanExceedContent()
   ! OutOfMemoryError | InvalidNode | TextError | FragmentationError | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
-  style.width = Dimension.px(73.0)
+  style.width = SizeValue.px(73.0)
   run check(
     move style,
     Input.make(OptionalSize.none()),
@@ -277,7 +278,7 @@ test effect fn gridNonReplacedMinimumIgnoresPreferredRatioTransfer()
   ! OutOfMemoryError | InvalidNode | TextError | FragmentationError | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
-  style.height = Dimension.px(40.0)
+  style.height = SizeValue.px(40.0)
   style.aspectRatio = 2.0
   run check(
     move style,
@@ -296,7 +297,7 @@ test effect fn gridReplacedMinimumUsesPreferredRatioTransfer()
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
   style.replaced = true
-  style.height = Dimension.px(40.0)
+  style.height = SizeValue.px(40.0)
   style.aspectRatio = 2.0
   run check(
     move style,
@@ -365,8 +366,8 @@ test effect fn gridIntrinsicMinimumWinsOverSmallerMaximum()
   ! OutOfMemoryError | InvalidNode | TextError | FragmentationError | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
-  style.minWidth = Dimension.keyword(DimensionKind.MaxContent)
-  style.maxWidth = Dimension.px(31.0)
+  style.minWidth = SizeValue.keyword(DimensionKind.MaxContent)
+  style.maxWidth = SizeValue.px(31.0)
   run check(
     move style,
     Input.make(OptionalSize.none()),
@@ -401,9 +402,9 @@ test effect fn gridReplacedTransferHonorsIndefinitePercentageMaximum()
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
   style.replaced = true
-  style.height = Dimension.px(40.0)
+  style.height = SizeValue.px(40.0)
   style.aspectRatio = 2.0
-  style.maxWidth = Dimension.pct(0.5)
+  style.maxWidth = SizeValue.pct(0.5)
   run check(
     move style,
     Input.make(OptionalSize.none()),
@@ -422,7 +423,7 @@ test effect fn gridBorderBoxRatioUsesCrossBorderBox()
   let mut style = Style.make()
   style.replaced = true
   style.boxSizing = BoxSizing.BorderBox
-  style.height = Dimension.px(40.0)
+  style.height = SizeValue.px(40.0)
   style.padding.left = Dimension.px(7.0)
   style.padding.top = Dimension.px(3.0)
   style.aspectRatio = 2.0
@@ -443,7 +444,7 @@ test effect fn gridTransferredSuggestionUsesOppositeFixedTrackCap()
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
   style.replaced = true
-  style.height = Dimension.px(40.0)
+  style.height = SizeValue.px(40.0)
   style.aspectRatio = 2.0
   style.margin.top = Dimension.px(3.0)
   run checkWithOptions(
@@ -483,8 +484,8 @@ test effect fn gridMinimumOnlyRequestDoesNotMeasureContent()
   ! OutOfMemoryError | InvalidNode | TextError | FragmentationError | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
-  style.minWidth = Dimension.px(7.0)
-  style.maxWidth = Dimension.keyword(DimensionKind.MaxContent)
+  style.minWidth = SizeValue.px(7.0)
+  style.maxWidth = SizeValue.keyword(DimensionKind.MaxContent)
   run checkWithOptions(
     move style,
     Input.make(OptionalSize.none()),
@@ -504,7 +505,7 @@ test effect fn gridContentBoxRatioPreservesIndependentInsets()
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
   style.replaced = true
-  style.height = Dimension.px(40.0)
+  style.height = SizeValue.px(40.0)
   style.padding.left = Dimension.px(7.0)
   style.padding.top = Dimension.px(3.0)
   style.aspectRatio = 2.0
@@ -525,8 +526,8 @@ test effect fn gridCyclicReplacedContributionTransfersOppositeMinimumFloor()
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
   style.replaced = true
-  style.maxWidth = Dimension.pct(0.5)
-  style.minHeight = Dimension.px(17.0)
+  style.maxWidth = SizeValue.pct(0.5)
+  style.minHeight = SizeValue.px(17.0)
   style.aspectRatio = 2.0
   run check(
     move style,
@@ -578,7 +579,7 @@ effect fn checkCrossAxisRecheck()
     let item = run tree.append(root, move itemStyle)
     run tree.setMeasurement(item, index + 1)
     let mut markerStyle = Style.make()
-    markerStyle.height = Dimension.px(10.0)
+    markerStyle.height = SizeValue.px(10.0)
     let marker = run tree.append(root, move markerStyle)
     let mut output = LayoutTree.make()
     let mut provider = ContributionMeasure { calls: 0 }
@@ -785,7 +786,7 @@ effect fn checkGridItemMinimumBounds()
   ? &mut Allocator {
   let mut style = Style.make()
   style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Grid }
-  style.width = Dimension.px(100.0)
+  style.width = SizeValue.px(100.0)
   style.justifyItems = Align.Start
   style.alignItems = Align.Start
   let mut tree = run Tree.make(move style)
@@ -801,7 +802,7 @@ effect fn checkGridItemMinimumBounds()
   let natural = run tree.append(root, Style.make())
   run tree.setMeasurement(natural, 0)
   let mut ratioStyle = Style.make()
-  ratioStyle.height = Dimension.px(10.0)
+  ratioStyle.height = SizeValue.px(10.0)
   ratioStyle.aspectRatio = 2.0
   let ratio = run tree.append(root, move ratioStyle)
   run tree.setMeasurement(ratio, 0)
@@ -876,8 +877,8 @@ effect fn checkGridFlexCrossConstraints()
   while mode < 2 {
     let mut rootStyle = Style.make()
     rootStyle.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Grid }
-    rootStyle.width = Dimension.px(200.0)
-    rootStyle.height = Dimension.px(100.0)
+    rootStyle.width = SizeValue.px(200.0)
+    rootStyle.height = SizeValue.px(100.0)
     let mut tree = run Tree.make(move rootStyle)
     let root = tree.root()
     let mut template = GridTemplate.make()
@@ -891,7 +892,7 @@ effect fn checkGridFlexCrossConstraints()
     }
     let flex = run tree.append(root, move flexStyle)
     let mut itemStyle = Style.make()
-    itemStyle.minWidth = Dimension.px(0.0)
+    itemStyle.minWidth = SizeValue.px(0.0)
     itemStyle.flexShrink = 0.0
     let item = run tree.append(flex, move itemStyle)
     run tree.setMeasurement(item, 3)

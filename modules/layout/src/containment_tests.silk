@@ -7,7 +7,7 @@ import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, Text
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableSpace, AvailableKind, max }
-import style { SizeContainment, Edges, Style, Display, DisplayOutside, DisplayInside, Dimension, DimensionKind, Direction, WritingMode, Position, Float }
+import style { SizeContainment, Edges, Style, Display, DisplayOutside, DisplayInside, Dimension, SizeValue, DimensionKind, Direction, WritingMode, Position, Float }
 import tree { Tree, LayoutTree, InvalidNode }
 import context { Input }
 import engine { compute, layoutNode }
@@ -61,8 +61,8 @@ impl TextMeasure for FixedMeasure {
 }
 fn sized(width: f32, height: f32) -> Style {
   let mut style = Style.make()
-  style.width = Dimension.px(width)
-  style.height = Dimension.px(height)
+  style.width = SizeValue.px(width)
+  style.height = SizeValue.px(height)
   return move style
 }
 effect fn arrange(tree: &Tree, width: f32) -> LayoutTree ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
@@ -115,12 +115,12 @@ effect fn containmentCases() ! OutOfMemoryError | TextError | FragmentationError
   run containmentCase(style, sized(120.0, 80.0), Size { width: 14.0, height: 94.0 }, 80.0)
   style.sizeContainment = SizeContainment.Size
   run containmentCase(style, sized(120.0, 80.0), Size { width: 14.0, height: 14.0 }, 80.0)
-  style.minWidth = Dimension.px(40.0)
-  style.minHeight = Dimension.px(30.0)
+  style.minWidth = SizeValue.px(40.0)
+  style.minHeight = SizeValue.px(30.0)
   run containmentCase(style, sized(120.0, 80.0), Size { width: 54.0, height: 44.0 }, 80.0)
   style = container()
   let mut child = sized(120.0, 80.0)
-  child.height = Dimension.pct(0.5)
+  child.height = SizeValue.pct(0.5)
   run containmentCase(style, child, Size { width: 300.0, height: 14.0 }, 0.0)
   style.aspectRatio = 2.0
   run containmentCase(style, sized(120.0, 80.0), Size { width: 300.0, height: 157.0 }, 80.0)
@@ -129,11 +129,11 @@ effect fn containmentCases() ! OutOfMemoryError | TextError | FragmentationError
   style = container()
   style.sizeContainment = SizeContainment.InlineSize
   style.writingMode = WritingMode.VerticalRl
-  style.height = Dimension.px(150.0)
+  style.height = SizeValue.px(150.0)
   child = sized(120.0, 80.0)
   child.writingMode = WritingMode.VerticalRl
   run containmentCase(style, child, Size { width: 134.0, height: 164.0 }, 80.0)
-  style.height = Dimension.auto()
+  style.height = SizeValue.auto()
   style.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.FlowRoot }
   run containmentCase(style, child, Size { width: 134.0, height: 14.0 }, 80.0)
   let insides = [DisplayInside.Flex, DisplayInside.Grid]
@@ -160,7 +160,7 @@ effect fn containmentContributions() ! OutOfMemoryError | TextError | Fragmentat
     let mut parent = Style.make()
     parent.display = Display.Box { outside: DisplayOutside.Block, inside: insides[index] }
     // Auto grid tracks stretch; a min-content parent exposes the contribution.
-    if index == 1 { parent.width = Dimension.keyword(DimensionKind.MinContent) }
+    if index == 1 { parent.width = SizeValue.keyword(DimensionKind.MinContent) }
     let mut tree = run Tree.make(Style.make())
     let root = tree.root()
     let parentId = run tree.append(root, parent)
@@ -196,7 +196,7 @@ effect fn containmentUpdates() ! OutOfMemoryError | TextError | FragmentationErr
   absolute.position = Position.Absolute
   absolute.inset.left = Dimension.px(0.0)
   absolute.inset.top = Dimension.px(0.0)
-  absolute.width = Dimension.pct(0.5)
+  absolute.width = SizeValue.pct(0.5)
   let abs = run tree.append(id, absolute)
   let mut output = LayoutTree.make()
   let mut host = FixedMeasure {}
@@ -272,7 +272,7 @@ effect fn containmentImages() ! OutOfMemoryError | TextError | FragmentationErro
   let mut style = Style.make()
   style.sizeContainment = SizeContainment.Size
   run containedImage(style, 0.0, 0.0)
-  style.width = Dimension.px(60.0)
+  style.width = SizeValue.px(60.0)
   run containedImage(style, 60.0, 0.0)
   style.aspectRatio = 2.0
   run containedImage(style, 60.0, 30.0)
@@ -280,11 +280,11 @@ effect fn containmentImages() ! OutOfMemoryError | TextError | FragmentationErro
   run containedImage(style, 60.0, 30.0)
   style.aspectRatio = 0.0
   run containedImage(style, 60.0, 80.0)
-  style.width = Dimension.auto()
+  style.width = SizeValue.auto()
   run containedImage(style, 0.0, 80.0)
-  style.height = Dimension.px(30.0)
+  style.height = SizeValue.px(30.0)
   run containedImage(style, 0.0, 30.0)
-  style.height = Dimension.auto()
+  style.height = SizeValue.auto()
   style.writingMode = WritingMode.VerticalRl
   run containedImage(style, 120.0, 0.0)
 }

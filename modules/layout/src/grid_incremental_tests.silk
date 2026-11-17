@@ -5,7 +5,7 @@ import silk.num.usize
 import silk.text.string { String }
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Dimension, Display, DisplayOutside, DisplayInside, Align, Edges }
+import style { Style, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, Align, Edges }
 import geometry {
   Measure,
   MeasureRequest,
@@ -191,13 +191,13 @@ effect fn fixedAreaTextEdit()
   run template.rows.tracks.append(GridTrack.breadth(GridBreadth.fixed(40.0)))
   run tree.setGrid(root, move template)
   let mut itemStyle = Style.make()
-  itemStyle.width = Dimension.px(70.0)
-  itemStyle.height = Dimension.px(30.0)
+  itemStyle.width = SizeValue.px(70.0)
+  itemStyle.height = SizeValue.px(30.0)
   let item = run tree.append(root, move itemStyle)
   let text = run tree.appendText(item, run String.copy("abcd"))
   let mut siblingStyle = Style.make()
-  siblingStyle.width = Dimension.px(70.0)
-  siblingStyle.height = Dimension.px(30.0)
+  siblingStyle.width = SizeValue.px(70.0)
+  siblingStyle.height = SizeValue.px(30.0)
   let sibling = run tree.append(root, move siblingStyle)
   let mut output = LayoutTree.make()
   let mut host = TextHost {}
@@ -250,7 +250,7 @@ effect fn autoRowTextEdit()
   let item = run tree.append(root, Style.make())
   let text = run tree.appendText(item, run String.copy("ab"))
   let mut siblingStyle = Style.make()
-  siblingStyle.height = Dimension.px(10.0)
+  siblingStyle.height = SizeValue.px(10.0)
   let sibling = run tree.append(root, move siblingStyle)
   let mut output = LayoutTree.make()
   let mut host = TextHost {}
@@ -553,7 +553,7 @@ effect fn flexibleColumnMinimum()
   ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | GridError | AssertionError<'static>
   ? &mut Allocator {
   let mut root = gridStyle()
-  root.width = Dimension.px(100.0)
+  root.width = SizeValue.px(100.0)
   let mut tree = run Tree.make(move root)
   let top = tree.root()
   let mut template = GridTemplate.make()
@@ -562,8 +562,8 @@ effect fn flexibleColumnMinimum()
   run tree.setGrid(top, move template)
   let wide = run tree.append(top, Style.make())
   let mut inner = Style.make()
-  inner.width = Dimension.px(80.0)
-  inner.height = Dimension.px(10.0)
+  inner.width = SizeValue.px(80.0)
+  inner.height = SizeValue.px(10.0)
   drop run tree.append(wide, move inner)
   let narrow = run tree.append(top, Style.make())
   let mut output = LayoutTree.make()

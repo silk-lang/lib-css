@@ -7,7 +7,7 @@ import silk.core.effect { Effect }
 import silk.core.option { Option }
 import silk.testing.testing { Testing, AssertionError }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize }
-import style { Style, Dimension, Direction, Display, DisplayOutside, DisplayInside, Float }
+import style { Style, Dimension, SizeValue, Direction, Display, DisplayOutside, DisplayInside, Float }
 import tree { Tree, LayoutTree, InvalidNode, NodeId }
 import engine { compute }
 
@@ -88,7 +88,7 @@ effect fn outsideMarkers() ! OutOfMemoryError | TextError | FragmentationError |
   let mut tree = run Tree.make(Style.make())
   let rootId = tree.root()
   let mut listStyle = Style.make()
-  listStyle.width = Dimension.px(200.0)
+  listStyle.width = SizeValue.px(200.0)
   listStyle.padding.left = Dimension.px(40.0)
   listStyle.padding.right = Dimension.px(40.0)
   let list = run tree.append(rootId, listStyle)

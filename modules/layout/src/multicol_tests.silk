@@ -7,7 +7,7 @@ import silk.core.effect { Effect }
 import silk.core.option { Option }
 import silk.testing.testing { Testing, AssertionError }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize }
-import style { Style, Dimension, ColumnFill, ColumnSpan, BreakBetween, Direction, Display, DisplayOutside, DisplayInside, FlexDirection }
+import style { Style, Dimension, SizeValue, ColumnFill, ColumnSpan, BreakBetween, Direction, Display, DisplayOutside, DisplayInside, FlexDirection }
 import tree { Tree, LayoutTree, InvalidNode, NodeId }
 import engine { compute }
 
@@ -70,7 +70,7 @@ effect fn expectAt(output: &LayoutTree, id: NodeId, x: f32, y: f32, label: strin
 
 fn columns(count: u32) -> Style {
   let mut style = Style.make()
-  style.width = Dimension.px(100.0)
+  style.width = SizeValue.px(100.0)
   style.columnCount = count
   style.columnGap = Dimension.px(10.0)
   return move style
@@ -115,7 +115,7 @@ effect fn balancedCounts() ! OutOfMemoryError | TextError | FragmentationError |
   let mut flexStyle = Style.make()
   flexStyle.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
   flexStyle.flexDirection = FlexDirection.Column
-  flexStyle.width = Dimension.px(100.0)
+  flexStyle.width = SizeValue.px(100.0)
   let flex = run tree.append(rootId, flexStyle)
   let item = run tree.append(flex, columns(2))
   let mut k: usize = 0
@@ -169,7 +169,7 @@ effect fn widthsSpansAndFill() ! OutOfMemoryError | TextError | FragmentationErr
   run expectAt(&output, b, 55.0, 0.0, "break-before: column starts a column")
   // column-fill: auto in a fixed height fills columns in turn.
   let mut filled = columns(2)
-  filled.height = Dimension.px(30.0)
+  filled.height = SizeValue.px(30.0)
   filled.columnFill = ColumnFill.Auto
   run tree.setStyle(container, filled)
   run tree.setStyle(b, Style.make())

@@ -2,6 +2,7 @@
 import catalog { Property }
 import computed {
   Dimension,
+  SizeValue,
   DimensionKind,
   Display,
   DisplayOutside,
@@ -88,6 +89,13 @@ test effect fn valuesSerializeAsCssText() -> () ! AssertionError<'static> | OutO
 }
 
 fn isDimension(found: Option<Dimension>, expected: Dimension) -> bool {
+  return match found {
+    Option.Some { value } => &value == &expected
+    Option.None => false
+  }
+}
+
+fn isSize(found: Option<SizeValue>, expected: SizeValue) -> bool {
   return match found {
     Option.Some { value } => &value == &expected
     Option.None => false
@@ -273,7 +281,7 @@ effect fn clampCases() ! AssertionError<'static> | OutOfMemoryError ? &mut Alloc
   run Testing.expect(isDimension(run clamped(values.unit(40.0, Unit.Px), values.unit(2.0, Unit.Vw), values.unit(30.0, Unit.Px)), Dimension.px(40.0)), "clamp()'s minimum wins over a smaller maximum")
 }
 
-effect fn sized(operator: MathOperator, first: Value, second: Value, third: Value) -> Option<Dimension> ! OutOfMemoryError ? &mut Allocator {
+effect fn sized(operator: MathOperator, first: Value, second: Value, third: Value) -> Option<SizeValue> ! OutOfMemoryError ? &mut Allocator {
   let mut parts = List<Value>.make()
   run parts.append(move first)
   run parts.append(move second)
@@ -285,23 +293,23 @@ effect fn sized(operator: MathOperator, first: Value, second: Value, third: Valu
 
 effect fn sizeCases() ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
   let least = run sized(MathOperator.Min, values.percent(100.0), values.unit(60.0, Unit.Em), values.unit(700.0, Unit.Px))
-  run Testing.expect(isDimension(least, Dimension.least(600.0, 0.0, 1.0)), "min() of lengths and a percentage keeps the smallest length")
+  run Testing.expect(isSize(least, SizeValue.least(600.0, 0.0, 1.0)), "min() of lengths and a percentage keeps the smallest length")
   let most = run sized(MathOperator.Max, values.percent(20.0), values.percent(50.0), values.unit(4.0, Unit.Em))
-  run Testing.expect(isDimension(most, Dimension.most(40.0, 0.0, 0.5)), "max() keeps the largest percentage")
+  run Testing.expect(isSize(most, SizeValue.most(40.0, 0.0, 0.5)), "max() keeps the largest percentage")
   let lengths = run sized(MathOperator.Min, values.unit(3.0, Unit.Px), values.unit(2.0, Unit.Px), values.unit(5.0, Unit.Px))
-  run Testing.expect(isDimension(lengths, Dimension.px(2.0)), "min() of lengths alone is a length")
+  run Testing.expect(isSize(lengths, SizeValue.px(2.0)), "min() of lengths alone is a length")
   let mut context = Context.make()
   context.fontSize = 10.0
   let inset = values.math(MathOperator.Min, run pair(run values.calc(-20.0, 100.0), values.unit(600.0, Unit.Px)))
-  run Testing.expect(isDimension(convert.size(&inset, &context), Dimension.least(600.0, -20.0, 1.0)), "min() takes a percentage with a length")
+  run Testing.expect(isSize(convert.size(&inset, &context), SizeValue.least(600.0, -20.0, 1.0)), "min() takes a percentage with a length")
   let mut bounds = run pair(values.unit(5.0, Unit.Em), values.percent(50.0))
   run bounds.append(values.unit(90.0, Unit.Px))
-  run Testing.expect(isDimension(convert.size(&values.math(MathOperator.Clamp, move bounds), &context), Dimension.clamp(50.0, 0.5, 90.0)), "clamp() keeps a percentage between two lengths")
+  run Testing.expect(isSize(convert.size(&values.math(MathOperator.Clamp, move bounds), &context), SizeValue.clamp(50.0, 0.5, 90.0)), "clamp() keeps a percentage between two lengths")
   let nested = values.math(MathOperator.Max, run pair(values.unit(50.0, Unit.Px), values.math(MathOperator.Min, run pair(values.percent(50.0), values.unit(90.0, Unit.Px)))))
-  run Testing.expect(isDimension(convert.size(&nested, &context), Dimension.clamp(50.0, 0.5, 90.0)), "max() of a length and min() is a clamp")
+  run Testing.expect(isSize(convert.size(&nested, &context), SizeValue.clamp(50.0, 0.5, 90.0)), "max() of a length and min() is a clamp")
   let mut crossed = run pair(values.unit(90.0, Unit.Px), values.percent(50.0))
   run crossed.append(values.unit(50.0, Unit.Px))
-  run Testing.expect(isDimension(convert.size(&values.math(MathOperator.Clamp, move crossed), &context), Dimension.px(90.0)), "a clamp() minimum above its maximum wins")
+  run Testing.expect(isSize(convert.size(&values.math(MathOperator.Clamp, move crossed), &context), SizeValue.px(90.0)), "a clamp() minimum above its maximum wins")
   run Testing.expect(convert.dimension(&values.math(MathOperator.Min, run pair(values.percent(100.0), values.unit(600.0, Unit.Px))), &context).isNone(), "only a size takes a length against a percentage")
 }
 

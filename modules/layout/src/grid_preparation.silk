@@ -4,7 +4,7 @@ import silk.num.i32
 import silk.num.usize
 import axes { Axes }
 import box_tree { BoxTree }
-import context { Input, ResolvedBox, resolves, effectiveDisplay, blockJustification, outOfFlow }
+import context { Input, ResolvedBox, sizeResolves, effectiveDisplay, blockJustification, outOfFlow }
 import geometry { OptionalSize, AvailableKind, max, clamp }
 import style { Style, DimensionKind, DisplayOutside, Float, Align, WritingMode }
 import grid_style { GridTemplate }
@@ -37,9 +37,9 @@ pub fn preferredSizes(
   let used = axis.optional(logical.size)
   let minimum = axis.size(limits.min)
   let maximum = axis.size(limits.max)
-  result.widthDefinite = resolves(style.width, input.parent.widthDefinite)
+  result.widthDefinite = sizeResolves(style.width, input.parent.widthDefinite)
     || (input.known.widthDefinite && !input.indefiniteWidth)
-  result.heightDefinite = resolves(style.height, input.parent.heightDefinite)
+  result.heightDefinite = sizeResolves(style.height, input.parent.heightDefinite)
     || (input.known.heightDefinite && !input.indefiniteHeight)
   if result.widthDefinite {
     result.width = clamp(result.width, minimum.width, max(minimum.width, maximum.width))

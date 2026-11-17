@@ -5,7 +5,7 @@ import silk.num.usize
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
-import style { Style, Dimension, Overflow, Position }
+import style { Style, Dimension, SizeValue, Overflow, Position }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, Point, OptionalSize }
 import tree { Tree, LayoutTree, InvalidNode }
 import engine { compute, repositionScroll }
@@ -56,15 +56,15 @@ impl TextMeasure for Host {
 test effect fn providerReplacementAndExactFitClearPriorScrollbarSelection() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
-  style.width = Dimension.px(100.0)
-  style.height = Dimension.px(100.0)
+  style.width = SizeValue.px(100.0)
+  style.height = SizeValue.px(100.0)
   style.overflowX = Overflow.Auto
   style.overflowY = Overflow.Auto
   let mut tree = run Tree.make(move style) |> Effect.provideMut<Allocator>(&mut allocator)
   let root = tree.root()
   let mut childStyle = Style.make()
-  childStyle.width = Dimension.px(100.0)
-  childStyle.height = Dimension.px(101.0)
+  childStyle.width = SizeValue.px(100.0)
+  childStyle.height = SizeValue.px(101.0)
   let child = run tree.append(root, move childStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut output = LayoutTree.make()
   let mut original = Host { horizontal: 12.0, vertical: 15.0 }
@@ -77,7 +77,7 @@ test effect fn providerReplacementAndExactFitClearPriorScrollbarSelection() ! Ou
   run Testing.expect(second.contentSize.width == 95.0 && second.contentSize.height == 93.0 && second.scrollbarGutter.right == 5.0 && second.scrollbarGutter.bottom == 7.0, "replacing the host refreshes scrollbar metrics without modifying the tree")
   let childStyleIndex = tree.nodes.asSlice()[child.index].styleIndex
   let styles = tree.styles.asMutSlice()
-  styles[childStyleIndex].height = Dimension.px(100.0)
+  styles[childStyleIndex].height = SizeValue.px(100.0)
   drop styles
   run compute(&tree, &mut output, &mut replacement, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
   let exact = output.boxes.get(output.firstBySource.get(root.index))
@@ -89,13 +89,13 @@ test effect fn providerReplacementAndExactFitClearPriorScrollbarSelection() ! Ou
 effect fn retainedScrolling(overflow: Overflow) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
-  style.width = Dimension.px(300.0)
-  style.height = Dimension.px(200.0)
+  style.width = SizeValue.px(300.0)
+  style.height = SizeValue.px(200.0)
   style.overflowY = overflow
   let mut tree = run Tree.make(move style) |> Effect.provideMut<Allocator>(&mut allocator)
   let root = tree.root()
   let mut containerStyle = Style.make()
-  containerStyle.height = Dimension.px(400.0)
+  containerStyle.height = SizeValue.px(400.0)
   containerStyle.overflowY = overflow
   containerStyle.position = Position.Relative
   containerStyle.inset.left = Dimension.px(12.0)
@@ -103,20 +103,20 @@ effect fn retainedScrolling(overflow: Overflow) ! OutOfMemoryError | TextError |
   let mut stickyStyle = Style.make()
   stickyStyle.position = Position.Sticky
   stickyStyle.inset.top = Dimension.px(8.0)
-  stickyStyle.height = Dimension.px(30.0)
+  stickyStyle.height = SizeValue.px(30.0)
   drop run tree.append(container, move stickyStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut tall = Style.make()
-  tall.height = Dimension.px(900.0)
+  tall.height = SizeValue.px(900.0)
   drop run tree.append(container, move tall) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut fixed = Style.make()
   fixed.position = Position.Fixed
   fixed.inset.top = Dimension.px(20.0)
-  fixed.height = Dimension.px(12.0)
+  fixed.height = SizeValue.px(12.0)
   drop run tree.append(container, move fixed) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut absolute = Style.make()
   absolute.position = Position.Absolute
   absolute.inset.bottom = Dimension.px(10.0)
-  absolute.height = Dimension.px(20.0)
+  absolute.height = SizeValue.px(20.0)
   drop run tree.append(container, move absolute) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut host = Host { horizontal: 12.0, vertical: 15.0 }
   let viewport = OptionalSize.definite(300.0, 200.0)
@@ -156,24 +156,24 @@ test effect fn retainedScrollingMatchesFreshLayout() ! OutOfMemoryError | TextEr
 test effect fn deferredStickyStaysAtItsNormalPosition() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
-  style.width = Dimension.px(300.0)
-  style.height = Dimension.px(200.0)
+  style.width = SizeValue.px(300.0)
+  style.height = SizeValue.px(200.0)
   let mut tree = run Tree.make(move style) |> Effect.provideMut<Allocator>(&mut allocator)
   let root = tree.root()
   let mut containerStyle = Style.make()
-  containerStyle.height = Dimension.px(200.0)
+  containerStyle.height = SizeValue.px(200.0)
   containerStyle.overflowY = Overflow.Auto
   let container = run tree.append(root, move containerStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut lead = Style.make()
-  lead.height = Dimension.px(50.0)
+  lead.height = SizeValue.px(50.0)
   drop run tree.append(container, move lead) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut stickyStyle = Style.make()
   stickyStyle.position = Position.Sticky
   stickyStyle.inset.top = Dimension.px(0.0)
-  stickyStyle.height = Dimension.px(30.0)
+  stickyStyle.height = SizeValue.px(30.0)
   let sticky = run tree.append(container, move stickyStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut tall = Style.make()
-  tall.height = Dimension.px(900.0)
+  tall.height = SizeValue.px(900.0)
   drop run tree.append(container, move tall) |> Effect.provideMut<Allocator>(&mut allocator)
   tree.stickyDeferred = true
   run tree.setScrollOffset(container, Point { x: 0.0, y: 100.0 })

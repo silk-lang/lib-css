@@ -5,7 +5,7 @@ import silk.num.usize
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
-import style { Style, Dimension, Edges, Display, DisplayOutside, DisplayInside, Position, Direction, WritingMode, FlexDirection, FlexWrap, Align, OverflowAlignment }
+import style { Style, Dimension, SizeValue, Edges, Display, DisplayOutside, DisplayInside, Position, Direction, WritingMode, FlexDirection, FlexWrap, Align, OverflowAlignment }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, abs }
 import tree { Tree, LayoutTree, InvalidNode, InvalidBox, NodeId, BoxId, NO_NODE }
 import silk.core.option { Option }
@@ -62,13 +62,13 @@ effect fn scenario(case: Case) ! OutOfMemoryError | TextError | FragmentationErr
   let mut root = Style.make()
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
   root.position = Position.Relative
-  root.width = Dimension.px(200.0)
-  root.height = Dimension.px(100.0)
+  root.width = SizeValue.px(200.0)
+  root.height = SizeValue.px(100.0)
   root.alignItems = Align.FlexStart
   let mut child = Style.make()
   child.position = Position.Absolute
-  child.width = Dimension.px(40.0)
-  child.height = Dimension.px(20.0)
+  child.width = SizeValue.px(40.0)
+  child.height = SizeValue.px(20.0)
   let mut x: f32 = 0.0
   let mut y: f32 = 0.0
   if case == Case.InsetSelfAlignment {
@@ -88,7 +88,7 @@ effect fn scenario(case: Case) ! OutOfMemoryError | TextError | FragmentationErr
   } else if case == Case.DefaultInsetSafety || case == Case.UnsafeInsetSafety {
     // Align 3 §4.4.1.2: 180px subject covers [80,180], but default
     // clamps its centered [40,220] to the original CB's [0,200] limits.
-    child.width = Dimension.px(180.0)
+    child.width = SizeValue.px(180.0)
     child.inset.left = Dimension.px(80.0)
     child.inset.right = Dimension.px(20.0)
     child.justifySelf = Align.Center
@@ -131,7 +131,7 @@ effect fn scenario(case: Case) ! OutOfMemoryError | TextError | FragmentationErr
     root.flexWrap = FlexWrap.WrapReverse
     y = 80.0
   } else if case == Case.SafeMain || case == Case.UnsafeMain || case == Case.DistributedOverflow {
-    child.width = Dimension.px(240.0)
+    child.width = SizeValue.px(240.0)
     root.justifyContent = Align.Center
     root.flexDirection = FlexDirection.RowReverse
     root.justifyContentSafety = OverflowAlignment.Safe
@@ -140,7 +140,7 @@ effect fn scenario(case: Case) ! OutOfMemoryError | TextError | FragmentationErr
     if case == Case.DistributedOverflow { root.justifyContent = Align.SpaceAround
       root.justifyContentSafety = OverflowAlignment.Default }
   } else if case == Case.SafeCross {
-    child.height = Dimension.px(120.0)
+    child.height = SizeValue.px(120.0)
     root.alignItems = Align.Center
     root.alignItemsSafety = OverflowAlignment.Safe
   } else if case == Case.SelfStart {
@@ -160,7 +160,7 @@ effect fn scenario(case: Case) ! OutOfMemoryError | TextError | FragmentationErr
   } else if case == Case.NegativeRtlMargins {
     // Negative inline space goes to inline-end, using the CB, not child direction.
     root.direction = Direction.Rtl
-    child.width = Dimension.px(240.0)
+    child.width = SizeValue.px(240.0)
     child.inset.left = Dimension.px(10.0)
     child.inset.right = Dimension.px(30.0)
     child.margin.left = Dimension.auto()
@@ -169,7 +169,7 @@ effect fn scenario(case: Case) ! OutOfMemoryError | TextError | FragmentationErr
   } else if case == Case.VerticalMargins {
     root.writingMode = WritingMode.VerticalRl
     root.direction = Direction.Rtl
-    child.height = Dimension.px(140.0)
+    child.height = SizeValue.px(140.0)
     child.inset.top = Dimension.px(10.0)
     child.inset.bottom = Dimension.px(20.0)
     child.margin.top = Dimension.auto()
@@ -215,8 +215,8 @@ effect fn scenario(case: Case) ! OutOfMemoryError | TextError | FragmentationErr
   let mut tree = run Tree.make(move root)
   let rootId = tree.root()
   let mut sibling = Style.make()
-  sibling.width = Dimension.px(30.0)
-  sibling.height = Dimension.px(10.0)
+  sibling.width = SizeValue.px(30.0)
+  sibling.height = SizeValue.px(10.0)
   // Relative cases need no preceding flex item; every abspos case does.
   if case == Case.Relative || case == Case.VerticalRelative { sibling.display = Display.None }
   let siblingId = run tree.append(rootId, move sibling)
@@ -265,8 +265,8 @@ test effect fn blockStaticPositionFlattensContentsAndIgnoresRelativeShift() ! Ou
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut rootStyle = Style.make()
   rootStyle.position = Position.Relative
-  rootStyle.width = Dimension.px(200.0)
-  rootStyle.height = Dimension.px(100.0)
+  rootStyle.width = SizeValue.px(200.0)
+  rootStyle.height = SizeValue.px(100.0)
   rootStyle.direction = Direction.Rtl
   let mut tree = run Tree.make(move rootStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let root = tree.root()
@@ -274,7 +274,7 @@ test effect fn blockStaticPositionFlattensContentsAndIgnoresRelativeShift() ! Ou
   contentsStyle.display = Display.Contents
   let contents = run tree.append(root, move contentsStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut previousStyle = Style.make()
-  previousStyle.height = Dimension.px(30.0)
+  previousStyle.height = SizeValue.px(30.0)
   previousStyle.position = Position.Relative
   previousStyle.inset.top = Dimension.px(50.0)
   let previous = run tree.append(contents, move previousStyle) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -283,13 +283,13 @@ test effect fn blockStaticPositionFlattensContentsAndIgnoresRelativeShift() ! Ou
   let hidden = run tree.append(contents, move hiddenStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut suppressedStyle = Style.make()
   suppressedStyle.position = Position.Absolute
-  suppressedStyle.width = Dimension.px(90.0)
-  suppressedStyle.height = Dimension.px(90.0)
+  suppressedStyle.width = SizeValue.px(90.0)
+  suppressedStyle.height = SizeValue.px(90.0)
   let suppressed = run tree.append(hidden, move suppressedStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut childStyle = Style.make()
   childStyle.position = Position.Absolute
-  childStyle.width = Dimension.px(40.0)
-  childStyle.height = Dimension.px(20.0)
+  childStyle.width = SizeValue.px(40.0)
+  childStyle.height = SizeValue.px(20.0)
   let child = run tree.append(contents, move childStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut output = LayoutTree.make()
   let mut measure = EmptyMeasure {}
@@ -312,21 +312,21 @@ test effect fn absoluteInsetStretchClampsAndInvertedRectangleReducesEndInset() !
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut rootStyle = Style.make()
   rootStyle.position = Position.Relative
-  rootStyle.width = Dimension.px(200.0)
-  rootStyle.height = Dimension.px(100.0)
+  rootStyle.width = SizeValue.px(200.0)
+  rootStyle.height = SizeValue.px(100.0)
   let mut tree = run Tree.make(move rootStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let root = tree.root()
   let mut stretchedStyle = Style.make()
   stretchedStyle.position = Position.Absolute
-  stretchedStyle.maxWidth = Dimension.px(80.0)
-  stretchedStyle.height = Dimension.px(20.0)
+  stretchedStyle.maxWidth = SizeValue.px(80.0)
+  stretchedStyle.height = SizeValue.px(20.0)
   stretchedStyle.inset.left = Dimension.px(10.0)
   stretchedStyle.inset.right = Dimension.px(30.0)
   let stretched = run tree.append(root, move stretchedStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut invertedStyle = Style.make()
   invertedStyle.position = Position.Absolute
-  invertedStyle.width = Dimension.px(40.0)
-  invertedStyle.height = Dimension.px(20.0)
+  invertedStyle.width = SizeValue.px(40.0)
+  invertedStyle.height = SizeValue.px(20.0)
   invertedStyle.inset.top = Dimension.px(120.0)
   invertedStyle.inset.bottom = Dimension.px(30.0)
   invertedStyle.margin.top = Dimension.auto()
@@ -352,26 +352,26 @@ test effect fn absoluteInsetStretchClampsAndInvertedRectangleReducesEndInset() !
 test effect fn insetAnchoredBoxesStayAcrossContainingBlockChanges() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut root = Style.make()
-  root.width = Dimension.px(400.0)
+  root.width = SizeValue.px(400.0)
   let mut tree = run Tree.make(move root) |> Effect.provideMut<Allocator>(&mut allocator)
   let top = tree.root()
   // A restyled block that is not a formatting context root keeps the
   // results of the absolute boxes below it.
   let mut wrapStyle = Style.make()
   wrapStyle.position = Position.Relative
-  wrapStyle.width = Dimension.px(400.0)
+  wrapStyle.width = SizeValue.px(400.0)
   let wrap = run tree.append(top, wrapStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut canvasStyle = Style.make()
   canvasStyle.position = Position.Relative
-  canvasStyle.height = Dimension.px(100.0)
+  canvasStyle.height = SizeValue.px(100.0)
   let canvas = run tree.append(wrap, canvasStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut boxes = List<NodeId>.make()
   let mut i: usize = 0
   while i < 3 {
     let mut s = Style.make()
     s.position = Position.Absolute
-    s.width = Dimension.px(10.0)
-    s.height = Dimension.px(4.0)
+    s.width = SizeValue.px(10.0)
+    s.height = SizeValue.px(4.0)
     s.inset.left = Dimension.px(usize.toF32(i) * 20.0)
     s.inset.top = Dimension.px(6.0)
     s.margin.left = Dimension.px(1.0)
@@ -381,7 +381,7 @@ test effect fn insetAnchoredBoxesStayAcrossContainingBlockChanges() ! OutOfMemor
   let mut output = LayoutTree.make()
   let mut measure = EmptyMeasure {}
   run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
-  wrapStyle.width = Dimension.px(300.0)
+  wrapStyle.width = SizeValue.px(300.0)
   run tree.setStyle(wrap, wrapStyle)
   run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(output.stats.reusedLayouts == 3, "the anchored boxes are kept")
@@ -408,8 +408,8 @@ test effect fn insetAnchoredBoxesStayAcrossContainingBlockChanges() ! OutOfMemor
   // A moved box moves alone; the others stay kept.
   let mut moved = Style.make()
   moved.position = Position.Absolute
-  moved.width = Dimension.px(10.0)
-  moved.height = Dimension.px(4.0)
+  moved.width = SizeValue.px(10.0)
+  moved.height = SizeValue.px(4.0)
   moved.inset.left = Dimension.px(100.0)
   moved.inset.top = Dimension.px(6.0)
   run tree.setStyle(boxes.get(1), moved)
@@ -425,24 +425,24 @@ test effect fn insetAnchoredBoxesStayAcrossContainingBlockChanges() ! OutOfMemor
 test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | InvalidBox | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut root = Style.make()
-  root.width = Dimension.px(400.0)
+  root.width = SizeValue.px(400.0)
   let mut tree = run Tree.make(move root) |> Effect.provideMut<Allocator>(&mut allocator)
   let top = tree.root()
   let mut wrapStyle = Style.make()
   wrapStyle.position = Position.Relative
-  wrapStyle.width = Dimension.px(400.0)
+  wrapStyle.width = SizeValue.px(400.0)
   let wrap = run tree.append(top, wrapStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut canvasStyle = Style.make()
   canvasStyle.position = Position.Relative
-  canvasStyle.height = Dimension.px(100.0)
+  canvasStyle.height = SizeValue.px(100.0)
   let canvas = run tree.append(wrap, canvasStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut boxes = List<NodeId>.make()
   let mut i: usize = 0
   while i < 6 {
     let mut s = Style.make()
     s.position = Position.Absolute
-    s.width = Dimension.px(10.0)
-    s.height = Dimension.px(4.0)
+    s.width = SizeValue.px(10.0)
+    s.height = SizeValue.px(4.0)
     s.inset.left = Dimension.px(usize.toF32(i) * 20.0)
     s.inset.top = Dimension.px(6.0)
     run boxes.append(run tree.append(canvas, s) |> Effect.provideMut<Allocator>(&mut allocator)) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -455,7 +455,7 @@ test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError |
   let widths: [f32; 6] = [300.0, 350.0, 320.0, 60.0, 50.0, 340.0]
   let mut step: usize = 0
   while step < 6 {
-    wrapStyle.width = Dimension.px(widths[step])
+    wrapStyle.width = SizeValue.px(widths[step])
     run tree.setStyle(wrap, wrapStyle)
     run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
     run Testing.expect(output.stats.reusedLayouts == 6, "every box of the run is kept")
@@ -499,8 +499,8 @@ test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError |
   // A box of the run that moves is laid out again, alone.
   let mut moved = Style.make()
   moved.position = Position.Absolute
-  moved.width = Dimension.px(10.0)
-  moved.height = Dimension.px(4.0)
+  moved.width = SizeValue.px(10.0)
+  moved.height = SizeValue.px(4.0)
   moved.inset.left = Dimension.px(200.0)
   moved.inset.top = Dimension.px(6.0)
   run tree.setStyle(boxes.get(3), moved)
@@ -512,7 +512,7 @@ test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError |
   // The run forms again around it.
   step = 0
   while step < 3 {
-    wrapStyle.width = Dimension.px(widths[step])
+    wrapStyle.width = SizeValue.px(widths[step])
     run tree.setStyle(wrap, wrapStyle)
     run compute(&tree, &mut output, &mut measure, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
     run Testing.expect(output.stats.reusedLayouts == 6, "the boxes are kept again")
