@@ -1,0 +1,93 @@
+{
+  "name": "shape-outside-border-box-radius",
+  "kind": "chrome",
+  "features": [
+    "source-text",
+    "floats",
+    "shape-outside",
+    "font-service"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-shapes-1/#shape-outside-property"
+  ],
+  "input": {
+    "viewport": {
+      "width": 240,
+      "height": 260
+    },
+    "fonts": [
+      {
+        "fontSize": 10,
+        "ascent": 8,
+        "descent": 2,
+        "lineGap": 0,
+        "xHeight": 5,
+        "capHeight": 7,
+        "subscriptOffset": 2,
+        "superscriptOffset": 3,
+        "baselines": {
+          "alphabetic": 8,
+          "ideographic": 10,
+          "central": 5,
+          "mathematical": 5
+        }
+      },
+      {
+        "fontSize": 6,
+        "ascent": 4,
+        "descent": 2,
+        "lineGap": 0,
+        "xHeight": 4,
+        "capHeight": 4,
+        "subscriptOffset": 1,
+        "superscriptOffset": 2,
+        "baselines": {
+          "alphabetic": 4,
+          "ideographic": 6,
+          "central": 3,
+          "mathematical": 3
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "width": 200,
+          "fontKey": 1
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "float": "right",
+          "width": 70,
+          "height": 70,
+          "margin": {
+            "left": 8,
+            "bottom": 8
+          },
+          "border": 2,
+          "shapeOutside": {
+            "kind": "box",
+            "box": "border-box",
+            "values": [
+              35,
+              35,
+              35,
+              35,
+              35,
+              35,
+              35,
+              35
+            ]
+          }
+        }
+      },
+      {
+        "parent": 0,
+        "text": "ab cd ef gh ij kl mn op qr st uv wx yz ab cd ef gh ij kl mn op qr st uv wx yz ab cd ef gh ij kl mn op qr st uv wx yz ab cd ef gh ij kl mn op qr st uv"
+      }
+    ]
+  }
+}

@@ -6,7 +6,7 @@ async function observeDOM(input, fontAssets, columns) {
     document.write('<!doctype html><html><head></head><body></body></html>');
     document.close();
   }
-  const dimensions = new Set(['width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'flexBasis', 'rowGap', 'columnGap']);
+  const dimensions = new Set(['width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'flexBasis', 'rowGap', 'columnGap', 'shapeMargin']);
   const sides = ['top', 'right', 'bottom', 'left'];
   const defaults = { display: 'block', boxSizing: 'content-box', direction: 'ltr', unicodeBidi: 'normal', writingMode: 'horizontal-tb', textOrientation: 'mixed',
     flexDirection: 'row', flexWrap: 'nowrap', flexGrow: 0, flexShrink: 1, flexBasis: 'auto', order: 0,
@@ -258,6 +258,26 @@ async function observeDOM(input, fontAssets, columns) {
         // Keep support and computed-value evidence even when Chrome rejects a
         // declaration. The native adapter validates the structured input.
         element.style.setProperty(cssName(name), gridValue(name, value));
+        continue;
+      }
+      if (name === 'shapeOutside') {
+        // Mirrors the native FloatShape: kind, reference box, radius keywords, values.
+        const v = value.values ?? [], d = dimension;
+        const radius = (kind, x) => kind === 'closest-side' || kind === 'farthest-side' ? kind : d(x);
+        let css = value.kind === 'none' ? 'none' : '';
+        if (value.kind === 'circle') css = `circle(${radius(value.radiusX, v[0])} at ${d(v[1])} ${d(v[2])})`;
+        if (value.kind === 'ellipse') css = `ellipse(${radius(value.radiusX, v[0])} ${radius(value.radiusY, v[1])} at ${d(v[2])} ${d(v[3])})`;
+        if (value.kind === 'inset') css = `inset(${v.slice(0, 4).map(d).join(' ')} round ${v.slice(4, 8).map(d).join(' ')} / ${v.slice(8, 12).map(d).join(' ')})`;
+        if (value.kind === 'polygon') {
+          const points = [];
+          for (let k = 0; k + 1 < v.length; k += 2) points.push(`${d(v[k])} ${d(v[k + 1])}`);
+          css = `polygon(${points.join(', ')})`;
+        }
+        if (value.kind === 'box') {
+          css = value.box ?? 'margin-box';
+          if (v.length === 8) element.style.setProperty('border-radius', `${v.slice(0, 4).map(d).join(' ')} / ${v.slice(4, 8).map(d).join(' ')}`);
+        } else if (value.box) css += ` ${value.box}`;
+        element.style.setProperty('shape-outside', css);
         continue;
       }
       if (name === 'textJustify') {

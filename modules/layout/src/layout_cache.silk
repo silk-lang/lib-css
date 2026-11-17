@@ -594,7 +594,7 @@ impl LayoutCache {
     while index < floats.length {
       let a = &recorded[kept.floats + index]
       let b = &floats[index]
-      if a.side != b.side || a.left != b.left || a.right != b.right || a.top != b.top || a.bottom != b.bottom { return false }
+      if a.side != b.side || a.left != b.left || a.right != b.right || a.top != b.top || a.bottom != b.bottom || a.shape != b.shape { return false }
       index = index + 1
     }
     return true
