@@ -8,7 +8,9 @@ import silk.geometry.insets { Insets }
 
 // Values have already passed CSS parsing and cascade. Percentages are fractions.
 // Keeping a percentage coefficient distinguishes 0% from 0px in indefinite axes.
-pub enum DimensionKind { Auto, Length, Percent, Calc, MinContent, MaxContent, FitContent, Content, None, Normal }
+/// `Least` is `min(value, percent)` and `Most` is `max(value, percent)`, a length against a
+/// percentage, for sizes only: `width: min(100%, 600px)`.
+pub enum DimensionKind { Auto, Length, Percent, Calc, Least, Most, MinContent, MaxContent, FitContent, Content, None, Normal }
 pub struct Dimension { pub kind: DimensionKind, pub value: f32, pub percent: f32 }
 impl Copy for Dimension {}
 impl Equal for Dimension {
@@ -22,6 +24,13 @@ impl Dimension {
   pub fn pct(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Percent, value: 0.0, percent: value } }
   pub fn calc(length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Calc, value: length, percent: percent } }
   pub fn keyword(kind: DimensionKind) -> Dimension { return Dimension { kind: kind, value: 0.0, percent: 0.0 } }
+  pub fn least(length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Least, value: length, percent: percent } }
+  pub fn most(length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Most, value: length, percent: percent } }
+  /// Whether the value depends on a percentage basis.
+  pub fn relative(self: Dimension) -> bool {
+    return self.kind == DimensionKind.Percent || self.kind == DimensionKind.Calc || self.kind == DimensionKind.Least
+      || self.kind == DimensionKind.Most
+  }
 }
 pub struct Edges { pub top: Dimension, pub right: Dimension, pub bottom: Dimension, pub left: Dimension }
 impl Copy for Edges {}

@@ -257,7 +257,7 @@ pub fn groupEnd(style: &Style, parent: &Style, columns: bool, last: bool) -> boo
 }
 
 fn percentage(value: Dimension) -> bool {
-  return value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc
+  return value.relative()
 }
 
 pub fn cyclicSize(

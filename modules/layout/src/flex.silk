@@ -468,7 +468,7 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
   if preferred.kind == DimensionKind.FitContent { preferredContribution = fitContent }
   let mut minimumContributionSize = minContent
   let mut maximumContributionSize = maxContent
-  let automaticPreferred = preferred.kind == DimensionKind.Auto || (!preferredDefinite && (preferred.kind == DimensionKind.Percent || preferred.kind == DimensionKind.Calc))
+  let automaticPreferred = preferred.kind == DimensionKind.Auto || (!preferredDefinite && preferred.relative())
   if ratio > 0.0 && automaticPreferred {
     if crossDefinite {
       minimumContributionSize = transfer(crossSize, ratio, horizontal, item.inset, crossInset, borderRatio)

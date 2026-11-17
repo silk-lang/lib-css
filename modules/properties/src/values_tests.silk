@@ -273,6 +273,40 @@ effect fn clampCases() ! AssertionError<'static> | OutOfMemoryError ? &mut Alloc
   run Testing.expect(isDimension(run clamped(values.unit(40.0, Unit.Px), values.unit(2.0, Unit.Vw), values.unit(30.0, Unit.Px)), Dimension.px(40.0)), "clamp()'s minimum wins over a smaller maximum")
 }
 
+effect fn sized(operator: MathOperator, first: Value, second: Value, third: Value) -> Option<Dimension> ! OutOfMemoryError ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(move first)
+  run parts.append(move second)
+  run parts.append(move third)
+  let mut context = Context.make()
+  context.fontSize = 10.0
+  return convert.size(&values.math(operator, move parts), &context)
+}
+
+effect fn sizeCases() ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let least = run sized(MathOperator.Min, values.percent(100.0), values.unit(60.0, Unit.Em), values.unit(700.0, Unit.Px))
+  run Testing.expect(isDimension(least, Dimension.least(600.0, 1.0)), "min() of lengths and a percentage keeps the smallest length")
+  let most = run sized(MathOperator.Max, values.percent(20.0), values.percent(50.0), values.unit(4.0, Unit.Em))
+  run Testing.expect(isDimension(most, Dimension.most(40.0, 0.5)), "max() keeps the largest percentage")
+  let lengths = run sized(MathOperator.Min, values.unit(3.0, Unit.Px), values.unit(2.0, Unit.Px), values.unit(5.0, Unit.Px))
+  run Testing.expect(isDimension(lengths, Dimension.px(2.0)), "min() of lengths alone is a length")
+  let mut context = Context.make()
+  context.fontSize = 10.0
+  run Testing.expect(convert.dimension(&values.math(MathOperator.Min, run pair(values.percent(100.0), values.unit(600.0, Unit.Px))), &context).isNone(), "only a size takes a length against a percentage")
+}
+
+effect fn pair(first: Value, second: Value) -> List<Value> ! OutOfMemoryError ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(move first)
+  run parts.append(move second)
+  return move parts
+}
+
+test effect fn sizesCompareLengthsWithPercentages() ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run sizeCases() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
 test effect fn clampResolvesBetweenItsBounds() ! AssertionError<'static> | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run clampCases() |> Effect.provideMut<Allocator>(&mut allocator)
