@@ -1,7 +1,7 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.usize
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
-import style { SizeContainment, Style, Display, Dimension, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
+import style { SizeContainment, Style, Display, Dimension, SizeValue, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
 import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, absolutelyPositioned, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
@@ -349,7 +349,7 @@ pub fn plainGridItem(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize
     && plainDimension(&style.minWidth, false) && plainDimension(&style.minHeight, false)
     && plainDimension(&style.maxWidth, true) && plainDimension(&style.maxHeight, true)
 }
-fn plainDimension(value: &Dimension, none: bool) -> bool {
+fn plainDimension(value: &SizeValue, none: bool) -> bool {
   return value.kind == DimensionKind.Auto || value.kind == DimensionKind.Length || (none && value.kind == DimensionKind.None)
 }
 fn plainWidthOf(nodes: &BoxTree<'_>, shapes: &[u16], widths: &mut [f32], base: &Input, id: usize) -> f32 {
@@ -602,6 +602,10 @@ fn orthogonalAvailable(input: &Input, available: AvailableSpace, horizontal: boo
 fn percentLike(value: Dimension) -> bool {
   return value.relative()
 }
+@inlineAlways
+fn percentLikeSize(value: SizeValue) -> bool {
+  return value.relative()
+}
 
 fn percentEdges(value: &Edges) -> bool {
   return percentLike(value.top) || percentLike(value.right) || percentLike(value.bottom) || percentLike(value.left)
@@ -662,8 +666,8 @@ fn keyShape(nodes: &BoxTree<'_>, id: usize) -> u16 {
   if style.height.kind == DimensionKind.Length { shape = shape | KEY_HEIGHT_LENGTH }
   if node.kind == BoxKind.Block && node.measurement == Measurement.None && !isFlex(style) && style.writingMode == WritingMode.HorizontalTb && style.height.kind != DimensionKind.MinContent && style.height.kind != DimensionKind.MaxContent && style.height.kind != DimensionKind.FitContent { shape = shape | KEY_BLOCK }
   if style.writingMode == WritingMode.HorizontalTb { shape = shape | KEY_HORIZONTAL }
-  if percentLike(style.width) || percentLike(style.minWidth) || percentLike(style.maxWidth) { shape = shape | KEY_PERCENT | KEY_PERCENT_WIDTH }
-  if percentLike(style.height) || percentLike(style.minHeight) || percentLike(style.maxHeight) { shape = shape | KEY_PERCENT | KEY_PERCENT_HEIGHT }
+  if percentLikeSize(style.width) || percentLikeSize(style.minWidth) || percentLikeSize(style.maxWidth) { shape = shape | KEY_PERCENT | KEY_PERCENT_WIDTH }
+  if percentLikeSize(style.height) || percentLikeSize(style.minHeight) || percentLikeSize(style.maxHeight) { shape = shape | KEY_PERCENT | KEY_PERCENT_HEIGHT }
   if percentEdges(&style.padding) || percentEdges(&style.margin) || percentEdges(&style.inset) { shape = shape | KEY_PERCENT | KEY_PERCENT_EDGES }
   let columnWrap = isFlex(style) && style.flexWrap != FlexWrap.NoWrap && (style.flexDirection == FlexDirection.Column || style.flexDirection == FlexDirection.ColumnReverse)
   if style.sizeContainment == SizeContainment.None && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex) && node.measurement == Measurement.None && style.writingMode == WritingMode.HorizontalTb && style.aspectRatio <= 0.0 && style.overflowX == Overflow.Visible && style.overflowY == Overflow.Visible && style.float == Float.None && !columnWrap {

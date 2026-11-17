@@ -5,7 +5,7 @@ import silk.num.usize
 import silk.num.f32
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Edges, Dimension, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind }
+import style { Style, Edges, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableKind, max, abs }
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import tree { Tree, LayoutTree, NodeId, InvalidNode }
@@ -120,7 +120,7 @@ effect fn autoColumns() ! OutOfMemoryError | TextError | FragmentationError | In
 
   // A set width with spacing: extra space goes to the columns by their widths.
   let mut style = styled(DisplayInside.Table)
-  style.width = Dimension.px(300.0)
+  style.width = SizeValue.px(300.0)
   style.borderSpacingX = 10.0
   style.borderSpacingY = 5.0
   run tree.setStyle(table, move style)
@@ -180,12 +180,12 @@ effect fn fixedLayout() ! OutOfMemoryError | TextError | FragmentationError | In
   let mut tree = run Tree.make(Style.make())
   let root = tree.root()
   let mut style = styled(DisplayInside.Table)
-  style.width = Dimension.px(400.0)
+  style.width = SizeValue.px(400.0)
   style.tableLayout = TableLayout.Fixed
   let table = run tree.append(root, move style)
   let first = run tree.append(table, styled(DisplayInside.TableRow))
   let mut set = styled(DisplayInside.TableCell)
-  set.width = Dimension.px(100.0)
+  set.width = SizeValue.px(100.0)
   let a = run tree.append(first, move set)
   let b = run cell(&mut tree, first, 0, 10)
   let c = run cell(&mut tree, first, 0, 900)
@@ -212,7 +212,7 @@ effect fn partsAndBorders() ! OutOfMemoryError | TextError | FragmentationError 
   let footer = run tree.append(table, styled(DisplayInside.TableFooterGroup))
   let f = run cell(&mut tree, footer, 0, 40)
   let mut captionStyle = styled(DisplayInside.TableCaption)
-  captionStyle.height = Dimension.px(30.0)
+  captionStyle.height = SizeValue.px(30.0)
   let caption = run tree.append(table, move captionStyle)
   let loose = run cell(&mut tree, table, 0, 40)
   let header = run tree.append(table, styled(DisplayInside.TableHeaderGroup))
@@ -233,16 +233,16 @@ effect fn partsAndBorders() ! OutOfMemoryError | TextError | FragmentationError 
   let row = run tree.append(grid, styled(DisplayInside.TableRow))
   let mut left = styled(DisplayInside.TableCell)
   left.border = Edges.all(Dimension.px(1.0))
-  left.width = Dimension.px(20.0)
-  left.height = Dimension.px(60.0)
+  left.width = SizeValue.px(20.0)
+  left.height = SizeValue.px(60.0)
   let l = run tree.append(row, move left)
   let mut right = styled(DisplayInside.TableCell)
   right.border = Edges.all(Dimension.px(1.0))
-  right.width = Dimension.px(20.0)
+  right.width = SizeValue.px(20.0)
   right.verticalAlign.kind = VerticalAlignKind.Middle
   let r = run tree.append(row, move right)
   let mut inner = Style.make()
-  inner.height = Dimension.px(20.0)
+  inner.height = SizeValue.px(20.0)
   let content = run tree.append(r, move inner)
   run lay(&tree, &mut output, 500.0)
   run expectBox(&output, l, 0.0, 90.0, 22.0, 62.0, "an outer cell's border lies on the table's")

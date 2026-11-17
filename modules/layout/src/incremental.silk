@@ -1,7 +1,7 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
 import context { outOfFlow, absolutelyPositioned }
-import style { Float, Dimension, DimensionKind, Edges, Position, Style, WritingMode }
+import style { Float, Dimension, SizeValue, DimensionKind, Edges, Position, Style, WritingMode }
 import tree { Tree, NO_NODE }
 import box_tree { BoxTree, BoxNode, BoxKind }
 import grid_subgrid as Subgrid
@@ -373,6 +373,7 @@ fn ownFacts(nodes: &BoxTree<'_>, index: usize) -> u8 {
 }
 
 fn length(value: &Dimension) -> bool { return value.kind == DimensionKind.Length }
+fn sizeLength(value: &SizeValue) -> bool { return value.kind == DimensionKind.Length }
 fn lengths(edges: &Edges) -> bool { return length(&edges.top) && length(&edges.right) && length(&edges.bottom) && length(&edges.left) }
 // Whether an absolute box's layout and place read nothing of its containing
 // block but where its padding box starts: lengths size it, and its left and
@@ -380,9 +381,9 @@ fn lengths(edges: &Edges) -> bool { return length(&edges.top) && length(&edges.r
 pub fn insetAnchored(style: &Style) -> bool {
   if style.position != Position.Absolute || style.replaced || style.writingMode != WritingMode.HorizontalTb { return false }
   if !length(&style.inset.left) || !length(&style.inset.top) || style.inset.right.kind != DimensionKind.Auto || style.inset.bottom.kind != DimensionKind.Auto { return false }
-  if !length(&style.width) || !length(&style.height) { return false }
-  if (style.minWidth.kind != DimensionKind.Auto && !length(&style.minWidth)) || (style.minHeight.kind != DimensionKind.Auto && !length(&style.minHeight)) { return false }
-  if (style.maxWidth.kind != DimensionKind.None && !length(&style.maxWidth)) || (style.maxHeight.kind != DimensionKind.None && !length(&style.maxHeight)) { return false }
+  if !sizeLength(&style.width) || !sizeLength(&style.height) { return false }
+  if (style.minWidth.kind != DimensionKind.Auto && !sizeLength(&style.minWidth)) || (style.minHeight.kind != DimensionKind.Auto && !sizeLength(&style.minHeight)) { return false }
+  if (style.maxWidth.kind != DimensionKind.None && !sizeLength(&style.maxWidth)) || (style.maxHeight.kind != DimensionKind.None && !sizeLength(&style.maxHeight)) { return false }
   return lengths(&style.margin) && lengths(&style.padding) && lengths(&style.border)
 }
 

@@ -6,7 +6,7 @@ import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, Text
 import silk.core.effect { Effect }
 import silk.testing.testing { AssertionError, Testing }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, Point, AvailableKind, abs, max }
-import style { Style, Display, DisplayOutside, DisplayInside, Dimension, DimensionKind, BoxSizing, FlexDirection, FlexWrap, Direction, WritingMode, Align, OverflowAlignment, Visibility, Overflow, Edges }
+import style { Style, Display, DisplayOutside, DisplayInside, Dimension, SizeValue, DimensionKind, BoxSizing, FlexDirection, FlexWrap, Direction, WritingMode, Align, OverflowAlignment, Visibility, Overflow, Edges }
 import tree { Tree, LayoutTree, InvalidNode }
 import context { Input }
 import geometry { OptionalSize, AvailableSpace }
@@ -73,42 +73,42 @@ effect fn near(actual: f32, expected: f32) ! AssertionError<'static> {
 effect fn scenario(case: Case) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
   let mut root = Style.make()
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
-  root.width = Dimension.px(200.0)
+  root.width = SizeValue.px(200.0)
   root.alignItems = Align.FlexStart
   let mut first = Style.make()
-  first.width = Dimension.px(100.0)
-  first.height = Dimension.px(20.0)
-  first.minWidth = Dimension.px(0.0)
+  first.width = SizeValue.px(100.0)
+  first.height = SizeValue.px(20.0)
+  first.minWidth = SizeValue.px(0.0)
   let mut second = Style.make()
-  second.width = Dimension.px(100.0)
-  second.height = Dimension.px(20.0)
-  second.minWidth = Dimension.px(0.0)
+  second.width = SizeValue.px(100.0)
+  second.height = SizeValue.px(20.0)
+  second.minWidth = SizeValue.px(0.0)
   let mut third = Style.make()
   third.display = Display.None
-  third.width = Dimension.px(40.0)
-  third.height = Dimension.px(10.0)
-  third.minWidth = Dimension.px(0.0)
+  third.width = SizeValue.px(40.0)
+  third.height = SizeValue.px(10.0)
+  third.minWidth = SizeValue.px(0.0)
   if case == Case.PartialGrow {
-    root.width = Dimension.px(400.0)
+    root.width = SizeValue.px(400.0)
     first.flexGrow = 0.25
     second.flexGrow = 0.25
   } else if case == Case.PartialShrink {
-    root.width = Dimension.px(100.0)
+    root.width = SizeValue.px(100.0)
     first.flexShrink = 0.25
     second.flexShrink = 0.25
   } else if case == Case.BalancedViolations {
-    first.flexBasis = Dimension.px(0.0)
-    second.flexBasis = Dimension.px(0.0)
+    first.flexBasis = SizeValue.px(0.0)
+    second.flexBasis = SizeValue.px(0.0)
     first.flexGrow = 1.0
     second.flexGrow = 1.0
-    first.minWidth = Dimension.px(120.0)
-    second.maxWidth = Dimension.px(80.0)
+    first.minWidth = SizeValue.px(120.0)
+    second.maxWidth = SizeValue.px(80.0)
   } else if case == Case.NegativeInnerBase || case == Case.AsymmetricInnerBase {
-    root.width = Dimension.px(100.0)
+    root.width = SizeValue.px(100.0)
     first.boxSizing = BoxSizing.BorderBox
     second.boxSizing = BoxSizing.BorderBox
-    first.flexBasis = Dimension.px(0.0)
-    second.flexBasis = Dimension.px(0.0)
+    first.flexBasis = SizeValue.px(0.0)
+    second.flexBasis = SizeValue.px(0.0)
     first.padding.left = Dimension.px(40.0)
     second.padding.left = Dimension.px(40.0)
     if case == Case.AsymmetricInnerBase { second.padding.left = Dimension.px(10.0) }
@@ -116,130 +116,130 @@ effect fn scenario(case: Case) ! OutOfMemoryError | TextError | FragmentationErr
     second.flexGrow = 1.0
   } else if case == Case.RatioCrossMaximum || case == Case.RatioCrossMinimum {
     // Flexbox §9.2 step 3B transfers the used (cross-min/max-clamped) size.
-    root.width = Dimension.px(400.0)
-    root.height = Dimension.px(200.0)
-    first.width = Dimension.auto()
-    first.height = Dimension.pct(0.5)
-    first.maxHeight = Dimension.px(50.0)
+    root.width = SizeValue.px(400.0)
+    root.height = SizeValue.px(200.0)
+    first.width = SizeValue.auto()
+    first.height = SizeValue.pct(0.5)
+    first.maxHeight = SizeValue.px(50.0)
     if case == Case.RatioCrossMinimum {
-      first.height = Dimension.px(50.0)
-      first.minHeight = Dimension.px(100.0)
-      first.maxHeight = Dimension.auto()
+      first.height = SizeValue.px(50.0)
+      first.minHeight = SizeValue.px(100.0)
+      first.maxHeight = SizeValue.auto()
     }
     first.aspectRatio = 2.0
-    first.flexBasis = Dimension.keyword(DimensionKind.Content)
+    first.flexBasis = SizeValue.keyword(DimensionKind.Content)
     first.flexShrink = 0.0
     second.display = Display.None
   } else if case == Case.ScrollMinimum {
-    root.width = Dimension.px(10.0)
-    first.width = Dimension.auto()
-    first.minWidth = Dimension.auto()
+    root.width = SizeValue.px(10.0)
+    first.width = SizeValue.auto()
+    first.minWidth = SizeValue.auto()
     first.overflowX = Overflow.Hidden
     second.display = Display.None
   } else if case == Case.MaxFreeze {
-    root.width = Dimension.px(400.0)
+    root.width = SizeValue.px(400.0)
     first.flexGrow = 1.0
-    first.maxWidth = Dimension.px(120.0)
+    first.maxWidth = SizeValue.px(120.0)
     second.flexGrow = 1.0
   } else if case == Case.MinFreeze {
-    root.width = Dimension.px(100.0)
-    first.minWidth = Dimension.px(80.0)
+    root.width = SizeValue.px(100.0)
+    first.minWidth = SizeValue.px(80.0)
   } else if case == Case.ScaledShrink {
-    root.width = Dimension.px(180.0)
+    root.width = SizeValue.px(180.0)
     first.padding.left = Dimension.px(20.0)
     first.padding.right = Dimension.px(20.0)
-    second.width = Dimension.px(200.0)
+    second.width = SizeValue.px(200.0)
   } else if case == Case.AutoMargin {
-    root.width = Dimension.px(400.0)
+    root.width = SizeValue.px(400.0)
     first.margin.left = Dimension.auto()
     first.margin.right = Dimension.auto()
     root.justifyContent = Align.SpaceBetween
   } else if case == Case.ReverseRtl {
     root.flexDirection = FlexDirection.RowReverse
     root.direction = Direction.Rtl
-    first.width = Dimension.px(40.0)
-    second.width = Dimension.px(60.0)
+    first.width = SizeValue.px(40.0)
+    second.width = SizeValue.px(60.0)
   } else if case == Case.VerticalAxis {
     root.writingMode = WritingMode.VerticalRl
-    root.width = Dimension.px(80.0)
-    root.height = Dimension.px(200.0)
-    first.width = Dimension.px(30.0)
-    first.height = Dimension.px(40.0)
-    second.width = Dimension.px(20.0)
-    second.height = Dimension.px(50.0)
+    root.width = SizeValue.px(80.0)
+    root.height = SizeValue.px(200.0)
+    first.width = SizeValue.px(30.0)
+    first.height = SizeValue.px(40.0)
+    second.width = SizeValue.px(20.0)
+    second.height = SizeValue.px(50.0)
   } else if case == Case.WrapGap {
-    root.width = Dimension.px(100.0)
+    root.width = SizeValue.px(100.0)
     root.flexWrap = FlexWrap.WrapReverse
     root.columnGap = Dimension.px(10.0)
     root.rowGap = Dimension.px(5.0)
-    first.width = Dimension.px(40.0)
-    second.width = Dimension.px(40.0)
+    first.width = SizeValue.px(40.0)
+    second.width = SizeValue.px(40.0)
     third.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flow }
   } else if case == Case.Collapse {
-    root.width = Dimension.px(100.0)
-    first.width = Dimension.px(50.0)
-    first.height = Dimension.px(80.0)
+    root.width = SizeValue.px(100.0)
+    first.width = SizeValue.px(50.0)
+    first.height = SizeValue.px(80.0)
     first.visibility = Visibility.Collapse
-    second.width = Dimension.px(50.0)
+    second.width = SizeValue.px(50.0)
     second.flexGrow = 1.0
   } else if case == Case.ColumnRatio {
     root.flexDirection = FlexDirection.Column
-    first.width = Dimension.auto()
-    first.height = Dimension.auto()
-    first.minHeight = Dimension.px(0.0)
+    first.width = SizeValue.auto()
+    first.height = SizeValue.auto()
+    first.minHeight = SizeValue.px(0.0)
     first.aspectRatio = 2.0
-    first.flexBasis = Dimension.keyword(DimensionKind.Content)
+    first.flexBasis = SizeValue.keyword(DimensionKind.Content)
     second.display = Display.None
   } else if case == Case.PercentageBasis {
     root.flexDirection = FlexDirection.Column
-    first.flexBasis = Dimension.pct(0.0)
-    second.flexBasis = Dimension.px(0.0)
-    first.minHeight = Dimension.px(0.0)
-    second.minHeight = Dimension.px(0.0)
-    first.height = Dimension.auto()
-    second.height = Dimension.auto()
+    first.flexBasis = SizeValue.pct(0.0)
+    second.flexBasis = SizeValue.px(0.0)
+    first.minHeight = SizeValue.px(0.0)
+    second.minHeight = SizeValue.px(0.0)
+    first.height = SizeValue.auto()
+    second.height = SizeValue.auto()
   } else if case == Case.ReplacedMinimum || case == Case.NonReplacedMinimum {
-    root.width = Dimension.px(10.0)
-    first.width = Dimension.auto()
-    first.height = Dimension.px(40.0)
+    root.width = SizeValue.px(10.0)
+    first.width = SizeValue.auto()
+    first.height = SizeValue.px(40.0)
     first.aspectRatio = 2.0
-    first.minWidth = Dimension.auto()
+    first.minWidth = SizeValue.auto()
     first.replaced = case == Case.ReplacedMinimum
     second.display = Display.None
   } else if case == Case.SafeOverflow {
-    root.width = Dimension.px(50.0)
+    root.width = SizeValue.px(50.0)
     root.justifyContent = Align.Center
     root.justifyContentSafety = OverflowAlignment.Safe
     first.flexShrink = 0.0
     second.display = Display.None
   } else if case == Case.IntrinsicContribution {
-    root.width = Dimension.auto()
+    root.width = SizeValue.auto()
     root.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flex }
-    first.width = Dimension.px(50.0)
-    first.flexBasis = Dimension.px(20.0)
-    second.width = Dimension.px(70.0)
-    second.flexBasis = Dimension.px(40.0)
+    first.width = SizeValue.px(50.0)
+    first.flexBasis = SizeValue.px(20.0)
+    second.width = SizeValue.px(70.0)
+    second.flexBasis = SizeValue.px(40.0)
   } else if case == Case.ColumnMinimum {
     // Flexbox §9.9.1.3: largest contribution, not sum, also for columns.
     root.flexDirection = FlexDirection.Column
     root.flexWrap = FlexWrap.Wrap
-    root.height = Dimension.keyword(DimensionKind.MinContent)
-    second.height = Dimension.px(40.0)
+    root.height = SizeValue.keyword(DimensionKind.MinContent)
+    second.height = SizeValue.px(40.0)
   } else if case == Case.Baseline {
     root.alignItems = Align.Baseline
-    first.height = Dimension.auto()
-    second.height = Dimension.auto()
+    first.height = SizeValue.auto()
+    second.height = SizeValue.auto()
   } else if case == Case.Stretch {
-    root.height = Dimension.px(80.0)
+    root.height = SizeValue.px(80.0)
     root.alignItems = Align.Stretch
-    first.height = Dimension.auto()
-    second.height = Dimension.auto()
-    second.maxHeight = Dimension.px(30.0)
+    first.height = SizeValue.auto()
+    second.height = SizeValue.auto()
+    second.maxHeight = SizeValue.px(30.0)
   } else if case == Case.StableOrder {
     first.order = 1
     second.order = 0
-    first.width = Dimension.px(40.0)
-    second.width = Dimension.px(40.0)
+    first.width = SizeValue.px(40.0)
+    second.width = SizeValue.px(40.0)
     third.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flow }
     third.order = 0
   }
@@ -396,15 +396,15 @@ effect fn percentageDescendant(definiteMain: bool) ! OutOfMemoryError | TextErro
   let mut root = Style.make()
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
   root.flexDirection = FlexDirection.Column
-  root.width = Dimension.px(200.0)
-  if definiteMain { root.height = Dimension.px(100.0) }
+  root.width = SizeValue.px(200.0)
+  if definiteMain { root.height = SizeValue.px(100.0) }
   let mut item = Style.make()
-  item.minHeight = Dimension.px(0.0)
-  item.flexBasis = Dimension.keyword(DimensionKind.Content)
-  if definiteMain { item.flexBasis = Dimension.px(0.0)
+  item.minHeight = SizeValue.px(0.0)
+  item.flexBasis = SizeValue.keyword(DimensionKind.Content)
+  if definiteMain { item.flexBasis = SizeValue.px(0.0)
     item.flexGrow = 1.0 }
   let mut child = Style.make()
-  child.height = Dimension.pct(0.5)
+  child.height = SizeValue.pct(0.5)
   let mut tree = run Tree.make(move root)
   let rootId = tree.root()
   let itemId = run tree.append(rootId, move item)
@@ -447,20 +447,20 @@ effect fn preferredColumnContribution(case: ColumnContribution) ! OutOfMemoryErr
   let mut root = Style.make()
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
   root.flexDirection = FlexDirection.Column
-  root.width = Dimension.px(100.0)
+  root.width = SizeValue.px(100.0)
   let mut item = Style.make()
   item.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
-  item.height = Dimension.px(50.0)
-  item.flexBasis = Dimension.px(0.0)
+  item.height = SizeValue.px(50.0)
+  item.flexBasis = SizeValue.px(0.0)
   item.flexGrow = 0.2
   if case == ColumnContribution.LargerBasis {
-    item.flexBasis = Dimension.px(80.0)
+    item.flexBasis = SizeValue.px(80.0)
     item.flexGrow = 1.0
   }
-  if case == ColumnContribution.UnresolvedBasis { item.flexBasis = Dimension.pct(0.25) }
+  if case == ColumnContribution.UnresolvedBasis { item.flexBasis = SizeValue.pct(0.25) }
   if case == ColumnContribution.OverflowingContent {
-    item.height = Dimension.px(20.0)
-    item.flexBasis = Dimension.auto()
+    item.height = SizeValue.px(20.0)
+    item.flexBasis = SizeValue.auto()
     item.flexGrow = 1.0
   }
   let mut tree = run Tree.make(move root)
@@ -468,7 +468,7 @@ effect fn preferredColumnContribution(case: ColumnContribution) ! OutOfMemoryErr
   let itemId = run tree.append(rootId, move item)
   if case == ColumnContribution.OverflowingContent {
     let mut overflow = Style.make()
-    overflow.height = Dimension.px(80.0)
+    overflow.height = SizeValue.px(80.0)
     let overflowId = run tree.append(itemId, move overflow)
     drop overflowId
   }
@@ -519,18 +519,18 @@ test effect fn flexAutomaticColumnContributionIncludesOverflowingContent() ! Out
 effect fn crossPercentage(percentItem: bool, definiteParent: bool) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
   let mut root = Style.make()
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
-  root.width = Dimension.px(200.0)
-  if definiteParent { root.height = Dimension.px(80.0) }
+  root.width = SizeValue.px(200.0)
+  if definiteParent { root.height = SizeValue.px(80.0) }
   let mut item = Style.make()
   item.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
-  item.flexBasis = Dimension.px(100.0)
-  if percentItem { item.height = Dimension.pct(0.5) }
+  item.flexBasis = SizeValue.px(100.0)
+  if percentItem { item.height = SizeValue.pct(0.5) }
   let mut sibling = Style.make()
-  sibling.flexBasis = Dimension.px(100.0)
-  sibling.height = Dimension.px(80.0)
+  sibling.flexBasis = SizeValue.px(100.0)
+  sibling.height = SizeValue.px(80.0)
   let mut descendant = Style.make()
-  descendant.width = Dimension.px(10.0)
-  descendant.height = Dimension.pct(0.5)
+  descendant.width = SizeValue.px(10.0)
+  descendant.height = SizeValue.pct(0.5)
   let mut tree = run Tree.make(move root)
   let rootId = tree.root()
   let itemId = run tree.append(rootId, move item)
@@ -575,12 +575,12 @@ test effect fn flexDefiniteCrossPercentageResolvesBeforeDescendants() ! OutOfMem
 effect fn negativeBaselineMargin(last: bool) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
   let mut root = Style.make()
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
-  root.width = Dimension.px(100.0)
+  root.width = SizeValue.px(100.0)
   root.alignItems = Align.Baseline
   if last { root.alignItems = Align.LastBaseline }
   let mut item = Style.make()
-  item.width = Dimension.px(100.0)
-  item.height = Dimension.px(20.0)
+  item.width = SizeValue.px(100.0)
+  item.height = SizeValue.px(20.0)
   item.margin.top = Dimension.px(-20.0)
   if last {
     item.margin.top = Dimension.px(0.0)
@@ -627,17 +627,17 @@ effect fn oppositeBaselineFlows(compatible: bool, reverse: bool) ! OutOfMemoryEr
   let mut root = Style.make()
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
   root.writingMode = WritingMode.VerticalRl
-  root.height = Dimension.px(200.0)
+  root.height = SizeValue.px(200.0)
   root.alignItems = Align.Baseline
   if reverse { root.flexWrap = FlexWrap.WrapReverse }
   let mut first = Style.make()
   first.writingMode = WritingMode.VerticalRl
-  first.width = Dimension.px(30.0)
-  first.height = Dimension.px(40.0)
+  first.width = SizeValue.px(30.0)
+  first.height = SizeValue.px(40.0)
   let mut second = Style.make()
   second.writingMode = WritingMode.VerticalLr
-  second.width = Dimension.px(60.0)
-  second.height = Dimension.px(40.0)
+  second.width = SizeValue.px(60.0)
+  second.height = SizeValue.px(40.0)
   if compatible { second.alignSelf = Align.LastBaseline }
   let mut tree = run Tree.make(move root)
   let rootId = tree.root()
@@ -690,15 +690,15 @@ effect fn columnPreferredCrossContribution(fit: bool) ! OutOfMemoryError | TextE
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
   root.flexDirection = FlexDirection.Column
   root.flexWrap = FlexWrap.Wrap
-  root.width = Dimension.keyword(DimensionKind.MinContent)
-  if fit { root.width = Dimension.keyword(DimensionKind.FitContent) }
-  root.height = Dimension.px(100.0)
+  root.width = SizeValue.keyword(DimensionKind.MinContent)
+  if fit { root.width = SizeValue.keyword(DimensionKind.FitContent) }
+  root.height = SizeValue.px(100.0)
   let mut item = Style.make()
-  item.width = Dimension.px(60.0)
-  item.height = Dimension.px(20.0)
+  item.width = SizeValue.px(60.0)
+  item.height = SizeValue.px(20.0)
   let mut overflow = Style.make()
-  overflow.width = Dimension.px(200.0)
-  overflow.height = Dimension.px(10.0)
+  overflow.width = SizeValue.px(200.0)
+  overflow.height = SizeValue.px(10.0)
   let mut tree = run Tree.make(move root)
   let rootId = tree.root()
   let itemId = run tree.append(rootId, move item)
@@ -735,11 +735,11 @@ test effect fn flexWrappedColumnFitContentUsesPreferredCrossContribution() ! Out
 effect fn partialNegativeInnerBase() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
   let mut root = Style.make()
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
-  root.width = Dimension.px(200.0)
+  root.width = SizeValue.px(200.0)
   let mut item = Style.make()
   item.boxSizing = BoxSizing.BorderBox
   item.padding = Edges.all(Dimension.px(10.0))
-  item.flexBasis = Dimension.px(0.0)
+  item.flexBasis = SizeValue.px(0.0)
   item.flexGrow = 0.2
   let mut tree = run Tree.make(move root)
   let rootId = tree.root()
@@ -775,16 +775,16 @@ fn columnFrames<'a>(rects: &'a [Rect]) -> Fragmentainers<'a> {
 effect fn fragmentedBaselineExports(reverse: bool) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
   let mut root = Style.make()
   root.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
-  root.width = Dimension.px(50.0)
+  root.width = SizeValue.px(50.0)
   root.flexWrap = FlexWrap.Wrap
   if reverse { root.flexWrap = FlexWrap.WrapReverse }
   root.alignItems = Align.FlexStart
   let mut first = Style.make()
-  first.width = Dimension.px(50.0)
-  first.height = Dimension.px(20.0)
+  first.width = SizeValue.px(50.0)
+  first.height = SizeValue.px(20.0)
   let mut second = Style.make()
-  second.width = Dimension.px(50.0)
-  second.height = Dimension.px(30.0)
+  second.width = SizeValue.px(50.0)
+  second.height = SizeValue.px(30.0)
   let mut tree = run Tree.make(move root)
   let rootId = tree.root()
   let a = run tree.append(rootId, move first)

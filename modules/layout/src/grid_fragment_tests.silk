@@ -19,6 +19,7 @@ import text {
 import style {
   Style,
   Dimension,
+  SizeValue,
   Display,
   DisplayOutside,
   DisplayInside,
@@ -186,7 +187,7 @@ effect fn repeatedRowBoundaries()
     let mut column: usize = 0
     while column < 2 {
       let mut child = Style.make()
-      child.height = Dimension.px(heights[row])
+      child.height = SizeValue.px(heights[row])
       child.breakInside = BreakInside.Avoid
       run children.append(run tree.append(root, move child))
       column = column + 1

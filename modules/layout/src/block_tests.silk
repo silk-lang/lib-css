@@ -6,7 +6,7 @@ import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, Text
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableSpace, AvailableKind, max }
-import style { Style, Display, DisplayOutside, DisplayInside, Dimension, DimensionKind, Direction, Float, Clear, Position, WritingMode, Align, Overflow, OverflowAlignment }
+import style { Style, Display, DisplayOutside, DisplayInside, Dimension, SizeValue, DimensionKind, Direction, Float, Clear, Position, WritingMode, Align, Overflow, OverflowAlignment }
 import tree { Tree, LayoutTree, InvalidNode }
 import context { Input }
 import engine { layoutNode, layoutNodeInPlace, probeNode }
@@ -61,8 +61,8 @@ impl TextMeasure for FixedMeasure {
 }
 fn sized(width: f32, height: f32) -> Style {
   let mut style = Style.make()
-  style.width = Dimension.px(width)
-  style.height = Dimension.px(height)
+  style.width = SizeValue.px(width)
+  style.height = SizeValue.px(height)
   return move style
 }
 effect fn arrange(tree: &Tree, width: f32) -> LayoutTree ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
@@ -178,7 +178,7 @@ test effect fn blockMinimumHeightStopsEmptyMarginThrough() -> () ! OutOfMemoryEr
   let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   let rootId = tree.root()
   let mut parent = Style.make()
-  parent.minHeight = Dimension.px(50.0)
+  parent.minHeight = SizeValue.px(50.0)
   parent.margin.bottom = Dimension.px(7.0)
   let a = run tree.append(rootId, move parent) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut empty = Style.make()
@@ -248,7 +248,7 @@ test effect fn blockFlowRootAvoidsFloatWithAutoWidth() -> () ! OutOfMemoryError 
   let a = run tree.append(rootId, move floated) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut parent = Style.make()
   parent.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.FlowRoot }
-  parent.height = Dimension.px(10.0)
+  parent.height = SizeValue.px(10.0)
   let b = run tree.append(rootId, move parent) |> Effect.provideMut<Allocator>(&mut allocator)
   let layouts = run arrange(&tree, 200.0) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(layouts.boxes.get(layouts.firstBySource.get(a.index)).location.y == 0.0, "float begins at root top")
@@ -334,13 +334,13 @@ test effect fn blockNegativeInlineMarginsAndMaximumWidthRebalance() -> () ! OutO
   let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   let rootId = tree.root()
   let mut widened = Style.make()
-  widened.height = Dimension.px(10.0)
+  widened.height = SizeValue.px(10.0)
   widened.margin.left = Dimension.px(-10.0)
   widened.margin.right = Dimension.px(-20.0)
   let a = run tree.append(rootId, move widened) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut capped = Style.make()
-  capped.height = Dimension.px(10.0)
-  capped.maxWidth = Dimension.px(100.0)
+  capped.height = SizeValue.px(10.0)
+  capped.maxWidth = SizeValue.px(100.0)
   capped.margin.left = Dimension.auto()
   capped.margin.right = Dimension.auto()
   let b = run tree.append(rootId, move capped) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -360,8 +360,8 @@ test effect fn blockFlowRootMinimumWidthMovesBelowFloatAndRefills() -> () ! OutO
   let a = run tree.append(rootId, move floated) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut flowRoot = Style.make()
   flowRoot.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.FlowRoot }
-  flowRoot.minWidth = Dimension.px(150.0)
-  flowRoot.height = Dimension.px(10.0)
+  flowRoot.minWidth = SizeValue.px(150.0)
+  flowRoot.height = SizeValue.px(10.0)
   let b = run tree.append(rootId, move flowRoot) |> Effect.provideMut<Allocator>(&mut allocator)
   let layouts = run arrange(&tree, 200.0) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(layouts.boxes.get(layouts.firstBySource.get(a.index)).location.y == 0.0, "float starts at content top")
@@ -573,7 +573,7 @@ test effect fn blockOrthogonalFlowPreventsParentChildMarginCollapse() -> () ! Ou
 
 effect fn alignedChild(align: Align, safety: OverflowAlignment, overflow: Overflow, height: f32, childHeight: f32) -> LayoutTree ! OutOfMemoryError | TextError | FragmentationError | InvalidNode ? &mut Allocator {
   let mut root = Style.make()
-  root.height = Dimension.px(height)
+  root.height = SizeValue.px(height)
   root.alignContent = align
   root.alignContentSafety = safety
   root.overflowY = overflow
@@ -588,7 +588,7 @@ effect fn alignedChild(align: Align, safety: OverflowAlignment, overflow: Overfl
 test effect fn blockAlignContentCentersWholeSubjectAndMovesBaselines() -> () ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut root = Style.make()
-  root.height = Dimension.px(100.0)
+  root.height = SizeValue.px(100.0)
   root.padding.top = Dimension.px(4.0)
   root.padding.bottom = Dimension.px(6.0)
   root.alignContent = Align.Center
@@ -636,7 +636,7 @@ test effect fn blockExplicitAlignContentStopsParentChildMarginCollapse() -> () !
   let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   let rootId = tree.root()
   let mut parent = Style.make()
-  parent.height = Dimension.px(100.0)
+  parent.height = SizeValue.px(100.0)
   parent.alignContent = Align.End
   parent.margin.top = Dimension.px(7.0)
   let a = run tree.append(rootId, move parent) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -652,7 +652,7 @@ test effect fn blockExplicitAlignContentStopsParentChildMarginCollapse() -> () !
 test effect fn blockAlignContentIncludesFloatsButNotAbsoluteChildren() -> () ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut root = Style.make()
-  root.height = Dimension.px(100.0)
+  root.height = SizeValue.px(100.0)
   root.alignContent = Align.End
   let mut tree = run Tree.make(move root) |> Effect.provideMut<Allocator>(&mut allocator)
   let rootId = tree.root()
@@ -672,7 +672,7 @@ test effect fn blockAlignContentEndFollowsVerticalBlockProgression() -> () ! Out
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut root = Style.make()
   root.writingMode = WritingMode.VerticalRl
-  root.width = Dimension.px(100.0)
+  root.width = SizeValue.px(100.0)
   root.padding.right = Dimension.px(5.0)
   root.padding.left = Dimension.px(7.0)
   root.alignContent = Align.End
@@ -847,7 +847,7 @@ test effect fn blockInheritedFloatsReachNestedFlowRootsAndClearance() -> () ! Ou
   let b = run tree.append(rootId, move wrapper) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut flowRoot = Style.make()
   flowRoot.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.FlowRoot }
-  flowRoot.height = Dimension.px(10.0)
+  flowRoot.height = SizeValue.px(10.0)
   let c = run tree.append(b, move flowRoot) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut cleared = sized(20.0, 10.0)
   cleared.clear = Clear.Both
@@ -1008,8 +1008,8 @@ effect fn checkMinimumProbeRequests(intrinsicMinima: bool)
   ? &mut Allocator {
   let mut style = Style.make()
   if intrinsicMinima {
-    style.minWidth = Dimension.keyword(DimensionKind.MinContent)
-    style.minHeight = Dimension.keyword(DimensionKind.MaxContent)
+    style.minWidth = SizeValue.keyword(DimensionKind.MinContent)
+    style.minHeight = SizeValue.keyword(DimensionKind.MaxContent)
   }
   let mut tree = run Tree.make(move style)
   let root = tree.root()
@@ -1077,13 +1077,13 @@ effect fn checkMinimumInheritance()
   ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static>
   ? &mut Allocator {
   let mut style = Style.make()
-  style.width = Dimension.px(80.0)
-  style.maxWidth = Dimension.px(90.0)
+  style.width = SizeValue.px(80.0)
+  style.maxWidth = SizeValue.px(90.0)
   let mut tree = run Tree.make(move style)
   let root = tree.root()
   let mut childStyle = Style.make()
-  childStyle.width = Dimension.pct(0.5)
-  childStyle.height = Dimension.pct(0.5)
+  childStyle.width = SizeValue.pct(0.5)
+  childStyle.height = SizeValue.pct(0.5)
   let child = run tree.append(root, move childStyle)
   let grandchild = run tree.append(child, sized(4.0, 6.0))
   let boxes = run Boxes.build(

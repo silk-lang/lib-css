@@ -11,6 +11,7 @@ import style {
   WritingMode,
   Float,
   Dimension,
+  SizeValue,
   Align
 }
 import tree { Tree, LayoutTree, InvalidNode, NO_NODE }
@@ -291,10 +292,10 @@ effect fn checkFixedMinimumFlexPercentageGap()
   while index < heights.length {
     let mut style = Style.make()
     style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Grid }
-    style.width = Dimension.px(40.0)
+    style.width = SizeValue.px(40.0)
     style.rowGap = Dimension.pct(0.1)
     if index == 0 {
-      style.height = Dimension.px(100.0)
+      style.height = SizeValue.px(100.0)
     }
     let mut tree = run Tree.make(move style)
     let root = tree.root()
@@ -306,7 +307,7 @@ effect fn checkFixedMinimumFlexPercentageGap()
     run template.rows.tracks.append(GridTrack.breadth(GridBreadth.fixed(20.0)))
     run tree.setGrid(root, move template)
     let mut itemStyle = Style.make()
-    itemStyle.minHeight = Dimension.px(120.0)
+    itemStyle.minHeight = SizeValue.px(120.0)
     itemStyle.alignSelf = Align.Start
     let item = run tree.append(root, move itemStyle)
     run tree.setMeasurement(item, 0)

@@ -8,27 +8,49 @@ import silk.geometry.insets { Insets }
 
 // Values have already passed CSS parsing and cascade. Percentages are fractions.
 // Keeping a percentage coefficient distinguishes 0% from 0px in indefinite axes.
-/// `Least` is `min(bound, value + percent)` and `Most` is `max(bound, value + percent)`: a
-/// length against a length plus a percentage. `Clamp` is `clamp(value, percent, bound)`.
+/// `Least`, `Most` and `Clamp` need a third number and only a `SizeValue` has them.
 pub enum DimensionKind { Auto, Length, Percent, Calc, Least, Most, Clamp, MinContent, MaxContent, FitContent, Content, None, Normal }
-pub struct Dimension { pub kind: DimensionKind, pub value: f32, pub percent: f32, pub bound: f32 }
+pub struct Dimension { pub kind: DimensionKind, pub value: f32, pub percent: f32 }
 impl Copy for Dimension {}
 impl Equal for Dimension {
   fn equals(left: &Dimension, right: &Dimension) -> bool {
-    return left.kind == right.kind && left.value == right.value && left.percent == right.percent && left.bound == right.bound
+    return left.kind == right.kind && left.value == right.value && left.percent == right.percent
   }
 }
 impl Dimension {
-  pub fn auto() -> Dimension { return Dimension { kind: DimensionKind.Auto, value: 0.0, percent: 0.0, bound: 0.0 } }
-  pub fn px(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Length, value: value, percent: 0.0, bound: 0.0 } }
-  pub fn pct(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Percent, value: 0.0, percent: value, bound: 0.0 } }
-  pub fn calc(length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Calc, value: length, percent: percent, bound: 0.0 } }
-  pub fn keyword(kind: DimensionKind) -> Dimension { return Dimension { kind: kind, value: 0.0, percent: 0.0, bound: 0.0 } }
-  pub fn least(bound: f32, length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Least, value: length, percent: percent, bound: bound } }
-  pub fn most(bound: f32, length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Most, value: length, percent: percent, bound: bound } }
-  pub fn clamp(lower: f32, percent: f32, upper: f32) -> Dimension { return Dimension { kind: DimensionKind.Clamp, value: lower, percent: percent, bound: upper } }
+  pub fn auto() -> Dimension { return Dimension { kind: DimensionKind.Auto, value: 0.0, percent: 0.0 } }
+  pub fn px(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Length, value: value, percent: 0.0 } }
+  pub fn pct(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Percent, value: 0.0, percent: value } }
+  pub fn calc(length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Calc, value: length, percent: percent } }
+  pub fn keyword(kind: DimensionKind) -> Dimension { return Dimension { kind: kind, value: 0.0, percent: 0.0 } }
   /// Whether the value depends on a percentage basis.
   pub fn relative(self: Dimension) -> bool {
+    return self.kind == DimensionKind.Percent || self.kind == DimensionKind.Calc
+  }
+}
+/// A width, height, minimum, maximum or flex basis. Besides every `Dimension` it holds a length
+/// against a length plus a percentage: `Least` is `min(bound, value + percent)` and `Most` is
+/// `max(bound, value + percent)`. `Clamp` is `clamp(value, percent, bound)`. Only these seven
+/// fields pay for the third number; edges and gaps stay a `Dimension`.
+pub struct SizeValue { pub kind: DimensionKind, pub value: f32, pub percent: f32, pub bound: f32 }
+impl Copy for SizeValue {}
+impl Equal for SizeValue {
+  fn equals(left: &SizeValue, right: &SizeValue) -> bool {
+    return left.kind == right.kind && left.value == right.value && left.percent == right.percent && left.bound == right.bound
+  }
+}
+impl SizeValue {
+  pub fn of(value: Dimension) -> SizeValue { return SizeValue { kind: value.kind, value: value.value, percent: value.percent, bound: 0.0 } }
+  pub fn auto() -> SizeValue { return SizeValue { kind: DimensionKind.Auto, value: 0.0, percent: 0.0, bound: 0.0 } }
+  pub fn px(value: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Length, value: value, percent: 0.0, bound: 0.0 } }
+  pub fn pct(value: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Percent, value: 0.0, percent: value, bound: 0.0 } }
+  pub fn calc(length: f32, percent: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Calc, value: length, percent: percent, bound: 0.0 } }
+  pub fn keyword(kind: DimensionKind) -> SizeValue { return SizeValue { kind: kind, value: 0.0, percent: 0.0, bound: 0.0 } }
+  pub fn least(bound: f32, length: f32, percent: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Least, value: length, percent: percent, bound: bound } }
+  pub fn most(bound: f32, length: f32, percent: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Most, value: length, percent: percent, bound: bound } }
+  pub fn clamp(lower: f32, percent: f32, upper: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Clamp, value: lower, percent: percent, bound: upper } }
+  /// Whether the value depends on a percentage basis.
+  pub fn relative(self: SizeValue) -> bool {
     return self.kind == DimensionKind.Percent || self.kind == DimensionKind.Calc || self.kind == DimensionKind.Least
       || self.kind == DimensionKind.Most || self.kind == DimensionKind.Clamp
   }
