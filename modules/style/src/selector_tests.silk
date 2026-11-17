@@ -717,3 +717,75 @@ test effect fn selectorListsReportWhatTheyReadBeyondAncestors() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   run readsBody() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+effect fn sharingOf(text: &[u8]) -> selectors.Sharing
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(text, &limits)
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &limits)
+  return match &parsed { Option<SelectorList>.Some { value } => value.sharing() _ => selectors.Sharing { siblings: 99, period: 99, lead: 99, tail: 99, fromEnd: true } }
+}
+
+fn bounds(found: selectors.Sharing, siblings: usize, period: usize, lead: usize, tail: usize, fromEnd: bool) -> bool {
+  return found.siblings == siblings && found.period == period && found.lead == lead && found.tail == tail && found.fromEnd == fromEnd
+}
+
+effect fn sharingBody() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  run Testing.expect(bounds(run sharingOf(b".a .b > .c:first-child:has(.d)"), 0, 1, 0, 0, false), "no sibling step and no index test")
+  run Testing.expect(bounds(run sharingOf(b".a + .b ~ .c, :is(.d + .e) .f"), 3, 1, 0, 0, false), "every sibling step of the list counts")
+  run Testing.expect(bounds(run sharingOf(b".a:nth-child(odd)"), 0, 2, 1, 0, false), "odd repeats every two after the first")
+  run Testing.expect(bounds(run sharingOf(b".a:nth-child(3)"), 0, 1, 3, 0, false), "one index is a lead with no period")
+  run Testing.expect(bounds(run sharingOf(b".a:nth-child(-n+4)"), 0, 1, 4, 0, false), "the first four are a lead")
+  run Testing.expect(bounds(run sharingOf(b"li:nth-child(2n), li:nth-of-type(3n+1)"), 0, 6, 1, 0, false), "periods multiply out")
+  run Testing.expect(bounds(run sharingOf(b".a:nth-last-child(2)"), 0, 1, 0, 2, false), "an index from the end is a tail")
+  run Testing.expect(bounds(run sharingOf(b".a:nth-last-child(2n)"), 0, 2, 0, 0, true), "a period from the end needs the count")
+  run Testing.expect(bounds(run sharingOf(b"p:first-of-type, p:only-of-type"), 0, 1, 1, 1, false), "of-type edges are a lead and a tail of one")
+  run Testing.expect((run sharingOf(b":nth-child(2 of .x)")).period == 0 && (run sharingOf(b":nth-child(100n)")).period == 0, "an of list or a long step has no period")
+  let merged = (run sharingOf(b".a + .b:nth-child(3n)")).with(run sharingOf(b".c:nth-child(2n+5)"))
+  run Testing.expect(bounds(merged, 1, 6, 5, 0, false), "sheets merge to the bounds of both")
+}
+
+test effect fn selectorListsBoundWhatSharingAMatchNeeds() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run sharingBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn matchReads(text: &[u8], node: usize) -> u32
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(text, &limits)
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &limits)
+  match &parsed {
+    Option<SelectorList>.Some { value } => {
+      let tree = Tree { states: 0 }
+      let mut context = MatchContext.make(1, 2)
+      drop run selectors.matchElement(&value, &buffer, &tree, node, &mut context)
+      return if context.above { 4294967295 } else { context.reads }
+    }
+    _ => { return 4294967295 }
+  }
+}
+
+// svg(0) > g(1) > rect(2), circle(3), rect(4); a foreign rect(5) follows g.
+effect fn matchReadsBody() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let above = selectors.READS_ABOVE
+  run Testing.expect((run matchReads(b"svg > g circle:not(.x)", 3)) == 0, "names and ancestors read nothing else")
+  run Testing.expect((run matchReads(b"rect + circle", 3)) == selectors.READS_SIBLINGS, "a sibling step that holds")
+  run Testing.expect((run matchReads(b"circle ~ rect", 2)) == selectors.READS_SIBLINGS, "a sibling step with nothing before the element")
+  run Testing.expect((run matchReads(b"rect + rect", 3)) == 0, "a compound that fails on the name never reaches its step")
+  run Testing.expect((run matchReads(b"circle:nth-child(2)", 3)) == selectors.READS_INDEX && (run matchReads(b"circle:last-of-type", 3)) == selectors.READS_INDEX, "indexes and types")
+  run Testing.expect((run matchReads(b"circle:last-child", 3)) == selectors.READS_EDGE && (run matchReads(b"circle:empty", 3)) == selectors.READS_EMPTY, "edges and emptiness")
+  run Testing.expect((run matchReads(b"g:has(circle)", 1)) == selectors.READS_DESCENDANTS, "has on the element")
+  run Testing.expect((run matchReads(b"g:first-child circle", 3)) == u32.shiftLeft(selectors.READS_EDGE, above), "an ancestor's edge")
+  run Testing.expect((run matchReads(b"g:has(rect + circle) > circle", 3)) == u32.shiftLeft(selectors.READS_DESCENDANTS | selectors.READS_SIBLINGS, above), "an ancestor's has, and what its argument read")
+  run Testing.expect((run matchReads(b"svg + g circle, rect ~ circle", 3)) == (selectors.READS_SIBLINGS | u32.shiftLeft(selectors.READS_SIBLINGS, above)), "every arm adds up, each at its level")
+}
+
+test effect fn matchingRecordsWhatItReadAndWhere() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run matchReadsBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}

@@ -2,7 +2,7 @@
 import silk.num.u32
 import cascade { Priority, Candidate }
 import element { ElementTree, MatchContext }
-import selectors { SelectorList, Specificity, Dependency }
+import selectors { SelectorList, Specificity, Dependency, Sharing }
 import selectors
 import selector_index { CandidateIndex }
 import tokens { BufferView, TokenBuffer, TokenRange, CssError }
@@ -58,6 +58,7 @@ pub struct Resolver {
   selectedStates: u32,
   starting: List<bool>,
   relations: u32,
+  shared: Sharing,
 }
 
 impl Resolver {
@@ -72,6 +73,7 @@ impl Resolver {
       selectedStates: 0,
       starting: List<bool>.make(),
       relations: 0,
+      shared: Sharing.none(),
     }
   }
 
@@ -80,6 +82,7 @@ impl Resolver {
     ! OutOfMemoryError ? &mut Allocator {
     let dependencies = run rule.selectors.dependencies()
     self.relations = self.relations | rule.selectors.reads()
+    self.shared = self.shared.with(rule.selectors.sharing())
     let mut states: u32 = 0
     let mut at: usize = 0
     while at < dependencies.length() {
@@ -204,6 +207,9 @@ impl Resolver {
 
   /// The union of `SelectorList.reads` over every rule, enabled or not.
   pub fn reads(self: &Self) -> u32 { return self.relations }
+
+  /// The `Sharing` bounds of every rule, enabled or not.
+  pub fn sharing(self: &Self) -> Sharing { return self.shared }
 
   pub fn invalidation(self: &Self, rule: usize) -> &[Dependency] {
     return self.dependencies.asSlice()[rule].asSlice()

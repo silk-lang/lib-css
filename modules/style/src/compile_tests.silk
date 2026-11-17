@@ -446,3 +446,12 @@ test effect fn unavailablePseudoElementsAreDiagnosedWithoutDroppingValidListArms
   let failed = run Effect.result(compile.compile(css, &strict)) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(match &failed { Result.Failure { .. } => true _ => false }, "strict mode rejects unavailable pseudo-elements")
 }
+
+test effect fn compiledSelectorsKeepTheSignsOfTheirIndexFormulas() -> ()
+  ! AssertionError<'static> | CompileError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let sheet = run compile.compile(b".a:nth-child(2n+1){width:1px}.b:nth-child(-n+3){width:1px}.c{&:nth-last-child(3n+2){width:1px}}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 0 && sheet.resolver.rules().length == 3, "an offset written against its step is still a formula once compiled")
+  let bounds = sheet.resolver.sharing()
+  run Testing.expect(bounds.period == 6 && bounds.lead == 3 && bounds.tail == 2 && bounds.fromEnd, "and the sheet's sharing bounds see every one")
+}
