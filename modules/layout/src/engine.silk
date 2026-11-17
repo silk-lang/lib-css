@@ -18,7 +18,8 @@ import layout_cache { LayoutCache, BoxFacts, CachedProbe, FinalRange, AGES_NONE,
 import incremental as Incremental
 import replaced { layoutReplaced, preferredRatio, borderRatio }
 import box_tree as Boxes
-import box_tree { BoxTree, BoxKind, BoxNode }
+import box_tree { BoxTree, BoxKind, BoxNode, itemParent }
+import table { layoutTable, layoutTablePart }
 import silk.collections.list { List }
 import fragments { FragmentKind, FragmentArena, Fragment }
 import inline_layout { layoutInline, InlineScratch }
@@ -239,6 +240,8 @@ effect fn contentAlgorithm<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   if nodes.style(id).replaced { return replacedContents(nodes.style(id), &request, &resolved, natural) }
   if isFlex(nodes.style(id)) { return run layoutFlex(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if isGrid(nodes.style(id)) { return run layoutGrid(nodes, &mut output, &mut measurer, id, &request, &resolved) }
+  if nodes.node(id).kind == BoxKind.Table { return run layoutTable(nodes, &mut output, &mut measurer, id, &request, &resolved) }
+  if nodes.node(id).kind == BoxKind.TablePart { return run layoutTablePart(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   return run layoutBlock(nodes, &mut output, &mut measurer, id, nodes.style(id), &request, &resolved, &mut bfc)
 }
 
@@ -1711,7 +1714,8 @@ fn boxInputChanges(nodes: &BoxTree<'_>, id: usize, input: &Input) -> bool {
   let style = nodes.style(id)
   let node = nodes.node(id)
   if !input.blockRoot && node.independentRoot { return true }
-  if !input.blockify && node.parent != NO_NODE && (nodes.node(node.parent).kind == BoxKind.Flex || nodes.node(node.parent).kind == BoxKind.Grid) { return true }
+  if !input.blockify && node.parent != NO_NODE && itemParent(nodes.node(node.parent).kind) { return true }
+  if node.kind == BoxKind.Table && !input.shrinkToFit { return true }
   let atomicInline = node.kind == BoxKind.Block && !style.replaced && style.display.outsideIs(DisplayOutside.Inline) && style.display.insideIs(DisplayInside.Flow)
   return input.atomicInline != atomicInline
 }
@@ -1720,7 +1724,9 @@ fn adjustBoxInput(nodes: &BoxTree<'_>, id: usize, input: &mut Input) {
   let style = nodes.style(id)
   let node = nodes.node(id)
   input.blockRoot = input.blockRoot || node.independentRoot
-  if node.parent != NO_NODE && (nodes.node(node.parent).kind == BoxKind.Flex || nodes.node(node.parent).kind == BoxKind.Grid) { input.blockify = true }
+  if node.parent != NO_NODE && itemParent(nodes.node(node.parent).kind) { input.blockify = true }
+  // CSS 2 §17.5.2: an auto-width table is as wide as its contents ask, within the space it has.
+  if node.kind == BoxKind.Table { input.shrinkToFit = true }
   input.atomicInline = node.kind == BoxKind.Block && !style.replaced && style.display.outsideIs(DisplayOutside.Inline) && style.display.insideIs(DisplayInside.Flow)
 }
 
@@ -2338,6 +2344,8 @@ effect fn cutoffCandidates(tree: &Tree, since: usize, nodes: &BoxTree<'_>, outpu
       } else { insets = insets && nodes.node(nodes.node(id).parent).kind != BoxKind.Flex }
     }
     if inheritedGridItem(nodes, id) { continue }
+    // A table sizes its columns and rows from every cell's contributions.
+    if nodes.node(id).parent != NO_NODE && (nodes.node(nodes.node(id).parent).kind == BoxKind.Table || nodes.node(nodes.node(id).parent).kind == BoxKind.TablePart) { continue }
     let range = output.cache.keptRange(id)
     if !range.valid || range.floatCount != 0 || range.end > output.fragments.values.length() || output.fragments.values.get(range.start).box != id { continue }
     let mut seen: usize = 0

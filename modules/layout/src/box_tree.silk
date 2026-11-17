@@ -9,7 +9,10 @@ import tree { Node, Measurement, NO_NODE }
 import context { outOfFlow, scrollable, overflowForAxis }
 import grid_style { GridTemplate }
 
-pub enum BoxKind { Block, Flex, Grid, Inline, InlineFormatting, Text }
+// A Table lays out its row groups, rows, column groups, columns, cells and captions
+// itself (table.silk); a TablePart (row group, row or column group) only places its
+// children where the table put them.
+pub enum BoxKind { Block, Flex, Grid, Inline, InlineFormatting, Text, Table, TablePart }
 pub struct BoxNode {
   // Fields read on every visit come first so they share one cache line.
   pub anonymousStyle: usize,
@@ -117,7 +120,7 @@ impl<'tree> BoxTree<'tree> {
         overflow = x }
       let scrolling = x == Overflow.Auto || x == Overflow.Scroll || y == Overflow.Auto || y == Overflow.Scroll
       let clipped = overflow == Overflow.Hidden && dimension.kind != DimensionKind.Auto && maximum.kind == DimensionKind.None
-      let monolithic = style.sizeContainment == SizeContainment.Size || style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
+      let monolithic = node.kind == BoxKind.Table || node.kind == BoxKind.TablePart || style.sizeContainment == SizeContainment.Size || style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
       let applicable = !outOfFlow(style) && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex || node.kind == BoxKind.Grid)
       let mut before = applicable && style.breakBefore != BreakBetween.Auto
       let mut dynamicBefore = false
@@ -299,7 +302,7 @@ impl<'tree> BoxTree<'tree> {
 
   effect fn construct(self: &mut Self, source: usize, flow: &mut Flow, inline: usize, parentWritingMode: WritingMode) ! OutOfMemoryError ? &mut Allocator {
     if self.sources[source].isText() {
-      if self.node(flow.container).kind == BoxKind.Flex || self.node(flow.container).kind == BoxKind.Grid {
+      if itemParent(self.node(flow.container).kind) {
         run flow.flexText.append(source)
         match self.sources[source].text() {
           Option<string>.Some { value } => {
@@ -324,13 +327,21 @@ impl<'tree> BoxTree<'tree> {
     }
 
     run self.flushFlexText(&mut flow)
-    let flexChild = self.node(flow.container).kind == BoxKind.Flex || self.node(flow.container).kind == BoxKind.Grid
+    let parentKind = self.node(flow.container).kind
+    let flexChild = itemParent(parentKind)
     let style = &self.styles[self.sources[source].styleIndex]
     let positioned = outOfFlow(style)
     let floating = style.float != Float.None && !flexChild && !positioned
     let blockify = flexChild || positioned || floating
     let mut display = style.display
-    if blockify { display = display.blockified() }
+    // A table's own parts keep their display; anything else in a table is blockified,
+    // as an anonymous cell would hold it.
+    let mut tablePart = false
+    if (parentKind == BoxKind.Table || parentKind == BoxKind.TablePart) && !positioned && !floating {
+      let parentDisplay = self.style(flow.container).display
+      tablePart = tablePartOf(&display, parentKind, &parentDisplay)
+    }
+    if blockify && !tablePart { display = display.blockified() }
     let inlineLevel = display.outsideIs(DisplayOutside.Inline)
     let differentWritingMode = style.writingMode != parentWritingMode
     let writingMode = style.writingMode
@@ -341,10 +352,12 @@ impl<'tree> BoxTree<'tree> {
       if display.insideIs(DisplayInside.Flex) { kind = BoxKind.Flex }
       if display.insideIs(DisplayInside.Grid) { kind = BoxKind.Grid }
       if inlineLevel && display.insideIs(DisplayInside.Flow) && !differentWritingMode { kind = BoxKind.Inline }
+      if display.insideIs(DisplayInside.Table) { kind = BoxKind.Table }
+      if tablePart && !display.insideIs(DisplayInside.TableCell) && !display.insideIs(DisplayInside.TableCaption) && !display.insideIs(DisplayInside.TableColumn) { kind = BoxKind.TablePart }
     }
     // Writing Modes 4 3.2 compares against the nearest box-generating parent;
     // contents and generated wrappers do not substitute a source parent here.
-    let independent = kind != BoxKind.Inline && (style.sizeContainment != SizeContainment.None || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
+    let independent = kind != BoxKind.Inline && (style.sizeContainment != SizeContainment.None || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || display.insideIs(DisplayInside.TableCell) || display.insideIs(DisplayInside.TableCaption) || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
     let node = BoxNode {
       source: source, styleOwner: source, anonymousStyle: NO_NODE, styleIndex: self.sources[source].styleIndex, kind: kind,
       parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE,
@@ -399,7 +412,8 @@ impl<'tree> BoxTree<'tree> {
     }
     // Replaced content is opaque even if the source API contains descendants.
     // Measured leaves retain their provider key; construction invents no text.
-    if !replaced && !measured {
+    // A column's children are not rendered (CSS 2 §17.2).
+    if !replaced && !measured && !(tablePart && display.insideIs(DisplayInside.TableColumn)) {
       let mut nested = Flow.make(id)
       run self.children(source, &mut nested, NO_NODE, writingMode)
       run self.finishFlow(&mut nested)
@@ -480,6 +494,23 @@ fn documentWhitespace(value: string) -> bool {
   return true
 }
 
+// Whether a container's children are its items: blockified, independent, with
+// text between them wrapped in anonymous blocks.
+pub fn itemParent(kind: BoxKind) -> bool {
+  return kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || kind == BoxKind.TablePart
+}
+// Whether a box of `display` is a part its table lays out: captions, column groups,
+// columns and row groups in a table, rows in a table or row group, columns in a
+// column group, and cells in a table, row group or row.
+fn tablePartOf(display: &Display, parentKind: BoxKind, parent: &Display) -> bool {
+  if parentKind == BoxKind.Table {
+    return display.isTablePart()
+  }
+  if parentKind != BoxKind.TablePart { return false }
+  if parent.insideIs(DisplayInside.TableColumnGroup) { return display.insideIs(DisplayInside.TableColumn) }
+  if parent.insideIs(DisplayInside.TableRow) { return display.insideIs(DisplayInside.TableCell) }
+  return display.insideIs(DisplayInside.TableRow) || display.insideIs(DisplayInside.TableCell)
+}
 fn anonymous(kind: BoxKind, owner: usize, slot: usize) -> BoxNode {
   return BoxNode {
     source: NO_NODE, styleOwner: owner, anonymousStyle: slot, styleIndex: NO_NODE, kind: kind,

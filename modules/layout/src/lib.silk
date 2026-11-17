@@ -32,7 +32,7 @@ pub import style {
   BoxDecorationBreak
 }
 pub import style { WhiteSpaceCollapse, TabSize, TextJustify, TextIndent }
-pub import style { BreakBetween, BreakInside, MarginBreak }
+pub import style { BreakBetween, BreakInside, MarginBreak, TableLayout, BorderCollapse, CaptionSide }
 pub import grid_style {
   MAX_GRID_TRACKS,
   GridError,

@@ -1,0 +1,829 @@
+// CSS 2 §17 table layout. The table box sizes its columns and rows from its cells and
+// lays out its parts; row groups, rows and column groups (TablePart boxes) place their
+// children where the table put them. A table is monolithic and is laid out in a
+// horizontal writing mode; percentage widths of cells and columns count as auto.
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.collections.list { List }
+import silk.core.ownership { Copy }
+import silk.num.usize
+import silk.num.u32
+import silk.num.u64
+import silk.num.f32
+import geometry { Measure, Layout, Size, Point, Rect, OptionalSize, AvailableSpace, AvailableKind, ResolvedEdges, max, min, clamp }
+import style { Style, Dimension, BoxSizing, DisplayInside, DimensionKind, TableLayout, BorderCollapse, CaptionSide }
+import tree { NO_NODE }
+import box_tree { BoxTree, BoxKind }
+import context { Input, ResolvedBox, childrenInput, outOfFlow, resolve }
+import engine { layoutNodeInPlace, probeNode }
+import layout_pass { LayoutPass }
+import text { TextMeasure, TextError }
+import fragmentation { FragmentationError }
+
+// `fixed` is a specified width, negative when none.
+struct Column { min: f32, max: f32, fixed: f32, width: f32, x: f32 }
+impl Copy for Column {}
+// `box` is NO_NODE for the anonymous row around loose cells, whose `parent` then
+// holds them; `section` indexes the row's group.
+struct Row { box: usize, parent: usize, section: usize, specified: f32, height: f32, y: f32 }
+impl Copy for Row {}
+// `rows` 0 asks for every row to the end of the group, until the group closes.
+struct Cell { box: usize, row: usize, column: usize, rows: usize, columns: usize, min: f32, max: f32, height: f32 }
+impl Copy for Cell {}
+// `box` is NO_NODE for the anonymous group around rows outside any group.
+struct Section { box: usize, first: usize, end: usize }
+impl Copy for Section {}
+struct ColumnBox { box: usize, parent: usize, first: usize, span: usize }
+impl Copy for ColumnBox {}
+
+struct Plan {
+  columns: List<Column>, rows: List<Row>, cells: List<Cell>, sections: List<Section>,
+  columnBoxes: List<ColumnBox>, captions: List<usize>,
+  // Per column, the row before which a cell spanning down into it holds it.
+  busy: List<usize>,
+  columnCount: usize, nextColumn: usize, cursor: usize,
+  openSection: bool, openRow: bool,
+}
+impl Plan {
+  fn make() -> Plan {
+    return Plan { columns: List<Column>.make(), rows: List<Row>.make(), cells: List<Cell>.make(), sections: List<Section>.make(), columnBoxes: List<ColumnBox>.make(), captions: List<usize>.make(), busy: List<usize>.make(), columnCount: 0, nextColumn: 0, cursor: 0, openSection: false, openRow: false }
+  }
+}
+
+fn display(nodes: &BoxTree<'_>, id: usize, inside: DisplayInside) -> bool { return nodes.style(id).display.insideIs(inside) }
+fn part(nodes: &BoxTree<'_>, id: usize) -> bool { return nodes.node(id).kind == BoxKind.TablePart }
+fn rowGroup(nodes: &BoxTree<'_>, id: usize) -> bool {
+  return part(nodes, id) && (display(nodes, id, DisplayInside.TableRowGroup) || display(nodes, id, DisplayInside.TableHeaderGroup) || display(nodes, id, DisplayInside.TableFooterGroup))
+}
+fn inFlow(nodes: &BoxTree<'_>, id: usize) -> bool { return !outOfFlow(nodes.style(id)) }
+fn length(value: f32) -> f32 { return max(0.0, value) }
+
+// CSS 2 §17.2.1: rows and cells outside a group or row get anonymous ones, which
+// here are only rows of the plan, never boxes.
+effect fn collect(nodes: &BoxTree<'_>, id: usize, plan: &mut Plan) ! OutOfMemoryError ? &mut Allocator {
+  // §17.2: the first header group goes first and the first footer group last.
+  let mut header = NO_NODE
+  let mut footer = NO_NODE
+  let mut child = nodes.node(id).firstChild
+  while child != NO_NODE {
+    if inFlow(nodes, child) && part(nodes, child) {
+      if header == NO_NODE && display(nodes, child, DisplayInside.TableHeaderGroup) { header = child }
+      if footer == NO_NODE && display(nodes, child, DisplayInside.TableFooterGroup) { footer = child }
+    }
+    child = nodes.node(child).nextSibling
+  }
+  if header != NO_NODE { run addSection(nodes, &mut plan, header) }
+  child = nodes.node(id).firstChild
+  while child != NO_NODE {
+    if inFlow(nodes, child) && child != header && child != footer {
+      if display(nodes, child, DisplayInside.TableCaption) {
+        closeSection(&mut plan)
+        run plan.captions.append(child)
+      } else if part(nodes, child) && display(nodes, child, DisplayInside.TableColumnGroup) {
+        run addColumnGroup(nodes, &mut plan, child)
+      } else if display(nodes, child, DisplayInside.TableColumn) {
+        run addColumn(nodes, &mut plan, child, id)
+      } else if rowGroup(nodes, child) {
+        run addSection(nodes, &mut plan, child)
+      } else if part(nodes, child) && display(nodes, child, DisplayInside.TableRow) {
+        run openSection(&mut plan)
+        run addRow(nodes, &mut plan, child, id)
+      } else {
+        run openSection(&mut plan)
+        run addLooseCell(nodes, &mut plan, child, id)
+      }
+    }
+    child = nodes.node(child).nextSibling
+  }
+  closeSection(&mut plan)
+  if footer != NO_NODE { run addSection(nodes, &mut plan, footer) }
+  if plan.nextColumn > plan.columnCount { plan.columnCount = plan.nextColumn }
+  let mut index: usize = 0
+  while index < plan.columnCount {
+    run plan.columns.append(Column { min: 0.0, max: 0.0, fixed: -1.0, width: 0.0, x: 0.0 })
+    index = index + 1
+  }
+}
+
+effect fn openSection(plan: &mut Plan) ! OutOfMemoryError ? &mut Allocator {
+  if plan.openSection { return }
+  run plan.sections.append(Section { box: NO_NODE, first: plan.rows.length(), end: plan.rows.length() })
+  plan.busy.clear()
+  plan.openSection = true
+  plan.openRow = false
+}
+
+// Ends the group being filled: cells spanning past its last row stop there.
+fn closeSection(plan: &mut Plan) {
+  if !plan.openSection { return }
+  plan.openSection = false
+  plan.openRow = false
+  let last = plan.sections.length() - 1
+  let end = plan.rows.length()
+  let sections = plan.sections.asMutSlice()
+  sections[last].end = end
+  let cells = plan.cells.asMutSlice()
+  let mut index = cells.length
+  while index > 0 {
+    index = index - 1
+    if cells[index].row < plan.sections.asSlice()[last].first { break }
+    if cells[index].rows == 0 || cells[index].row + cells[index].rows > end { cells[index].rows = end - cells[index].row }
+  }
+}
+
+effect fn addSection(nodes: &BoxTree<'_>, plan: &mut Plan, section: usize) ! OutOfMemoryError ? &mut Allocator {
+  closeSection(&mut plan)
+  run plan.sections.append(Section { box: section, first: plan.rows.length(), end: plan.rows.length() })
+  plan.busy.clear()
+  plan.openSection = true
+  plan.openRow = false
+  let mut child = nodes.node(section).firstChild
+  while child != NO_NODE {
+    if inFlow(nodes, child) {
+      if part(nodes, child) && display(nodes, child, DisplayInside.TableRow) { run addRow(nodes, &mut plan, child, section) }
+      else { run addLooseCell(nodes, &mut plan, child, section) }
+    }
+    child = nodes.node(child).nextSibling
+  }
+  closeSection(&mut plan)
+}
+
+effect fn startRow(nodes: &BoxTree<'_>, plan: &mut Plan, row: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
+  let mut specified: f32 = 0.0
+  if row != NO_NODE && nodes.style(row).height.kind == DimensionKind.Length { specified = length(nodes.style(row).height.value) }
+  run plan.rows.append(Row { box: row, parent: parent, section: plan.sections.length() - 1, specified: specified, height: 0.0, y: 0.0 })
+  plan.cursor = 0
+}
+
+effect fn addRow(nodes: &BoxTree<'_>, plan: &mut Plan, row: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
+  plan.openRow = false
+  run startRow(nodes, &mut plan, row, parent)
+  let mut child = nodes.node(row).firstChild
+  while child != NO_NODE {
+    if inFlow(nodes, child) { run addCell(nodes, &mut plan, child) }
+    child = nodes.node(child).nextSibling
+  }
+}
+
+effect fn addLooseCell(nodes: &BoxTree<'_>, plan: &mut Plan, cell: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
+  if !plan.openRow {
+    run startRow(nodes, &mut plan, NO_NODE, parent)
+    plan.openRow = true
+  }
+  run addCell(nodes, &mut plan, cell)
+}
+
+// HTML's table forming algorithm: a cell takes the first column of its row that no
+// cell from a row above still spans into.
+effect fn addCell(nodes: &BoxTree<'_>, plan: &mut Plan, cell: usize) ! OutOfMemoryError ? &mut Allocator {
+  let row = plan.rows.length() - 1
+  let style = nodes.style(cell)
+  let columns = max(1.0, usize.toF32(style.columnSpan))
+  let span = f32.toUsize(min(columns, 1000.0))
+  let mut column = plan.cursor
+  while column < plan.busy.length() && plan.busy.get(column) > row { column = column + 1 }
+  let mut reach = usize.MAX
+  if style.rowSpan != 0 { reach = row + style.rowSpan }
+  let mut index = column
+  while index < column + span {
+    while plan.busy.length() <= index { run plan.busy.append(0) }
+    let busy = plan.busy.asMutSlice()
+    busy[index] = reach
+    index = index + 1
+  }
+  run plan.cells.append(Cell { box: cell, row: row, column: column, rows: style.rowSpan, columns: span, min: 0.0, max: 0.0, height: 0.0 })
+  plan.cursor = column + span
+  if plan.cursor > plan.columnCount { plan.columnCount = plan.cursor }
+}
+
+effect fn addColumnGroup(nodes: &BoxTree<'_>, plan: &mut Plan, group: usize) ! OutOfMemoryError ? &mut Allocator {
+  let first = plan.nextColumn
+  let mut child = nodes.node(group).firstChild
+  let mut any = false
+  while child != NO_NODE {
+    if inFlow(nodes, child) && display(nodes, child, DisplayInside.TableColumn) {
+      run addColumn(nodes, &mut plan, child, group)
+      any = true
+    }
+    child = nodes.node(child).nextSibling
+  }
+  if !any { plan.nextColumn = plan.nextColumn + larger(1, nodes.style(group).columnSpan) }
+  run plan.columnBoxes.append(ColumnBox { box: group, parent: NO_NODE, first: first, span: plan.nextColumn - first })
+}
+
+effect fn addColumn(nodes: &BoxTree<'_>, plan: &mut Plan, column: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
+  let span = larger(1, nodes.style(column).columnSpan)
+  run plan.columnBoxes.append(ColumnBox { box: column, parent: parent, first: plan.nextColumn, span: span })
+  plan.nextColumn = plan.nextColumn + span
+}
+
+fn larger(a: usize, b: usize) -> usize {
+  if a > b { return a }
+  return b
+}
+
+// The geometry the table works in: spacing, and the edges its grid sits inside.
+struct Frame { spacingX: f32, spacingY: f32, left: f32, right: f32, top: f32, bottom: f32, collapse: bool }
+impl Copy for Frame {}
+
+fn frameOf(style: &Style, box: &ResolvedBox) -> Frame {
+  // §17.6.2: collapsing borders have no spacing, and the table no padding.
+  if style.borderCollapse == BorderCollapse.Collapse {
+    return Frame { spacingX: 0.0, spacingY: 0.0, left: box.border.left, right: box.border.right, top: box.border.top, bottom: box.border.bottom, collapse: true }
+  }
+  return Frame { spacingX: length(style.borderSpacingX), spacingY: length(style.borderSpacingY), left: box.inset.left, right: box.inset.right, top: box.inset.top, bottom: box.inset.bottom, collapse: false }
+}
+
+// How far a collapsed cell reaches over its neighbours' borders: over the one
+// before it by its own start border, and over the table's border at the table's edges.
+struct Overlap { left: f32, right: f32, top: f32, bottom: f32 }
+impl Copy for Overlap {}
+
+fn overlapOf(nodes: &BoxTree<'_>, frame: &Frame, cell: &Cell, columns: usize, rows: usize) -> Overlap {
+  if !frame.collapse { return Overlap { left: 0.0, right: 0.0, top: 0.0, bottom: 0.0 } }
+  let style = nodes.style(cell.box)
+  let mut result = Overlap {
+    left: length(resolve(style.border.left, 0.0, false, 0.0)), right: 0.0,
+    top: length(resolve(style.border.top, 0.0, false, 0.0)), bottom: 0.0,
+  }
+  if cell.column == 0 { result.left = frame.left }
+  if cell.row == 0 { result.top = frame.top }
+  if cell.column + cell.columns >= columns { result.right = frame.right }
+  if cell.row + cell.rows >= rows { result.bottom = frame.bottom }
+  return result
+}
+
+// A length width as a border-box width; zero for any other width.
+fn specifiedWidth(style: &Style) -> f32 {
+  if style.width.kind != DimensionKind.Length { return 0.0 }
+  let mut width = length(style.width.value)
+  if style.boxSizing == BoxSizing.ContentBox {
+    width = width + edge(style.padding.left) + edge(style.padding.right) + edge(style.border.left) + edge(style.border.right)
+  }
+  return width
+}
+fn edge(value: Dimension) -> f32 { return length(resolve(value, 0.0, false, 0.0)) }
+
+fn widthProbe(base: &Input, minimum: bool) -> Input {
+  let mut probe = base.*
+  probe.performLayout = false
+  probe.baselines = false
+  probe.fullSize = false
+  probe.intrinsicWidth = true
+  probe.known = OptionalSize.none()
+  probe.availableWidth = AvailableSpace.maxContent()
+  if minimum { probe.availableWidth = AvailableSpace.minContent() }
+  return probe
+}
+
+fn sized(base: &Input, width: f32, height: f32, heightKnown: bool, performLayout: bool) -> Input {
+  let mut request = base.*
+  request.performLayout = performLayout
+  request.baselines = performLayout
+  request.known = OptionalSize { width: width, height: height, widthDefinite: true, heightDefinite: heightKnown }
+  request.availableWidth = AvailableSpace.definite(width)
+  request.availableHeight = AvailableSpace.maxContent()
+  if heightKnown { request.availableHeight = AvailableSpace.definite(height) }
+  return request
+}
+
+// Column minimum and maximum widths from the cells (§17.5.2.2) or, in the fixed
+// layout, specified widths from the columns and the first row (§17.5.2.1).
+effect fn columnWidths<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, plan: &mut Plan, base: &Input, frame: &Frame, fixed: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let count = plan.columns.length()
+  let rowCount = plan.rows.length()
+  let mut index: usize = 0
+  while index < plan.columnBoxes.length() {
+    let entry = plan.columnBoxes.get(index)
+    let style = nodes.style(entry.box)
+    if display(nodes, entry.box, DisplayInside.TableColumn) && style.width.kind == DimensionKind.Length {
+      let mut column = entry.first
+      while column < entry.first + entry.span && column < count {
+        let columns = plan.columns.asMutSlice()
+        columns[column].fixed = max(columns[column].fixed, length(style.width.value))
+        columns[column].min = max(columns[column].min, columns[column].fixed)
+        columns[column].max = max(columns[column].max, columns[column].fixed)
+        column = column + 1
+      }
+    }
+    index = index + 1
+  }
+  index = 0
+  while index < plan.cells.length() {
+    let cell = plan.cells.get(index)
+    let lengthWidth = nodes.style(cell.box).width.kind == DimensionKind.Length
+    if !fixed || (cell.row == 0 && lengthWidth) {
+      let overlap = overlapOf(nodes, frame, &cell, count, rowCount)
+      let shared = overlap.left + overlap.right
+      // A probe sizes the content; a set width is the cell's own (§17.5.2.2).
+      let specified = specifiedWidth(nodes.style(cell.box))
+      let mut low: f32 = 0.0
+      let mut high = specified
+      if !fixed {
+        run probeNode(nodes, &mut output, &mut measurer, cell.box, &widthProbe(base, true))
+        low = max(output.boxes[cell.box].size.width, specified)
+        if !lengthWidth {
+          run probeNode(nodes, &mut output, &mut measurer, cell.box, &widthProbe(base, false))
+          high = output.boxes[cell.box].size.width
+        }
+      }
+      low = max(0.0, low - shared)
+      high = max(low, high - shared)
+      let cells = plan.cells.asMutSlice()
+      cells[index].min = low
+      cells[index].max = high
+      if cell.columns == 1 {
+        let columns = plan.columns.asMutSlice()
+        if fixed {
+          if columns[cell.column].fixed < 0.0 { columns[cell.column].fixed = high }
+        } else {
+          columns[cell.column].min = max(columns[cell.column].min, low)
+          columns[cell.column].max = max(columns[cell.column].max, high)
+          if lengthWidth { columns[cell.column].fixed = max(columns[cell.column].fixed, high) }
+        }
+      }
+    }
+    index = index + 1
+  }
+  // Spanning cells spread what their columns lack over them, narrowest spans first.
+  let mut span: usize = 2
+  let mut widest: usize = 1
+  index = 0
+  while index < plan.cells.length() {
+    widest = larger(widest, plan.cells.get(index).columns)
+    index = index + 1
+  }
+  while span <= widest {
+    index = 0
+    while index < plan.cells.length() {
+      let cell = plan.cells.get(index)
+      if cell.columns == span && (!fixed || (cell.row == 0 && nodes.style(cell.box).width.kind == DimensionKind.Length)) {
+        let end = min(usize.toF32(cell.column + span), usize.toF32(count))
+        let last = f32.toUsize(end)
+        let gaps = frame.spacingX * usize.toF32(span - 1)
+        if fixed {
+          // The fixed layout splits a spanning cell's width over its columns without one.
+          let mut free: usize = 0
+          let mut taken: f32 = 0.0
+          let mut column = cell.column
+          while column < last {
+            if plan.columns.get(column).fixed < 0.0 { free = free + 1 }
+            else { taken = taken + plan.columns.get(column).fixed }
+            column = column + 1
+          }
+          if free > 0 {
+            let share = max(0.0, cell.max - gaps - taken) / usize.toF32(free)
+            column = cell.column
+            while column < last {
+              if plan.columns.get(column).fixed < 0.0 {
+                let columns = plan.columns.asMutSlice()
+                columns[column].fixed = share
+              }
+              column = column + 1
+            }
+          }
+        } else {
+          spread(plan.columns.asMutSlice(), cell.column, last, cell.min - gaps, true)
+          spread(plan.columns.asMutSlice(), cell.column, last, cell.max - gaps, false)
+        }
+      }
+      index = index + 1
+    }
+    span = span + 1
+  }
+}
+
+// Grows columns [first, end) so their minimums (or maximums) reach `needed`, in
+// proportion to their maximums, evenly when those are all zero.
+fn spread(columns: &mut [Column], first: usize, end: usize, needed: f32, minimum: bool) {
+  let mut have: f32 = 0.0
+  let mut weight: f32 = 0.0
+  let mut column = first
+  while column < end {
+    if minimum { have = have + columns[column].min }
+    else { have = have + columns[column].max }
+    weight = weight + columns[column].max
+    column = column + 1
+  }
+  let lack = needed - have
+  if lack <= 0.0 || end <= first { return }
+  column = first
+  while column < end {
+    let mut share = lack / usize.toF32(end - first)
+    if weight > 0.0 { share = lack * columns[column].max / weight }
+    if minimum {
+      columns[column].min = columns[column].min + share
+      columns[column].max = max(columns[column].max, columns[column].min)
+    } else { columns[column].max = columns[column].max + share }
+    column = column + 1
+  }
+}
+
+fn spacing(frame: &Frame, count: usize) -> f32 {
+  if count == 0 { return 0.0 }
+  return frame.spacingX * usize.toF32(count + 1)
+}
+
+// Gives the columns `available` width: between their minimums and maximums in
+// proportion, and beyond the maximums mostly to columns without a set width.
+fn distribute(columns: &mut [Column], available: f32, fixed: bool) {
+  if columns.length == 0 { return }
+  let mut index: usize = 0
+  if fixed {
+    let mut taken: f32 = 0.0
+    let mut free: usize = 0
+    while index < columns.length {
+      if columns[index].fixed < 0.0 { free = free + 1 }
+      else { taken = taken + columns[index].fixed }
+      index = index + 1
+    }
+    let rest = available - taken
+    index = 0
+    while index < columns.length {
+      if columns[index].fixed >= 0.0 { columns[index].width = columns[index].fixed }
+      else { columns[index].width = max(0.0, rest / usize.toF32(free)) }
+      if free == 0 && rest > 0.0 {
+        if taken > 0.0 { columns[index].width = columns[index].fixed + rest * columns[index].fixed / taken }
+        else { columns[index].width = rest / usize.toF32(columns.length) }
+      }
+      index = index + 1
+    }
+    return
+  }
+  let mut low: f32 = 0.0
+  let mut high: f32 = 0.0
+  let mut autoHigh: f32 = 0.0
+  let mut autoCount: usize = 0
+  while index < columns.length {
+    low = low + columns[index].min
+    high = high + columns[index].max
+    if columns[index].fixed < 0.0 {
+      autoHigh = autoHigh + columns[index].max
+      autoCount = autoCount + 1
+    }
+    index = index + 1
+  }
+  index = 0
+  let total = columns.length
+  while index < total {
+    let column = &mut columns[index]
+    if available <= low { column.width = column.min }
+    else if available <= high {
+      column.width = column.min + (column.max - column.min) * (available - low) / (high - low)
+    } else {
+      let extra = available - high
+      column.width = column.max
+      if autoCount > 0 {
+        if column.fixed < 0.0 {
+          if autoHigh > 0.0 { column.width = column.max + extra * column.max / autoHigh }
+          else { column.width = column.max + extra / usize.toF32(autoCount) }
+        }
+      } else if high > 0.0 { column.width = column.max + extra * column.max / high }
+      else { column.width = column.max + extra / usize.toF32(total) }
+    }
+    index = index + 1
+  }
+}
+
+fn spanned(plan: &Plan, frame: &Frame, cell: &Cell) -> f32 {
+  let end = cell.column + cell.columns
+  let columns = plan.columns.asSlice()
+  if end > columns.length || cell.columns == 0 { return 0.0 }
+  return columns[end - 1].x + columns[end - 1].width - columns[cell.column].x
+}
+
+fn rowsSpanned(plan: &Plan, cell: &Cell) -> f32 {
+  let rows = plan.rows.asSlice()
+  let last = cell.row + larger(1, cell.rows) - 1
+  return rows[last].y + rows[last].height - rows[cell.row].y
+}
+
+const OFFSET: u64 = 14695981039346656037
+const PRIME: u64 = 1099511628211
+fn mix(hash: u64, value: f32) -> u64 { return u64.wrappingMultiply(u64.bitXor(hash, u32.toU64(f32.toBits(value))), PRIME) }
+
+fn setSlot(output: &mut LayoutPass<'_, '_>, id: usize, rect: Rect) {
+  let slots = output.tableSlots.asMutSlice()
+  slots[id] = rect
+}
+
+effect fn reserveSlots(output: &mut LayoutPass<'_, '_>, count: usize) ! OutOfMemoryError ? &mut Allocator {
+  while output.tableSlots.length() < count { run output.tableSlots.append(Rect.zero()) }
+  while output.tablePlans.length() < count { run output.tablePlans.append(0) }
+}
+
+fn relative(rect: Rect, origin: Rect) -> Rect { return Rect { x: rect.x - origin.x, y: rect.y - origin.y, width: rect.width, height: rect.height } }
+
+pub effect fn layoutTable<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let style = nodes.style(id)
+  let mut plan = Plan.make()
+  run collect(nodes, id, &mut plan)
+  let frame = frameOf(style, box)
+  let mut base = childrenInput(input, style, box, OptionalSize.none())
+  base.fragmentation.active = false
+  let fixed = style.tableLayout == TableLayout.Fixed && style.width.kind != DimensionKind.Auto
+  run columnWidths(nodes, &mut output, &mut measurer, &mut plan, &base, &frame, fixed)
+  let count = plan.columns.length()
+  let rowCount = plan.rows.length()
+  let insetWidth = frame.left + frame.right
+  let gaps = spacing(&frame, count)
+  let mut low: f32 = 0.0
+  let mut high: f32 = 0.0
+  let mut index: usize = 0
+  while index < count {
+    let column = plan.columns.get(index)
+    if fixed {
+      low = low + max(0.0, column.fixed)
+      high = high + max(0.0, column.fixed)
+    } else {
+      low = low + column.min
+      high = high + column.max
+    }
+    index = index + 1
+  }
+  let mut tableMin = low + gaps + insetWidth
+  let mut tableMax = high + gaps + insetWidth
+  // §17.4: the table is at least as wide as its captions need.
+  index = 0
+  while index < plan.captions.length() {
+    let caption = plan.captions.get(index)
+    run probeNode(nodes, &mut output, &mut measurer, caption, &widthProbe(&base, true))
+    tableMin = max(tableMin, output.boxes[caption].size.width + insetWidth)
+    tableMax = max(tableMax, tableMin)
+    index = index + 1
+  }
+  let mut width = tableMax
+  if box.size.widthDefinite { width = box.size.width }
+  else if input.intrinsicWidth && input.availableWidth.kind == AvailableKind.MinContent { width = tableMin }
+  else if !input.intrinsicWidth && input.availableWidth.kind == AvailableKind.Definite { width = clamp(input.availableWidth.value - box.margin.horizontal(), tableMin, tableMax) }
+  if !box.size.widthDefinite { width = clamp(width, box.min.width, box.max.width) }
+  width = max(width, tableMin)
+  distribute(plan.columns.asMutSlice(), width - insetWidth - gaps, fixed)
+  let mut x = frame.left + frame.spacingX
+  index = 0
+  while index < count {
+    let columns = plan.columns.asMutSlice()
+    columns[index].x = x
+    x = x + columns[index].width + frame.spacingX
+    index = index + 1
+  }
+
+  let mut result = Layout.zero()
+  if input.intrinsicWidth && !input.fullSize {
+    result.size = Size { width: width, height: box.inset.vertical() }
+    return result
+  }
+  // Rows are as tall as their cells, and cells spanning rows spread what they lack.
+  index = 0
+  while index < rowCount {
+    let rows = plan.rows.asMutSlice()
+    rows[index].height = rows[index].specified
+    index = index + 1
+  }
+  index = 0
+  while index < plan.cells.length() {
+    let cell = plan.cells.get(index)
+    let overlap = overlapOf(nodes, &frame, &cell, count, rowCount)
+    let cellWidth = spanned(&plan, &frame, &cell) + overlap.left + overlap.right
+    run probeNode(nodes, &mut output, &mut measurer, cell.box, &sized(&base, cellWidth, 0.0, false, false))
+    let height = max(0.0, output.boxes[cell.box].size.height - overlap.top - overlap.bottom)
+    let cells = plan.cells.asMutSlice()
+    cells[index].height = height
+    if cell.rows <= 1 {
+      let rows = plan.rows.asMutSlice()
+      rows[cell.row].height = max(rows[cell.row].height, height)
+    }
+    index = index + 1
+  }
+  index = 0
+  while index < plan.cells.length() {
+    let cell = plan.cells.get(index)
+    if cell.rows > 1 {
+      let mut have = frame.spacingY * usize.toF32(cell.rows - 1)
+      let mut row = cell.row
+      while row < cell.row + cell.rows {
+        have = have + plan.rows.get(row).height
+        row = row + 1
+      }
+      if cell.height > have {
+        let share = (cell.height - have) / usize.toF32(cell.rows)
+        row = cell.row
+        while row < cell.row + cell.rows {
+          let rows = plan.rows.asMutSlice()
+          rows[row].height = rows[row].height + share
+          row = row + 1
+        }
+      }
+    }
+    index = index + 1
+  }
+  let captionWidth = max(0.0, width - insetWidth)
+  let mut above: f32 = 0.0
+  let mut below: f32 = 0.0
+  index = 0
+  while index < plan.captions.length() {
+    let caption = plan.captions.get(index)
+    run probeNode(nodes, &mut output, &mut measurer, caption, &sized(&base, captionWidth, 0.0, false, false))
+    if nodes.style(caption).captionSide == CaptionSide.Bottom { below = below + output.boxes[caption].size.height }
+    else { above = above + output.boxes[caption].size.height }
+    index = index + 1
+  }
+  let mut rowsHeight: f32 = 0.0
+  index = 0
+  while index < rowCount {
+    rowsHeight = rowsHeight + plan.rows.get(index).height
+    index = index + 1
+  }
+  let mut grid: f32 = 0.0
+  if rowCount > 0 { grid = rowsHeight + frame.spacingY * usize.toF32(rowCount + 1) }
+  let natural = frame.top + frame.bottom + above + grid + below
+  let mut height = clamp(natural, box.min.height, box.max.height)
+  if box.size.heightDefinite { height = box.size.height }
+  height = max(height, natural)
+  // §17.5.3: a taller table makes its rows taller.
+  if height > natural && rowCount > 0 {
+    let share = (height - natural) / usize.toF32(rowCount)
+    index = 0
+    while index < rowCount {
+      let rows = plan.rows.asMutSlice()
+      rows[index].height = rows[index].height + share
+      index = index + 1
+    }
+  }
+  let gridTop = frame.top + above
+  let mut y = gridTop + frame.spacingY
+  index = 0
+  while index < rowCount {
+    let rows = plan.rows.asMutSlice()
+    rows[index].y = y
+    y = y + rows[index].height + frame.spacingY
+    index = index + 1
+  }
+  result.size = Size { width: width, height: height }
+  if !input.performLayout { return result }
+
+  run reserveSlots(&mut output, nodes.boxes.length())
+  let mut gridLeft = frame.left + frame.spacingX
+  let mut gridRight = gridLeft
+  if count > 0 { gridRight = plan.columns.get(count - 1).x + plan.columns.get(count - 1).width }
+  let mut rowsTop = gridTop + frame.spacingY
+  let mut rowsBottom = rowsTop
+  if rowCount > 0 { rowsBottom = plan.rows.get(rowCount - 1).y + plan.rows.get(rowCount - 1).height }
+  if frame.collapse {
+    gridLeft = 0.0
+    gridRight = width
+  }
+  let mut sectionRects = List<Rect>.make()
+  index = 0
+  while index < plan.sections.length() {
+    let section = plan.sections.get(index)
+    let mut top = rowsTop
+    let mut bottom = rowsTop
+    if section.first < section.end {
+      top = plan.rows.get(section.first).y
+      bottom = plan.rows.get(section.end - 1).y + plan.rows.get(section.end - 1).height
+    } else if section.first < rowCount { top = plan.rows.get(section.first).y
+      bottom = top }
+    let rect = Rect { x: gridLeft, y: top, width: gridRight - gridLeft, height: bottom - top }
+    run sectionRects.append(rect)
+    if section.box != NO_NODE { setSlot(&mut output, section.box, rect) }
+    index = index + 1
+  }
+  let zero = Rect.zero()
+  let mut rowRects = List<Rect>.make()
+  index = 0
+  while index < rowCount {
+    let row = plan.rows.get(index)
+    let rect = Rect { x: gridLeft, y: row.y, width: gridRight - gridLeft, height: row.height }
+    run rowRects.append(rect)
+    if row.box != NO_NODE {
+      let mut origin = zero
+      if row.parent != id { origin = sectionRects.get(row.section) }
+      setSlot(&mut output, row.box, relative(rect, origin))
+    }
+    index = index + 1
+  }
+  index = 0
+  while index < plan.cells.length() {
+    let cell = plan.cells.get(index)
+    let overlap = overlapOf(nodes, &frame, &cell, count, rowCount)
+    let mut rect = Rect { x: frame.left, y: rowsTop, width: 0.0, height: 0.0 }
+    if cell.column < count { rect.x = plan.columns.get(cell.column).x }
+    rect.y = plan.rows.get(cell.row).y
+    rect.width = spanned(&plan, &frame, &cell)
+    rect.height = rowsSpanned(&plan, &cell)
+    rect.x = rect.x - overlap.left
+    rect.y = rect.y - overlap.top
+    rect.width = rect.width + overlap.left + overlap.right
+    rect.height = rect.height + overlap.top + overlap.bottom
+    let row = plan.rows.get(cell.row)
+    let mut origin = zero
+    if row.box != NO_NODE { origin = rowRects.get(cell.row) }
+    else if row.parent != id { origin = sectionRects.get(row.section) }
+    setSlot(&mut output, cell.box, relative(rect, origin))
+    index = index + 1
+  }
+  // Column groups first: their columns sit inside them.
+  let mut pass: usize = 0
+  while pass < 2 {
+    index = 0
+    while index < plan.columnBoxes.length() {
+      let entry = plan.columnBoxes.get(index)
+      if (entry.parent == NO_NODE) == (pass == 0) {
+        let mut rect = Rect { x: gridLeft, y: rowsTop, width: 0.0, height: rowsBottom - rowsTop }
+        if entry.first < count && entry.span > 0 {
+          let end = f32.toUsize(min(usize.toF32(entry.first + entry.span), usize.toF32(count))) - 1
+          rect.x = plan.columns.get(entry.first).x
+          rect.width = plan.columns.get(end).x + plan.columns.get(end).width - rect.x
+        }
+        let mut origin = zero
+        if entry.parent != id && entry.parent != NO_NODE { origin = output.tableSlots.get(entry.parent) }
+        setSlot(&mut output, entry.box, relative(rect, origin))
+      }
+      index = index + 1
+    }
+    pass = pass + 1
+  }
+  let mut captionTop = frame.top
+  let mut captionBottom = gridTop + grid
+  index = 0
+  while index < plan.captions.length() {
+    let caption = plan.captions.get(index)
+    let height = output.boxes[caption].size.height
+    let mut rect = Rect { x: frame.left, y: captionTop, width: captionWidth, height: height }
+    if nodes.style(caption).captionSide == CaptionSide.Bottom {
+      rect.y = captionBottom
+      captionBottom = captionBottom + height
+    } else { captionTop = captionTop + height }
+    setSlot(&mut output, caption, rect)
+    index = index + 1
+  }
+  // A part is kept only while what it places is placed where it was.
+  index = 0
+  while index < plan.sections.length() {
+    let section = plan.sections.get(index).box
+    if section != NO_NODE { run digest(nodes, &mut output, section) }
+    index = index + 1
+  }
+  index = 0
+  while index < rowCount {
+    let row = plan.rows.get(index).box
+    if row != NO_NODE { run digest(nodes, &mut output, row) }
+    index = index + 1
+  }
+  index = 0
+  while index < plan.columnBoxes.length() {
+    let entry = plan.columnBoxes.get(index)
+    if part(nodes, entry.box) { run digest(nodes, &mut output, entry.box) }
+    index = index + 1
+  }
+  run placeChildren(nodes, &mut output, &mut measurer, id, &base, input.performLayout)
+  return result
+}
+
+effect fn digest(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize) ! OutOfMemoryError ? &mut Allocator {
+  let mut hash = OFFSET
+  let mut child = nodes.node(id).firstChild
+  while child != NO_NODE {
+    if inFlow(nodes, child) {
+      let slot = output.tableSlots.get(child)
+      hash = mix(mix(mix(mix(hash, slot.x), slot.y), slot.width), slot.height)
+      hash = u64.wrappingMultiply(u64.bitXor(hash, output.tablePlans.get(child)), PRIME)
+    }
+    child = nodes.node(child).nextSibling
+  }
+  let plans = output.tablePlans.asMutSlice()
+  plans[id] = hash
+}
+
+effect fn placeChildren<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, base: &Input, performLayout: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let mut child = nodes.node(id).firstChild
+  while child != NO_NODE {
+    if inFlow(nodes, child) {
+      let mut slot = Rect.zero()
+      let mut plan: u64 = 0
+      if child < output.tableSlots.length() {
+        slot = output.tableSlots.get(child)
+        plan = output.tablePlans.get(child)
+      }
+      let mut request = sized(base, slot.width, slot.height, true, performLayout)
+      request.tablePlan = plan
+      run layoutNodeInPlace(nodes, &mut output, &mut measurer, child, &request)
+      run output.place(child, Point { x: slot.x, y: slot.y }, ResolvedEdges.zero(), false, performLayout)
+    }
+    child = nodes.node(child).nextSibling
+  }
+}
+
+// A row group, row or column group, sized by its table: it places its children
+// where the table put them.
+pub effect fn layoutTablePart<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let mut result = Layout.zero()
+  result.size = Size { width: box.size.width, height: box.size.height }
+  if !box.size.widthDefinite { result.size.width = box.inset.horizontal() }
+  if !box.size.heightDefinite { result.size.height = box.inset.vertical() }
+  if !input.performLayout { return result }
+  let mut base = childrenInput(input, nodes.style(id), box, OptionalSize.none())
+  base.fragmentation.active = false
+  run placeChildren(nodes, &mut output, &mut measurer, id, &base, true)
+  return result
+}
