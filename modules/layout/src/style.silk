@@ -114,6 +114,9 @@ pub struct Style {
   // A cell's columns and rows, and a column's columns, from the host's `colspan`,
   // `rowspan` and `span` attributes. A row span of 0 reaches the end of the row group.
   pub columnSpan: usize, pub rowSpan: usize,
+  // Tree-managed handle of the `shape-outside` area, 0 for none; setStyle
+  // preserves it and Tree.setShape replaces it, as with `grid`.
+  pub shape: u32,
 }
 // Plain data: every field is a value or a tree-managed handle.
 impl Copy for Style {}
@@ -189,6 +192,7 @@ impl Style {
       aspectRatio: 0.0, aspectRatioAuto: false, replaced: false,
       tableLayout: TableLayout.Auto, borderCollapse: BorderCollapse.Separate, captionSide: CaptionSide.Top,
       borderSpacingX: 0.0, borderSpacingY: 0.0, columnSpan: 1, rowSpan: 1,
+      shape: 0,
     }
   }
 }
