@@ -77,6 +77,11 @@ effect fn shapes() -> () ! AssertionError<'static> | CssError | OutOfMemoryError
     "a known function",
   )
   run shaped(b"blur(4px)", b"blur(4px)", "a filter function")
+  run unshaped(
+    b"linear-gradient(90deg, oklch(72% 0.21 305), red)",
+    b"linear-gradient(90deg, oklch(72% 0.21 305), red)",
+    "a gradient with a non-legacy stop keeps the stop as written",
+  )
 }
 
 effect fn math() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
