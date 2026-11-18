@@ -7,9 +7,13 @@ import silk.core.effect { Effect }
 import silk.core.option { Option }
 import silk.testing.testing { Testing, AssertionError }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize }
-import style { Style, Dimension, SizeValue, ColumnFill, ColumnSpan, BreakBetween, Direction, Display, DisplayOutside, DisplayInside, FlexDirection }
+import style { Style, Dimension, Edges, SizeValue, ColumnFill, ColumnSpan, BreakBetween, Direction, WritingMode, Display, DisplayOutside, DisplayInside, FlexDirection }
 import tree { Tree, LayoutTree, InvalidNode, NodeId }
 import engine { compute }
+import fragment_flow { computeFragmented }
+import fragmentation { Fragmentainers, FragmentAncestor }
+import geometry { Point }
+import breaks { FragmentainerKind }
 
 // Measured leaves are `key` pixels tall and as wide as offered; fonts are 10px.
 struct Leaves {}
@@ -188,4 +192,177 @@ effect fn widthsSpansAndFill() ! OutOfMemoryError | TextError | FragmentationErr
 test effect fn multicolWidthsSpannersBreaksAndFill() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run widthsSpansAndFill() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn nestedColumns() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let rootId = tree.root()
+  // Outer: two 45px columns. Inner, in the first outer column: two 17.5px columns.
+  let outer = run tree.append(rootId, columns(2))
+  let mut innerStyle = columns(2)
+  innerStyle.width = SizeValue.auto()
+  let inner = run tree.append(outer, innerStyle)
+  let a = run leaf(&mut tree, inner, 10)
+  let b = run leaf(&mut tree, inner, 10)
+  let after = run leaf(&mut tree, outer, 10)
+  let mut output = LayoutTree.make()
+  let mut host = Leaves {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectAt(&output, a, 0.0, 0.0, "nested: first inner column")
+  run expectAt(&output, b, 27.5, 0.0, "nested: second inner column, inside the first outer one")
+  let rect = run rectOf(&output, b)
+  run Testing.expect(rect.width == 17.5, "nested: inner columns share the outer column's width")
+  run expectAt(&output, after, 55.0, 0.0, "nested: what follows balances into the second outer column")
+}
+test effect fn multicolNestedContainersSplit() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run nestedColumns() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+fn pageFrames<'a>(rects: &'a [Rect]) -> Fragmentainers<'a> {
+  return Fragmentainers {
+    rects: Option<&'a [Rect]>.Some { value: rects }, repeatStep: Option<Point>.None, uniform: Option<Rect>.None,
+    contexts: Option<&'a [FragmentainerKind]>.None, ancestors: Option<&'a [FragmentAncestor]>.None,
+    kind: FragmentainerKind.Page, writingMode: WritingMode.HorizontalTb,
+    direction: Direction.Ltr, firstPageRight: true, rectoOnRight: true,
+  }
+}
+
+effect fn pagedColumns() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let rootId = tree.root()
+  let tall = run leaf(&mut tree, rootId, 90)
+  let container = run tree.append(rootId, columns(2))
+  let a = run leaf(&mut tree, container, 10)
+  let b = run leaf(&mut tree, container, 10)
+  let c = run leaf(&mut tree, container, 10)
+  let mut pages = List<Rect>.make()
+  run pages.append(Rect { x: 0.0, y: 0.0, width: 300.0, height: 100.0 })
+  run pages.append(Rect { x: 0.0, y: 120.0, width: 300.0, height: 100.0 })
+  let frames = pageFrames(pages.asSlice())
+  let mut output = LayoutTree.make()
+  let mut host = Leaves {}
+  run computeFragmented(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 100.0), move frames)
+  drop tall
+  run expectAt(&output, a, 0.0, 120.0, "paged: the column set does not fit below the tall leaf and moves to the next page")
+  run expectAt(&output, b, 0.0, 130.0, "paged: balanced columns on that page")
+  run expectAt(&output, c, 55.0, 120.0, "paged: the second column, not one column")
+}
+test effect fn multicolInsidePagesSplits() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run pagedColumns() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn descendantSpanners() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let rootId = tree.root()
+  let container = run tree.append(rootId, columns(2))
+  let mut wrapStyle = Style.make()
+  wrapStyle.border = Edges { top: Dimension.px(2.0), right: Dimension.px(0.0), bottom: Dimension.px(3.0), left: Dimension.px(0.0) }
+  let wrap = run tree.append(container, wrapStyle)
+  let a = run leaf(&mut tree, wrap, 10)
+  let b = run leaf(&mut tree, wrap, 10)
+  let mut spanStyle = Style.make()
+  spanStyle.multicolSpan = ColumnSpan.All
+  let spanner = run tree.append(wrap, spanStyle)
+  run tree.setMeasurement(spanner, 5)
+  let c = run leaf(&mut tree, wrap, 10)
+  let d = run leaf(&mut tree, wrap, 10)
+  let mut output = LayoutTree.make()
+  let mut host = Leaves {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  // Before the spanner: the wrapper's top border, then a and b in two columns.
+  run expectAt(&output, a, 0.0, 2.0, "descendant spanner: content before it opens the first set, below the top border")
+  run expectAt(&output, b, 55.0, 0.0, "descendant spanner: and balances into the second column")
+  let span = run rectOf(&output, spanner)
+  let mut probeTree = run Tree.make(Style.make())
+  let probeRoot = probeTree.root()
+  let probeContainer = run probeTree.append(probeRoot, columns(2))
+  let mut probeWrapStyle = Style.make()
+  probeWrapStyle.border = Edges { top: Dimension.px(2.0), right: Dimension.px(0.0), bottom: Dimension.px(0.0), left: Dimension.px(0.0) }
+  let probeWrap = run probeTree.append(probeContainer, probeWrapStyle)
+  drop run leaf(&mut probeTree, probeWrap, 10)
+  drop run leaf(&mut probeTree, probeWrap, 10)
+  let mut probeOutput = LayoutTree.make()
+  run compute(&probeTree, &mut probeOutput, &mut host, OptionalSize.definite(300.0, 200.0))
+  let probeBounds = run rectOf(&probeOutput, probeContainer)
+  run Testing.expect(probeBounds.height == 12.0, "a first child that cannot leave its parent's top border raises the balanced height")
+  run Testing.expect(span.x == 0.0 && span.y == 12.0 && span.width == 100.0, "descendant spanner: the spanner takes the container's width below the first set")
+  // After it: c and d in a second set, the bottom border after d.
+  run expectAt(&output, c, 0.0, 17.0, "descendant spanner: content after it opens a second set")
+  run expectAt(&output, d, 55.0, 17.0, "descendant spanner: and balances on its own")
+  let bounds = run rectOf(&output, container)
+  // c at 17 and the spanner at 12 hold only with the bottom border left off
+  // the first piece and the top border off the second.
+  run Testing.expect(bounds.height >= 30.0 && bounds.height <= 31.0, "descendant spanner: the container holds both sets, the spanner and the bottom border")
+  // Two levels down, through an anonymous-free block chain.
+  let inner = run tree.append(wrap, Style.make())
+  let e = run leaf(&mut tree, inner, 10)
+  let deep = run tree.append(inner, spanStyle)
+  run tree.setMeasurement(deep, 4)
+  let f = run leaf(&mut tree, inner, 10)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  let deepRect = run rectOf(&output, deep)
+  let eRect = run rectOf(&output, e)
+  let fRect = run rectOf(&output, f)
+  run Testing.expect(deepRect.width == 100.0 && deepRect.y >= eRect.y + 10.0, "nested spanner: spans the container below what precedes it")
+  run Testing.expect(fRect.y == deepRect.y + 4.0 && fRect.x == 0.0, "nested spanner: what follows starts a set below it")
+  // A spanner inside a new formatting context does not span.
+  let mut rootStyle = Style.make()
+  rootStyle.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.FlowRoot }
+  run tree.setStyle(inner, rootStyle)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  let contained = run rectOf(&output, deep)
+  run Testing.expect(contained.width == 45.0, "a spanner in a flow root stays in its column")
+}
+test effect fn multicolDescendantSpannersSplitTheirAncestors() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run descendantSpanners() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn verticalColumns() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let rootId = tree.root()
+  // vertical-rl, 100px inline (tall): two 45px columns, one above the other.
+  let mut style = columns(2)
+  style.width = SizeValue.auto()
+  style.height = SizeValue.px(100.0)
+  style.writingMode = WritingMode.VerticalRl
+  let container = run tree.append(rootId, style)
+  let a = run leaf(&mut tree, container, 10)
+  let b = run leaf(&mut tree, container, 10)
+  let c = run leaf(&mut tree, container, 10)
+  let d = run leaf(&mut tree, container, 10)
+  let mut output = LayoutTree.make()
+  let mut host = Leaves {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  // Leaves are 30px wide (their block size here): 120px balances to 60 per column.
+  let bounds = run rectOf(&output, container)
+  run Testing.expect(bounds.width == 60.0 && bounds.height == 100.0, "vertical-rl: balanced columns are half as wide as the content")
+  run expectAt(&output, a, 30.0, 0.0, "vertical-rl: the first leaf starts the first column at the right")
+  run expectAt(&output, b, 0.0, 0.0, "vertical-rl: the second goes to its left")
+  run expectAt(&output, c, 30.0, 55.0, "vertical-rl: the third opens the second column, below the gap")
+  run expectAt(&output, d, 0.0, 55.0, "vertical-rl: the fourth follows it")
+  let rect = run rectOf(&output, a)
+  run Testing.expect(rect.height == 10.0 && rect.width == 30.0, "vertical-rl: leaves keep their size")
+  // Inside a block in the flow, a leaf sits where it would alone.
+  run tree.remove(d)
+  let block = run tree.append(container, Style.make())
+  let e = run leaf(&mut tree, block, 10)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectAt(&output, e, 0.0, 55.0, "vertical-rl: a nested leaf is placed like a direct one")
+  // vertical-lr fills from the left.
+  let mut lr = columns(2)
+  lr.width = SizeValue.auto()
+  lr.height = SizeValue.px(100.0)
+  lr.writingMode = WritingMode.VerticalLr
+  run tree.setStyle(container, lr)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectAt(&output, a, 0.0, 0.0, "vertical-lr: the first leaf starts at the left")
+  run expectAt(&output, b, 30.0, 0.0, "vertical-lr: the second goes to its right")
+  run expectAt(&output, c, 0.0, 55.0, "vertical-lr: the third opens the second column")
+}
+test effect fn multicolVerticalWritingModesSplit() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run verticalColumns() |> Effect.provideMut<Allocator>(&mut allocator)
 }

@@ -429,7 +429,15 @@ impl Compiler {
           let mut cursor = Cursor.make(&input)
           let colorMix = cursor.function(&input, b"color-mix")
           cursor = Cursor.make(&input)
-          if colorMix {
+          // A relative color from currentcolor or a system color is a program too.
+          let mut contextual = false
+          if !colorMix && colors.relativeStart(&input, &cursor) {
+            let mut probe = cursor
+            if let Option<ColorProgram>.Some { value } = run colors.parseProgram(&input, &mut probe) {
+              contextual = value.contextual() && probe.done(&input)
+            }
+          }
+          if colorMix || contextual {
             let program = run colors.parseProgram(&input, &mut cursor)
             if let Option<ColorProgram>.Some { value } = move program {
               if cursor.done(&input) {

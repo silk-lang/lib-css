@@ -2,7 +2,6 @@ import colors { Color, ColorProgram, ColorNode, Space, HueMethod }
 import sheet_colors
 import sheet_binary { Writer, Reader, DecodeError }
 import tokens { Limits }
-import silk.collections.list { List }
 import silk.core.effect { Effect }
 import silk.core.result { Result }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
@@ -13,7 +12,7 @@ test effect fn decoderRejectsColorCyclesSharedSubtreesAndDisconnectedPrograms() 
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut i: usize = 0
   while i < 4 {
-    let mut program = ColorProgram { nodes: List<ColorNode>.make() }
+    let mut program = ColorProgram.make()
     run program.nodes.append(ColorNode.Leaf { color: Color.current() }) |> Effect.provideMut<Allocator>(&mut allocator)
     run program.nodes.append(ColorNode.Leaf { color: Color.srgb(1.0, 0.0, 0.0, 1.0) }) |> Effect.provideMut<Allocator>(&mut allocator)
     run program.nodes.append(ColorNode.Mix {

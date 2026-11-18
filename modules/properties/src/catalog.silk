@@ -452,11 +452,12 @@ pub enum(u16) Property {
   PositionAnchor,
   PositionArea,
   PositionTryFallbacks,
+  Zoom,
   WrapFlow,
   WrapThrough,
 }
 
-pub const COUNT: usize = 451
+pub const COUNT: usize = 452
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -909,6 +910,7 @@ pub fn all() -> [Property; COUNT] {
     Property.PositionAnchor,
     Property.PositionArea,
     Property.PositionTryFallbacks,
+    Property.Zoom,
     Property.WrapFlow,
     Property.WrapThrough,
   ]
@@ -1365,8 +1367,9 @@ pub fn index(property: Property) -> usize {
     Property.PositionAnchor => 446
     Property.PositionArea => 447
     Property.PositionTryFallbacks => 448
-    Property.WrapFlow => 449
-    Property.WrapThrough => 450
+    Property.Zoom => 449
+    Property.WrapFlow => 450
+    Property.WrapThrough => 451
   }
 }
 
@@ -1821,6 +1824,7 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.PositionAnchor => b"position-anchor"
     Property.PositionArea => b"position-area"
     Property.PositionTryFallbacks => b"position-try-fallbacks"
+    Property.Zoom => b"zoom"
     Property.WrapFlow => b"wrap-flow"
     Property.WrapThrough => b"wrap-through"
   }
@@ -1875,6 +1879,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     4 => {
+      if first == 122 && insensitive(name, b"zoom") {
+        return Option<Property>.some(Property.Zoom)
+      }
       if first == 102 && insensitive(name, b"fill") {
         return Option<Property>.some(Property.Fill)
       }
@@ -3726,6 +3733,7 @@ pub fn inherited(property: Property) -> bool {
     Property.PositionAnchor => false
     Property.PositionArea => false
     Property.PositionTryFallbacks => false
+    Property.Zoom => false
     Property.WrapFlow => false
     Property.WrapThrough => false
   }
@@ -4184,6 +4192,7 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.PositionAnchor => b"auto"
     Property.PositionArea => b"none"
     Property.PositionTryFallbacks => b"none"
+    Property.Zoom => b"1"
     Property.WrapFlow => b"auto"
     Property.WrapThrough => b"wrap"
   }
@@ -4220,7 +4229,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 374
+    Property.All => 375
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5784,9 +5793,12 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
         return Property.PositionTryFallbacks
       }
       if index == 372 {
-        return Property.WrapFlow
+        return Property.Zoom
       }
       if index == 373 {
+        return Property.WrapFlow
+      }
+      if index == 374 {
         return Property.WrapThrough
       }
     }

@@ -1,0 +1,57 @@
+{
+  "name": "grid-lanes-rtl-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "In right-to-left direction the first lane is on the right.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "direction": "rtl",
+          "width": 300,
+          "gridTemplateColumns": [
+            100,
+            100,
+            100
+          ]
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 40
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 10
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 30
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 20
+        }
+      }
+    ]
+  }
+}

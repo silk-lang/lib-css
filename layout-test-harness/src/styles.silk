@@ -22,6 +22,8 @@ effect fn parseDisplay(value: &Value) -> Display ! ProtocolError {
   if name == "inline-flex" || name == "inline flex" || name == "flex inline" { return Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flex } }
   if name == "grid" || name == "block grid" || name == "grid block" { return Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Grid } }
   if name == "inline-grid" || name == "inline grid" || name == "grid inline" { return Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Grid } }
+  if name == "grid-lanes" { return Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.GridLanes } }
+  if name == "inline-grid-lanes" { return Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.GridLanes } }
   fail P.invalid("invalid Display value")
 }
 

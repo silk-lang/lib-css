@@ -94,6 +94,9 @@ pub enum(u16) Keyword {
   FlowRoot,
   Grid,
   InlineGrid,
+  GridLanes,
+  InlineGridLanes,
+  Masonry,
   Contents,
   MinContent,
   MaxContent,
@@ -433,6 +436,9 @@ pub fn name(value: Keyword) -> &'static [u8] {
     Keyword.FlowRoot => b"flow-root"
     Keyword.Grid => b"grid"
     Keyword.InlineGrid => b"inline-grid"
+    Keyword.GridLanes => b"grid-lanes"
+    Keyword.InlineGridLanes => b"inline-grid-lanes"
+    Keyword.Masonry => b"masonry"
     Keyword.Contents => b"contents"
     Keyword.MinContent => b"min-content"
     Keyword.MaxContent => b"max-content"
@@ -1090,6 +1096,9 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
     }
     7 => {
+      if first == 109 && insensitive(name, b"masonry") {
+        return Option<Keyword>.some(Keyword.Masonry)
+      }
       if first == 105 && insensitive(name, b"initial") {
         return Option<Keyword>.some(Keyword.Initial)
       }
@@ -1354,6 +1363,9 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
     }
     10 => {
+      if first == 103 && insensitive(name, b"grid-lanes") {
+        return Option<Keyword>.some(Keyword.GridLanes)
+      }
       if first == 98 && insensitive(name, b"border-box") {
         return Option<Keyword>.some(Keyword.BorderBox)
       }
@@ -1686,6 +1698,9 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
     }
     17 => {
+      if first == 105 && insensitive(name, b"inline-grid-lanes") {
+        return Option<Keyword>.some(Keyword.InlineGridLanes)
+      }
       if first == 115 && insensitive(name, b"slider-horizontal") {
         return Option<Keyword>.some(Keyword.SliderHorizontal)
       }
