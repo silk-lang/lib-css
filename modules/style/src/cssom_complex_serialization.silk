@@ -355,6 +355,35 @@ effect fn appendImageImpl(
       let text = run syntax.url(url.asSlice())
       run out.append(text.asSlice())
     }
+    Image.CrossFade { layers } => {
+      run out.append(b"cross-fade(")
+      let mut i: usize = 0
+      while i < layers.length() {
+        if i > 0 {
+          run out.append(b", ")
+        }
+        let item = &layers.asSlice()[i]
+        run appendImageImpl(computed, &mut out.*, store, &item.image)
+        match item.percent {
+          Option<ExprId>.Some { value: given } => {
+            run out.append(b" ")
+            run expr(computed, &mut out.*, store, given)
+          }
+          _ => {}
+        }
+        i = i + 1
+      }
+      run out.append(b")")
+    }
+    Image.Filtered { source, filters: list } => {
+      run out.append(b"filter(")
+      if source.length() > 0 {
+        run appendImageImpl(computed, &mut out.*, store, &source.asSlice()[0])
+      }
+      run out.append(b", ")
+      run filters(computed, &mut out.*, store, &list)
+      run out.append(b")")
+    }
     Image.Linear { repeating, direction, stops: items, interpolation } => {
       run out.append(
         if repeating {
@@ -1000,6 +1029,54 @@ effect fn source(
   }
 }
 
+effect fn filters(computed: bool, out: &mut Bytes, store: &values.Store<'_>, items: &List<Filter>) -> ()
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut i: usize = 0
+  while i < items.length() {
+    if i > 0 {
+      run out.append(b" ")
+    }
+    match &items.asSlice()[i] {
+      Filter.Url { url } => {
+        let text = run syntax.url(url.asSlice())
+        run out.append(text.asSlice())
+      }
+      Filter.Function { kind, amount } => {
+        run out.append(
+          match kind {
+            FilterKind.Blur => b"blur("
+            FilterKind.Brightness => b"brightness("
+            FilterKind.Contrast => b"contrast("
+            FilterKind.Grayscale => b"grayscale("
+            FilterKind.HueRotate => b"hue-rotate("
+            FilterKind.Invert => b"invert("
+            FilterKind.Opacity => b"opacity("
+            FilterKind.Saturate => b"saturate("
+            FilterKind.Sepia => b"sepia("
+          },
+        )
+        run expr(computed, &mut out.*, store, amount)
+        run out.append(b")")
+      }
+      Filter.DropShadow { x, y, blur, color } => {
+        run out.append(b"drop-shadow(")
+        run numeric.appendColor(&mut out.*, &color)
+        run out.append(b" ")
+        run expr(computed, &mut out.*, store, x)
+        run out.append(b" ")
+        run expr(computed, &mut out.*, store, y)
+        if !literal(store, blur, 0.0) {
+          run out.append(b" ")
+          run expr(computed, &mut out.*, store, blur)
+        }
+        run out.append(b")")
+      }
+    }
+    i = i + 1
+  }
+}
+
 effect fn effectValueImpl(
   computed: bool,
   store: &values.Store<'_>,
@@ -1018,51 +1095,7 @@ effect fn effectValueImpl(
         b"none"
       },
     )
-    EffectValue.Filters { items } => {
-      let mut i: usize = 0
-      while i < items.length() {
-        if i > 0 {
-          run out.append(b" ")
-        }
-        match &items.asSlice()[i] {
-          Filter.Url { url } => {
-            let text = run syntax.url(url.asSlice())
-            run out.append(text.asSlice())
-          }
-          Filter.Function { kind, amount } => {
-            run out.append(
-              match kind {
-                FilterKind.Blur => b"blur("
-                FilterKind.Brightness => b"brightness("
-                FilterKind.Contrast => b"contrast("
-                FilterKind.Grayscale => b"grayscale("
-                FilterKind.HueRotate => b"hue-rotate("
-                FilterKind.Invert => b"invert("
-                FilterKind.Opacity => b"opacity("
-                FilterKind.Saturate => b"saturate("
-                FilterKind.Sepia => b"sepia("
-              },
-            )
-            run expr(computed, &mut out, store, amount)
-            run out.append(b")")
-          }
-          Filter.DropShadow { x, y, blur, color } => {
-            run out.append(b"drop-shadow(")
-            run numeric.appendColor(&mut out, &color)
-            run out.append(b" ")
-            run expr(computed, &mut out, store, x)
-            run out.append(b" ")
-            run expr(computed, &mut out, store, y)
-            if !literal(store, blur, 0.0) {
-              run out.append(b" ")
-              run expr(computed, &mut out, store, blur)
-            }
-            run out.append(b")")
-          }
-        }
-        i = i + 1
-      }
-    }
+    EffectValue.Filters { items } => run filters(computed, &mut out, store, &items)
     EffectValue.Masks { layers, resetBorder } => {
       if borderProperty(property) {
         run border(computed, &mut out, store, &resetBorder, property)
