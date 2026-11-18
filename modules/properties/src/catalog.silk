@@ -452,6 +452,7 @@ pub enum(u16) Property {
   PositionAnchor,
   PositionArea,
   PositionTryFallbacks,
+  Zoom,
   OffsetPath,
   OffsetDistance,
   OffsetRotate,
@@ -460,7 +461,7 @@ pub enum(u16) Property {
   Offset,
 }
 
-pub const COUNT: usize = 455
+pub const COUNT: usize = 456
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -913,6 +914,7 @@ pub fn all() -> [Property; COUNT] {
     Property.PositionAnchor,
     Property.PositionArea,
     Property.PositionTryFallbacks,
+    Property.Zoom,
     Property.OffsetPath,
     Property.OffsetDistance,
     Property.OffsetRotate,
@@ -1373,12 +1375,13 @@ pub fn index(property: Property) -> usize {
     Property.PositionAnchor => 446
     Property.PositionArea => 447
     Property.PositionTryFallbacks => 448
-    Property.OffsetPath => 449
-    Property.OffsetDistance => 450
-    Property.OffsetRotate => 451
-    Property.OffsetAnchor => 452
-    Property.OffsetPosition => 453
-    Property.Offset => 454
+    Property.Zoom => 449
+    Property.OffsetPath => 450
+    Property.OffsetDistance => 451
+    Property.OffsetRotate => 452
+    Property.OffsetAnchor => 453
+    Property.OffsetPosition => 454
+    Property.Offset => 455
   }
 }
 
@@ -1833,6 +1836,7 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.PositionAnchor => b"position-anchor"
     Property.PositionArea => b"position-area"
     Property.PositionTryFallbacks => b"position-try-fallbacks"
+    Property.Zoom => b"zoom"
     Property.OffsetPath => b"offset-path"
     Property.OffsetDistance => b"offset-distance"
     Property.OffsetRotate => b"offset-rotate"
@@ -1891,6 +1895,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     4 => {
+      if first == 122 && insensitive(name, b"zoom") {
+        return Option<Property>.some(Property.Zoom)
+      }
       if first == 102 && insensitive(name, b"fill") {
         return Option<Property>.some(Property.Fill)
       }
@@ -3754,6 +3761,7 @@ pub fn inherited(property: Property) -> bool {
     Property.PositionAnchor => false
     Property.PositionArea => false
     Property.PositionTryFallbacks => false
+    Property.Zoom => false
     Property.OffsetPath => false
     Property.OffsetDistance => false
     Property.OffsetRotate => false
@@ -4216,6 +4224,7 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.PositionAnchor => b"auto"
     Property.PositionArea => b"none"
     Property.PositionTryFallbacks => b"none"
+    Property.Zoom => b"1"
     Property.OffsetPath => b"none"
     Property.OffsetDistance => b"0px"
     Property.OffsetRotate => b"auto"
@@ -4256,6 +4265,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
+    Property.All => 373
     Property.All => 377
     Property.Animation => 8
     Property.Transition => 5
@@ -5833,6 +5843,7 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
         return Property.PositionTryFallbacks
       }
       if index == 372 {
+        return Property.Zoom
         return Property.OffsetPath
       }
       if index == 373 {

@@ -218,7 +218,16 @@ fn itemEnd(text: &[u8], at: usize) -> usize {
   return text.length
 }
 
-// A `background` value that spells a `url()` image, `repeat-x`, `repeat-y` or `local`,
+// Whether `word` names a gradient the shared model has no shape for: every one but
+// `linear-gradient`.
+fn unshapedGradient(word: &[u8]) -> bool {
+  return tokens.insensitive(word, b"radial-gradient") || tokens.insensitive(word, b"conic-gradient")
+    || tokens.insensitive(word, b"repeating-linear-gradient")
+    || tokens.insensitive(word, b"repeating-radial-gradient")
+    || tokens.insensitive(word, b"repeating-conic-gradient")
+}
+
+// A `background` value that spells a `url()` image, a gradient other than `linear-gradient`, `repeat-x`, `repeat-y` or `local`,
 // which the shared model has no shape for: read with `none`, the two-value repeats and
 // `scroll` in their places, then with the images and `local` put back in their layers of
 // `background-image` and `background-attachment`. None when it has none of them.
@@ -261,7 +270,7 @@ effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
       let word = Slice.view(css, i, end - i)
       let called = end < css.length && css[end] == 40
       if called && (tokens.insensitive(word, b"url") || tokens.insensitive(word, b"image-set")
-        || tokens.insensitive(word, b"-webkit-image-set")) {
+        || tokens.insensitive(word, b"-webkit-image-set") || unshapedGradient(word)) {
         if current.image.length() != 0 { return Option<Value>.None }
         let close = itemEnd(css, end)
         let mut stop = end + 1
