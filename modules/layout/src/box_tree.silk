@@ -4,9 +4,9 @@ import silk.core.ownership { Copy }
 import silk.core.option { Option }
 import silk.text.string { String }
 import geometry { Point }
-import style { SizeContainment, Style, Display, DisplayOutside, DisplayInside, WritingMode, Direction, Align, Float, Position, BreakBetween, Visibility, DimensionKind, Overflow, ColumnSpan, WhiteSpaceCollapse }
+import style { SizeContainment, Style, Display, DisplayOutside, DisplayInside, WritingMode, Direction, Align, Float, BreakBetween, Visibility, DimensionKind, Overflow, ColumnSpan, WhiteSpaceCollapse }
 import tree { Node, Measurement, NO_NODE }
-import context { outOfFlow, scrollable, overflowForAxis }
+import context { outOfFlow, scrollable, overflowForAxis, containsAbsolute }
 import grid_style { GridTemplate }
 import silk.num.u32
 import shapes { FloatShape }
@@ -124,7 +124,7 @@ impl<'tree> BoxTree<'tree> {
     while index > 0 {
       index = index - 1
       let node = self.boxes.get(index)
-      let needed = index == 0 || node.needsFragmentGeometry || self.style(index).position != Position.Static
+      let needed = index == 0 || node.needsFragmentGeometry || containsAbsolute(self.style(index))
       let style = self.style(index)
       // Break3 §4.1 suppresses internal break points and propagation through
       // monolithic content. Classification is stable across fragmentainers.
@@ -140,7 +140,7 @@ impl<'tree> BoxTree<'tree> {
         overflow = x }
       let scrolling = x == Overflow.Auto || x == Overflow.Scroll || y == Overflow.Auto || y == Overflow.Scroll
       let clipped = overflow == Overflow.Hidden && dimension.kind != DimensionKind.Auto && maximum.kind == DimensionKind.None
-      let monolithic = node.kind == BoxKind.Table || node.kind == BoxKind.TablePart || style.sizeContainment == SizeContainment.Size || style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
+      let monolithic = node.kind == BoxKind.Table || node.kind == BoxKind.TablePart || style.sizeContainment == SizeContainment.Size || style.layoutContainment || style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
       let applicable = !outOfFlow(style) && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex || node.kind == BoxKind.Grid)
       let mut before = applicable && style.breakBefore != BreakBetween.Auto
       let mut dynamicBefore = false
@@ -378,7 +378,7 @@ impl<'tree> BoxTree<'tree> {
     // Writing Modes 4 3.2 compares against the nearest box-generating parent;
     // contents and generated wrappers do not substitute a source parent here.
     let multicol = kind == BoxKind.Block && !measured && style.multicol()
-    let independent = kind != BoxKind.Inline && (multicol || style.sizeContainment != SizeContainment.None || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || display.insideIs(DisplayInside.TableCell) || display.insideIs(DisplayInside.TableCaption) || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
+    let independent = kind != BoxKind.Inline && (multicol || style.sizeContainment != SizeContainment.None || style.layoutContainment || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || display.insideIs(DisplayInside.TableCell) || display.insideIs(DisplayInside.TableCaption) || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
     let node = BoxNode {
       source: source, styleOwner: source, anonymousStyle: NO_NODE, styleIndex: self.sources[source].styleIndex, kind: kind,
       parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE,

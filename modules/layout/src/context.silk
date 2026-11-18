@@ -268,6 +268,8 @@ pub fn childrenInput(input: &Input, style: &Style, box: &ResolvedBox, parent: Op
 pub fn outOfFlow(style: &Style) -> bool { return style.position == Position.Absolute || style.position == Position.Fixed || style.outsideMarker }
 // Out of flow and placed by positioning, which an outside marker is not: its list item places it.
 pub fn absolutelyPositioned(style: &Style) -> bool { return style.position == Position.Absolute || style.position == Position.Fixed }
+// Whether the box is the containing block of its absolutely positioned descendants.
+pub fn containsAbsolute(style: &Style) -> bool { return style.position != Position.Static || style.layoutContainment }
 pub fn effectiveDisplay(style: &Style, input: &Input) -> Display {
   if input.blockify || style.float != Float.None || outOfFlow(style) { return style.display.blockified() }
   if input.atomicInline { return Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.FlowRoot } }
@@ -295,7 +297,7 @@ pub fn usedOverflowForAxis(style: &Style, horizontal: bool) -> Overflow {
 }
 pub fn establishesContext(style: &Style, input: &Input) -> bool {
   let display = effectiveDisplay(style, &input)
-  return style.sizeContainment != SizeContainment.None || display.insideIs(DisplayInside.Flex) || display.isGrid() || style.alignContent != Align.Normal || (style.float != Float.None && !input.blockify) || display.insideIs(DisplayInside.FlowRoot) || outOfFlow(style) || scrollable(style.overflowX) || scrollable(style.overflowY)
+  return style.sizeContainment != SizeContainment.None || style.layoutContainment || display.insideIs(DisplayInside.Flex) || display.isGrid() || style.alignContent != Align.Normal || (style.float != Float.None && !input.blockify) || display.insideIs(DisplayInside.FlowRoot) || outOfFlow(style) || scrollable(style.overflowX) || scrollable(style.overflowY)
 }
 
 // CSS 2.1 §10.3.3: auto margins absorb positive free space; the containing

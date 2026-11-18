@@ -5,12 +5,12 @@ import silk.core.option { Option }
 import silk.mem.box { Box }
 import silk.text.string { String }
 import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min }
-import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, Position }
+import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind }
 import tree { Node, NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, TextFragment, TextFragmentKind }
 import axes { Axes }
-import context { Input, ResolvedBox, resolveBox, resolve, outOfFlow }
+import context { Input, ResolvedBox, resolveBox, resolve, outOfFlow, containsAbsolute }
 import engine { layoutNode, layoutNodeInPlace }
 import bfc { BfcState, FloatBox, Band }
 import shapes { ShapeFrame }
@@ -1446,7 +1446,7 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
         value.hasLastBaseline = false
       }
       let emitted = run output.fragments.append(value)
-      if output.frame != NO_NODE && nodes.style(scope.id).position != Position.Static {
+      if output.frame != NO_NODE && containsAbsolute(nodes.style(scope.id)) {
         run output.rememberFragmentBox(scope.id, emitted.index, FullBoxGeometry { parent: input.parent, known: OptionalSize.none(), minimum: Size { width: 0.0, height: 0.0 }, content: OptionalSize.none(), gridContext: 0 })
       }
       let values = spans.values.asMutSlice()
