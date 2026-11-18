@@ -2164,7 +2164,7 @@ effect fn emitLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
 // The box's paragraph as this pass last prepared it, else the core an earlier
 // compute kept, else an empty one.
 effect fn takePrepared<'pass, 'source>(output: &mut LayoutPass<'pass, 'source>, id: usize) -> PreparedInline<'source> ! OutOfMemoryError ? &mut Allocator {
-  match move output.inlinePrepared.asMutSlice()[id].pop() {
+  match move output.takeHeld(id) {
     Option<PreparedInline<'source>>.Some { value } => { return move value }
     Option<PreparedInline<'source>>.None => {}
   }
@@ -2179,6 +2179,11 @@ effect fn takePrepared<'pass, 'source>(output: &mut LayoutPass<'pass, 'source>, 
       return PreparedInline { tokens: List<TextToken<'source>>.make(), core: move kept.core, hasTokens: false }
     }
     Option<KeptText>.None => {}
+  }
+  // A core this compute let go lends its lists, as a stale one does.
+  match output.spareCores.pop() {
+    Option<Box<PreparedCore>>.Some { value } => { return PreparedInline { tokens: List<TextToken<'source>>.make(), core: move value, hasTokens: false } }
+    Option<Box<PreparedCore>>.None => {}
   }
   return PreparedInline { tokens: List<TextToken<'source>>.make(), core: run Box.make(PreparedCore.make()), hasTokens: false }
 }
@@ -2305,8 +2310,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
         run emitLines(nodes, &mut output, &mut measurer, memo.fitted.lines.asSlice(), memo.fitted.items.asSlice(), atomics.asSlice(), memo.fitted.texts.asSlice(), memo.fonts.asSlice(), scopes, &mut extents, &mut text.spans, id, style, &axes, &box, result.size, &baselineOffsets, &input)
       }
       core.origins = move normalized.origins
-      run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
-      run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
+      run output.putPrepared(id, PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
       return result
     }
   }
@@ -3027,7 +3031,6 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     run output.resumes.set(id, state)
   }
   if fitsMemo && memoFirst == NO_NODE && !blocked && next == points.length() { run memo.record(fitWidth, lineEnds.asSlice()) }
-  run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
   if recording && !blocked && next == points.length() {
     memo.fitted.valid = true
     memo.fitted.width = width
@@ -3046,6 +3049,6 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   }
   core.ready = true
   core.origins = move normalized.origins
-  run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
+  run output.putPrepared(id, PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
   return result
 }
