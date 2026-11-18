@@ -1,0 +1,51 @@
+{
+  "name": "grid-lanes-align-content-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "align-content in the stacking axis moves the whole stacking range.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "width": 200,
+          "height": 200,
+          "gridTemplateColumns": [
+            100,
+            100
+          ],
+          "alignContent": "center"
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 40
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 10
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 30
+        }
+      }
+    ]
+  }
+}

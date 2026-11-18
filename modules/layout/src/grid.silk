@@ -12,6 +12,7 @@ import geometry {
   AvailableSpace,
   AvailableKind,
   Measure,
+  FontRequest,
   max,
   clamp
 }
@@ -28,7 +29,8 @@ import grid_fragment as Fragments
 import grid_fragment { FragmentGrid }
 import axes { Axes }
 import grid_placement { GridItem, GridBounds, collectItems }
-import grid_style { GridTrack, GridBreadthKind }
+import grid_style { GridTrack, GridBreadthKind, GridNamedLine }
+import grid_lanes as Lanes
 import grid_scratch { GridScratch, GridAxisScratch, ContributionMemo, ContributionMemos, TrackArea }
 import layout_cache { REUSE_INDEPENDENT }
 import grid_lines { LineNames }
@@ -1158,7 +1160,39 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     areas = value.areas.asSlice()
     areaMasks = value.areaMasks.asSlice()
   }
-  let items = scratch.items.asSlice()
+  let lanes = Lanes.laneAxis(style, template)
+  let noTracks: [GridTrack; 0] = []
+  let noLines: [GridNamedLine; 0] = []
+  let mut autoColumns = template.autoColumns.asSlice()
+  let mut autoRows = template.autoRows.asSlice()
+  if lanes == Lanes.COLUMNS {
+    Lanes.place(&mut scratch.items, &mut scratch.bounds, lanes, columnTemplate.length)
+    rowTemplate = &noTracks
+    autoRows = &noTracks
+    collapsedRows = &noCollapsed
+    rowLines = &noLines
+  } else if lanes == Lanes.ROWS {
+    Lanes.place(&mut scratch.items, &mut scratch.bounds, lanes, rowTemplate.length)
+    columnTemplate = &noTracks
+    autoColumns = &noTracks
+    collapsedColumns = &noCollapsed
+    columnLines = &noLines
+  }
+  // Lane sizing counts auto-placed items in every lane they could take (see Lanes.everyLane).
+  let mut laneItems = List<GridItem>.make()
+  if lanes == Lanes.COLUMNS && scratch.bounds.columns > 1
+    && Lanes.intrinsic(columnTemplate, autoColumns, scratch.bounds.columns) {
+    run Lanes.everyLane(scratch.items.asSlice(), lanes, scratch.bounds.columns, &mut laneItems)
+  } else if lanes == Lanes.ROWS && scratch.bounds.rows > 1
+    && Lanes.intrinsic(rowTemplate, autoRows, scratch.bounds.rows) {
+    run Lanes.everyLane(scratch.items.asSlice(), lanes, scratch.bounds.rows, &mut laneItems)
+  }
+  let placed = scratch.items.asSlice()
+  let mut columnItems = placed
+  let mut rowItems = placed
+  if laneItems.length() != 0 {
+    if lanes == Lanes.COLUMNS { columnItems = laneItems.asSlice() } else { rowItems = laneItems.asSlice() }
+  }
   let mut subgridChildren = false
   let mut baselineRequested = false
   let flags = output.facts.itemFlags.asSlice()
@@ -1168,22 +1202,22 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     // still takes needsBaselines.
     let mut any: u8 = 0
     let mut childIndex: usize = 0
-    while childIndex < items.length {
-      any = any | flags[items[childIndex].id]
+    while childIndex < placed.length {
+      any = any | flags[placed[childIndex].id]
       childIndex = childIndex + 1
     }
     subgridChildren = any & ITEM_SUBGRID != 0
     baselineRequested = any & ITEM_SELF_BASELINE != 0
     if !baselineRequested && (subgridChildren || baselineValue(style.justifyItems) || baselineValue(style.alignItems)) {
-      baselineRequested = needsBaselines(nodes, items, style)
+      baselineRequested = needsBaselines(nodes, placed, style)
     }
   } else {
     let mut childIndex: usize = 0
-    while !subgridChildren && childIndex < items.length {
-      subgridChildren = Subgrid.eligible(nodes, items[childIndex].id)
+    while !subgridChildren && childIndex < placed.length {
+      subgridChildren = Subgrid.eligible(nodes, placed[childIndex].id)
       childIndex = childIndex + 1
     }
-    baselineRequested = needsBaselines(nodes, items, style)
+    baselineRequested = needsBaselines(nodes, placed, style)
   }
   let source = GridSource {
     columns: columnLines, rows: rowLines, areas: areas,
@@ -1248,6 +1282,27 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     inherited: inheritedRows,
   }
   columnSizing.maximum = max(columnSizing.minimum, columnSizing.maximum)
+  // The stacking axis sizes each item's own track to its outer size: no free space to
+  // fill, and no stretch (Grid 3 §6.3 treats normal and stretch as flow-start).
+  let mut stackDefinite = false
+  let mut stackSize: f32 = 0.0
+  if lanes == Lanes.COLUMNS {
+    stackDefinite = rowSizing.definite
+    stackSize = rowSizing.size
+    rowSizing.definite = false
+    rowSizing.available = AvailableSpace.maxContent()
+    rowSizing.stretch = false
+    rowSizing.gap = Dimension.px(rowSizing.usedGap)
+    rowSizing.resolveCyclic = false
+  } else if lanes == Lanes.ROWS {
+    stackDefinite = columnSizing.definite
+    stackSize = columnSizing.size
+    columnSizing.definite = false
+    columnSizing.available = AvailableSpace.maxContent()
+    columnSizing.stretch = false
+    columnSizing.gap = Dimension.px(columnSizing.usedGap)
+    columnSizing.resolveCyclic = false
+  }
   rowSizing.maximum = max(rowSizing.minimum, rowSizing.maximum)
   if inheritedColumns {
     if style.columnGap.kind == DimensionKind.Normal { columnSizing.usedGap = inherited.columns.gap }
@@ -1279,7 +1334,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
   // §12.1's first column pass estimates rows using their definite maxima.
   run initializeTracks(
     rowTemplate,
-    template.autoRows.asSlice(),
+    autoRows,
     bounds.rowOrigin,
     bounds.rows,
     blockSize,
@@ -1302,7 +1357,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     nodes,
     &mut output,
     &mut measurer,
-    items,
+    columnItems,
     &base,
     &source,
     style,
@@ -1312,7 +1367,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     &mut columnSizing,
     &rowSizing,
     columnTemplate,
-    template.autoColumns.asSlice(),
+    autoColumns,
     collapsedColumns,
     false,
     &mut scratch.trackWork,
@@ -1323,7 +1378,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     nodes,
     &mut output,
     &mut measurer,
-    items,
+    rowItems,
     &base,
     &source,
     style,
@@ -1333,7 +1388,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     &mut rowSizing,
     &columnSizing,
     rowTemplate,
-    template.autoRows.asSlice(),
+    autoRows,
     collapsedRows,
     !initialStage,
     &mut scratch.trackWork,
@@ -1346,7 +1401,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     nodes,
     &mut output,
     &mut measurer,
-    items,
+    columnItems,
     &base,
     &source,
     style,
@@ -1365,7 +1420,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
       nodes,
       &mut output,
       &mut measurer,
-      items,
+      columnItems,
       &base,
       &source,
       style,
@@ -1375,7 +1430,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
       &mut columnSizing,
       &rowSizing,
       columnTemplate,
-      template.autoColumns.asSlice(),
+      autoColumns,
       collapsedColumns,
       true,
       &mut scratch.trackWork,
@@ -1386,7 +1441,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
       nodes,
       &mut output,
       &mut measurer,
-      items,
+      rowItems,
       &base,
       &source,
       style,
@@ -1404,7 +1459,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
         nodes,
         &mut output,
         &mut measurer,
-        items,
+        rowItems,
         &base,
         &source,
         style,
@@ -1414,7 +1469,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
         &mut rowSizing,
         &columnSizing,
         rowTemplate,
-        template.autoRows.asSlice(),
+        autoRows,
         collapsedRows,
         true,
         &mut scratch.trackWork,
@@ -1423,6 +1478,60 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
       )
     }
   }
+  let mut stackExtent: f32 = 0.0
+  if lanes != Lanes.NONE {
+    let font = Measure.font(&mut measurer, FontRequest { key: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.direction })
+    let mut running = List<f32>.make()
+    let mut tries: usize = 0
+    while tries < 3 {
+      let mut resized = false
+      if lanes == Lanes.COLUMNS {
+        resized = run Lanes.stack(scratch.items.asMutSlice(), scratch.columns.tracks.asSlice(),
+          scratch.rows.tracks.asMutSlice(), lanes, rowSizing.usedGap, font.fontSize, &mut running)
+      } else {
+        drop run Lanes.stack(scratch.items.asMutSlice(), scratch.rows.tracks.asSlice(),
+          scratch.columns.tracks.asMutSlice(), lanes, columnSizing.usedGap, font.fontSize, &mut running)
+      }
+      tries = tries + 1
+      if !resized || tries == 3 { break }
+      // Lanes of other widths give the moved items other heights.
+      run sizeAxis(
+        nodes,
+        &mut output,
+        &mut measurer,
+        scratch.items.asSlice(),
+        &base,
+        &source,
+        style,
+        &axis,
+        &mut scratch.rows,
+        &scratch.columns,
+        &mut rowSizing,
+        &columnSizing,
+        rowTemplate,
+        autoRows,
+        collapsedRows,
+        true,
+        &mut scratch.trackWork,
+        &mut baselines,
+        false,
+      )
+    }
+    if lanes == Lanes.COLUMNS {
+      stackExtent = Lanes.extent(scratch.rows.tracks.asSlice())
+      rowSizing.definite = stackDefinite
+      rowSizing.size = stackSize
+      if !stackDefinite { rowSizing.size = clamp(stackExtent, rowSizing.minimum, rowSizing.maximum) }
+      Lanes.align(scratch.rows.tracks.asMutSlice(), style.alignContent, rowSizing.size - stackExtent)
+    } else {
+      stackExtent = Lanes.extent(scratch.columns.tracks.asSlice())
+      columnSizing.definite = stackDefinite
+      columnSizing.size = stackSize
+      if !stackDefinite { columnSizing.size = clamp(stackExtent, columnSizing.minimum, columnSizing.maximum) }
+      Lanes.align(scratch.columns.tracks.asMutSlice(), style.justifyContent, columnSizing.size - stackExtent)
+    }
+  }
+  let items = scratch.items.asSlice()
   scratch.columnGap = columnSizing.usedGap
   scratch.rowGap = rowSizing.usedGap
   let mut result = Layout.zero()
@@ -1452,6 +1561,13 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
   if rows.length > 0 {
     gridBlock = rows[0].position
     gridHeight = rows[rows.length - 1].position + rows[rows.length - 1].base - gridBlock
+  }
+  if lanes == Lanes.COLUMNS {
+    gridBlock = 0.0
+    gridHeight = stackExtent
+  } else if lanes == Lanes.ROWS {
+    gridInline = 0.0
+    gridWidth = stackExtent
   }
   if rtl {
     gridInline = columnSizing.size - gridInline - gridWidth
