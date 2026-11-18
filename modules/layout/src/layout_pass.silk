@@ -64,8 +64,8 @@ pub struct PassCheckpoint {
 impl Copy for PassCheckpoint {}
 // Size-only results go to `cache`; compute lends it the LayoutTree's cache so
 // clean entries survive between computes (see LayoutCache).
-// The most paragraphs one compute hands to the cache prepared (see keepTexts).
-const KEPT_PARAGRAPHS: usize = 2048
+// The most prepared paragraphs the cache keeps between computes (see keepTexts).
+const KEPT_PARAGRAPHS: usize = 256
 
 pub struct LayoutPass<'a, 'source> {
   pub boxes: &'a mut [Layout],
@@ -623,38 +623,24 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
       id = id + 1
     }
   }
-  // Hands every paragraph prepared in this compute to the cache, unless there
-  // are more than KEPT_PARAGRAPHS of them. A prepared paragraph (its analysis,
-  // breaks and shaped ranges) is several kilobytes that only a later layout of
-  // the same text at another width reads; the layout results that answer an
-  // unchanged box are kept apart. A long document keeps none: laying it out at
-  // another width prepares its text again, as its first layout did.
+  // Hands every paragraph prepared in this compute to the cache, which keeps
+  // at most KEPT_PARAGRAPHS of them, the latest first (see
+  // LayoutCache.trimTexts).
   pub effect fn keepTexts(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
-    let mut prepared: usize = 0
+    let stamp = self.cache.nextTextStamp()
+    let mut handed = false
     let mut id: usize = 0
-    while id < self.inlinePrepared.length() {
-      if self.inlinePrepared.asSlice()[id].length() != 0 { prepared = prepared + 1 }
-      id = id + 1
-    }
-    if prepared > KEPT_PARAGRAPHS {
-      id = 0
-      while id < self.inlinePrepared.length() {
-        self.inlinePrepared.asMutSlice()[id].clearAndFree()
-        id = id + 1
-      }
-      self.cache.dropPlains()
-      return
-    }
-    id = 0
     while id < self.inlinePrepared.length() {
       match self.inlinePrepared.asMutSlice()[id].pop() {
         Option<PreparedInline<'source>>.Some { value } => {
-          run self.cache.keepText(id, KeptText { core: move value.core, stale: false })
+          run self.cache.keepText(id, KeptText { core: move value.core, stale: false, stamp: stamp })
+          handed = true
         }
         Option<PreparedInline<'source>>.None => {}
       }
       id = id + 1
     }
+    if handed { self.cache.trimTexts(stamp, KEPT_PARAGRAPHS) }
   }
   pub effect fn restart(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
     run self.fragments.finishInPlace()
