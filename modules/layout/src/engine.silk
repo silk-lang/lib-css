@@ -23,6 +23,7 @@ import box_tree { BoxTree, BoxKind, BoxNode, itemParent }
 import table { layoutTable, layoutTablePart }
 import silk.collections.list { List }
 import fragments { FragmentKind, FragmentArena, Fragment }
+import scratch_boxes { ScratchBoxes }
 import inline_layout { layoutInline, InlineScratch }
 import text { TextMeasure, TextError }
 import fragment_box as FragmentBox
@@ -2788,6 +2789,17 @@ fn adoptSubtree(nodes: &BoxTree<'_>, output: &mut LayoutTree, scratch: &[Layout]
   }
 }
 
+// Gives each box of the subtree a zero layout in `scratch`, which holds
+// whatever an earlier cutoff left, or zero bytes (see ScratchBoxes).
+fn resetSubtree(nodes: &BoxTree<'_>, scratch: &mut [Layout], id: usize) {
+  scratch[id] = Layout.zero()
+  let mut child = nodes.node(id).firstChild
+  while child != NO_NODE {
+    resetSubtree(nodes, &mut scratch, child)
+    child = nodes.node(child).nextSibling
+  }
+}
+
 // Unsets the box chains of a subtree laid out alone in the scratch arena.
 fn unsetSubtree(nodes: &BoxTree<'_>, fragments: &mut FragmentArena, id: usize) {
   fragments.unsetChains(id)
@@ -2803,9 +2815,9 @@ fn unsetSubtree(nodes: &BoxTree<'_>, fragments: &mut FragmentArena, id: usize) {
 effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutTree, facts: &mut BoxFacts, measurer: &mut M, id: usize, range: FinalRange, probes: &[CachedProbe], first: usize, end: usize, plain: f32) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let final = output.cache.result(id).*
   let count = nodes.boxes.length()
-  let mut scratchBoxes = Intrinsic.replace(output.scratchBoxes, List<Layout>.make())
-  let have = scratchBoxes.length()
-  if have < count { run scratchBoxes.appendRepeated(Layout.zero(), count - have) }
+  let mut scratchBoxes = Intrinsic.replace(output.scratchBoxes, ScratchBoxes.make())
+  run scratchBoxes.reserve(count)
+  resetSubtree(nodes, scratchBoxes.asMutSlice(), id)
   let mut scratchFragments = Intrinsic.replace(output.scratchFragments, FragmentArena.make())
   run scratchFragments.prepareUnset(count)
   let mut same = true
