@@ -5,7 +5,7 @@ import silk.num.usize
 import silk.text.string { String }
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, Align, Edges }
+import style { Style, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, Align, Edges, LineHeight, TextBoxTrim, TextBoxEdge, TextEdge, EmphasisSide, WritingMode, TextOrientation }
 import geometry {
   Measure,
   MeasureRequest,
@@ -47,6 +47,8 @@ impl Measure for TextHost {
     result.ascent = 8.0
     result.descent = 2.0
     result.baselines = BaselineSet.uniform(8.0)
+    result.capHeight = 7.0
+    result.xHeight = 5.0
     return result
   }
 
@@ -218,6 +220,15 @@ effect fn fixedAreaTextEdit()
   run expectBounds(&mut output, item, 0.0, 0.0, 70.0, 30.0)
   run expectBounds(&mut output, text, 0.0, 0.0, 10.0, 10.0)
   run expectBounds(&mut output, sibling, 80.0, 0.0, 70.0, 30.0)
+  // A host's ::first-letter takes the leading byte: layout reads the rest, at its own offsets.
+  run tree.setTextStart(text, 1)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, text, 0.0, 0.0, 5.0, 10.0)
+  let texts = output.fragments.texts.asSlice()
+  run Testing.expect(texts.length != 0 && texts[texts.length - 1].sourceStart == 1 && texts[texts.length - 1].sourceEnd == 2, "the text after its start keeps the text's offsets")
+  run tree.setText(text, run String.copy("abc"))
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, text, 0.0, 0.0, 15.0, 10.0)
 }
 
 test effect fn gridTextEditKeepsUnchangedAreaAndAncestors()
@@ -682,4 +693,127 @@ test effect fn gridLanesFollowDisplaySwitches()
     | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run lanesSwitch() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn startAfterInline()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static>
+  ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut inlineStyle = Style.make()
+  inlineStyle.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flow }
+  let letter = run tree.append(root, move inlineStyle)
+  let first = run tree.appendText(letter, run String.copy("a"))
+  let text = run tree.appendText(root, run String.copy("abcd"))
+  run tree.setTextStart(text, 1)
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, first, 0.0, 0.0, 5.0, 10.0)
+  run expectBounds(&mut output, text, 5.0, 0.0, 15.0, 10.0)
+}
+
+test effect fn textStartAfterAnInlineBox()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run startAfterInline() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+fn trimmedStyle(trim: TextBoxTrim, over: TextEdge, under: TextEdge) -> Style {
+  let mut result = Style.make()
+  result.width = SizeValue.of(Dimension.px(300.0))
+  result.lineHeight = LineHeight.Length { value: 20.0 }
+  result.textBoxTrim = trim
+  result.textBoxEdge = TextBoxEdge { over: over, under: under }
+  return move result
+}
+
+// The strut: ascent 8, descent 2, cap height 7, x-height 5, half-leading 5 in a 20px line.
+effect fn trimmedLines()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static>
+  ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let block = run tree.append(root, trimmedStyle(TextBoxTrim.None, TextEdge.Auto, TextEdge.Auto))
+  let text = run tree.appendText(block, run String.copy("ab cd"))
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 20.0)
+  run expectBounds(&mut output, text, 0.0, 5.0, 25.0, 10.0)
+  // cap: 13 - 7 above; alphabetic: all 7 below the baseline.
+  run tree.setStyle(block, trimmedStyle(TextBoxTrim.Both, TextEdge.Cap, TextEdge.Alphabetic))
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 7.0)
+  run expectBounds(&mut output, text, 0.0, -1.0, 25.0, 10.0)
+  // text: the half-leading on both sides.
+  run tree.setStyle(block, trimmedStyle(TextBoxTrim.Both, TextEdge.Text, TextEdge.Text))
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 10.0)
+  run expectBounds(&mut output, text, 0.0, 0.0, 25.0, 10.0)
+  // Only the start: ex trims 13 - 5.
+  run tree.setStyle(block, trimmedStyle(TextBoxTrim.Start, TextEdge.Ex, TextEdge.Text))
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 12.0)
+  run expectBounds(&mut output, text, 0.0, -3.0, 25.0, 10.0)
+  // A block child between two runs: the first trims its start, the last its end.
+  run tree.setStyle(block, trimmedStyle(TextBoxTrim.Both, TextEdge.Text, TextEdge.Text))
+  let mut middle = Style.make()
+  middle.height = SizeValue.of(Dimension.px(30.0))
+  drop run tree.append(block, move middle)
+  let after = run tree.appendText(block, run String.copy("ef"))
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 60.0)
+  run expectBounds(&mut output, text, 0.0, 0.0, 25.0, 10.0)
+  run expectBounds(&mut output, after, 0.0, 50.0, 10.0, 10.0)
+}
+
+test effect fn textBoxTrimsTheFirstAndLastLines()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run trimmedLines() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// Marks half the font size above or below the text: a 10px line (no half-leading) grows by 5,
+// a 20px one (half-leading 5) holds them.
+effect fn emphasizedLines()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static>
+  ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut style = Style.make()
+  style.width = SizeValue.of(Dimension.px(300.0))
+  style.emphasis = EmphasisSide.Over
+  let block = run tree.append(root, style)
+  let text = run tree.appendText(block, run String.copy("ab cd"))
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 15.0)
+  run expectBounds(&mut output, text, 0.0, 5.0, 25.0, 10.0)
+  style.emphasis = EmphasisSide.Under
+  run tree.setStyle(block, style)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 15.0)
+  run expectBounds(&mut output, text, 0.0, 0.0, 25.0, 10.0)
+  style.lineHeight = LineHeight.Length { value: 20.0 }
+  run tree.setStyle(block, style)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 20.0)
+  // Central baseline 8: marks reach a full em (10) over it, the descent 2 stays under it.
+  style.lineHeight = LineHeight.Normal
+  style.emphasis = EmphasisSide.Over
+  style.writingMode = WritingMode.VerticalRl
+  style.textOrientation = TextOrientation.Upright
+  style.width = SizeValue.auto()
+  style.height = SizeValue.of(Dimension.px(100.0))
+  run tree.setStyle(block, style)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 12.0, 100.0)
+}
+
+test effect fn emphasisMarksTakeLineRoom()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run emphasizedLines() |> Effect.provideMut<Allocator>(&mut allocator)
 }
