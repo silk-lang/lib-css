@@ -195,6 +195,8 @@ fn splicedIn(spliced: &[usize], start: usize, end: usize) -> bool {
 
 // Previous fragments edited in a compute that resolveLocations tracks.
 const EDITS_TRACKED: usize = 4096
+// releaseSaved keeps saved lists shorter than this many slots for the next compute.
+const RELEASE_SAVED: usize = 16384
 // A fragment slot at or above this names a saved position, at the slot
 // less this, instead of a saved fragment.
 const PARTIAL_SLOT: usize = usize.MAX / 2 + 1
@@ -583,6 +585,29 @@ impl FragmentArena {
     self.values.truncate(self.count)
     self.texts.truncate(self.textCount)
     self.textMarks.truncate(self.count)
+  }
+
+  // Gives back what an in-place compute saved of the output before it, once
+  // the compute is over: from then on the previous output is the current one.
+  // A compute that rewrote most of a long document saved about as much as the
+  // document's fragments (76 MB for 290,000), and held it until the next.
+  pub fn releaseSaved(self: &mut Self) {
+    if self.inPlace { return }
+    let held = self.savedFragments.capacity() + self.tailFragments.capacity() + self.savedTexts.capacity() + self.tailTexts.capacity()
+    if held < RELEASE_SAVED { return }
+    self.savedFragments.clearAndFree()
+    self.savedPositions.clearAndFree()
+    self.savedTexts.clearAndFree()
+    self.savedFirst.clearAndFree()
+    self.savedLast.clearAndFree()
+    self.tailFragments.clearAndFree()
+    self.tailTexts.clearAndFree()
+    // No stamp names a saved slot now, and nothing past the write position is kept.
+    self.generation = self.generation + 1
+    self.closedAt = usize.MAX
+    self.closedTexts = usize.MAX
+    self.previousCount = self.values.length()
+    self.previousTexts = self.texts.length()
   }
 
   // Whether reused ranges come from this arena's previous output rather
