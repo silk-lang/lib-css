@@ -448,9 +448,13 @@ pub enum(u16) Property {
   BackgroundPositionX,
   BackgroundPositionY,
   WebkitTextFillColor,
+  AnchorName,
+  PositionAnchor,
+  PositionArea,
+  PositionTryFallbacks,
 }
 
-pub const COUNT: usize = 445
+pub const COUNT: usize = 449
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -899,6 +903,10 @@ pub fn all() -> [Property; COUNT] {
     Property.BackgroundPositionX,
     Property.BackgroundPositionY,
     Property.WebkitTextFillColor,
+    Property.AnchorName,
+    Property.PositionAnchor,
+    Property.PositionArea,
+    Property.PositionTryFallbacks,
   ]
 }
 
@@ -1349,6 +1357,10 @@ pub fn index(property: Property) -> usize {
     Property.BackgroundPositionX => 442
     Property.BackgroundPositionY => 443
     Property.WebkitTextFillColor => 444
+    Property.AnchorName => 445
+    Property.PositionAnchor => 446
+    Property.PositionArea => 447
+    Property.PositionTryFallbacks => 448
   }
 }
 
@@ -1799,6 +1811,10 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.BackgroundPositionX => b"background-position-x"
     Property.BackgroundPositionY => b"background-position-y"
     Property.WebkitTextFillColor => b"-webkit-text-fill-color"
+    Property.AnchorName => b"anchor-name"
+    Property.PositionAnchor => b"position-anchor"
+    Property.PositionArea => b"position-area"
+    Property.PositionTryFallbacks => b"position-try-fallbacks"
   }
 }
 
@@ -2156,6 +2172,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     11 => {
+      if first == 97 && insensitive(name, b"anchor-name") {
+        return Option<Property>.some(Property.AnchorName)
+      }
       if first == 112 && insensitive(name, b"paint-order") {
         return Option<Property>.some(Property.PaintOrder)
       }
@@ -2370,6 +2389,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     13 => {
+      if first == 112 && insensitive(name, b"position-area") {
+        return Option<Property>.some(Property.PositionArea)
+      }
       if first == 118 && insensitive(name, b"vector-effect") {
         return Option<Property>.some(Property.VectorEffect)
       }
@@ -2542,6 +2564,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     15 => {
+      if first == 112 && insensitive(name, b"position-anchor") {
+        return Option<Property>.some(Property.PositionAnchor)
+      }
       if first == 115 && insensitive(name, b"stroke-linejoin") {
         return Option<Property>.some(Property.StrokeLinejoin)
       }
@@ -3045,6 +3070,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     22 => {
+      if first == 112 && insensitive(name, b"position-try-fallbacks") {
+        return Option<Property>.some(Property.PositionTryFallbacks)
+      }
       if first == 102 && insensitive(name, b"font-variant-ligatures") {
         return Option<Property>.some(Property.FontVariantLigatures)
       }
@@ -3680,6 +3708,10 @@ pub fn inherited(property: Property) -> bool {
     Property.BackgroundPositionX => false
     Property.BackgroundPositionY => false
     Property.WebkitTextFillColor => true
+    Property.AnchorName => false
+    Property.PositionAnchor => false
+    Property.PositionArea => false
+    Property.PositionTryFallbacks => false
   }
 }
 
@@ -4132,6 +4164,10 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.BackgroundPositionX => b"0%"
     Property.BackgroundPositionY => b"0%"
     Property.WebkitTextFillColor => b"currentcolor"
+    Property.AnchorName => b"none"
+    Property.PositionAnchor => b"auto"
+    Property.PositionArea => b"none"
+    Property.PositionTryFallbacks => b"none"
   }
 }
 
@@ -4166,7 +4202,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 368
+    Property.All => 372
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5716,6 +5752,18 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 367 {
         return Property.WebkitTextFillColor
+      }
+      if index == 368 {
+        return Property.AnchorName
+      }
+      if index == 369 {
+        return Property.PositionAnchor
+      }
+      if index == 370 {
+        return Property.PositionArea
+      }
+      if index == 371 {
+        return Property.PositionTryFallbacks
       }
     }
     Property.WhiteSpace => {
