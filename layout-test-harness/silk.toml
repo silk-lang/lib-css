@@ -2,7 +2,7 @@
 name = "css-layout-test-harness"
 description = "Internal layout test and benchmark harness; not a consumer package"
 version = "0.1.0"
-silk-version = "0.1.0-dev.86+c9d19330761b"
+silk-version = "0.1.0-dev.87+37fa5f8857de"
 license = "MIT"
 
 [dependencies]
