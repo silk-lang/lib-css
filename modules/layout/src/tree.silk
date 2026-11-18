@@ -756,9 +756,16 @@ pub struct LayoutTree {
   pub keptViewport: OptionalSize, pub keptScroll: Point, pub keptScrolls: usize, pub keptMarks: usize,
   // Settled visual offsets before scroll/sticky positioning, for scroll-only updates.
   pub normalOffsets: List<Point>, pub scrollReady: bool,
+  // Whether every entry of `normalOffsets` is zero, so a compute that moves no fragment
+  // only changes the list's length.
+  pub normalOffsetsZero: bool,
   // Whether the last compute of the same boxes as the one before laid out
   // most of them again.
   pub relaidMost: bool,
+  // How the last compute ran, for diagnostics: 0 nothing changed, 1 every change laid out
+  // alone and spliced in, 2 in place over the previous output, 3 the same boxes written
+  // afresh, 4 other boxes, 5 other boxes in place over the previous output renumbered.
+  pub lastMode: u8,
   // How many computes in a row laid out most boxes again and copied none
   // (see compute).
   pub reuseIdle: usize,
@@ -787,7 +794,7 @@ impl LayoutTree {
   pub fn make() -> LayoutTree {
     return LayoutTree {
       stats: LayoutStats.zero(),
-      cache: LayoutCache.make(), snapshot: Snapshot.make(), facts: BoxFacts.make(), writes: BoxWrites.make(), keptRevision: 0, keptReusable: false, normalOffsets: List<Point>.make(), scrollReady: false, keptViewport: OptionalSize.none(), keptScroll: Point { x: 0.0, y: 0.0 }, keptScrolls: 0, keptMarks: 0, relaidMost: false, reuseIdle: 0,
+      cache: LayoutCache.make(), snapshot: Snapshot.make(), facts: BoxFacts.make(), writes: BoxWrites.make(), keptRevision: 0, keptReusable: false, normalOffsets: List<Point>.make(), normalOffsetsZero: true, scrollReady: false, keptViewport: OptionalSize.none(), keptScroll: Point { x: 0.0, y: 0.0 }, keptScrolls: 0, keptMarks: 0, relaidMost: false, lastMode: 0, reuseIdle: 0,
       boxes: List<Layout>.make(), boxNodes: List<BoxNode>.make(),
       anonymousStyles: List<Style>.make(),
       anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
