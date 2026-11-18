@@ -78,6 +78,7 @@ pub fn expands(property: Property) -> bool {
     || property == Property.ListStyle
     || property == Property.Columns
     || property == Property.ColumnRule
+    || property == Property.Offset
 }
 
 /// The value `target` gets from `value` written for `shorthand`. None when `target` is not
@@ -169,6 +170,9 @@ pub effect fn longhand(shorthand: Property, value: &Value, target: Property) -> 
   }
   if shorthand == Property.Container {
     return run container(value, index)
+  }
+  if shorthand == Property.Offset {
+    return run offset(value, index)
   }
   if shorthand == Property.ContainIntrinsicSize {
     return run intrinsicSize(value, index)
@@ -817,6 +821,166 @@ effect fn container(value: &Value, index: usize) -> Option<Value> ! OutOfMemoryE
     return Option<Value>.some(run values.clone(&parts.asSlice()[index]))
   }
   return Option<Value>.some(values.normal())
+}
+
+// `offset` (Motion Path 1): `[<offset-position>? [<offset-path> [<offset-distance> ||
+// <offset-rotate>]?]?]! [/ <offset-anchor>]?`, split on its CSS text. Each longhand gets its
+// words as text, which the receiver parses; the ones left out get their initial values.
+effect fn offset(value: &Value, index: usize) -> Option<Value> ! OutOfMemoryError ? &mut Allocator {
+  let css = run values.cssText(value)
+  let text = css.asSlice()
+  let mut slash = text.length
+  let mut depth: usize = 0
+  let mut quote: u8 = 0
+  let mut i: usize = 0
+  while i < text.length {
+    let byte = text[i]
+    if quote != 0 {
+      if byte == quote { quote = 0 }
+    } else if byte == 34 || byte == 39 {
+      quote = byte
+    } else if byte == 40 {
+      depth = depth + 1
+    } else if byte == 41 && depth > 0 {
+      depth = depth - 1
+    } else if byte == 47 && depth == 0 {
+      if slash != text.length { return Option<Value>.None }
+      slash = i
+    }
+    i = i + 1
+  }
+  // Word boundaries of the part before the slash: [start, end) pairs.
+  let mut starts: [usize; 12] = [0; 12]
+  let mut ends: [usize; 12] = [0; 12]
+  let mut count: usize = 0
+  i = 0
+  while i < slash {
+    while i < slash && spaceByte(text[i]) { i = i + 1 }
+    if i >= slash { break }
+    let start = i
+    depth = 0
+    quote = 0
+    while i < slash {
+      let byte = text[i]
+      if quote != 0 {
+        if byte == quote { quote = 0 }
+      } else if byte == 34 || byte == 39 {
+        quote = byte
+      } else if byte == 40 {
+        depth = depth + 1
+      } else if byte == 41 && depth > 0 {
+        depth = depth - 1
+      } else if depth == 0 && spaceByte(byte) {
+        break
+      }
+      i = i + 1
+    }
+    if count == 12 { return Option<Value>.None }
+    starts[count] = start
+    ends[count] = i
+    count = count + 1
+  }
+  // The path is the first path word and a box keyword next to it.
+  let mut pathFrom = count
+  let mut k: usize = 0
+  while k < count {
+    if pathWord(Slice.view<u8>(text, starts[k], ends[k] - starts[k])) {
+      pathFrom = k
+      break
+    }
+    k = k + 1
+  }
+  let mut pathTo = pathFrom
+  while pathTo < count && pathTo < pathFrom + 2 && pathWord(Slice.view<u8>(text, starts[pathTo], ends[pathTo] - starts[pathTo])) {
+    pathTo = pathTo + 1
+  }
+  if pathFrom == count && count == 0 && slash == text.length { return Option<Value>.None }
+  if pathFrom > 4 { return Option<Value>.None }
+  // After the path: one distance and up to two rotate words, in either order.
+  let mut distanceAt = count
+  let mut rotateFrom = count
+  let mut rotateTo = count
+  k = pathTo
+  while k < count {
+    let word = Slice.view<u8>(text, starts[k], ends[k] - starts[k])
+    if rotateWord(word) {
+      if rotateFrom != count && rotateTo != k { return Option<Value>.None }
+      if rotateFrom == count { rotateFrom = k }
+      rotateTo = k + 1
+      if rotateTo - rotateFrom > 2 { return Option<Value>.None }
+    } else {
+      if distanceAt != count { return Option<Value>.None }
+      distanceAt = k
+    }
+    k = k + 1
+  }
+  if pathFrom == count && count > 4 { return Option<Value>.None }
+  let anchorStart = if slash < text.length { slash + 1 } else { text.length }
+  return match index {
+    0 => if pathFrom == 0 { Option<Value>.some(values.keyword(Keyword.Normal)) } else {
+      Option<Value>.some(run trimmedText(text, starts[0], ends[if pathFrom == count { count - 1 } else { pathFrom - 1 }]))
+    }
+    1 => if pathFrom == count { Option<Value>.some(values.none()) } else {
+      Option<Value>.some(run trimmedText(text, starts[pathFrom], ends[pathTo - 1]))
+    }
+    2 => if distanceAt == count { Option<Value>.some(values.px(0.0)) } else {
+      Option<Value>.some(run trimmedText(text, starts[distanceAt], ends[distanceAt]))
+    }
+    3 => if rotateFrom == count { Option<Value>.some(values.auto()) } else {
+      Option<Value>.some(run trimmedText(text, starts[rotateFrom], ends[rotateTo - 1]))
+    }
+    _ => if anchorStart >= text.length { Option<Value>.some(values.auto()) } else {
+      Option<Value>.some(run trimmedText(text, anchorStart, text.length))
+    }
+  }
+}
+
+fn spaceByte(byte: u8) -> bool {
+  return byte == 32 || byte == 9 || byte == 10 || byte == 12 || byte == 13
+}
+
+fn lowerByte(byte: u8) -> u8 {
+  return if byte >= 65 && byte <= 90 { byte + 32 } else { byte }
+}
+
+fn startsWithWord(word: &[u8], prefix: &[u8]) -> bool {
+  if word.length < prefix.length { return false }
+  let mut i: usize = 0
+  while i < prefix.length {
+    if lowerByte(word[i]) != prefix[i] { return false }
+    i = i + 1
+  }
+  return true
+}
+
+fn wordIs(word: &[u8], name: &[u8]) -> bool {
+  return word.length == name.length && startsWithWord(word, name)
+}
+
+// An `<offset-path>` or `<coord-box>` word.
+fn pathWord(word: &[u8]) -> bool {
+  return wordIs(word, b"none") || startsWithWord(word, b"ray(") || startsWithWord(word, b"path(")
+    || startsWithWord(word, b"url(") || startsWithWord(word, b"circle(") || startsWithWord(word, b"ellipse(")
+    || startsWithWord(word, b"inset(") || startsWithWord(word, b"polygon(") || startsWithWord(word, b"rect(")
+    || startsWithWord(word, b"xywh(") || startsWithWord(word, b"shape(") || wordIs(word, b"border-box")
+    || wordIs(word, b"padding-box") || wordIs(word, b"content-box") || wordIs(word, b"margin-box")
+    || wordIs(word, b"fill-box") || wordIs(word, b"stroke-box") || wordIs(word, b"view-box")
+}
+
+// An `<offset-rotate>` word: `auto`, `reverse` or an angle.
+fn rotateWord(word: &[u8]) -> bool {
+  if wordIs(word, b"auto") || wordIs(word, b"reverse") { return true }
+  let n = word.length
+  return (n > 3 && (startsWithWord(Slice.view<u8>(word, n - 3, 3), b"deg") || startsWithWord(Slice.view<u8>(word, n - 3, 3), b"rad")))
+    || (n > 4 && (startsWithWord(Slice.view<u8>(word, n - 4, 4), b"grad") || startsWithWord(Slice.view<u8>(word, n - 4, 4), b"turn")))
+}
+
+effect fn trimmedText(text: &[u8], start: usize, end: usize) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let mut a = start
+  let mut b = end
+  while a < b && spaceByte(text[a]) { a = a + 1 }
+  while b > a && spaceByte(text[b - 1]) { b = b - 1 }
+  return run values.text(Slice.view<u8>(text, a, b - a))
 }
 
 // `contain-intrinsic-size` (width, height): one or two of `none`, a length, or `auto` and a
