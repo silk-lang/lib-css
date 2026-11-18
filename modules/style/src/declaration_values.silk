@@ -36,6 +36,10 @@ fn scan(
           Kind.Function { name } => {
             opening = true
             variable = tokens.insensitive(value.text(name), b"var")
+            // if() picks a branch at computed time, as var() substitutes then.
+            if tokens.insensitive(value.text(name), b"if") {
+              variables = true
+            }
           }
           Kind.OpenParen => {
             opening = true
