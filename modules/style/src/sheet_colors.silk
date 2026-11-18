@@ -1,11 +1,12 @@
 //! Parsed Color 5 expression programs, without source text or a runtime CSS parser.
-import colors { Color, ColorProgram, ColorNode, Space, Identity, SystemColor, HueMethod }
+import colors { Color, ColorProgram, ColorNode, ChannelOp, Space, Identity, SystemColor, HueMethod }
 import colors
 import sheet_binary { Writer, Reader, DecodeError, DecodeReason }
 import tokens { Limits }
 import silk.collections.list { List }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.f64
+import silk.num.u8
 
 const SPACES: [Space; 15] = [Space.Srgb, Space.SrgbLinear, Space.DisplayP3, Space.DisplayP3Linear,
   Space.A98Rgb, Space.ProphotoRgb, Space.Rec2020, Space.XyzD50, Space.XyzD65, Space.Hsl,
@@ -61,6 +62,38 @@ pub effect fn encode(program: &ColorProgram, writer: &mut Writer) -> ()
         run writer.number(leftWeight)
         run writer.number(alphaMultiplier)
       }
+      ColorNode.Relative { origin, space, legacy, first, lengths } => {
+        run writer.byte(2)
+        run writer.index(origin)
+        run writer.index(spaceIndex(space))
+        run writer.flag(legacy)
+        run writer.index(first)
+        run writer.byte(lengths[0])
+        run writer.byte(lengths[1])
+        run writer.byte(lengths[2])
+        run writer.byte(lengths[3])
+      }
+    }
+    i = i + 1
+  }
+  // Relative channels, in postfix.
+  run writer.index(program.ops.length())
+  i = 0
+  while i < program.ops.length() {
+    match program.ops.asSlice()[i] {
+      ChannelOp.Number { value } => {
+        run writer.byte(0)
+        run writer.number(value)
+      }
+      ChannelOp.Channel { index } => {
+        run writer.byte(1)
+        run writer.byte(index)
+      }
+      ChannelOp.Add => run writer.byte(2)
+      ChannelOp.Subtract => run writer.byte(3)
+      ChannelOp.Multiply => run writer.byte(4)
+      ChannelOp.Divide => run writer.byte(5)
+      ChannelOp.Missing => run writer.byte(6)
     }
     i = i + 1
   }
@@ -70,7 +103,7 @@ pub effect fn decode(reader: &mut Reader<'_>, limits: &Limits) -> ColorProgram
   ! DecodeError | OutOfMemoryError ? &mut Allocator {
   let count = run reader.count(if limits.maxTokens < 4096 { limits.maxTokens } else { 4096 })
   if count == 0 { run reader.invalid() }
-  let mut result = ColorProgram { nodes: List<ColorNode>.make() }
+  let mut result = ColorProgram.make()
   let mut depths = List<usize>.make()
   let mut used = List<bool>.make()
   let mut i: usize = 0
@@ -115,6 +148,19 @@ pub effect fn decode(reader: &mut Reader<'_>, limits: &Limits) -> ColorProgram
       let alpha = run reader.number()
       if !f64.isFinite(weight) || !f64.isFinite(alpha) || weight < 0.0 || weight > 1.0 || alpha <= 0.0 || alpha > 1.0 { run reader.invalid() }
       ColorNode.Mix { left: left, right: right, space: coordinates, hue: hue, leftWeight: weight, alphaMultiplier: alpha }
+    } else if tag == 2 {
+      let origin = run reader.index()
+      if origin >= i || used.asSlice()[origin] { run reader.invalid() }
+      let flags = used.asMutSlice()
+      flags[origin] = true
+      depth = 1 + depths.asSlice()[origin]
+      let coordinates = run space(&mut reader.*)
+      let legacy = run reader.flag()
+      let first = run reader.index()
+      let lengths = [run reader.byte(), run reader.byte(), run reader.byte(), run reader.byte()]
+      if legacy && coordinates != Space.Srgb { run reader.invalid() }
+      if lengths[0] > 64 || lengths[1] > 64 || lengths[2] > 64 || lengths[3] > 64 { run reader.invalid() }
+      ColorNode.Relative { origin: origin, space: coordinates, legacy: legacy, first: first, lengths: lengths }
     } else { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
     if depth > 64 || depth > limits.maxDepth { fail DecodeError { reason: DecodeReason.Limit, offset: reader.at } }
     run result.nodes.append(node)
@@ -125,6 +171,32 @@ pub effect fn decode(reader: &mut Reader<'_>, limits: &Limits) -> ColorProgram
   i = 0
   while i + 1 < count {
     if !used.asSlice()[i] { run reader.invalid() }
+    i = i + 1
+  }
+  let steps = run reader.count(4096)
+  i = 0
+  while i < steps {
+    let tag = run reader.byte()
+    let op = if tag == 0 { ChannelOp.Number { value: run reader.number() } }
+      else if tag == 1 {
+        let index = run reader.byte()
+        if index > 3 { run reader.invalid() }
+        ChannelOp.Channel { index: index }
+      }
+      else if tag == 2 { ChannelOp.Add } else if tag == 3 { ChannelOp.Subtract }
+      else if tag == 4 { ChannelOp.Multiply } else if tag == 5 { ChannelOp.Divide }
+      else if tag == 6 { ChannelOp.Missing }
+      else { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
+    run result.ops.append(op)
+    i = i + 1
+  }
+  // Each relative node's channels lie inside the steps.
+  i = 0
+  while i < result.nodes.length() {
+    if let ColorNode.Relative { first, lengths, .. } = result.nodes.asSlice()[i] {
+      let total = u8.toUsize(lengths[0]) + u8.toUsize(lengths[1]) + u8.toUsize(lengths[2]) + u8.toUsize(lengths[3])
+      if first > result.ops.length() || total > result.ops.length() - first { run reader.invalid() }
+    }
     i = i + 1
   }
   return move result
