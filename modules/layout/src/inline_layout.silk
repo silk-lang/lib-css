@@ -2940,9 +2940,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     if input.performLayout || recording {
       let lineStart = finalItems.length()
       let base = finalTexts.length()
-      index = 0
-      while index < accepted.texts.length() { run finalTexts.append(accepted.texts.get(index))
-        index = index + 1 }
+      run finalTexts.appendSlice(accepted.texts.asSlice())
+      run finalItems.reserve(accepted.items.length())
       index = 0
       while index < accepted.items.length() {
         let mut item = accepted.items.get(index)
