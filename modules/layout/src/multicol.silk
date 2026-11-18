@@ -23,6 +23,7 @@ import layout_pass { LayoutPass }
 import text { TextMeasure, TextError }
 import fragmentation { FragmentationError, Fragmentainers }
 import breaks { FragmentainerKind, BreakKinds, BreakRelaxation, nextRelaxation }
+import fragments { FragmentKind }
 
 // Balancing raises the column height at most this many times before it lets
 // the content overflow into more columns.
@@ -376,6 +377,11 @@ effect fn columnReach(output: &LayoutPass<'_, '_>, start: usize, style: &Style) 
       at = Point { x: parent.x + fragment.location.x, y: parent.y + fragment.location.y }
     }
     run origins.append(at)
+    // Text and inline boxes may draw past their line box; the line box is what has to fit.
+    if fragment.kind == FragmentKind.Text || fragment.kind == FragmentKind.Inline {
+      index = index + 1
+      continue
+    }
     if !flip { reach = max(reach, at.y + fragment.size.height) }
     else if left { reach = max(reach, at.x + fragment.size.width) }
     else { reach = max(reach, values[start].size.width - at.x) }
