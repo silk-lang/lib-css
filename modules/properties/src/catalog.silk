@@ -447,9 +447,10 @@ pub enum(u16) Property {
   FieldSizing,
   BackgroundPositionX,
   BackgroundPositionY,
+  WebkitTextFillColor,
 }
 
-pub const COUNT: usize = 444
+pub const COUNT: usize = 445
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -897,6 +898,7 @@ pub fn all() -> [Property; COUNT] {
     Property.FieldSizing,
     Property.BackgroundPositionX,
     Property.BackgroundPositionY,
+    Property.WebkitTextFillColor,
   ]
 }
 
@@ -1346,6 +1348,7 @@ pub fn index(property: Property) -> usize {
     Property.FieldSizing => 441
     Property.BackgroundPositionX => 442
     Property.BackgroundPositionY => 443
+    Property.WebkitTextFillColor => 444
   }
 }
 
@@ -1795,6 +1798,7 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.FieldSizing => b"field-sizing"
     Property.BackgroundPositionX => b"background-position-x"
     Property.BackgroundPositionY => b"background-position-y"
+    Property.WebkitTextFillColor => b"-webkit-text-fill-color"
   }
 }
 
@@ -3088,6 +3092,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       if first == 116 && insensitive(name, b"text-underline-position") {
         return Option<Property>.some(Property.TextUnderlinePosition)
       }
+      if first == 45 && insensitive(name, b"-webkit-text-fill-color") {
+        return Option<Property>.some(Property.WebkitTextFillColor)
+      }
       if first == 98 && insensitive(name, b"border-top-right-radius") {
         return Option<Property>.some(Property.BorderTopRightRadius)
       }
@@ -3672,6 +3679,7 @@ pub fn inherited(property: Property) -> bool {
     Property.FieldSizing => false
     Property.BackgroundPositionX => false
     Property.BackgroundPositionY => false
+    Property.WebkitTextFillColor => true
   }
 }
 
@@ -4123,6 +4131,7 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.FieldSizing => b"fixed"
     Property.BackgroundPositionX => b"0%"
     Property.BackgroundPositionY => b"0%"
+    Property.WebkitTextFillColor => b"currentcolor"
   }
 }
 
@@ -4157,7 +4166,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 367
+    Property.All => 368
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5704,6 +5713,9 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 366 {
         return Property.BackgroundPositionY
+      }
+      if index == 367 {
+        return Property.WebkitTextFillColor
       }
     }
     Property.WhiteSpace => {

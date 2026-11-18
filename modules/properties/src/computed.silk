@@ -1,6 +1,8 @@
 //! Computed CSS values: what layout and paint read after the cascade and unit resolution.
 //! Lengths are pixels and percentages are fractions (0.5 is 50%).
 import silk.color.rgba { Rgba }
+import silk.num.f32
+import silk.num.u32
 import silk.core.equal { Equal }
 import silk.core.ownership { Copy }
 import silk.geometry.corners { Corners }
@@ -470,6 +472,9 @@ pub struct Text {
   pub selectionColor: Rgba<f32>,
   pub placeholderColor: Rgba<f32>,
   pub hasPlaceholderColor: bool,
+  /// `-webkit-text-fill-color` as RGBA8 (red in the low byte), when `hasFillColor`.
+  pub hasFillColor: bool,
+  pub fillColor: u32,
 }
 impl Copy for Text {}
 impl Text {
@@ -516,7 +521,28 @@ impl Text {
       selectionColor: Rgba<f32> { r: 0.706, g: 0.835, b: 0.996, a: 1.0 },
       placeholderColor: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
       hasPlaceholderColor: false,
+      hasFillColor: false,
+      fillColor: 0,
     }
+  }
+
+  /// The color glyphs are filled with: `-webkit-text-fill-color`, else `color`.
+  pub fn fill(self: &Self) -> Rgba<f32> {
+    if !self.hasFillColor {
+      return self.color
+    }
+    let word = self.fillColor
+    return Rgba<f32> {
+      r: u32.toF32(word & 255) / 255.0,
+      g: u32.toF32((word / 256) & 255) / 255.0,
+      b: u32.toF32((word / 65536) & 255) / 255.0,
+      a: u32.toF32(word / 16777216) / 255.0,
+    }
+  }
+
+  /// Packs `color` for `fillColor`.
+  pub fn packFill(color: Rgba<f32>) -> u32 {
+    return channel(color.r) + channel(color.g) * 256 + channel(color.b) * 65536 + channel(color.a) * 16777216
   }
 
   /// The color decorations are drawn in.
@@ -542,6 +568,10 @@ impl Text {
     }
     return Rgba<f32> { r: self.color.r, g: self.color.g, b: self.color.b, a: self.color.a * 0.5 }
   }
+}
+
+fn channel(value: f32) -> u32 {
+  return f32.toU32(f32.floor(f32.min(f32.max(value, 0.0), 1.0) * 255.0 + 0.5))
 }
 
 // Plain keyword enums compare by variant.
