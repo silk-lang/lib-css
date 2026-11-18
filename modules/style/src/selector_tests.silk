@@ -294,6 +294,8 @@ test effect fn competingMatchingArmsAndFunctionalSpecificity() -> ()
 test effect fn combinatorsRelativeSelectorsAndHasBoundaries() -> ()
   ! AssertionError<'static> | DecodeError | CssError | OutOfMemoryError {
   run check(b"svg g > rect + circle ~ rect", 4, true, 0, 0, 5)
+  run check(b"svg >> rect", 4, true, 0, 0, 2)
+  run check(b"g>>rect", 2, true, 0, 0, 2)
   run check(b"g:has(> rect + circle)", 1, true, 0, 0, 3)
   run check(b"rect:has(+ circle)", 2, true, 0, 0, 2)
   run check(b"rect:has(~ rect)", 2, true, 0, 0, 2)
@@ -307,6 +309,9 @@ test effect fn combinatorsRelativeSelectorsAndHasBoundaries() -> ()
   run invalid(b"g:has(rect, :unknown)")
   run invalid(b"g:has(::before)")
   run invalid(b"rect >")
+  run invalid(b"rect >>")
+  run invalid(b"svg > > rect")
+  run invalid(b"svg >>> rect")
   run invalid(b"rect,,circle")
 }
 
