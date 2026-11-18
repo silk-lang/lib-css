@@ -15,8 +15,8 @@ import geometry {
   max,
   clamp
 }
-import style { Style, Dimension, DimensionKind, Direction, Align, Position, WritingMode }
-import context { Input, ResolvedBox, UNBOUNDED, childrenInput, resolve }
+import style { Style, Dimension, DimensionKind, Direction, Align, WritingMode }
+import context { Input, ResolvedBox, UNBOUNDED, childrenInput, resolve, containsAbsolute }
 import box_tree { BoxTree }
 import layout_pass { LayoutPass }
 import engine { layoutNodeInPlace, plainGridItem, percentFree, probeNode, shapedBox, widthIgnoresHeight, baselineValue, ITEM_SUBGRID, ITEM_SELF_BASELINE }
@@ -1712,7 +1712,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     )
     run output.resumes.set(id, state)
   }
-  if input.performLayout && (style.position != Position.Static || input.gridContext != 0) {
+  if input.performLayout && (containsAbsolute(style) || input.gridContext != 0) {
     let emptyNames = LineNames.make()
     let mut columnNames = &emptyNames
     let mut rowNames = &emptyNames

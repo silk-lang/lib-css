@@ -111,7 +111,7 @@ fn sameOuter(a: &Style, b: &Style) -> bool {
 // The style properties box construction reads (see box_tree.silk); other
 // properties reach generated boxes only through their styles.
 fn sameGeneration(a: &Style, b: &Style) -> bool {
-  if a.sizeContainment != b.sizeContainment { return false }
+  if a.sizeContainment != b.sizeContainment || a.layoutContainment != b.layoutContainment { return false }
   if a.display.isNone() != b.display.isNone() || a.display.isContents() != b.display.isContents() { return false }
   if a.display.outsideIs(DisplayOutside.Block) != b.display.outsideIs(DisplayOutside.Block) || a.display.outsideIs(DisplayOutside.Inline) != b.display.outsideIs(DisplayOutside.Inline) { return false }
   if a.display.insideIs(DisplayInside.Flow) != b.display.insideIs(DisplayInside.Flow) || a.display.insideIs(DisplayInside.FlowRoot) != b.display.insideIs(DisplayInside.FlowRoot) || a.display.insideIs(DisplayInside.Flex) != b.display.insideIs(DisplayInside.Flex) { return false }
