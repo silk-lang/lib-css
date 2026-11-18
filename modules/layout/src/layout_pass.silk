@@ -1,5 +1,7 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.mem.box { Box }
 import silk.core.option { Option }
 import silk.core.ownership { Copy }
 import silk.num.usize
@@ -13,7 +15,7 @@ import box_tree { BoxTree }
 import fragments { Fragment, FragmentArena, FragmentKind, one }
 import fragmentation { ResumeStore, ResumeCheckpoint, StaticAnchor, Fragmentainers, Fragmentainer, FragmentAncestor, FragmentationError }
 import breaks { ForcedBreaks, PageSide, BreakKinds }
-import inline_prepared { PreparedInline, KeptText }
+import inline_prepared { PreparedInline, PreparedCore, KeptText }
 import text { TextToken }
 
 import flex { FlexScratch }
@@ -63,6 +65,9 @@ pub struct PassCheckpoint {
 impl Copy for PassCheckpoint {}
 // Size-only results go to `cache`; compute lends it the LayoutTree's cache so
 // clean entries survive between computes (see LayoutCache).
+// The most prepared paragraphs one compute holds at a time (see putPrepared).
+const PREPARED_HELD: usize = 384
+
 // The most prepared paragraphs the cache keeps between computes (see keepTexts).
 const KEPT_PARAGRAPHS: usize = 256
 
@@ -78,6 +83,11 @@ pub struct LayoutPass<'a, 'source> {
   fullBoxes: List<FullBoxGeometry>,
   fullIndices: List<usize>,
     pub inlinePrepared: List<List<PreparedInline<'source>>>,
+    // The boxes whose paragraphs `inlinePrepared` holds, oldest first from
+    // `preparedHead` (a box taken out and put back is listed again), how many
+    // it holds, and the cores of those let go (see putPrepared).
+    preparedOrder: List<usize>, preparedHead: usize, preparedHeld: usize,
+    pub spareCores: List<Box<PreparedCore>>,
   // A paragraph's tokens before normalization, one paragraph at a time.
   pub rawTokens: List<TextToken<'source>>,
   lineLimits: List<LineLimit>,
@@ -147,7 +157,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   pub effect fn over(boxes: &'a mut [Layout], fragments: &'a mut FragmentArena, sources: &'source [Node], cache: &'a mut LayoutCache, previous: &'a mut Snapshot, writes: &'a mut BoxWrites, facts: &'a mut BoxFacts) -> LayoutPass<'a, 'source> ! OutOfMemoryError ? &mut Allocator {
     // The paragraph cache may borrow text from these source nodes.
     drop sources
-    return LayoutPass { boxes: move boxes, fragments: move fragments, fragmentParent: NO_NODE, frame: NO_NODE, resumes: ResumeStore.make(), frames: Fragmentainers.empty(), frameRoots: List<usize>.make(), frameOffsets: List<f32>.make(), fullBoxes: List<FullBoxGeometry>.make(), fullIndices: List<usize>.make(), inlinePrepared: List<List<PreparedInline<'source>>>.make(), rawTokens: List<TextToken<'source>>.make(), lineLimits: List<LineLimit>.make(), cache: move cache, previous: move previous, facts: move facts, floatContext: List<FloatBox>.make(), outOfFlowBoxes: List<u64>.make(), overflowEscapes: List<usize>.make(), overflowMarks: List<u64>.make(), overflowRuns: 0, relativeOffsets: List<Point>.make(), absoluteInputOwner: NO_NODE, absoluteInput: Input.make(OptionalSize.definite(0.0, 0.0)), absoluteBox: ResolvedBox { padding: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(), min: Size.zero(), max: Size.zero(), size: OptionalSize.none() }, absoluteRect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, absoluteLimits: ResolvedEdges.zero(), absoluteLimitsSet: false, absoluteScrollParent: NO_NODE, absoluteScrolled: false, absoluteScrollport: Size.zero(), inPlace: false, writes: move writes, tracking: true, deferSticky: false, anchors: List<StaticAnchor>.make(), selections: List<ScrollbarSelection>.make(), frameSelections: List<List<FrameScrollbarSelection>>.make(), scrollbarSnapshots: List<ScrollbarSnapshot>.make(), hasAutoScrollbars: false, gutterScrollbars: false, needsRelayout: false, stats: LayoutStats.zero(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), tableSlots: List<Rect>.make(), tablePlans: List<u64>.make() }
+    return LayoutPass { boxes: move boxes, fragments: move fragments, fragmentParent: NO_NODE, frame: NO_NODE, resumes: ResumeStore.make(), frames: Fragmentainers.empty(), frameRoots: List<usize>.make(), frameOffsets: List<f32>.make(), fullBoxes: List<FullBoxGeometry>.make(), fullIndices: List<usize>.make(), inlinePrepared: List<List<PreparedInline<'source>>>.make(), preparedOrder: List<usize>.make(), preparedHead: 0, preparedHeld: 0, spareCores: List<Box<PreparedCore>>.make(), rawTokens: List<TextToken<'source>>.make(), lineLimits: List<LineLimit>.make(), cache: move cache, previous: move previous, facts: move facts, floatContext: List<FloatBox>.make(), outOfFlowBoxes: List<u64>.make(), overflowEscapes: List<usize>.make(), overflowMarks: List<u64>.make(), overflowRuns: 0, relativeOffsets: List<Point>.make(), absoluteInputOwner: NO_NODE, absoluteInput: Input.make(OptionalSize.definite(0.0, 0.0)), absoluteBox: ResolvedBox { padding: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(), min: Size.zero(), max: Size.zero(), size: OptionalSize.none() }, absoluteRect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, absoluteLimits: ResolvedEdges.zero(), absoluteLimitsSet: false, absoluteScrollParent: NO_NODE, absoluteScrolled: false, absoluteScrollport: Size.zero(), inPlace: false, writes: move writes, tracking: true, deferSticky: false, anchors: List<StaticAnchor>.make(), selections: List<ScrollbarSelection>.make(), frameSelections: List<List<FrameScrollbarSelection>>.make(), scrollbarSnapshots: List<ScrollbarSnapshot>.make(), hasAutoScrollbars: false, gutterScrollbars: false, needsRelayout: false, stats: LayoutStats.zero(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), tableSlots: List<Rect>.make(), tablePlans: List<u64>.make() }
   }
   // Fragmentation state for the column flows of a continuous pass.
   pub effect fn beginColumns(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
@@ -617,6 +627,45 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
       self.selections.set(id, ScrollbarSelection { horizontal: self.boxes[id].horizontalScrollbar, vertical: self.boxes[id].verticalScrollbar })
       id = id + 1
     }
+  }
+  // Holds box `id`'s prepared paragraph for the rest of the compute, which
+  // lays a box out more than once (a probe, then the layout), and lets the
+  // oldest go once more than PREPARED_HELD are held: their cores serve the
+  // paragraphs prepared next. A long document then prepares its text through
+  // a few hundred cores, not one a paragraph that all go when the compute ends.
+  pub effect fn putPrepared(self: &mut Self, id: usize, prepared: PreparedInline<'source>) ! OutOfMemoryError ? &mut Allocator {
+    run self.inlinePrepared.asMutSlice()[id].reserveExact(1)
+    run self.inlinePrepared.asMutSlice()[id].append(move prepared)
+    run self.preparedOrder.append(id)
+    self.preparedHeld = self.preparedHeld + 1
+    while self.preparedHeld > PREPARED_HELD && self.preparedHead < self.preparedOrder.length() {
+      let oldest = self.preparedOrder.get(self.preparedHead)
+      self.preparedHead = self.preparedHead + 1
+      if oldest == id { continue }
+      match self.inlinePrepared.asMutSlice()[oldest].pop() {
+        Option<PreparedInline<'source>>.Some { value } => {
+          let mut let_go = move value
+          let held = let_go.core.getMut()
+          held[0].ready = false
+          drop held
+          run self.spareCores.append(move let_go.core)
+          self.preparedHeld = self.preparedHeld - 1
+        }
+        Option<PreparedInline<'source>>.None => {}
+      }
+    }
+    if self.preparedHead > 4096 && self.preparedHead * 2 > self.preparedOrder.length() {
+      let mut rest = List<usize>.make()
+      run rest.appendSlice(Slice.view(self.preparedOrder.asSlice(), self.preparedHead, self.preparedOrder.length() - self.preparedHead))
+      self.preparedOrder = move rest
+      self.preparedHead = 0
+    }
+  }
+  // Takes box `id`'s prepared paragraph out of this compute's, if it holds one.
+  pub fn takeHeld(self: &mut Self, id: usize) -> Option<PreparedInline<'source>> {
+    let taken = self.inlinePrepared.asMutSlice()[id].pop()
+    if taken.isSome() && self.preparedHeld > 0 { self.preparedHeld = self.preparedHeld - 1 }
+    return move taken
   }
   // Hands every paragraph prepared in this compute to the cache, which keeps
   // at most KEPT_PARAGRAPHS of them, the latest first (see
