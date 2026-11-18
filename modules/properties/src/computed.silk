@@ -25,6 +25,11 @@ impl Dimension {
   pub fn pct(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Percent, value: 0.0, percent: value } }
   pub fn calc(length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Calc, value: length, percent: percent } }
   pub fn keyword(kind: DimensionKind) -> Dimension { return Dimension { kind: kind, value: 0.0, percent: 0.0 } }
+  /// The value with its lengths multiplied by `ratio`, for a change of `zoom`. Percentages and
+  /// keywords stay.
+  pub fn zoomed(self: Dimension, ratio: f32) -> Dimension {
+    return Dimension { kind: self.kind, value: self.value * ratio, percent: self.percent }
+  }
   /// Whether the value depends on a percentage basis.
   pub fn relative(self: Dimension) -> bool {
     return self.kind == DimensionKind.Percent || self.kind == DimensionKind.Calc
@@ -43,6 +48,10 @@ impl Equal for SizeValue {
 }
 impl SizeValue {
   pub fn of(value: Dimension) -> SizeValue { return SizeValue { kind: value.kind, value: value.value, percent: value.percent, bound: 0.0 } }
+  /// The value with its lengths multiplied by `ratio`, for a change of `zoom`.
+  pub fn zoomed(self: SizeValue, ratio: f32) -> SizeValue {
+    return SizeValue { kind: self.kind, value: self.value * ratio, percent: self.percent, bound: self.bound * ratio }
+  }
   pub fn auto() -> SizeValue { return SizeValue { kind: DimensionKind.Auto, value: 0.0, percent: 0.0, bound: 0.0 } }
   pub fn px(value: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Length, value: value, percent: 0.0, bound: 0.0 } }
   pub fn pct(value: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Percent, value: 0.0, percent: value, bound: 0.0 } }
@@ -456,8 +465,11 @@ pub struct Text {
   /// `-webkit-text-fill-color` as RGBA8 (red in the low byte), 0 for `currentcolor`. One
   /// word, so `Text` keeps its size: `packFill` never returns 0.
   pub fillColor: u32,
-  pub orphans: usize,
-  pub widows: usize,
+  /// The effective `zoom`: the product of the element's and its ancestors' `zoom`. Lengths in
+  /// computed values, `size` included, are already multiplied by it.
+  pub zoom: f32,
+  pub orphans: u32,
+  pub widows: u32,
   pub visibility: Visibility,
   /// The font family list, as a handle the host defines.
   pub family: u32,
@@ -512,6 +524,7 @@ impl Text {
       family: 0,
       size: 16.0,
       weight: 400.0,
+      zoom: 1.0,
       style: FontStyle.Normal,
       lineHeight: LineHeight.Normal,
       color: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
@@ -529,6 +542,26 @@ impl Text {
       placeholderColor: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
       hasPlaceholderColor: false,
       fillColor: 0,
+    }
+  }
+
+  /// Moves the inherited text to an effective zoom of `zoom`: its lengths are multiplied by
+  /// `zoom` over the zoom they were computed at.
+  pub fn rezoom(self: &mut Self, zoom: f32) -> () {
+    if zoom == self.zoom || self.zoom <= 0.0 { return () }
+    let ratio = zoom / self.zoom
+    self.zoom = zoom
+    self.size = self.size * ratio
+    self.letterSpacing = self.letterSpacing * ratio
+    self.wordSpacing = self.wordSpacing * ratio
+    self.textIndent.value = self.textIndent.value.zoomed(ratio)
+    self.lineHeight = match self.lineHeight {
+      LineHeight.Length { value } => LineHeight.Length { value: value * ratio }
+      _ => self.lineHeight
+    }
+    self.tabSize = match self.tabSize {
+      TabSize.Length { value } => TabSize.Length { value: value * ratio }
+      _ => self.tabSize
     }
   }
 
