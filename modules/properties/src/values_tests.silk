@@ -370,3 +370,28 @@ test effect fn textBoxValuesConvert() -> () ! AssertionError<'static> | OutOfMem
   let mut allocator = Allocator.systemAllocatorProvider()
   run textBoxValues() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+fn markIs(found: Option<u32>, expected: u32) -> bool {
+  return match found { Option.Some { value } => value == expected _ => false }
+}
+
+fn placeIs(found: Option<convert.EmphasisPosition>, under: bool, left: bool) -> bool {
+  return match found { Option.Some { value } => value.under == under && value.left == left _ => false }
+}
+
+effect fn emphasisValues() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  run Testing.expect(markIs(convert.textEmphasisStyle(&values.none()), 0), "none")
+  run Testing.expect(markIs(convert.textEmphasisStyle(&run written(b"filled circle")), computed.EMPHASIS_KEYWORD + 2), "filled circle")
+  run Testing.expect(markIs(convert.textEmphasisStyle(&run written(b"sesame open")), computed.EMPHASIS_KEYWORD + computed.EMPHASIS_OPEN + 5), "the fill may come last")
+  run Testing.expect(markIs(convert.textEmphasisStyle(&run written(b"open")), computed.EMPHASIS_KEYWORD + computed.EMPHASIS_OPEN), "a fill alone leaves the shape to the writing mode")
+  run Testing.expect(markIs(convert.textEmphasisStyle(&run written(b"\"\xE2\x98\x85\"")), 0x2605), "a string's first character")
+  run Testing.expect(convert.textEmphasisStyle(&run written(b"dot circle")).isNone(), "one shape at most")
+  run Testing.expect(placeIs(convert.textEmphasisPosition(&run written(b"under left")), true, true), "under left")
+  run Testing.expect(placeIs(convert.textEmphasisPosition(&run written(b"over")), false, false), "over alone is over right")
+  run Testing.expect(convert.textEmphasisPosition(&run written(b"left")).isNone(), "the over or under side is required")
+}
+
+test effect fn emphasisValuesConvert() -> () ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run emphasisValues() |> Effect.provideMut<Allocator>(&mut allocator)
+}

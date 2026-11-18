@@ -566,6 +566,7 @@ fn inherited(parent: &Style) -> Style {
   style.textJustify = parent.textJustify
   style.textIndent = parent.textIndent
   style.textBoxEdge = parent.textBoxEdge
+  style.emphasis = parent.emphasis
   style.textWrap = parent.textWrap
   style.textWrapStyle = parent.textWrapStyle
   style.whiteSpaceCollapse = parent.whiteSpaceCollapse

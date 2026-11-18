@@ -4,6 +4,7 @@ pub import properties.computed {
   TextEdge,
   TextBoxEdge,
   TextBoxTrim,
+  EmphasisSide,
   DimensionKind,
   Dimension,
   SizeValue,
@@ -100,6 +101,9 @@ pub struct Style {
   // `text-box-trim` and `text-box-edge` (CSS Inline 3 §3): the first and last line boxes of
   // the block's own inline formatting context trim to the root inline box's edges.
   pub textBoxTrim: TextBoxTrim, pub textBoxEdge: TextBoxEdge,
+  // The side `text-emphasis` marks sit on (inherited): they take room in the line like
+  // ruby when the half-leading cannot hold them.
+  pub emphasis: EmphasisSide,
   pub flexDirection: FlexDirection, pub flexWrap: FlexWrap,
   pub flexGrow: f32, pub flexShrink: f32, pub flexBasis: SizeValue,
   pub order: i32,
@@ -189,7 +193,7 @@ impl Style {
       breakBefore: BreakBetween.Auto, breakAfter: BreakBetween.Auto, breakInside: BreakInside.Auto,
       orphans: 2, widows: 2,
       columnCount: 0, columnWidth: -1.0, columnFill: ColumnFill.Balance, multicolSpan: ColumnSpan.None,
-      maxLines: 0, blockEllipsis: false, textOverflowEllipsis: false, textBoxTrim: TextBoxTrim.None, textBoxEdge: TextBoxEdge.auto(),
+      maxLines: 0, blockEllipsis: false, textOverflowEllipsis: false, textBoxTrim: TextBoxTrim.None, textBoxEdge: TextBoxEdge.auto(), emphasis: EmphasisSide.None,
       flexDirection: FlexDirection.Row, flexWrap: FlexWrap.NoWrap,
       flexGrow: 0.0, flexShrink: 1.0, flexBasis: SizeValue.auto(), order: 0,
       justifyContent: Align.Normal, alignItems: Align.Normal, alignSelf: Align.Auto, alignContent: Align.Normal,

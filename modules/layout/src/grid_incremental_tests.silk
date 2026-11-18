@@ -5,7 +5,7 @@ import silk.num.usize
 import silk.text.string { String }
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, Align, Edges, LineHeight, TextBoxTrim, TextBoxEdge, TextEdge }
+import style { Style, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, Align, Edges, LineHeight, TextBoxTrim, TextBoxEdge, TextEdge, EmphasisSide }
 import geometry {
   Measure,
   MeasureRequest,
@@ -772,4 +772,38 @@ test effect fn textBoxTrimsTheFirstAndLastLines()
   ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run trimmedLines() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// Marks half the font size above or below the text: a 10px line (no half-leading) grows by 5,
+// a 20px one (half-leading 5) holds them.
+effect fn emphasizedLines()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static>
+  ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut style = Style.make()
+  style.width = SizeValue.of(Dimension.px(300.0))
+  style.emphasis = EmphasisSide.Over
+  let block = run tree.append(root, style)
+  let text = run tree.appendText(block, run String.copy("ab cd"))
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 15.0)
+  run expectBounds(&mut output, text, 0.0, 5.0, 25.0, 10.0)
+  style.emphasis = EmphasisSide.Under
+  run tree.setStyle(block, style)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 15.0)
+  run expectBounds(&mut output, text, 0.0, 0.0, 25.0, 10.0)
+  style.lineHeight = LineHeight.Length { value: 20.0 }
+  run tree.setStyle(block, style)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 20.0)
+}
+
+test effect fn emphasisMarksTakeLineRoom()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run emphasizedLines() |> Effect.provideMut<Allocator>(&mut allocator)
 }
