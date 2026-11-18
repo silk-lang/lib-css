@@ -249,6 +249,10 @@ async function observeDOM(input, fontAssets, columns) {
       set(element, 'fontKerning', 'none');
       set(element, 'fontVariantLigatures', 'none');
     }
+    // The native tolerance is 1em of the element's font even without font assets.
+    if (String(node.style.display ?? '').includes('grid-lanes')) {
+      element.style.setProperty('flow-tolerance', `${fontMetrics(node.style.fontKey ?? 0).fontSize}px`);
+    }
     // Individual sides override shorthands regardless of JSON property order.
     const edges = new Set(['padding', 'margin', 'border', 'inset']);
     const entries = Object.entries(node.style).sort(([a], [b]) => Number(edges.has(b)) - Number(edges.has(a)));
@@ -433,9 +437,11 @@ async function observeDOM(input, fontAssets, columns) {
         const evidence = { node: i, property, requested, specified: element.style.getPropertyValue(property),
           computed: style.getPropertyValue(property), cssSupported: CSS.supports(property, requested) };
         gridEvidence.push(evidence);
+        // Grid lanes compute no value for the stacking axis's template.
+        const stackingNone = style.display.includes('grid-lanes') && requested === 'none' && property.startsWith('grid-template-');
         // Track lists expose used pixel sizes through getComputedStyle; those
         // cannot be compared textually with authored fr/minmax/repeat values.
-        if (!evidence.cssSupported || !evidence.specified || !evidence.computed) {
+        if (!evidence.cssSupported || !evidence.specified || !evidence.computed && !stackingNone) {
           unsupported.push({ node: i, feature: property,
             reason: 'Chrome does not support or did not retain the requested grid declaration.', evidence });
         }

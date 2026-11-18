@@ -1,0 +1,93 @@
+{
+  "name": "grid-lanes-tolerance-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "With a 20px font, lanes ending within 1em of the shortest tie, and ties go to the first lane at or after the cursor, else the first one: the fourth item goes to lane 1 although lane 3 ends 5px higher.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "fonts": [
+      {
+        "fontSize": 20,
+        "ascent": 16,
+        "descent": 4,
+        "lineGap": 0,
+        "xHeight": 10,
+        "capHeight": 14,
+        "subscriptOffset": 4,
+        "superscriptOffset": 6,
+        "baselines": {
+          "alphabetic": 16,
+          "ideographic": 20,
+          "central": 10,
+          "mathematical": 10
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "fontKey": 1,
+          "width": 300,
+          "gridTemplateColumns": [
+            100,
+            100,
+            100
+          ]
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 30,
+          "fontKey": 1
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 40,
+          "fontKey": 1
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 25,
+          "fontKey": 1
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 10,
+          "fontKey": 1
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 50,
+          "fontKey": 1
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 5,
+          "fontKey": 1
+        }
+      }
+    ]
+  }
+}

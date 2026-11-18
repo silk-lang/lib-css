@@ -1,0 +1,65 @@
+{
+  "name": "grid-lanes-percent-gap-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "Percent row gaps in an auto-height lanes container resolve against nothing (zero), column gaps against the width.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "width": 200,
+          "gridTemplateColumns": [
+            {
+              "fr": 1
+            },
+            {
+              "fr": 1
+            }
+          ],
+          "columnGap": {
+            "percent": 0.1
+          },
+          "rowGap": {
+            "percent": 0.1
+          }
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 40
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 10
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 30
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 20
+        }
+      }
+    ]
+  }
+}

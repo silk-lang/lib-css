@@ -1,0 +1,88 @@
+{
+  "name": "grid-lanes-columns-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "Eight fixed-height items in three 1fr column lanes each go to the lane that ends highest, so the stacking track of each lands at its lane's running position plus row-gap.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "width": 320,
+          "gridTemplateColumns": [
+            {
+              "fr": 1
+            },
+            {
+              "fr": 1
+            },
+            {
+              "fr": 1
+            }
+          ],
+          "columnGap": 10,
+          "rowGap": 6
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 50
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 30
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 80
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 20
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 40
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 60
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 25
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 70
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,247 @@
+//! Grid lanes (masonry) containers, CSS Grid 3: `display: grid-lanes` and the older
+//! `grid-template-rows: masonry` / `grid-template-columns: masonry`.
+//!
+//! A lanes container is laid out by the grid engine with one change of placement: every
+//! item gets a stacking-axis track of its own, so ordinary track sizing measures each
+//! item's outer size there, and `stack` then moves those tracks to the running positions
+//! of the lanes the items land in.
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.i32
+import silk.num.usize
+import silk.collections.list { List }
+import geometry { max }
+import style { Style, DisplayInside, Align }
+import grid_placement { GridItem, GridBounds }
+import grid_lines { GridSpan }
+import grid_style { GridAxis, GridTemplate, GridMasonry, GridTrack, GridTrackKind, GridBreadthKind }
+import grid_tracks { TrackState, spanSize }
+
+// No lanes: an ordinary grid.
+pub const NONE: u8 = 0
+// Lanes are columns; items stack in the block axis.
+pub const COLUMNS: u8 = 1
+// Lanes are rows; items stack in the inline axis.
+pub const ROWS: u8 = 2
+
+fn none(axis: &GridAxis) -> bool {
+  return axis.tracks.length() == 0 && axis.repeats.length() == 0 && !axis.subgrid
+}
+
+// Grid 3 §2.3: the grid axis is the inline one unless only `grid-template-rows` has tracks.
+pub fn laneAxis(style: &Style, template: &GridTemplate) -> u8 {
+  if template.masonry == GridMasonry.Rows { return COLUMNS }
+  if template.masonry == GridMasonry.Columns { return ROWS }
+  if !style.display.insideIs(DisplayInside.GridLanes) { return NONE }
+  if none(&template.columns) && !none(&template.rows) { return ROWS }
+  return COLUMNS
+}
+
+fn laneSpan(item: &GridItem, kind: u8) -> GridSpan {
+  if kind == COLUMNS { return item.column }
+  return item.row
+}
+
+fn setLaneSpan(item: &mut GridItem, kind: u8, span: GridSpan) {
+  if kind == COLUMNS { item.column = span } else { item.row = span }
+}
+
+fn setStackSpan(item: &mut GridItem, kind: u8, span: GridSpan) {
+  if kind == COLUMNS { item.row = span } else { item.column = span }
+}
+
+// Gives each item the stacking track of its index and keeps lane spans inside the lanes:
+// the explicit tracks plus the ones definite placements reach. Auto-placed spans keep the
+// lane they had (the last layout's, or auto-placement's) when it is still there.
+// Idempotent, so a placement kept from an earlier layout can go through it again.
+pub fn place(items: &mut List<GridItem>, bounds: &mut GridBounds, kind: u8, explicit: usize) {
+  let values = items.asMutSlice()
+  let mut origin = bounds.columnOrigin
+  if kind == ROWS { origin = bounds.rowOrigin }
+  let mut low: i32 = 0
+  let mut high = usize.toI32(explicit)
+  let mut index: usize = 0
+  while index < values.length {
+    let span = laneSpan(&values[index], kind)
+    if span.definite {
+      if span.start + origin < low { low = span.start + origin }
+      if span.end + origin > high { high = span.end + origin }
+    } else if span.end - span.start > high - low {
+      high = low + span.end - span.start
+    }
+    index = index + 1
+  }
+  let shift = origin - low
+  let lanes = high - low
+  index = 0
+  while index < values.length {
+    let mut span = laneSpan(&values[index], kind)
+    span.start = span.start + shift
+    span.end = span.end + shift
+    if !span.definite && (span.start < 0 || span.end > lanes) {
+      span.end = span.end - span.start
+      span.start = 0
+    }
+    setLaneSpan(&mut values[index], kind, span)
+    let at = usize.toI32(index)
+    setStackSpan(&mut values[index], kind, GridSpan { start: at, end: at + 1, definite: false })
+    index = index + 1
+  }
+  if kind == COLUMNS {
+    bounds.columnOrigin = low
+    bounds.columns = i32.toUsize(lanes)
+    bounds.rowOrigin = 0
+    bounds.rows = values.length
+  } else {
+    bounds.rowOrigin = low
+    bounds.rows = i32.toUsize(lanes)
+    bounds.columnOrigin = 0
+    bounds.columns = values.length
+  }
+}
+
+// Grid 3 §4.4: places each item, in order, at the lane start whose spanned lanes run
+// shortest (ties within `tolerance` go to the first one at or after the cursor), and moves
+// its stacking track there. Returns whether an item changed to a span of another size,
+// which changes its stacking size when lanes are columns.
+pub effect fn stack(
+  items: &mut [GridItem],
+  lanes: &[TrackState],
+  stacked: &mut [TrackState],
+  kind: u8,
+  gap: f32,
+  tolerance: f32,
+  running: &mut List<f32>,
+) -> bool
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  running.clear()
+  let mut lane: usize = 0
+  while lane < lanes.length {
+    run running.append(0.0)
+    lane = lane + 1
+  }
+  let mut cursor: usize = 0
+  let mut resized = false
+  let mut index: usize = 0
+  while index < items.length {
+    let mut span = laneSpan(&items[index], kind)
+    let length = i32.toUsize(span.end - span.start)
+    let mut start = i32.toUsize(span.start)
+    if !span.definite && length <= lanes.length {
+      let last = lanes.length - length
+      let mut lowest: f32 = 0.0
+      let mut candidate: usize = 0
+      while candidate <= last {
+        let top = reach(running.asSlice(), candidate, length)
+        if candidate == 0 || top < lowest { lowest = top }
+        candidate = candidate + 1
+      }
+      let mut first = usize.MAX
+      let mut chosen = usize.MAX
+      candidate = 0
+      while candidate <= last && chosen == usize.MAX {
+        if reach(running.asSlice(), candidate, length) <= lowest + tolerance {
+          if first == usize.MAX { first = candidate }
+          if candidate >= cursor { chosen = candidate }
+        }
+        candidate = candidate + 1
+      }
+      if chosen == usize.MAX { chosen = first }
+      if chosen != start && spanSize(lanes, chosen, chosen + length) != spanSize(lanes, start, start + length) {
+        resized = true
+      }
+      start = chosen
+      span.start = usize.toI32(start)
+      span.end = usize.toI32(start + length)
+      setLaneSpan(&mut items[index], kind, span)
+      cursor = start + length
+    }
+    let top = reach(running.asSlice(), start, length)
+    let size = max(0.0, stacked[index].base)
+    stacked[index].position = top
+    let mut at = start
+    while at < start + length {
+      running.set(at, top + size + gap)
+      at = at + 1
+    }
+    index = index + 1
+  }
+  return resized
+}
+
+fn reach(heights: &[f32], start: usize, length: usize) -> f32 {
+  let mut top: f32 = 0.0
+  let mut at = start
+  while at < start + length {
+    if heights[at] > top { top = heights[at] }
+    at = at + 1
+  }
+  return top
+}
+
+// The stacking range: from the start to the furthest item's far edge.
+pub fn extent(stacked: &[TrackState]) -> f32 {
+  let mut result: f32 = 0.0
+  let mut index: usize = 0
+  while index < stacked.length {
+    result = max(result, stacked[index].position + max(0.0, stacked[index].base))
+    index = index + 1
+  }
+  return result
+}
+
+// Grid 3 §6.3: content alignment in the stacking axis moves the whole stacking range as
+// one subject; normal and stretch are start.
+pub fn align(stacked: &mut [TrackState], value: Align, free: f32) {
+  let mut offset: f32 = 0.0
+  if value == Align.End || value == Align.FlexEnd { offset = free }
+  if value == Align.Center || value == Align.SpaceAround || value == Align.SpaceEvenly { offset = free / 2.0 }
+  if offset == 0.0 { return }
+  let mut index: usize = 0
+  while index < stacked.length {
+    stacked[index].position = stacked[index].position + offset
+    index = index + 1
+  }
+}
+
+// Whether lane sizing reads item contributions at all; auto-placed items then contribute
+// to every lane (Grid 3 §3.4), see `everyLane`. A flexible minimum is `auto`.
+pub fn intrinsic(explicit: &[GridTrack], automatic: &[GridTrack], lanes: usize) -> bool {
+  if anyIntrinsic(explicit) { return true }
+  return lanes > explicit.length && (automatic.length == 0 || anyIntrinsic(automatic))
+}
+
+fn anyIntrinsic(tracks: &[GridTrack]) -> bool {
+  let mut index: usize = 0
+  while index < tracks.length {
+    let track = &tracks[index]
+    if track.kind == GridTrackKind.FitContent || !track.min.isFixed() { return true }
+    if !track.max.isFixed() && track.max.kind != GridBreadthKind.Flex { return true }
+    index = index + 1
+  }
+  return false
+}
+
+// Grid 3 §3.4: for lane sizing an auto-placed item counts at every start it could take.
+pub effect fn everyLane(items: &[GridItem], kind: u8, lanes: usize, result: &mut List<GridItem>) -> ()
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  result.clear()
+  let mut index: usize = 0
+  while index < items.length {
+    let span = laneSpan(&items[index], kind)
+    let length = span.end - span.start
+    if span.definite || i32.toUsize(length) > lanes {
+      run result.append(items[index])
+    } else {
+      let mut start: i32 = 0
+      while start + length <= usize.toI32(lanes) {
+        let mut copy = items[index]
+        setLaneSpan(&mut copy, kind, GridSpan { start: start, end: start + length, definite: false })
+        run result.append(copy)
+        start = start + 1
+      }
+    }
+    index = index + 1
+  }
+}

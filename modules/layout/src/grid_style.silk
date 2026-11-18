@@ -520,6 +520,14 @@ pub enum GridAutoFlow {
   Column
 }
 
+// `grid-template-rows: masonry` (Rows) or `grid-template-columns: masonry` (Columns): the
+// older spelling of a grid lanes container whose stacking axis is that one.
+pub enum GridMasonry {
+  None,
+  Rows,
+  Columns
+}
+
 pub struct GridTemplate {
   pub rows: GridAxis,
   pub columns: GridAxis,
@@ -531,6 +539,7 @@ pub struct GridTemplate {
   pub flow: GridAutoFlow,
   pub dense: bool,
   pub placement: GridPlacement,
+  pub masonry: GridMasonry,
 }
 
 impl GridTemplate {
@@ -546,6 +555,7 @@ impl GridTemplate {
       flow: GridAutoFlow.Row,
       dense: false,
       placement: GridPlacement.make(),
+      masonry: GridMasonry.None,
     }
   }
 
@@ -565,6 +575,7 @@ impl GridTemplate {
       && self.flow == GridAutoFlow.Row
       && !self.dense
       && self.placement.same(&GridPlacement.make())
+      && self.masonry == GridMasonry.None
   }
 
   pub fn same(self: &Self, other: &Self) -> bool {
@@ -575,6 +586,7 @@ impl GridTemplate {
       && self.areaRows == other.areaRows && self.areaColumns == other.areaColumns
       && self.flow == other.flow && self.dense == other.dense
       && self.placement.same(&other.placement)
+      && self.masonry == other.masonry
   }
 
   pub fn valid(self: &Self, names: usize) -> bool {

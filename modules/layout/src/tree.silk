@@ -115,7 +115,7 @@ fn sameGeneration(a: &Style, b: &Style) -> bool {
   if a.display.isNone() != b.display.isNone() || a.display.isContents() != b.display.isContents() { return false }
   if a.display.outsideIs(DisplayOutside.Block) != b.display.outsideIs(DisplayOutside.Block) || a.display.outsideIs(DisplayOutside.Inline) != b.display.outsideIs(DisplayOutside.Inline) { return false }
   if a.display.insideIs(DisplayInside.Flow) != b.display.insideIs(DisplayInside.Flow) || a.display.insideIs(DisplayInside.FlowRoot) != b.display.insideIs(DisplayInside.FlowRoot) || a.display.insideIs(DisplayInside.Flex) != b.display.insideIs(DisplayInside.Flex) { return false }
-  if a.display.insideIs(DisplayInside.Grid) != b.display.insideIs(DisplayInside.Grid) { return false }
+  if a.display.isGrid() != b.display.isGrid() || a.display.insideIs(DisplayInside.GridLanes) != b.display.insideIs(DisplayInside.GridLanes) { return false }
   if a.multicol() != b.multicol() || a.multicolSpan != b.multicolSpan { return false }
   if (tableDisplay(&a.display) || tableDisplay(&b.display)) && !(&a.display == &b.display) { return false }
   return a.replaced == b.replaced && a.position == b.position && a.float == b.float && a.writingMode == b.writingMode && a.alignContent == b.alignContent && a.overflowX == b.overflowX && a.overflowY == b.overflowY
@@ -633,7 +633,7 @@ impl Tree {
     while generatedParent != NO_NODE {
       let display = &self.styles.asSlice()[self.nodes.asSlice()[generatedParent].styleIndex].display
       if !display.isContents() {
-        gridParent = display.insideIs(DisplayInside.Grid)
+        gridParent = display.isGrid()
         break
       }
       generatedParent = self.nodes.asSlice()[generatedParent].parent
