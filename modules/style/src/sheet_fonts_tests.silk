@@ -55,7 +55,7 @@ test effect fn compiledFontFacesRoundTripWithoutDescriptorParsing() ! CompileErr
 test effect fn compiledFontFacesValidateNumbersAndReportUnsupportedDescriptors() ! CompileError | CssError | OutOfMemoryError | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut sheet = run compile.compile(b"@font-face{font-family:Brand;src:url(a.ttf);font-weight:calc(300 + 100);size-adjust:110%;unknown-face-descriptor:1;font-display:block}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
-  run Testing.expect(sheet.diagnostics.length() == 4 && sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Unsupported, "unsupported descriptors are counted rather than silently applied")
+  run Testing.expect(sheet.diagnostics.length() == 3 && sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Unsupported, "unsupported descriptors are counted rather than silently applied; font-display is supported")
   let faces = sheet.fontFaces.asMutSlice()
   faces[0].rule.weight = Option<Range>.some(Range { min: f64.INFINITY, max: f64.INFINITY })
   let invalid = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
