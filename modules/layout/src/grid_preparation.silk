@@ -182,6 +182,7 @@ pub effect fn prepareTemplate<'source>(
       maximum: max(0.0, limits.max.width - logical.inset.horizontal()),
       definite: preferred.widthDefinite,
       gap: style.columnGap,
+      bounds: style.bounds,
     }
     let mut rows = RepeatSizing {
       size: max(0.0, preferred.height - logical.inset.vertical()),
@@ -189,6 +190,7 @@ pub effect fn prepareTemplate<'source>(
       maximum: max(0.0, limits.max.height - logical.inset.vertical()),
       definite: preferred.heightDefinite,
       gap: style.rowGap,
+      bounds: style.bounds,
     }
     columns.maximum = max(columns.minimum, columns.maximum)
     rows.maximum = max(rows.minimum, rows.maximum)

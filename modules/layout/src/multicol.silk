@@ -15,7 +15,7 @@ import geometry { Layout, Measure, FontRequest, OptionalSize, AvailableSpace, Av
 import style { Style, DimensionKind, Direction, ColumnFill }
 import tree { NO_NODE }
 import box_tree { BoxTree }
-import context { Input, ResolvedBox, childrenInput, resolve, UNBOUNDED }
+import context { Input, ResolvedBox, childrenInput, resolveGap, UNBOUNDED }
 import engine { layoutNode, probeNode }
 import layout_pass { LayoutPass }
 import text { TextMeasure, TextError }
@@ -37,7 +37,7 @@ fn gapOf<M: Measure + TextMeasure>(style: &Style, measurer: &mut M, available: f
     let font = Measure.font(&mut measurer, FontRequest { key: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.direction })
     return font.fontSize
   }
-  return max(0.0, resolve(style.columnGap, available, true, 0.0))
+  return max(0.0, resolveGap(style.columnGap, &style.bounds, available, true))
 }
 
 // Multicol 1 §3.4: the used column count and width for an available inline size.

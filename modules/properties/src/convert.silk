@@ -5,6 +5,8 @@
 import computed {
   Dimension,
   SizeValue,
+  Bound,
+  Bounds,
   DimensionKind,
   Display,
   DisplayOutside,
@@ -26,6 +28,7 @@ import values { Value, Unit, MathOperator }
 import silk.collections.list { List }
 import silk.color.rgba { Rgba }
 import silk.core.option { Option }
+import silk.num.f32
 import silk.core.ownership { Copy }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 
@@ -251,6 +254,34 @@ fn linear(value: &Value, context: &Context) -> Linear {
           total.pixels = 1.0 / total.pixels
           return total
         }
+        MathOperator.RoundNearest => { return stepFunction(items, context, 0) }
+        MathOperator.RoundUp => { return stepFunction(items, context, 1) }
+        MathOperator.RoundDown => { return stepFunction(items, context, 2) }
+        MathOperator.RoundToZero => { return stepFunction(items, context, 3) }
+        MathOperator.Mod => { return stepFunction(items, context, 4) }
+        MathOperator.Rem => { return stepFunction(items, context, 5) }
+        MathOperator.Abs => {
+          if items.length != 1 || total.percent != 0.0 { return invalid() }
+          total.pixels = f32.abs(total.pixels)
+          return total
+        }
+        MathOperator.Sign => {
+          if items.length != 1 || total.percent != 0.0 { return invalid() }
+          let sign: f32 = if total.pixels > 0.0 { 1.0 } else if total.pixels < 0.0 { 0.0 - 1.0 } else { 0.0 }
+          return Linear { pixels: sign, percent: 0.0, scalar: true, valid: true }
+        }
+        MathOperator.Hypot => {
+          let mut squares: f32 = 0.0
+          let mut i: usize = 0
+          while i < items.length {
+            let next = linear(&items[i], context)
+            if !next.valid || next.percent != 0.0 || next.scalar != total.scalar { return invalid() }
+            squares = squares + next.pixels * next.pixels
+            i = i + 1
+          }
+          total.pixels = f32.sqrt(squares)
+          return total
+        }
         MathOperator.Clamp => {
           // clamp(MIN, VAL, MAX) is max(MIN, min(VAL, MAX)): MIN wins when it exceeds MAX.
           if items.length != 3 {
@@ -328,6 +359,33 @@ fn linear(value: &Value, context: &Context) -> Linear {
       return invalid()
     }
   }
+}
+
+// round() (strategies 0 nearest, 1 up, 2 down, 3 toward zero), mod() (4) and rem() (5) over
+// lengths or numbers. A percentage would need the basis; those are dropped.
+fn stepFunction(items: &[Value], context: &Context, strategy: u8) -> Linear {
+  if items.length == 0 || items.length > 2 { return invalid() }
+  let value = linear(&items[0], context)
+  if !value.valid || value.percent != 0.0 { return invalid() }
+  if items.length == 1 {
+    // round(VALUE) steps by 1 only for a number.
+    if strategy > 3 || !value.scalar { return invalid() }
+    return Linear { pixels: f32.floor(value.pixels + 0.5), percent: 0.0, scalar: true, valid: true }
+  }
+  let step = linear(&items[1], context)
+  if !step.valid || step.percent != 0.0 || step.scalar != value.scalar || step.pixels == 0.0 { return invalid() }
+  let ratio = value.pixels / step.pixels
+  let whole = if strategy == 1 {
+    f32.ceil(ratio)
+  } else if strategy == 2 || strategy == 4 {
+    f32.floor(ratio)
+  } else if strategy == 3 || strategy == 5 {
+    f32.trunc(ratio)
+  } else {
+    f32.floor(ratio + 0.5)
+  }
+  let pixels = if strategy > 3 { value.pixels - whole * step.pixels } else { whole * step.pixels }
+  return Linear { pixels: pixels, percent: 0.0, scalar: value.scalar, valid: true }
 }
 
 /// The keyword `value` is, if it is one.
@@ -471,6 +529,180 @@ pub fn size(value: &Value, context: &Context) -> Option<SizeValue> {
   return Option<SizeValue>.None
 }
 
+/// A margin, padding, inset or gap: a `dimension`, or `min()`, `max()` and `clamp()` that
+/// compare a length plus a percentage with lengths, such as `clamp(1rem, 5% + 4px, 3rem)` or
+/// `max(1rem, (100% - 60rem) / 2)`. Their bounds go in a slot of `bounds`; none when no slot
+/// is left.
+pub fn edge(value: &Value, context: &Context, bounds: &mut Bounds) -> Option<Dimension> {
+  if let Option<Dimension>.Some { value: found } = dimension(value, context) {
+    return Option<Dimension>.some(found)
+  }
+  if let Option<Bound>.Some { value: found } = bound(value, context) {
+    if !found.bounded() { return Option<Dimension>.some(if found.percent == 0.0 { Dimension.px(found.value) } else { Dimension.calc(found.value, found.percent) }) }
+    if let Option<u8>.Some { value: slot } = bounds.slotOf(found.lower, found.upper) {
+      return Option<Dimension>.some(Dimension.bounded(found.value, found.percent, slot))
+    }
+  }
+  return Option<Dimension>.None
+}
+
+/// A `size`, or a comparison `size` has no kind for, as `edge` takes it: `clamp(200px, 50% +
+/// 2rem, 800px)` or `calc(min(100%, 60rem) - 2rem)`.
+pub fn sizeIn(value: &Value, context: &Context, bounds: &mut Bounds) -> Option<SizeValue> {
+  if let Option<SizeValue>.Some { value: found } = size(value, context) {
+    return Option<SizeValue>.some(found)
+  }
+  if let Option<Bound>.Some { value: found } = bound(value, context) {
+    if found.bounded() && found.percent != 0.0 {
+      if let Option<u8>.Some { value: slot } = bounds.slotOf(found.lower, found.upper) {
+        return Option<SizeValue>.some(SizeValue.bounded(found.value, found.percent, slot))
+      }
+    }
+  }
+  return Option<SizeValue>.None
+}
+
+/// `value` as a length plus a percentage held between two lengths, when it is one: sums,
+/// products with numbers, `min()`, `max()` and `clamp()` over lengths and percentages.
+/// Comparing a length plus a percentage with a length moves a bound; comparing two of them
+/// needs both to have the same length and percentage, as in `clamp(1rem, 5%, 3rem)`. Since
+/// a percentage basis is never negative, `min(10%, 20%)` is `10%`.
+pub fn bound(value: &Value, context: &Context) -> Option<Bound> {
+  let reduced = linear(value, context)
+  if reduced.valid {
+    if reduced.scalar { return Option<Bound>.None }
+    return Option<Bound>.some(Bound.line(finite(reduced.pixels), reduced.percent))
+  }
+  if let Value.Math { operator, values } = &value.* {
+    return mathBound(operator, values.asSlice(), context)
+  }
+  return Option<Bound>.None
+}
+
+fn mathBound(operator: MathOperator, items: &[Value], context: &Context) -> Option<Bound> {
+  if items.length == 0 { return Option<Bound>.None }
+  if operator == MathOperator.Negate {
+    return match bound(&items[0], context) {
+      Option.Some { value: inner } => Option<Bound>.some(scaledBound(inner, 0.0 - 1.0))
+      Option.None => Option<Bound>.None
+    }
+  }
+  if operator == MathOperator.Product {
+    let mut factor: f32 = 1.0
+    let mut found = Option<Bound>.None
+    let mut i: usize = 0
+    while i < items.length {
+      let term = linear(&items[i], context)
+      if term.valid && term.scalar {
+        factor = factor * term.pixels
+      } else {
+        if found.isSome() { return Option<Bound>.None }
+        found = bound(&items[i], context)
+        if found.isNone() { return Option<Bound>.None }
+      }
+      i = i + 1
+    }
+    return match found {
+      Option.Some { value: inner } => Option<Bound>.some(scaledBound(inner, factor))
+      Option.None => Option<Bound>.None
+    }
+  }
+  if operator == MathOperator.Clamp {
+    if items.length != 3 { return Option<Bound>.None }
+    // clamp(MIN, VAL, MAX) is max(MIN, min(VAL, MAX)): MIN wins when it exceeds MAX.
+    if let Option<Bound>.Some { value: lower } = bound(&items[0], context) {
+      if let Option<Bound>.Some { value: middle } = bound(&items[1], context) {
+        if let Option<Bound>.Some { value: upper } = bound(&items[2], context) {
+          if let Option<Bound>.Some { value: inner } = compared(middle, upper, true) {
+            return compared(inner, lower, false)
+          }
+        }
+      }
+    }
+    return Option<Bound>.None
+  }
+  if operator != MathOperator.Sum && operator != MathOperator.Min && operator != MathOperator.Max {
+    return Option<Bound>.None
+  }
+  let mut total = match bound(&items[0], context) {
+    Option.Some { value: first } => first
+    Option.None => { return Option<Bound>.None }
+  }
+  let mut i: usize = 1
+  while i < items.length {
+    let next = match bound(&items[i], context) {
+      Option.Some { value: found } => found
+      Option.None => { return Option<Bound>.None }
+    }
+    let combined = if operator == MathOperator.Sum { added(total, next) } else { compared(total, next, operator == MathOperator.Min) }
+    total = match combined {
+      Option.Some { value: found } => found
+      Option.None => { return Option<Bound>.None }
+    }
+    i = i + 1
+  }
+  return Option<Bound>.some(total)
+}
+
+// A bound whose percentage is zero is the length it holds.
+fn settled(value: Bound) -> Bound {
+  if value.percent != 0.0 { return value }
+  return Bound.line(f32.max(value.lower, f32.min(value.value, value.upper)), 0.0)
+}
+
+fn scaledBound(value: Bound, factor: f32) -> Bound {
+  if factor == 0.0 { return Bound.line(0.0, 0.0) }
+  let lower = value.lower * factor
+  let upper = value.upper * factor
+  return Bound {
+    lower: if factor > 0.0 { lower } else { upper },
+    value: value.value * factor,
+    percent: value.percent * factor,
+    upper: if factor > 0.0 { upper } else { lower },
+  }
+}
+
+// A sum moves the bounds by a length; two values that both need the basis add only unbounded.
+fn added(left: Bound, right: Bound) -> Option<Bound> {
+  if right.percent == 0.0 {
+    return Option<Bound>.some(Bound { lower: left.lower + right.value, value: left.value + right.value, percent: left.percent, upper: left.upper + right.value })
+  }
+  if left.percent == 0.0 { return added(right, left) }
+  if left.bounded() || right.bounded() { return Option<Bound>.None }
+  return Option<Bound>.some(Bound.line(left.value + right.value, left.percent + right.percent))
+}
+
+// min() when `least`, else max(), of two bounds.
+fn compared(left: Bound, right: Bound, least: bool) -> Option<Bound> {
+  if left.percent == 0.0 && right.percent == 0.0 {
+    return Option<Bound>.some(Bound.line(if least { f32.min(left.value, right.value) } else { f32.max(left.value, right.value) }, 0.0))
+  }
+  if left.percent == 0.0 { return compared(right, left, least) }
+  if right.percent == 0.0 {
+    let length = right.value
+    // min(clamp(L, x, U), c) is c where c <= L, else clamp(L, x, min(U, c)); max() mirrors it.
+    if least {
+      if length <= left.lower { return Option<Bound>.some(Bound.line(length, 0.0)) }
+      return Option<Bound>.some(settled(Bound { lower: left.lower, value: left.value, percent: left.percent, upper: f32.min(left.upper, length) }))
+    }
+    if length >= left.upper { return Option<Bound>.some(Bound.line(length, 0.0)) }
+    return Option<Bound>.some(settled(Bound { lower: f32.max(left.lower, length), value: left.value, percent: left.percent, upper: left.upper }))
+  }
+  if left.value == right.value && left.percent == right.percent {
+    // Clamps of one value: the bounds compare pairwise.
+    return Option<Bound>.some(if least {
+      Bound { lower: f32.min(left.lower, right.lower), value: left.value, percent: left.percent, upper: f32.min(left.upper, right.upper) }
+    } else {
+      Bound { lower: f32.max(left.lower, right.lower), value: left.value, percent: left.percent, upper: f32.max(left.upper, right.upper) }
+    })
+  }
+  if left.value == right.value && !left.bounded() && !right.bounded() {
+    // The basis is never negative, so percentages compare as numbers.
+    return Option<Bound>.some(Bound.line(left.value, if (left.percent < right.percent) == least { left.percent } else { right.percent }))
+  }
+  return Option<Bound>.None
+}
+
 // clamp(MIN, VAL, MAX) is max(MIN, min(VAL, MAX)): MIN wins when it exceeds MAX.
 fn clamped(lower: f32, percent: f32, upper: f32) -> SizeValue {
   if lower >= upper { return SizeValue.px(lower) }
@@ -489,6 +721,33 @@ effect fn basisTerm(value: SizeValue) -> Value ! OutOfMemoryError ? &mut Allocat
 /// A computed size as written: lengths in `px`, percentages 0 to 100.
 pub effect fn fromDimension(value: Dimension) -> Value ! OutOfMemoryError ? &mut Allocator {
   return run fromSize(SizeValue.of(value))
+}
+
+/// A computed size as written, with the bounds of a `Bounded` one from `bounds`.
+pub effect fn fromSizeIn(value: SizeValue, bounds: &Bounds) -> Value ! OutOfMemoryError ? &mut Allocator {
+  if value.kind != DimensionKind.Bounded { return run fromSize(value) }
+  return run fromBound(bounds.bound(value.slot, value.value, value.percent))
+}
+
+/// A computed edge or gap as written, with the bounds of a `Bounded` one from `bounds`.
+pub effect fn fromDimensionIn(value: Dimension, bounds: &Bounds) -> Value ! OutOfMemoryError ? &mut Allocator {
+  return run fromSizeIn(SizeValue.of(value), bounds)
+}
+
+/// `clamp()`, or `min()` or `max()` when a bound is infinite, of a length plus a percentage.
+pub effect fn fromBound(value: Bound) -> Value ! OutOfMemoryError ? &mut Allocator {
+  let middle = run basisTerm(SizeValue.calc(value.value, value.percent))
+  let mut terms = List<Value>.make()
+  if value.lower == 0.0 - f32.INFINITY || value.upper == f32.INFINITY {
+    let least = value.lower == 0.0 - f32.INFINITY
+    run terms.append(Value.Unit { value: if least { value.upper } else { value.lower }, unit: Unit.Px })
+    run terms.append(move middle)
+    return Value.Math { operator: if least { MathOperator.Min } else { MathOperator.Max }, values: move terms }
+  }
+  run terms.append(Value.Unit { value: value.lower, unit: Unit.Px })
+  run terms.append(move middle)
+  run terms.append(Value.Unit { value: value.upper, unit: Unit.Px })
+  return Value.Math { operator: MathOperator.Clamp, values: move terms }
 }
 
 /// A computed size as written, with the comparisons only a size holds.
@@ -527,6 +786,10 @@ pub effect fn fromSize(value: SizeValue) -> Value ! OutOfMemoryError ? &mut Allo
       run terms.append(Value.Unit { value: value.percent * 100.0, unit: Unit.Percent })
       run terms.append(Value.Unit { value: value.bound, unit: Unit.Px })
       return Value.Math { operator: MathOperator.Clamp, values: move terms }
+    }
+    DimensionKind.Bounded => {
+      // Its bounds are in the style; `fromSizeIn` writes them.
+      return run basisTerm(value)
     }
     DimensionKind.MinContent => {
       return Value.Keyword { value: Keyword.MinContent }

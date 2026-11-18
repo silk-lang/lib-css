@@ -1017,6 +1017,29 @@ fn stepped(value: f32, step: f32, strategy: u8) -> f32 {
   return whole * step
 }
 
+// The operator `name` computes with once its arguments' lengths are known: the stepped-value,
+// sign and `hypot()` functions, which take lengths. The others take numbers and angles,
+// which are constants here.
+fn deferred(name: &[u8], strategy: u8) -> Option<MathOperator> {
+  if tokens.insensitive(name, b"round") {
+    return Option<MathOperator>.some(if strategy == 1 {
+      MathOperator.RoundUp
+    } else if strategy == 2 {
+      MathOperator.RoundDown
+    } else if strategy == 3 {
+      MathOperator.RoundToZero
+    } else {
+      MathOperator.RoundNearest
+    })
+  }
+  if tokens.insensitive(name, b"mod") { return Option<MathOperator>.some(MathOperator.Mod) }
+  if tokens.insensitive(name, b"rem") { return Option<MathOperator>.some(MathOperator.Rem) }
+  if tokens.insensitive(name, b"abs") { return Option<MathOperator>.some(MathOperator.Abs) }
+  if tokens.insensitive(name, b"sign") { return Option<MathOperator>.some(MathOperator.Sign) }
+  if tokens.insensitive(name, b"hypot") { return Option<MathOperator>.some(MathOperator.Hypot) }
+  return Option<MathOperator>.None
+}
+
 /// Appends the value of the math function `name` over the arguments in `start..end`, when
 /// they are constants: `sin(30deg)` is `0.5`, `pow(2, 3)` is `8` and `round(up, 13px, 4px)`
 /// is `16px`. False for arguments that depend on a font or a box.
@@ -1051,23 +1074,42 @@ effect fn folded(buffer: &TokenBuffer, name: &[u8], start: usize, end: usize, ou
     }
   }
   let mut arguments = List<Constant>.make()
+  let mut written = List<Value>.make()
+  let mut constant = true
   while at <= end {
     let stop = find(buffer, at, end, COMMA)
     let mut shaped = List<Value>.make()
     if !run sum(buffer, at, stop, &mut shaped) { return false }
     match constantOf(&shaped.asSlice()[0]) {
       Option<Constant>.Some { value: found } => { run arguments.append(found) }
-      Option<Constant>.None => { return false }
+      Option<Constant>.None => { constant = false }
     }
+    run written.append(shaped.remove(0))
     at = stop + 1
   }
-  let list = arguments.asSlice()
-  if list.length == 0 { return false }
+  if constant {
+    if let Option<Constant>.Some { value: result } = foldedConstant(name, strategy, arguments.asSlice()) {
+      run out.append(Value.Unit { value: result.value, unit: result.unit })
+      return true
+    }
+  }
+  // Over lengths a font or a viewport sets, or in different units, the value is computed later.
+  let operator = match deferred(name, strategy) {
+    Option<MathOperator>.Some { value: found } => found
+    Option<MathOperator>.None => { return false }
+  }
+  run out.append(Value.Math { operator: operator, values: move written })
+  return true
+}
+
+// The constant the math function `name` folds `list` to, if any.
+fn foldedConstant(name: &[u8], strategy: u8, list: &[Constant]) -> Option<Constant> {
+  if list.length == 0 { return Option<Constant>.None }
   let a = list[0]
   let plain = a.unit == Unit.Number
   let mut result = Constant { value: 0.0, unit: Unit.Number }
   if tokens.insensitive(name, b"sin") || tokens.insensitive(name, b"cos") || tokens.insensitive(name, b"tan") {
-    if list.length != 1 || !(plain || a.unit == Unit.Deg) { return false }
+    if list.length != 1 || !(plain || a.unit == Unit.Deg) { return Option<Constant>.None }
     let radians = if plain { a.value } else { a.value * 0.017453292 }
     result.value = if tokens.insensitive(name, b"sin") {
       f32.sin(radians)
@@ -1077,7 +1119,7 @@ effect fn folded(buffer: &TokenBuffer, name: &[u8], start: usize, end: usize, ou
       f32.tan(radians)
     }
   } else if tokens.insensitive(name, b"asin") || tokens.insensitive(name, b"acos") || tokens.insensitive(name, b"atan") {
-    if list.length != 1 || !plain { return false }
+    if list.length != 1 || !plain { return Option<Constant>.None }
     let radians = if tokens.insensitive(name, b"asin") {
       f32.asin(a.value)
     } else if tokens.insensitive(name, b"acos") {
@@ -1087,51 +1129,50 @@ effect fn folded(buffer: &TokenBuffer, name: &[u8], start: usize, end: usize, ou
     }
     result = Constant { value: radians * 57.29578, unit: Unit.Deg }
   } else if tokens.insensitive(name, b"atan2") {
-    if list.length != 2 || list[1].unit != a.unit { return false }
+    if list.length != 2 || list[1].unit != a.unit { return Option<Constant>.None }
     result = Constant { value: f32.atan2(a.value, list[1].value) * 57.29578, unit: Unit.Deg }
   } else if tokens.insensitive(name, b"pow") {
-    if list.length != 2 || !plain || list[1].unit != Unit.Number { return false }
+    if list.length != 2 || !plain || list[1].unit != Unit.Number { return Option<Constant>.None }
     result.value = f32.pow(a.value, list[1].value)
   } else if tokens.insensitive(name, b"sqrt") || tokens.insensitive(name, b"exp") {
-    if list.length != 1 || !plain { return false }
+    if list.length != 1 || !plain { return Option<Constant>.None }
     result.value = if tokens.insensitive(name, b"sqrt") { f32.sqrt(a.value) } else { f32.exp(a.value) }
   } else if tokens.insensitive(name, b"log") {
-    if list.length > 2 || !plain { return false }
+    if list.length > 2 || !plain { return Option<Constant>.None }
     result.value = f32.log(a.value)
     if list.length == 2 {
-      if list[1].unit != Unit.Number { return false }
+      if list[1].unit != Unit.Number { return Option<Constant>.None }
       result.value = result.value / f32.log(list[1].value)
     }
   } else if tokens.insensitive(name, b"hypot") {
     let mut squares: f32 = 0.0
     let mut i: usize = 0
     while i < list.length {
-      if list[i].unit != a.unit { return false }
+      if list[i].unit != a.unit { return Option<Constant>.None }
       squares = squares + list[i].value * list[i].value
       i = i + 1
     }
     result = Constant { value: f32.sqrt(squares), unit: a.unit }
   } else if tokens.insensitive(name, b"abs") {
-    if list.length != 1 { return false }
+    if list.length != 1 { return Option<Constant>.None }
     result = Constant { value: f32.abs(a.value), unit: a.unit }
   } else if tokens.insensitive(name, b"sign") {
-    if list.length != 1 { return false }
+    if list.length != 1 { return Option<Constant>.None }
     result.value = if a.value > 0.0 { 1.0 } else if a.value < 0.0 { 0.0 - 1.0 } else { 0.0 }
   } else if tokens.insensitive(name, b"mod") || tokens.insensitive(name, b"rem") {
-    if list.length != 2 || list[1].unit != a.unit || list[1].value == 0.0 { return false }
+    if list.length != 2 || list[1].unit != a.unit || list[1].value == 0.0 { return Option<Constant>.None }
     let step = list[1].value
     let whole = if tokens.insensitive(name, b"mod") { f32.floor(a.value / step) } else { f32.trunc(a.value / step) }
     result = Constant { value: a.value - whole * step, unit: a.unit }
   } else {
     // round(strategy?, value, step?): the step is 1 for a number.
-    if list.length > 2 || (list.length == 1 && !plain) { return false }
-    if list.length == 2 && list[1].unit != a.unit { return false }
+    if list.length > 2 || (list.length == 1 && !plain) { return Option<Constant>.None }
+    if list.length == 2 && list[1].unit != a.unit { return Option<Constant>.None }
     let step: f32 = if list.length == 2 { list[1].value } else { 1.0 }
     result = Constant { value: stepped(a.value, step, strategy), unit: a.unit }
   }
-  if result.value != result.value { return false }
-  run out.append(Value.Unit { value: result.value, unit: result.unit })
-  return true
+  if result.value != result.value { return Option<Constant>.None }
+  return Option<Constant>.some(result)
 }
 
 /// Appends the sum in `start..end`. `a - b` is `a + (-b)`, as in Typed OM.
