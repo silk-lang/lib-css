@@ -12,7 +12,8 @@ import cascade { Priority, Origin }
 import cascade
 import element { ElementTree, MatchContext, ContainerDependency, PseudoTarget }
 import resolver { ResolverError }
-import tokens { BufferView, Limits, CssError, equal }
+import tokens { BufferView, Limits, CssError, Kind, equal }
+import tokens
 import media_features { Environment }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
@@ -50,6 +51,8 @@ pub struct StyleSheets {
   matched: List<MatchedRule>,
   selectedStates: u32,
   variables: Option<Box<Inputs>>,
+  /// The last environment, which `if(media(...))` reads during substitution.
+  current: Option<Environment>,
 }
 
 fn important(declaration: &Declaration) -> bool {
@@ -64,7 +67,7 @@ fn important(declaration: &Declaration) -> bool {
 impl StyleSheets {
   pub fn make() -> StyleSheets {
     return StyleSheets { entries: List<AdoptedSheet>.make(), layers: Layers.make(),
-      output: List<Candidate>.make(), matched: List<MatchedRule>.make(), selectedStates: 0, variables: Option<Box<Inputs>>.None }
+      output: List<Candidate>.make(), matched: List<MatchedRule>.make(), selectedStates: 0, variables: Option<Box<Inputs>>.None, current: Option<Environment>.None }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() }
   pub fn sheets(self: &Self) -> &[AdoptedSheet] { return self.entries.asSlice() }
@@ -81,7 +84,7 @@ impl StyleSheets {
       let sheet = &self.entries.asSlice()[index].sheet
       if dependency.condition >= sheet.conditions.length() { return true }
       let condition = sheet.conditions.asSlice()[dependency.condition]
-      if (run sheet_conditions.containerMatches(sheet.buffers.asSlice(), condition, sheet.containerPrograms.asSlice(), tree, node, pseudo)) != dependency.matched { return true }
+      if (run sheet_conditions.containerMatches(sheet.buffers.asSlice(), condition, sheet.containerPrograms.asSlice(), tree, node, pseudo, self.variableInputs())) != dependency.matched { return true }
       i = i + 1
     }
     return false
@@ -258,7 +261,18 @@ impl StyleSheets {
       changed = changed || flipped
       i = i + 1
     }
+    // A new environment can pick another if() branch: only sheets with `media()` care.
+    let moved = match &self.current {
+      Option<Environment>.Some { value: last } => !sameMedia(&last, environment)
+      _ => true
+    }
+    self.current = Option<Environment>.some(environment.*)
+    if moved && !changed && self.current.isSome() && mediaTests(self.entries.asSlice()) { changed = true }
     if changed { self.variables = Option<Box<Inputs>>.None }
+    if let Option<Box<Inputs>>.Some { value } = &mut self.variables {
+      let inputs = value.getMut()
+      inputs[0].variables.environment = self.current
+    }
     return changed
   }
 
@@ -271,7 +285,9 @@ impl StyleSheets {
   pub effect fn variableScopeWith(self: &mut Self, parent: Option<ScopeId>, inline: &[InlineCustom<'_, '_>], limits: &Limits) -> ScopeId
     ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
     if self.variables.isNone() {
-      self.variables = Option<Box<Inputs>>.some(run Box<Inputs>.make(run Inputs.make(self.entries.asSlice(), limits)))
+      let mut made = run Inputs.make(self.entries.asSlice(), limits)
+      made.variables.environment = self.current
+      self.variables = Option<Box<Inputs>>.some(run Box<Inputs>.make(move made))
     }
     match &mut self.variables {
       Option<Box<Inputs>>.Some { value } => { let inputs = value.getMut()
@@ -324,12 +340,16 @@ impl StyleSheets {
     let mut matched = List<MatchedRule>.make()
     let mut states: u32 = 0
     let mut order: usize = 0
+    let styles = match &self.variables {
+      Option<Box<Inputs>>.Some { value } => value.get()
+      Option<Box<Inputs>>.None => &[]
+    }
     let entries = self.entries.asMutSlice()
     let mut i: usize = 0
     while i < entries.length {
       let entry = &mut entries[i]
       let filter = sheet_conditions.Filter { tree: tree, node: node, sheet: entry.id, buffers: entry.sheet.buffers.asSlice(),
-        conditions: entry.sheet.conditions.asSlice(), programs: entry.sheet.containerPrograms.asSlice(), rules: entry.sheet.ruleConditions.asSlice() }
+        conditions: entry.sheet.conditions.asSlice(), programs: entry.sheet.containerPrograms.asSlice(), rules: entry.sheet.ruleConditions.asSlice(), styles: styles }
       run entry.sheet.resolver.resolveFiltered(BufferView.of(entry.sheet.buffers.asSlice()), tree, node, &[], &mut context, starting, &filter)
       states = u32.bitOr(states, entry.sheet.resolver.stateDependencies())
       let found = entry.sheet.resolver.declarations()
@@ -378,4 +398,35 @@ impl StyleSheets {
     self.matched = move matched
     self.selectedStates = states
   }
+}
+
+fn sameMedia(a: &Environment, b: &Environment) -> bool {
+  return a.initial.viewportWidth == b.initial.viewportWidth && a.initial.viewportHeight == b.initial.viewportHeight
+    && a.deviceWidth == b.deviceWidth && a.deviceHeight == b.deviceHeight
+    && a.resolutionDppx == b.resolutionDppx && a.mediaType == b.mediaType
+    && a.colorScheme == b.colorScheme && a.reducedMotion == b.reducedMotion
+    && a.forcedColors == b.forcedColors && a.hover == b.hover && a.anyHover == b.anyHover
+    && a.pointer == b.pointer && a.colorGamut == b.colorGamut
+}
+
+/// Whether a sheet has a `media()` function, which only `if()` takes.
+fn mediaTests(entries: &[AdoptedSheet]) -> bool {
+  let mut i: usize = 0
+  while i < entries.length {
+    let buffers = entries[i].sheet.buffers.asSlice()
+    let mut b: usize = 0
+    while b < buffers.length {
+      let list = buffers[b].tokens.asSlice()
+      let mut t: usize = 0
+      while t < list.length {
+        if let Kind.Function { name } = list[t].kind {
+          if tokens.insensitive(buffers[b].text(name), b"media") { return true }
+        }
+        t = t + 1
+      }
+      b = b + 1
+    }
+    i = i + 1
+  }
+  return false
 }

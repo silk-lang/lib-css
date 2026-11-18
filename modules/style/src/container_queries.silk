@@ -228,3 +228,30 @@ pub effect fn decode(reader: &mut Reader<'_>, range: TokenRange, limits: &Limits
   }
   return move result
 }
+
+/// Whether the arm's condition tests only `style()` (joined by `and`, `or`, `not`).
+pub fn styleOnly(buffer: &TokenBuffer, query: &Query) -> bool {
+  let list = buffer.tokens.asSlice()
+  let mut any = false
+  let mut i = query.condition.start
+  while i < query.condition.end && i < list.length {
+    let token = list[i]
+    match token.kind {
+      Kind.Whitespace => { i = i + 1 }
+      Kind.OpenParen => { i = i + 1 }
+      Kind.CloseParen => { i = i + 1 }
+      Kind.Ident { text } => {
+        let word = buffer.text(text)
+        if !(insensitive(word, b"and") || insensitive(word, b"or") || insensitive(word, b"not")) { return false }
+        i = i + 1
+      }
+      Kind.Function { name } => {
+        if !insensitive(buffer.text(name), b"style") { return false }
+        any = true
+        i = if token.matching < query.condition.end { token.matching + 1 } else { query.condition.end }
+      }
+      _ => { return false }
+    }
+  }
+  return any
+}

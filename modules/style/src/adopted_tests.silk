@@ -441,3 +441,95 @@ test effect fn namedFontFacesFollowLayersConditionsAndAdoptionOrder() ! Assertio
   let mut allocator = Allocator.systemAllocatorProvider()
   run faceNames() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+effect fn ifBody() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, run compiled(b".button{--mode:dark} .a{width:if(style(--mode: dark): 10px; else: 20px);height:if(style(--mode: light): 1px; else: 2px);margin-left:if(media(width >= 600px): 5px; else: 6px);margin-top:if(supports(display: grid) and style(--mode): 7px; else: 8px);padding-left:if(not style(--mode): 1px; style((--mode: x) or (--mode: dark)): 3px);margin-right:if(else: var(--gap,4px));padding-top:if(style(--missing): 1px)}"))
+  drop run sheets.environment(&Environment.headless(400.0, 300.0), false, &Limits.make())
+  let tree = Tree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  let parent = run sheets.variableScope(Option<ScopeId>.None, &Limits.make())
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  let child = run sheets.variableScope(Option<ScopeId>.some(parent), &Limits.make())
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.Width)), b"10px"), "style() matches an inherited custom property")
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.Height)), b"2px"), "else is taken when no condition holds")
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.MarginLeft)), b"6px"), "media() reads the environment")
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.MarginTop)), b"7px"), "supports() and and")
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.PaddingLeft)), b"3px"), "not, and or inside style()")
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.MarginRight)), b"4px"), "var() in a branch")
+  run Testing.expect(!valueIs(&(run pendingValue(&sheets, child, Property.PaddingTop)), b"1px"), "no branch: no value")
+  let changed = run sheets.environment(&Environment.headless(800.0, 300.0), false, &Limits.make())
+  run Testing.expect(changed, "a new environment restyles a sheet that tests media()")
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  let parent2 = run sheets.variableScope(Option<ScopeId>.None, &Limits.make())
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  let child2 = run sheets.variableScope(Option<ScopeId>.some(parent2), &Limits.make())
+  run Testing.expect(valueIs(&(run pendingValue(&sheets, child2, Property.MarginLeft)), b"5px"), "media() follows the environment")
+}
+
+test effect fn adoptedIfPicksTheFirstBranchThatHolds() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run ifBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+import element { ElementTree, StateBits, AttributeText, PseudoTarget }
+
+/// The fixture tree, with node 0 as the style container of node 1.
+struct Styled { tree: Tree, scope: Option<ScopeId> }
+impl ElementTree for Styled {
+  fn state(self: &Self, node: usize) -> StateBits { return self.tree.state(node) }
+  fn parent(self: &Self, node: usize) -> usize { return self.tree.parent(node) }
+  fn containingHost(self: &Self, node: usize) -> usize { return self.tree.containingHost(node) }
+  fn firstChild(self: &Self, node: usize) -> usize { return self.tree.firstChild(node) }
+  fn nextSibling(self: &Self, node: usize) -> usize { return self.tree.nextSibling(node) }
+  fn previousSibling(self: &Self, node: usize) -> usize { return self.tree.previousSibling(node) }
+  fn localName(self: &Self, node: usize) -> &[u8] { return self.tree.localName(node) }
+  fn namespaceUri(self: &Self, node: usize) -> &[u8] { return self.tree.namespaceUri(node) }
+  fn attributeCount(self: &Self, node: usize) -> usize { return self.tree.attributeCount(node) }
+  fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return self.tree.attributeName(node, attribute) }
+  fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return self.tree.attributeNamespace(node, attribute) }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return self.tree.attributeValue(node, attribute) }
+  fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return self.tree.attributeIsId(node, attribute) }
+  fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> { return self.tree.attribute(node, attribute) }
+  fn language(self: &Self, node: usize) -> &[u8] { return self.tree.language(node) }
+  fn isRoot(self: &Self, node: usize) -> bool { return self.tree.isRoot(node) }
+  fn isEmpty(self: &Self, node: usize) -> bool { return self.tree.isEmpty(node) }
+  fn isLink(self: &Self, node: usize) -> bool { return self.tree.isLink(node) }
+  fn styleContainer(self: &Self, node: usize, name: &[u8], pseudo: PseudoTarget) -> Option<ScopeId> {
+    return if node == 1 { self.scope } else { Option<ScopeId>.None }
+  }
+}
+
+effect fn styleQueryBody() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut sheets = StyleSheets.make()
+  run sheets.adopt(1, run compiled(b".button{--mode:dark;--n: 1} @container style(--mode: dark){.a{width:1px}} @container style(--mode: light){.a{height:1px}} @container style(--n: 1) and (not style(--other)){.a{margin-left:1px}} @container style(--mode){.a{margin-top:1px}}"))
+  drop run sheets.environment(&Environment.headless(400.0, 300.0), false, &Limits.make())
+  let mut tree = Styled { tree: Tree { hovered: false }, scope: Option<ScopeId>.None }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  let parent = run sheets.variableScope(Option<ScopeId>.None, &Limits.make())
+  tree.scope = Option<ScopeId>.some(parent)
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  run Testing.expect(winningNumber(&sheets, Property.Width) == 1.0, "style(--mode: dark) matches the container's value")
+  run Testing.expect(winner(&sheets, Property.Height) == 0, "style(--mode: light) does not")
+  run Testing.expect(winningNumber(&sheets, Property.MarginLeft) == 1.0, "and, not, and spaces around a value")
+  run Testing.expect(winningNumber(&sheets, Property.MarginTop) == 1.0, "a bare name matches a set property")
+  tree.scope = Option<ScopeId>.None
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
+  run Testing.expect(winner(&sheets, Property.Width) == 0, "no container: no match")
+}
+
+test effect fn adoptedContainerStyleQueriesReadTheContainer() -> ()
+  ! AssertionError<'static> | AdoptionError | RegistrationError | ResolverError | CompileError | DecodeError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run styleQueryBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
