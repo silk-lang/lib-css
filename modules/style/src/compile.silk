@@ -1,7 +1,7 @@
 import compile_fonts
 import sheet_fonts { Face }
 //! Compiles CSS syntax to shared declarations, selector programs and retained conditions.
-import sheet { Sheet, Declaration, Condition, ConditionKind, Keyframes, Keyframe, RegisteredProperty, Diagnostic, DiagnosticKind, NONE }
+import sheet { Sheet, Declaration, Condition, ConditionKind, Keyframes, Keyframe, RegisteredProperty, Diagnostic, DiagnosticKind, AtRule, NONE }
 import registration { Parsed }
 import registration
 import resolver { Rule as MatchRule }
@@ -286,6 +286,21 @@ impl Compiler {
       if let Option.Some { value } = move parsed.rule {
         run self.sheet.fontFaces.append(Face { rule: move value, condition: condition, layer: layer, enabled: condition == NONE })
       }
+      return
+    }
+    // https://drafts.csswg.org/css-fonts-4/#font-palette-values
+    // https://drafts.csswg.org/css-fonts-4/#font-feature-values
+    // Kept whole in `metadata` (name in lowercase); their reader parses the prelude and body.
+    // Only top-level, unconditioned rules are kept.
+    let palette = insensitive(name, b"font-palette-values")
+    if (palette || insensitive(name, b"font-feature-values")) && rule.kind == RuleKind.AtBlock {
+      if parent.length != 0 || condition != NONE {
+        run self.report(DiagnosticKind.Unsupported, name)
+        return
+      }
+      if self.sheet.metadata.length() >= self.limits.maxRules { fail CssError { kind: CssErrorKind.RuleLimit, offset: rule.prelude.start } }
+      let canonical = if palette { b"font-palette-values" } else { b"font-feature-values" }
+      run self.sheet.metadata.append(AtRule { name: run Bytes.copy(canonical), buffer: 0, prelude: rule.prelude, body: rule.body })
       return
     }
     run self.report(DiagnosticKind.AtRule, name)
