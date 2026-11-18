@@ -457,6 +457,7 @@ pub enum(u16) Property {
   TextBox,
   TextBoxTrim,
   TextBoxEdge,
+  FontSmooth,
   OffsetPath,
   OffsetDistance,
   OffsetRotate,
@@ -465,7 +466,7 @@ pub enum(u16) Property {
   Offset,
 }
 
-pub const COUNT: usize = 460
+pub const COUNT: usize = 461
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -923,6 +924,7 @@ pub fn all() -> [Property; COUNT] {
     Property.TextBox,
     Property.TextBoxTrim,
     Property.TextBoxEdge,
+    Property.FontSmooth,
     Property.OffsetPath,
     Property.OffsetDistance,
     Property.OffsetRotate,
@@ -1388,12 +1390,13 @@ pub fn index(property: Property) -> usize {
     Property.TextBox => 451
     Property.TextBoxTrim => 452
     Property.TextBoxEdge => 453
-    Property.OffsetPath => 454
-    Property.OffsetDistance => 455
-    Property.OffsetRotate => 456
-    Property.OffsetAnchor => 457
-    Property.OffsetPosition => 458
-    Property.Offset => 459
+    Property.FontSmooth => 454
+    Property.OffsetPath => 455
+    Property.OffsetDistance => 456
+    Property.OffsetRotate => 457
+    Property.OffsetAnchor => 458
+    Property.OffsetPosition => 459
+    Property.Offset => 460
   }
 }
 
@@ -1853,6 +1856,7 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.TextBox => b"text-box"
     Property.TextBoxTrim => b"text-box-trim"
     Property.TextBoxEdge => b"text-box-edge"
+    Property.FontSmooth => b"font-smooth"
     Property.OffsetPath => b"offset-path"
     Property.OffsetDistance => b"offset-distance"
     Property.OffsetRotate => b"offset-rotate"
@@ -2225,6 +2229,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     11 => {
+      if first == 102 && insensitive(name, b"font-smooth") {
+        return Option<Property>.some(Property.FontSmooth)
+      }
       if first == 111 && insensitive(name, b"offset-path") {
         return Option<Property>.some(Property.OffsetPath)
       }
@@ -3147,6 +3154,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     22 => {
+      if first == 45 && insensitive(name, b"-webkit-font-smoothing") {
+        return Option<Property>.some(Property.FontSmooth)
+      }
       if first == 112 && insensitive(name, b"position-try-fallbacks") {
         return Option<Property>.some(Property.PositionTryFallbacks)
       }
@@ -3179,6 +3189,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     23 => {
+      if first == 45 && insensitive(name, b"-moz-osx-font-smoothing") {
+        return Option<Property>.some(Property.FontSmooth)
+      }
       if first == 45 && insensitive(name, b"-webkit-background-clip") {
         return Option<Property>.some(Property.BackgroundClip)
       }
@@ -3794,6 +3807,7 @@ pub fn inherited(property: Property) -> bool {
     Property.TextBox => false
     Property.TextBoxTrim => false
     Property.TextBoxEdge => true
+    Property.FontSmooth => true
     Property.OffsetPath => false
     Property.OffsetDistance => false
     Property.OffsetRotate => false
@@ -4261,6 +4275,7 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.TextBox => b"normal"
     Property.TextBoxTrim => b"none"
     Property.TextBoxEdge => b"auto"
+    Property.FontSmooth => b"auto"
     Property.OffsetPath => b"none"
     Property.OffsetDistance => b"0px"
     Property.OffsetRotate => b"auto"
@@ -4301,7 +4316,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 382
+    Property.All => 383
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5893,18 +5908,21 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
         return Property.TextBoxEdge
       }
       if index == 377 {
-        return Property.OffsetPath
+        return Property.FontSmooth
       }
       if index == 378 {
-        return Property.OffsetDistance
+        return Property.OffsetPath
       }
       if index == 379 {
-        return Property.OffsetRotate
+        return Property.OffsetDistance
       }
       if index == 380 {
-        return Property.OffsetAnchor
+        return Property.OffsetRotate
       }
       if index == 381 {
+        return Property.OffsetAnchor
+      }
+      if index == 382 {
         return Property.OffsetPosition
       }
     }

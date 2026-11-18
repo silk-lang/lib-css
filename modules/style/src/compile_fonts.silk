@@ -183,7 +183,6 @@ pub effect fn parse(buffer: &TokenBuffer, body: TokenRange, limits: &Limits) -> 
           let display = item.value.asSlice()
           rule.display = if insensitive(display,b"block") { FontDisplay.Block } else if insensitive(display,b"swap") { FontDisplay.Swap }
             else if insensitive(display,b"fallback") { FontDisplay.Fallback } else if insensitive(display,b"optional") { FontDisplay.Optional } else { FontDisplay.Auto }
-          if rule.display != FontDisplay.Auto && rule.display != FontDisplay.Swap { run unsupported.append(run Bytes.copy(b"font-display timing")) }
         } else if insensitive(item.name,b"font-family") || insensitive(item.name,b"src") || numeric {
           let value = run lexer.tokenize(item.value.asSlice(),limits)
           if insensitive(item.name,b"font-family") {
