@@ -1,6 +1,6 @@
 import layout.lib { Style, Dimension, SizeValue, DimensionKind, Edges, Display, DisplayOutside, DisplayInside, BoxSizing, Direction, UnicodeBidi, WritingMode, TextOrientation, FlexDirection, FlexWrap, Align, OverflowAlignment, Overflow, ScrollbarWidth, ScrollbarGutter, Position, Float, Clear, Visibility }
 import layout.lib { LineHeight, VerticalAlign, VerticalAlignKind, BaselineSource, TextAlign, TextJustify, TextIndent, TextWrap, WhiteSpaceCollapse, TabSize, BoxDecorationBreak }
-import layout.lib { BreakBetween, BreakInside, MarginBreak }
+import layout.lib { BreakBetween, BreakInside, MarginBreak, WrapFlow, WrapThrough }
 import layout.lib { FloatShape, ShapeKind, ShapeBox, ShapeRadius, Tree, NodeId, InvalidNode }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.f32
@@ -158,6 +158,25 @@ effect fn parseClear(value: &Value) -> Clear ! ProtocolError {
   if name == "right" { return Clear.Right }
   if name == "both" { return Clear.Both }
   fail P.invalid("invalid Clear value")
+}
+
+effect fn parseWrapFlow(value: &Value) -> WrapFlow ! ProtocolError {
+  let name = run P.text(value)
+  if name == "auto" { return WrapFlow.Auto }
+  if name == "both" { return WrapFlow.Both }
+  if name == "start" { return WrapFlow.Start }
+  if name == "end" { return WrapFlow.End }
+  if name == "minimum" { return WrapFlow.Minimum }
+  if name == "maximum" { return WrapFlow.Maximum }
+  if name == "clear" { return WrapFlow.Clear }
+  fail P.invalid("invalid WrapFlow value")
+}
+
+effect fn parseWrapThrough(value: &Value) -> WrapThrough ! ProtocolError {
+  let name = run P.text(value)
+  if name == "wrap" { return WrapThrough.Wrap }
+  if name == "none" { return WrapThrough.None }
+  fail P.invalid("invalid WrapThrough value")
 }
 
 effect fn parseVisibility(value: &Value) -> Visibility ! ProtocolError {
@@ -400,7 +419,7 @@ effect fn parseLineCount(value: &Value) -> usize ! ProtocolError {
 
 
 pub effect fn parse(value: &Value) -> Style ! ProtocolError {
-  run P.fields(value, &["width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight", "flexBasis", "rowGap", "columnGap", "display", "boxSizing", "direction", "unicodeBidi", "writingMode", "textOrientation", "flexDirection", "flexWrap", "justifyContent", "justifySelf", "justifyItems", "alignItems", "alignSelf", "alignContent", "overflowX", "overflowY", "scrollbarWidth", "scrollbarGutter", "position", "float", "clear", "visibility", "margin", "padding", "border", "inset", "flexGrow", "flexShrink", "aspectRatio", "aspectRatioAuto", "justifyContentSafety", "justifySelfSafety", "justifyItemsSafety", "alignContentSafety", "alignItemsSafety", "alignSelfSafety", "replaced", "order", "marginTop", "marginRight", "marginBottom", "marginLeft", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTop", "borderRight", "borderBottom", "borderLeft", "insetTop", "insetRight", "insetBottom", "insetLeft", "fontKey", "lineHeight", "verticalAlign", "baselineSource", "textAlign", "textAlignLast", "textJustify", "textIndent", "textWrap", "whiteSpaceCollapse", "tabSize", "boxDecorationBreak", "marginBreak", "breakBefore", "breakAfter", "breakInside", "orphans", "widows", "gridTemplateRows", "gridTemplateColumns", "gridTemplateAreas", "gridAutoRows", "gridAutoColumns", "gridAutoFlow", "gridRowStart", "gridRowEnd", "gridColumnStart", "gridColumnEnd", "shapeOutside", "shapeMargin"])
+  run P.fields(value, &["width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight", "flexBasis", "rowGap", "columnGap", "display", "boxSizing", "direction", "unicodeBidi", "writingMode", "textOrientation", "flexDirection", "flexWrap", "justifyContent", "justifySelf", "justifyItems", "alignItems", "alignSelf", "alignContent", "overflowX", "overflowY", "scrollbarWidth", "scrollbarGutter", "position", "float", "clear", "visibility", "margin", "padding", "border", "inset", "flexGrow", "flexShrink", "aspectRatio", "aspectRatioAuto", "justifyContentSafety", "justifySelfSafety", "justifyItemsSafety", "alignContentSafety", "alignItemsSafety", "alignSelfSafety", "replaced", "order", "marginTop", "marginRight", "marginBottom", "marginLeft", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTop", "borderRight", "borderBottom", "borderLeft", "insetTop", "insetRight", "insetBottom", "insetLeft", "fontKey", "lineHeight", "verticalAlign", "baselineSource", "textAlign", "textAlignLast", "textJustify", "textIndent", "textWrap", "whiteSpaceCollapse", "tabSize", "boxDecorationBreak", "marginBreak", "breakBefore", "breakAfter", "breakInside", "orphans", "widows", "gridTemplateRows", "gridTemplateColumns", "gridTemplateAreas", "gridAutoRows", "gridAutoColumns", "gridAutoFlow", "gridRowStart", "gridRowEnd", "gridColumnStart", "gridColumnEnd", "shapeOutside", "shapeMargin", "wrapFlow", "wrapThrough"])
   let mut style = Style.make()
   if P.has(value, "width") { style.width = SizeValue.of(run dimension(run P.required(value, "width"))) }
   if P.has(value, "height") { style.height = SizeValue.of(run dimension(run P.required(value, "height"))) }
@@ -433,6 +452,8 @@ pub effect fn parse(value: &Value) -> Style ! ProtocolError {
   if P.has(value, "float") { style.float = run parseFloat(run P.required(value, "float")) }
   if P.has(value, "clear") { style.clear = run parseClear(run P.required(value, "clear")) }
   if P.has(value, "visibility") { style.visibility = run parseVisibility(run P.required(value, "visibility")) }
+  if P.has(value, "wrapFlow") { style.wrapFlow = run parseWrapFlow(run P.required(value, "wrapFlow")) }
+  if P.has(value, "wrapThrough") { style.wrapThrough = run parseWrapThrough(run P.required(value, "wrapThrough")) }
   if P.has(value, "margin") { style.margin = run edges(run P.required(value, "margin"), style.margin) }
   if P.has(value, "marginTop") { style.margin.top = run dimension(run P.required(value, "marginTop")) }
   if P.has(value, "marginRight") { style.margin.right = run dimension(run P.required(value, "marginRight")) }

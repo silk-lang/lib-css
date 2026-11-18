@@ -3,7 +3,8 @@ import silk.num.u64
 import silk.num.u32
 import silk.num.usize
 import geometry { Layout, Point, Size, Rect, ResolvedEdges, OptionalSize, AvailableSpace, Measure, max, min, clamp, abs, EMPTY_EXTENT }
-import style { Style, Position, DimensionKind, Direction, WritingMode, Align, FlexDirection, FlexWrap, OverflowAlignment, Overflow, Float, BoxDecorationBreak }
+import style { Style, Position, DimensionKind, Direction, WritingMode, Align, FlexDirection, FlexWrap, OverflowAlignment, Overflow, Float, BoxDecorationBreak, WrapFlow }
+import exclusions { ExclusionArea }
 import tree { NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, SettledRange }
@@ -987,6 +988,30 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
   run output.fragments.editPosition(fragment)
   let fragments = output.fragments.values.asMutSlice()
   fragments[fragment].location = Point { x: x - physicalOrigin.x, y: y - physicalOrigin.y }
+}
+
+// The exclusion areas of the boxes as positioned now, in box order, into
+// `output.foundExclusions` (see exclusions.silk).
+pub effect fn gatherExclusions(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>) ! OutOfMemoryError ? &mut Allocator {
+  output.foundExclusions.clear()
+  if output.frame != NO_NODE { return }
+  let mut id: usize = 0
+  while id < nodes.boxes.length() {
+    let style = nodes.style(id)
+    if style.wrapFlow != WrapFlow.Auto && absolutelyPositioned(style) && output.boxes[id].hasBox() && output.fragments.first(id) != NO_NODE {
+      // The initial containing block wraps the root's content.
+      let mut owner = absoluteContainingBlock(nodes, id)
+      if owner == NO_NODE && nodes.firstBySource.length() != 0 { owner = nodes.firstBySource.get(0) }
+      if owner != NO_NODE && nodes.node(owner).kind != BoxKind.Inline && output.fragments.first(owner) != NO_NODE {
+        let at = normalPosition(nodes, &output, id)
+        let content = output.boxes[owner].contentRect()
+        let base = normalPosition(nodes, &output, owner)
+        let size = output.boxes[id].size
+        run output.foundExclusions.append(ExclusionArea { owner: owner, rect: Rect { x: at.x - base.x - content.x, y: at.y - base.y - content.y, width: size.width, height: size.height }, flow: style.wrapFlow })
+      }
+    }
+    id = id + 1
+  }
 }
 
 fn monolithicContaining(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: usize) -> bool {

@@ -2,7 +2,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import geometry { Point, max, min }
-import style { Float, Clear }
+import style { Float, Clear, WrapFlow }
 import shapes { FloatShape, ResolvedShape, ShapeFrame, resolveShape }
 
 // CSS 2.2 §§9.5–9.5.2: exclusions belong to a formatting context, not
@@ -11,15 +11,36 @@ import shapes { FloatShape, ResolvedShape, ShapeFrame, resolveShape }
 // `shape-outside` area BfcState keeps beside it (see shapes.silk).
 pub struct FloatBox { pub side: Float, pub left: f32, pub right: f32, pub top: f32, pub bottom: f32, pub shape: u32 }
 impl Copy for FloatBox {}
-pub struct Band { pub left: f32, pub right: f32, pub nextBottom: f32, pub occupied: bool }
+// `more`: an exclusion with `wrap-flow: both` splits the line, and another segment
+// follows this one in the line's inline direction (see lineSegment).
+pub struct Band { pub left: f32, pub right: f32, pub nextBottom: f32, pub occupied: bool, pub more: bool }
 impl Copy for Band {}
+// CSS Exclusions 1 §3: an exclusion area in the formatting context's coordinates.
+// `flow` is physical by now: Start keeps content on the left, End on the right.
+pub struct ExclusionBox { pub left: f32, pub right: f32, pub top: f32, pub bottom: f32, pub flow: WrapFlow }
+impl Copy for ExclusionBox {}
 pub struct Checkpoint { pub count: usize, pub sourceFloor: f32, leftDeferred: bool, rightDeferred: bool, pendingFloat: bool }
 impl Copy for Checkpoint {}
 // `areas` runs beside `floats` once a float has a shape (`shaped`), and `points`
 // holds the polygons' points.
-pub struct BfcState { floats: List<FloatBox>, pub count: usize, pub sourceFloor: f32, leftDeferred: bool, rightDeferred: bool, pub pendingFloat: bool, shaped: bool, areas: List<ResolvedShape>, points: List<Point> }
+pub struct BfcState { floats: List<FloatBox>, pub count: usize, pub sourceFloor: f32, leftDeferred: bool, rightDeferred: bool, pub pendingFloat: bool, shaped: bool, areas: List<ResolvedShape>, points: List<Point>,
+  // Exclusions of the wrapping contexts being laid out, innermost last. Those below
+  // `floor` are hidden by a `wrap-through: none` box.
+  exclusions: List<ExclusionBox>, floor: usize }
 impl BfcState {
-  pub fn make() -> BfcState { return BfcState { floats: List<FloatBox>.make(), count: 0, sourceFloor: 0.0, leftDeferred: false, rightDeferred: false, pendingFloat: false, shaped: false, areas: List<ResolvedShape>.make(), points: List<Point>.make() } }
+  pub fn make() -> BfcState { return BfcState { floats: List<FloatBox>.make(), count: 0, sourceFloor: 0.0, leftDeferred: false, rightDeferred: false, pendingFloat: false, shaped: false, areas: List<ResolvedShape>.make(), points: List<Point>.make(), exclusions: List<ExclusionBox>.make(), floor: 0 } }
+  // Some exclusion reaches the lines laid out now.
+  pub fn excluding(self: &Self) -> bool { return self.exclusions.length() > self.floor }
+  pub fn exclusionMark(self: &Self) -> usize { return self.exclusions.length() }
+  pub fn exclusionFloor(self: &Self) -> usize { return self.floor }
+  pub effect fn exclude(self: &mut Self, item: ExclusionBox) ! OutOfMemoryError ? &mut Allocator { run self.exclusions.append(item) }
+  // Hides the exclusions entered so far, for a `wrap-through: none` box.
+  pub fn hideExclusions(self: &mut Self) { self.floor = self.exclusions.length() }
+  // Leaves the wrapping contexts entered since `mark`, and restores `floor`.
+  pub fn leaveExclusions(self: &mut Self, mark: usize, floor: usize) {
+    while self.exclusions.length() > mark { drop self.exclusions.pop() }
+    self.floor = floor
+  }
   pub fn checkpoint(self: &Self) -> Checkpoint { return Checkpoint { count: self.count, sourceFloor: self.sourceFloor, leftDeferred: self.leftDeferred, rightDeferred: self.rightDeferred, pendingFloat: self.pendingFloat } }
   pub fn restore(self: &mut Self, checkpoint: Checkpoint) {
     self.count = checkpoint.count
@@ -29,7 +50,8 @@ impl BfcState {
     self.pendingFloat = checkpoint.pendingFloat
   }
   // No exclusions are deferred or pending.
-  pub fn settled(self: &Self) -> bool { return !self.leftDeferred && !self.rightDeferred && !self.pendingFloat }
+  // Lines beside exclusions are not cached: exclusions are not part of a cache key.
+  pub fn settled(self: &Self) -> bool { return !self.leftDeferred && !self.rightDeferred && !self.pendingFloat && !self.excluding() }
   // Replaces `output` with the exclusions that extend below `origin`,
   // relative to it, in placement order.
   pub effect fn collectBelow(self: &Self, origin: Point, output: &mut List<FloatBox>) ! OutOfMemoryError ? &mut Allocator {
@@ -49,6 +71,11 @@ impl BfcState {
     let mut index: usize = 0
     while index < self.count {
       if self.floats.get(index).bottom > top { return false }
+      index = index + 1
+    }
+    index = self.floor
+    while index < self.exclusions.length() {
+      if self.exclusions.get(index).bottom > top { return false }
       index = index + 1
     }
     return true
@@ -124,7 +151,7 @@ impl BfcState {
     return floor
   }
   pub fn band(self: &Self, origin: Point, width: f32, y: f32, height: f32) -> Band {
-    let mut band = Band { left: 0.0, right: width, nextBottom: 1.0e30, occupied: false }
+    let mut band = Band { left: 0.0, right: width, nextBottom: 1.0e30, occupied: false, more: false }
     let mut index: usize = 0
     while index < self.count {
       let item = self.floats.get(index)
@@ -145,7 +172,7 @@ impl BfcState {
   // and leaves it alone where the area is empty (CSS Shapes 1 §3).
   pub fn lineBand(self: &Self, origin: Point, width: f32, y: f32, height: f32) -> Band {
     if !self.shaped { return self.band(origin, width, y, height) }
-    let mut band = Band { left: 0.0, right: width, nextBottom: 1.0e30, occupied: false }
+    let mut band = Band { left: 0.0, right: width, nextBottom: 1.0e30, occupied: false, more: false }
     let points = self.points.asSlice()
     let mut index: usize = 0
     while index < self.count {
@@ -174,6 +201,92 @@ impl BfcState {
     }
     return band
   }
+  // Segment `segment` of the line from `y` to `y + height`, counted in the line's
+  // inline direction, beside the floats and the exclusions (CSS Exclusions 1 §3.1).
+  // A `wrap-flow: both` exclusion inside the band splits it; the others narrow it.
+  pub fn lineSegment(self: &Self, origin: Point, width: f32, y: f32, height: f32, segment: u32, rtl: bool) -> Band {
+    let mut band = self.lineBand(origin, width, y, height)
+    if !self.excluding() { return band }
+    let floatLeft = band.left
+    let floatRight = band.right
+    let mut holes = false
+    let mut index = self.floor
+    while index < self.exclusions.length() {
+      let item = self.exclusions.get(index)
+      let top = item.top - origin.y
+      let bottom = item.bottom - origin.y
+      let low = item.left - origin.x
+      let high = item.right - origin.x
+      if bottom > y && (top < y + height || top <= y) && low < floatRight && high > floatLeft {
+        band.nextBottom = min(band.nextBottom, bottom)
+        band.occupied = true
+        let mut flow = item.flow
+        if flow == WrapFlow.Minimum || flow == WrapFlow.Maximum {
+          let before = low - floatLeft
+          let after = floatRight - high
+          let leftSide = if flow == WrapFlow.Minimum { before < after || (before == after && !rtl) } else { before > after || (before == after && !rtl) }
+          flow = if leftSide { WrapFlow.Start } else { WrapFlow.End }
+        }
+        if flow == WrapFlow.Start { band.right = min(band.right, low) }
+        else if flow == WrapFlow.End { band.left = max(band.left, high) }
+        else if flow == WrapFlow.Clear { band.right = band.left }
+        else { holes = true }
+      }
+      index = index + 1
+    }
+    if band.right < band.left { band.right = band.left }
+    if !holes { return if segment == 0 { band } else { emptyAt(band) } }
+    // Walk the segments between `both` exclusions in reading order.
+    let mut remaining = segment
+    let mut low = band.left
+    let mut high = band.right
+    while low < high {
+      let hole = self.nearestHole(origin, y, height, low, high, rtl)
+      if hole.empty {
+        let mut last = band
+        last.left = low
+        last.right = high
+        last.more = false
+        return if remaining == 0 { last } else { emptyAt(band) }
+      }
+      let mut piece = band
+      if rtl {
+        if hole.high >= high { high = hole.low
+          continue }
+        piece.left = hole.high
+        piece.right = high
+        piece.more = hole.low > low
+      } else {
+        if hole.low <= low { low = hole.high
+          continue }
+        piece.left = low
+        piece.right = hole.low
+        piece.more = hole.high < high
+      }
+      if remaining == 0 { return piece }
+      remaining = remaining - 1
+      if rtl { high = hole.low } else { low = hole.high }
+    }
+    return emptyAt(band)
+  }
+  // The `both` exclusion between `low` and `high` met first in reading order.
+  fn nearestHole(self: &Self, origin: Point, y: f32, height: f32, low: f32, high: f32, rtl: bool) -> Hole {
+    let mut found = Hole { low: 0.0, high: 0.0, empty: true }
+    let mut index = self.floor
+    while index < self.exclusions.length() {
+      let item = self.exclusions.get(index)
+      let top = item.top - origin.y
+      let bottom = item.bottom - origin.y
+      let left = item.left - origin.x
+      let right = item.right - origin.x
+      if item.flow == WrapFlow.Both && bottom > y && (top < y + height || top <= y) && left < high && right > low {
+        let better = found.empty || (if rtl { right > found.high } else { left < found.low })
+        if better { found = Hole { low: left, high: right, empty: false } }
+      }
+      index = index + 1
+    }
+    return found
+  }
   pub fn bottom(self: &Self, origin: Point) -> f32 {
     let mut bottom: f32 = 0.0
     let mut index: usize = 0
@@ -183,4 +296,12 @@ impl BfcState {
     }
     return bottom
   }
+}
+struct Hole { low: f32, high: f32, empty: bool }
+impl Copy for Hole {}
+fn emptyAt(band: Band) -> Band {
+  let mut empty = band
+  empty.right = empty.left
+  empty.more = false
+  return empty
 }

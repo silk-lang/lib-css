@@ -310,6 +310,10 @@ pub enum BreakInside { Auto, Avoid, AvoidPage, AvoidColumn, AvoidRegion }
 // Multi-column layout (CSS Multicol 1).
 pub enum ColumnFill { Balance, Auto, BalanceAll }
 pub enum ColumnSpan { None, All }
+// CSS Exclusions 1 §3.1-3.2: which sides of an exclusion inline content may wrap on, and
+// whether a box's content wraps around the exclusions of its wrapping context.
+pub enum WrapFlow { Auto, Both, Start, End, Minimum, Maximum, Clear }
+pub enum WrapThrough { Wrap, None }
 
 // Paint and text. These are the computed values a painter reads; layout ignores them.
 
@@ -676,6 +680,12 @@ impl Equal for BreakInside {
 }
 impl Equal for ColumnFill {
   fn equals(left: &ColumnFill, right: &ColumnFill) -> bool { return left.* == right.* }
+}
+impl Equal for WrapFlow {
+  fn equals(left: &WrapFlow, right: &WrapFlow) -> bool { return left.* == right.* }
+}
+impl Equal for WrapThrough {
+  fn equals(left: &WrapThrough, right: &WrapThrough) -> bool { return left.* == right.* }
 }
 impl Equal for ColumnSpan {
   fn equals(left: &ColumnSpan, right: &ColumnSpan) -> bool { return left.* == right.* }

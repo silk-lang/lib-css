@@ -9,6 +9,7 @@ import geometry { Layout, Point, Rect, OptionalSize, ScrollbarMetrics, ResolvedE
 import style { Overflow, ScrollbarWidth }
 import tree { Node, NO_NODE, LayoutStats }
 import bfc { FloatBox }
+import exclusions { ExclusionArea }
 import box_tree { BoxTree }
 import fragments { Fragment, FragmentArena, FragmentKind, one }
 import fragmentation { ResumeStore, ResumeCheckpoint, StaticAnchor, Fragmentainers, Fragmentainer, FragmentAncestor, FragmentationError }
@@ -123,6 +124,9 @@ pub struct LayoutPass<'a, 'source> {
   frameSelections: List<List<FrameScrollbarSelection>>,
   scrollbarSnapshots: List<ScrollbarSnapshot>,
   pub hasAutoScrollbars: bool, pub needsRelayout: bool,
+  // The exclusion areas this pass lays out with, those positioning found, and how
+  // often the compute laid out again for them (see exclusions.silk).
+  pub exclusions: List<ExclusionArea>, pub foundExclusions: List<ExclusionArea>, pub exclusionPasses: usize,
   pub stats: LayoutStats,
   // Spare item and line lists for flex passes, reused instead of allocated per pass.
   pub flexScratch: List<FlexScratch>,
@@ -141,7 +145,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   pub effect fn over(boxes: &'a mut [Layout], fragments: &'a mut FragmentArena, sources: &'source [Node], cache: &'a mut LayoutCache, previous: &'a mut Snapshot, writes: &'a mut BoxWrites, facts: &'a mut BoxFacts) -> LayoutPass<'a, 'source> ! OutOfMemoryError ? &mut Allocator {
     // The paragraph cache may borrow text from these source nodes.
     drop sources
-    return LayoutPass { boxes: move boxes, fragments: move fragments, fragmentParent: NO_NODE, frame: NO_NODE, resumes: ResumeStore.make(), frames: Fragmentainers.empty(), frameRoots: List<usize>.make(), frameOffsets: List<f32>.make(), fullBoxes: List<FullBoxGeometry>.make(), fullIndices: List<usize>.make(), inlinePrepared: List<List<PreparedInline<'source>>>.make(), rawTokens: List<TextToken<'source>>.make(), lineLimits: List<LineLimit>.make(), cache: move cache, previous: move previous, facts: move facts, floatContext: List<FloatBox>.make(), outOfFlowBoxes: List<u64>.make(), overflowEscapes: List<usize>.make(), overflowMarks: List<u64>.make(), overflowRuns: 0, relativeOffsets: List<Point>.make(), absoluteInputOwner: NO_NODE, absoluteInput: Input.make(OptionalSize.definite(0.0, 0.0)), absoluteBox: ResolvedBox { padding: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(), min: Size.zero(), max: Size.zero(), size: OptionalSize.none() }, absoluteRect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, absoluteLimits: ResolvedEdges.zero(), absoluteLimitsSet: false, absoluteScrollParent: NO_NODE, absoluteScrolled: false, absoluteScrollport: Size.zero(), inPlace: false, writes: move writes, tracking: true, deferSticky: false, anchors: List<StaticAnchor>.make(), selections: List<ScrollbarSelection>.make(), frameSelections: List<List<FrameScrollbarSelection>>.make(), scrollbarSnapshots: List<ScrollbarSnapshot>.make(), hasAutoScrollbars: false, needsRelayout: false, stats: LayoutStats.zero(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), tableSlots: List<Rect>.make(), tablePlans: List<u64>.make() }
+    return LayoutPass { boxes: move boxes, fragments: move fragments, fragmentParent: NO_NODE, frame: NO_NODE, resumes: ResumeStore.make(), frames: Fragmentainers.empty(), frameRoots: List<usize>.make(), frameOffsets: List<f32>.make(), fullBoxes: List<FullBoxGeometry>.make(), fullIndices: List<usize>.make(), inlinePrepared: List<List<PreparedInline<'source>>>.make(), rawTokens: List<TextToken<'source>>.make(), lineLimits: List<LineLimit>.make(), cache: move cache, previous: move previous, facts: move facts, floatContext: List<FloatBox>.make(), outOfFlowBoxes: List<u64>.make(), overflowEscapes: List<usize>.make(), overflowMarks: List<u64>.make(), overflowRuns: 0, relativeOffsets: List<Point>.make(), absoluteInputOwner: NO_NODE, absoluteInput: Input.make(OptionalSize.definite(0.0, 0.0)), absoluteBox: ResolvedBox { padding: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(), min: Size.zero(), max: Size.zero(), size: OptionalSize.none() }, absoluteRect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, absoluteLimits: ResolvedEdges.zero(), absoluteLimitsSet: false, absoluteScrollParent: NO_NODE, absoluteScrolled: false, absoluteScrollport: Size.zero(), inPlace: false, writes: move writes, tracking: true, deferSticky: false, anchors: List<StaticAnchor>.make(), selections: List<ScrollbarSelection>.make(), frameSelections: List<List<FrameScrollbarSelection>>.make(), scrollbarSnapshots: List<ScrollbarSnapshot>.make(), hasAutoScrollbars: false, needsRelayout: false, exclusions: List<ExclusionArea>.make(), foundExclusions: List<ExclusionArea>.make(), exclusionPasses: 0, stats: LayoutStats.zero(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), tableSlots: List<Rect>.make(), tablePlans: List<u64>.make() }
   }
   // Fragmentation state for the column flows of a continuous pass.
   pub effect fn beginColumns(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
@@ -649,6 +653,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
     }
     self.needsRelayout = false
     self.hasAutoScrollbars = false
+    self.foundExclusions.clear()
   }
   // Records the full layout of a reusable box that just emitted fragments
   // [start, current end), if its own fragment opens the range.
