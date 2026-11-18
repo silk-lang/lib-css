@@ -110,6 +110,8 @@ pub struct KeptText {
   // any more, but the paragraph's next preparation fills its lists again
   // instead of allocating its own.
   pub stale: bool,
+  // Which compute kept it (see LayoutCache.trimTexts).
+  pub stamp: usize,
 }
 
 pub struct LineBox {

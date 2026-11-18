@@ -347,6 +347,8 @@ pub struct LayoutCache {
   pub plainWidths: List<f32>,
   // Each inline formatting box's PlainLine slot, or ABSENT.
   plainSlots: List<usize>, plainLines: List<PlainLine>,
+  // The stamp of the last compute that kept paragraphs.
+  textStamp: usize,
 }
 pub const PLAIN_UNKNOWN: f32 = -1.0
 pub const PLAIN_NEVER: f32 = -2.0
@@ -354,7 +356,7 @@ const CLEAR_LOG: usize = 16
 
 impl LayoutCache {
   pub fn make() -> LayoutCache {
-    return LayoutCache { heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<Input>.make(), layouts: List<Layout>.make(), spare: List<Entry>.make(), spareInputs: List<Input>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make(), plainSlots: List<usize>.make(), plainLines: List<PlainLine>.make() }
+    return LayoutCache { textStamp: 0, heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<Input>.make(), layouts: List<Layout>.make(), spare: List<Entry>.make(), spareInputs: List<Input>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make(), plainSlots: List<usize>.make(), plainLines: List<PlainLine>.make() }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() - self.dead }
   pub fn clear(self: &mut Self) {
@@ -967,6 +969,39 @@ impl LayoutCache {
     }
     self.plainLines.set(slot, move line)
   }
+  // Counts the computes that kept paragraphs, for their stamps.
+  pub fn nextTextStamp(self: &mut Self) -> usize {
+    self.textStamp = self.textStamp + 1
+    return self.textStamp
+  }
+  // Keeps at most `budget` prepared paragraphs: when more are kept, those an
+  // earlier compute kept go, and if the compute stamped `stamp` alone kept
+  // more, so do its own. The plain lines go with them. A prepared paragraph
+  // is several kilobytes that only a later layout of the same text at
+  // another width reads, so a long document keeps the ones laid out last.
+  pub fn trimTexts(self: &mut Self, stamp: usize, budget: usize) {
+    let mut kept: usize = 0
+    let mut recent: usize = 0
+    let mut id: usize = 0
+    while id < self.texts.length() {
+      let held = self.texts.asSlice()[id].asSlice()
+      if held.length != 0 {
+        kept = kept + 1
+        if held[0].stamp == stamp { recent = recent + 1 }
+      }
+      id = id + 1
+    }
+    if kept <= budget { return }
+    id = 0
+    while id < self.texts.length() {
+      let held = self.texts.asSlice()[id].asSlice()
+      let goes = held.length != 0 && (recent > budget || held[0].stamp != stamp)
+      drop held
+      if goes { self.texts.asMutSlice()[id].clearAndFree() }
+      id = id + 1
+    }
+    self.dropPlains()
+  }
   // Drops every box's PlainLine and its storage: the next probe of each
   // shapes its line again.
   pub fn dropPlains(self: &mut Self) {
@@ -1030,6 +1065,17 @@ impl LayoutCache {
     self.spare.clear()
     self.spareInputs.clear()
     self.spareLayouts.clear()
+    // A large spare would hold as much again as the cache for as long as the
+    // tree lives; the next compaction of a cache that size allocates its own
+    // (as Snapshot.releaseSpare does for the output).
+    let bytes = self.spare.capacity() * Intrinsic.layoutOf<Entry>().bytes
+      + self.spareInputs.capacity() * Intrinsic.layoutOf<Input>().bytes
+      + self.spareLayouts.capacity() * Intrinsic.layoutOf<Layout>().bytes
+    if bytes > SPARE_KEPT_BYTES {
+      self.spare.clearAndFree()
+      self.spareInputs.clearAndFree()
+      self.spareLayouts.clearAndFree()
+    }
     self.dead = 0
   }
 }
