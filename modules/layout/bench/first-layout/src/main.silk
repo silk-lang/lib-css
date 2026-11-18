@@ -1,0 +1,181 @@
+// First-layout benchmark of long documents. Text is measured by a fixed-advance
+// stub, so no shaping is in the times. See ../README.md.
+import layout.lib { Tree, LayoutTree, OptionalSize, InvalidNode, GridError, TextError, FragmentationError, compute, fragmentDigest }
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.io.writer { Writer, WriterError }
+import silk.io.writer_native { StdoutWriter }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.mem.layout { Layout }
+import silk.mem.pointer { Pointer }
+import silk.num.i32
+import silk.num.i64
+import silk.num.u32
+import silk.num.usize
+import silk.system.host_input { HostInput, HostInputError }
+import silk.system.monotonic_clock { MonotonicClock }
+import silk.system.monotonic_clock_native { OsMonotonicClock }
+import silk.system.system_clock { Instant, SystemClock }
+import silk.text.format { Format }
+import silk.text.string { String }
+import documents as Documents
+import provider { FixedAdvance }
+
+// Counts what a compute asks of the allocator. It reports no growth in place,
+// so a list that grows asks again for its whole new storage, as it does where
+// the heap cannot extend a block.
+struct Counting { bytes: usize, requests: usize }
+effect fn allocateCounted(self: &mut Counting, layout: Layout) -> Intrinsic.Allocation ! OutOfMemoryError {
+  self.bytes = self.bytes + layout.bytes
+  self.requests = self.requests + 1
+  let mut system = Allocator.systemAllocatorProvider()
+  return run Allocator.allocate(move layout) |> Effect.provideMut<Allocator>(&mut system)
+}
+effect fn allocateZeroedCounted(self: &mut Counting, layout: Layout) -> Intrinsic.Allocation ! OutOfMemoryError {
+  self.bytes = self.bytes + layout.bytes
+  self.requests = self.requests + 1
+  let mut system = Allocator.systemAllocatorProvider()
+  return run Allocator.allocateZeroed(move layout) |> Effect.provideMut<Allocator>(&mut system)
+}
+impl Allocator for Counting {
+  allocate: Counting.allocateCounted
+  allocateZeroed: Counting.allocateZeroedCounted
+  unsafe effect fn takeBlock(self: &mut Self, layout: Layout) -> ?*mut u8 { drop layout return Pointer.null<u8>() }
+}
+
+static if Intrinsic.targetOperatingSystem() == "linux" {
+  extern "C" struct HeapInfo {
+    arena: i32, ordblks: i32, smblks: i32, hblks: i32, hblkhd: i32,
+    usmblks: i32, fsmblks: i32, uordblks: i32, fordblks: i32, keepcost: i32,
+  }
+  unsafe extern "C" fn mallinfo() -> HeapInfo
+}
+// Bytes the process heap holds in use, or 0 where that cannot be read.
+fn heapInUse() -> usize {
+  static if Intrinsic.targetOperatingSystem() == "linux" {
+    // Counts wrap past 2 GiB, far above what these documents hold.
+    let info = unsafe mallinfo()
+    return u32.toUsize(i32.toU32(info.uordblks)) + u32.toUsize(i32.toU32(info.hblkhd))
+  } else {
+    return 0
+  }
+}
+
+fn elapsed(start: &Instant, end: &Instant) -> i64 {
+  return (SystemClock.seconds(end) - SystemClock.seconds(start)) * 1000000000 + SystemClock.nanoseconds(end) - SystemClock.nanoseconds(start)
+}
+
+struct Options { runs: usize, only: String, size: usize }
+
+effect fn options() -> Options ! HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator {
+  let arguments = run HostInput.arguments()
+  let mut result = Options { runs: 9, only: String.make(), size: 0 }
+  let mut index: usize = 1
+  while index + 1 < arguments.length() {
+    let name = HostInput.text(arguments.asSlice()[index].asSlice()).unwrapOr("")
+    let value = HostInput.text(arguments.asSlice()[index + 1].asSlice()).unwrapOr("")
+    if name == "--runs" { result.runs = usize.parse(value).unwrapOr(9) }
+    if name == "--document" { result.only = run String.copy(value) }
+    if name == "--size" { result.size = usize.parse(value).unwrapOr(0) }
+    index = index + 2
+  }
+  if result.runs == 0 { result.runs = 1 }
+  return move result
+}
+
+effect fn micros(label: string<'static>, nanoseconds: i64) ! WriterError ? &mut Writer {
+  run Format.format("  {label:<28}{ms:>10.3} ms\n", &.{ label: label, ms: i64.toF64(nanoseconds) / 1000000.0 })
+}
+effect fn count(label: string<'static>, value: usize) ! WriterError ? &mut Writer {
+  run Format.format("  {label:<28}{value:>10}\n", &.{ label: label, value: value })
+}
+effect fn ratio(label: string<'static>, value: f64) ! WriterError ? &mut Writer {
+  run Format.format("  {label:<28}{value:>10.3}\n", &.{ label: label, value: value })
+}
+
+effect fn measure(name: string<'static>, tree: &Tree, viewport: OptionalSize, runs: usize)
+  ! OutOfMemoryError | InvalidNode | TextError | FragmentationError | WriterError ? &mut Allocator | &mut Writer {
+  let mut clock = OsMonotonicClock.make()
+  let mut samples = List<i64>.make()
+  let mut digest: u64 = 0
+  let mut sample: usize = 0
+  // Every sample is a first layout: a new LayoutTree with nothing kept.
+  while sample < runs + 1 {
+    let mut output = LayoutTree.make()
+    let mut text = FixedAdvance.make()
+    let start = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
+    run compute<FixedAdvance>(tree, &mut output, &mut text, viewport)
+    let end = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
+    // The first run warms the heap and is left out.
+    if sample > 0 { run samples.append(elapsed(&start, &end)) }
+    digest = fragmentDigest(&output)
+    sample = sample + 1
+  }
+  // Insertion sort: a handful of samples.
+  let mut at: usize = 1
+  while at < samples.length() {
+    let value = samples.get(at)
+    let mut slot = at
+    while slot > 0 && samples.get(slot - 1) > value {
+      let earlier = samples.get(slot - 1)
+      samples.set(slot, earlier)
+      slot = slot - 1
+    }
+    samples.set(slot, value)
+    at = at + 1
+  }
+
+  // One more first layout under the counting allocator.
+  let mut counting = Counting { bytes: 0, requests: 0 }
+  let mut output = LayoutTree.make()
+  let mut text = FixedAdvance.make()
+  let before = heapInUse()
+  run compute<FixedAdvance>(tree, &mut output, &mut text, viewport) |> Effect.provideMut<Allocator>(&mut counting)
+  let held = heapInUse() - before
+  let counted = fragmentDigest(&output)
+
+  let boxes = output.boxes.length()
+  let stats = output.stats
+  run Format.format("{name}\n", &.{ name: name })
+  run count("nodes", tree.nodes.length())
+  run count("boxes", boxes)
+  run count("fragments", output.fragments.values.length())
+  run micros("first layout, median", samples.get(samples.length() / 2))
+  run micros("first layout, fastest", samples.get(0))
+  run count("full layouts", stats.fullLayouts)
+  run count("size probes", stats.sizeProbes)
+  run count("size probe cache hits", stats.cacheHits)
+  run ratio("size probes per box", usize.toF64(stats.sizeProbes) / usize.toF64(boxes))
+  run count("allocation requests", counting.requests)
+  run count("bytes requested", counting.bytes)
+  run count("bytes held after", held)
+  run count("transient bytes", if counting.bytes > held { counting.bytes - held } else { 0 })
+  run count("analyze calls", text.analyzeCalls)
+  run count("shape calls", text.shapeCalls)
+  run Format.format("  {label:<28}{value:>#18x}\n", &.{ label: "fragment digest", value: digest })
+  if counted != digest { run Writer.writeString("  DIGEST DIFFERS BETWEEN RUNS\n") }
+}
+
+effect fn program() ! HostInputError | OutOfMemoryError | InvalidNode | GridError | TextError | FragmentationError | WriterError
+  ? &mut HostInput | &mut Allocator | &mut Writer {
+  let options = run options()
+  let only = String.view(&options.only)
+  if only == "" || only == "chat" {
+    let tree = run Documents.chat(if options.size == 0 { 1000 } else { options.size })
+    run measure("chat", &tree, OptionalSize.definite(960.0, 800.0), options.runs)
+  }
+  if only == "" || only == "grids" {
+    let tree = run Documents.grids(if options.size == 0 { 2000 } else { options.size })
+    run measure("grids", &tree, OptionalSize.definite(960.0, 800.0), options.runs)
+  }
+  if only == "" || only == "nested" {
+    let tree = run Documents.nested(if options.size == 0 { 100 } else { options.size }, 32)
+    run measure("nested", &tree, OptionalSize.definite(1600.0, 800.0), options.runs)
+  }
+}
+
+pub effect fn main() -> () ! HostInputError | OutOfMemoryError | InvalidNode | GridError | TextError | FragmentationError | WriterError ? &mut HostInput {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut output = StdoutWriter.make()
+  run program() |> Effect.provideMut<Allocator>(&mut allocator) |> Effect.provideMut<Writer>(&mut output)
+}

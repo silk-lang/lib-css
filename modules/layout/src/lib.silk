@@ -118,6 +118,7 @@ pub import fragments {
   TextFragmentKind
 }
 pub import engine { repositionScroll, compute }
+pub import digest { fragmentDigest }
 pub import fragment_flow { computeFragmented }
 pub import fragmentation { Fragmentainers, Fragmentainer, FragmentAncestor, FragmentationError }
 pub import breaks { FragmentainerKind, PageSide }

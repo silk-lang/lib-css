@@ -1,0 +1,137 @@
+import layout.lib { Size, Rect, Measure, MeasureRequest, Measured, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, BaselineSet }
+import layout.lib { TextMeasure, TextError, TextContext, TextBreak, TextBreakKind, TextCursor, TextAnalysis, TextShapeRequest, TextRun, TextToken, TextTokenKind, WhiteSpaceCollapse }
+import silk.collections.list { List }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.usize
+import silk.text.string { String }
+
+pub const BODY_FONT: usize = 0
+pub const CODE_FONT: usize = 1
+
+// Text of a fixed advance per byte, so that a layout's time holds no shaping:
+// 7 px in the 14 px body font, 8 px in the 13 px code font. Breaks follow
+// spaces, and segment breaks are forced.
+pub struct FixedAdvance { pub analyzeCalls: usize, pub shapeCalls: usize }
+
+impl FixedAdvance {
+  pub fn make() -> FixedAdvance { return FixedAdvance { analyzeCalls: 0, shapeCalls: 0 } }
+}
+
+fn advanceOf(fontKey: usize) -> f32 {
+  if fontKey == CODE_FONT { return 8.0 }
+  return 7.0
+}
+
+impl Measure for FixedAdvance {
+  fn font(provider: &mut Self, request: FontRequest) -> FontMetrics {
+    let mut font = FontMetrics.zero()
+    let code = request.key == CODE_FONT
+    font.fontSize = if code { 13.0 } else { 14.0 }
+    font.spaceAdvance = advanceOf(request.key)
+    font.zeroAdvance = advanceOf(request.key)
+    font.ascent = if code { 12.0 } else { 13.0 }
+    font.descent = 4.0
+    font.xHeight = 7.0
+    font.capHeight = 10.0
+    font.baselines = BaselineSet.uniform(font.ascent)
+    font.baselines.xMiddle = font.ascent - 3.5
+    font.baselines.textOver = 0.0
+    font.baselines.textUnder = font.ascent + font.descent
+    return font
+  }
+  fn scrollbars(provider: &mut Self, request: ScrollbarRequest) -> ScrollbarMetrics {
+    let mut metrics = ScrollbarMetrics.zero()
+    metrics.overlay = true
+    return metrics
+  }
+  fn natural(provider: &mut Self, key: usize) -> NaturalDimensions { return NaturalDimensions.none() }
+  fn measure(provider: &mut Self, key: usize, request: MeasureRequest<'_>) -> Measured {
+    return Measured {
+      size: Size { width: 0.0, height: 0.0 }, scrollableOverflow: Rect.zero(), contentBlockSize: 0.0,
+      firstBaselines: BaselineSet.zero(), lastBaselines: BaselineSet.zero(), hasBaseline: false, hasLineBoxes: false,
+    }
+  }
+}
+
+fn tokenLength(token: TextToken<'_>) -> usize {
+  if token.kind == TextTokenKind.Text || token.kind == TextTokenKind.PreservedSpace { return String.byteLength(token.text) }
+  if token.kind == TextTokenKind.Space || token.kind == TextTokenKind.Tab || token.kind == TextTokenKind.SegmentBreak || token.kind == TextTokenKind.Atomic { return 1 }
+  return 0
+}
+
+effect fn appendBreak(output: &mut List<TextBreak>, unit: usize, kind: TextBreakKind) ! OutOfMemoryError ? &mut Allocator {
+  if output.length() > 0 {
+    let lastIndex = output.length() - 1
+    let last = output.get(lastIndex)
+    if last.at.unit == unit && last.at.offset == 0 {
+      if kind == TextBreakKind.Forced { output.set(lastIndex, TextBreak { at: last.at, kind: kind }) }
+      return
+    }
+  }
+  run output.append(TextBreak { at: TextCursor { unit: unit, offset: 0 }, kind: kind })
+}
+
+impl TextMeasure for FixedAdvance {
+  fn beginTextLayout(provider: &mut Self) {}
+  fn plainText(provider: &Self) -> bool { return true }
+
+  effect fn analyze(provider: &mut Self, context: TextContext<'_, '_>, output: &mut List<TextBreak>) -> TextAnalysis
+    ! OutOfMemoryError | TextError ? &mut Allocator {
+    provider.analyzeCalls = provider.analyzeCalls + 1
+    let mut pending = usize.MAX
+    let mut unit: usize = 0
+    while unit < context.tokens.length {
+      let token = context.tokens[unit]
+      let kept = token.kind == TextTokenKind.PreservedSpace || token.kind == TextTokenKind.Tab
+      if token.kind != TextTokenKind.Open && token.kind != TextTokenKind.Close {
+        if pending != usize.MAX && !kept {
+          run appendBreak(&mut output, pending, TextBreakKind.Soft)
+          pending = usize.MAX
+        }
+        if kept {
+          pending = unit + 1
+          if token.whiteSpaceCollapse == WhiteSpaceCollapse.BreakSpaces {
+            run appendBreak(&mut output, pending, TextBreakKind.Soft)
+            pending = usize.MAX
+          }
+        }
+      }
+      if token.kind == TextTokenKind.Atomic && unit > 0 { run appendBreak(&mut output, unit, TextBreakKind.Soft) }
+      if token.kind == TextTokenKind.Space || token.kind == TextTokenKind.Atomic {
+        run appendBreak(&mut output, unit + 1, TextBreakKind.Soft)
+      }
+      if token.kind == TextTokenKind.SegmentBreak { run appendBreak(&mut output, unit + 1, TextBreakKind.Forced) }
+      unit = unit + 1
+    }
+    if pending != usize.MAX { run appendBreak(&mut output, pending, TextBreakKind.Soft) }
+    run appendBreak(&mut output, context.tokens.length, TextBreakKind.Soft)
+    return TextAnalysis.uniform(context.tokens.length, 0, 0, true)
+  }
+
+  effect fn shape(provider: &mut Self, request: TextShapeRequest<'_, '_>, output: &mut List<TextRun>)
+    ! OutOfMemoryError | TextError ? &mut Allocator {
+    provider.shapeCalls = provider.shapeCalls + 1
+    let mut unit = request.start.unit
+    while unit < request.context.tokens.length && unit <= request.end.unit {
+      let token = request.context.tokens[unit]
+      let mut start: usize = 0
+      if unit == request.start.unit { start = request.start.offset }
+      let mut end = tokenLength(token)
+      if unit == request.end.unit { end = request.end.offset }
+      if start < end {
+        if token.kind == TextTokenKind.Atomic {
+          run output.append(TextRun.Object { unit: unit, bidiLevel: 0, lineLeftSpacing: 0.0, lineRightSpacing: 0.0 })
+        } else if token.kind == TextTokenKind.Text || token.kind == TextTokenKind.Space || token.kind == TextTokenKind.PreservedSpace
+          || token.kind == TextTokenKind.Tab || token.kind == TextTokenKind.SegmentBreak {
+          let mut glyphs = end - start
+          if token.kind == TextTokenKind.SegmentBreak { glyphs = 0 }
+          run output.append(TextRun.Text {
+            unit: unit, start: start, end: end, advance: usize.toF32(glyphs) * advanceOf(token.fontKey),
+            fontKey: token.fontKey, bidiLevel: 0, shapeKey: token.fontKey,
+          })
+        }
+      }
+      unit = unit + 1
+    }
+  }
+}

@@ -1,0 +1,253 @@
+import layout.lib { Style, Display, DisplayOutside, DisplayInside, Dimension, SizeValue, Tree, NodeId, InvalidNode, FlexDirection, Align, Overflow, LineHeight, TextWrap, WhiteSpaceCollapse, GridTemplate, GridTrack, GridBreadth, GridError, BoxSizing }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.u32
+import silk.num.usize
+import silk.text.string { String }
+import provider { BODY_FONT, CODE_FONT }
+
+const WORDS: [string; 48] = [
+  "a", "the", "of", "to", "and", "layout", "is", "in", "that", "probe", "it", "for", "fragment", "with", "as",
+  "on", "be", "at", "wrapped", "paragraph", "this", "from", "transcript", "or", "message", "by", "width", "not",
+  "measured", "what", "all", "container", "were", "when", "constraint", "we", "there", "available", "can", "an",
+  "intrinsic", "which", "their", "if", "incremental", "do", "will", "each",
+]
+
+// A linear congruential generator: the documents are the same on every run and machine.
+struct Random { state: u32 }
+impl Random {
+  fn next(self: &mut Self) -> u32 {
+    self.state = u32.wrappingAdd(u32.wrappingMultiply(self.state, 1664525), 1013904223)
+    return u32.shiftRight(self.state, 8)
+  }
+  fn below(self: &mut Self, limit: u32) -> usize { return u32.toUsize(self.next() % limit) }
+}
+
+effect fn words(random: &mut Random, count: usize) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut text = String.make()
+  let mut index: usize = 0
+  while index < count {
+    if index > 0 { run String.append(&mut text, " ") }
+    run String.append(&mut text, WORDS[random.below(48)])
+    index = index + 1
+  }
+  return move text
+}
+
+fn body() -> Style {
+  let mut style = Style.make()
+  style.fontKey = BODY_FONT
+  style.lineHeight = LineHeight.Length { value: 20.0 }
+  return style
+}
+fn flex(direction: FlexDirection, gap: f32) -> Style {
+  let mut style = body()
+  style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  style.flexDirection = direction
+  style.rowGap = Dimension.px(gap)
+  style.columnGap = Dimension.px(gap)
+  return style
+}
+fn padded(style: &mut Style, vertical: f32, horizontal: f32) {
+  style.padding.top = Dimension.px(vertical)
+  style.padding.bottom = Dimension.px(vertical)
+  style.padding.left = Dimension.px(horizontal)
+  style.padding.right = Dimension.px(horizontal)
+}
+fn inline() -> Style {
+  let mut style = body()
+  style.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flow }
+  return style
+}
+
+effect fn paragraph(tree: &mut Tree, parent: NodeId, random: &mut Random, count: usize, emphasis: bool)
+  ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let mut style = body()
+  style.margin.bottom = Dimension.px(8.0)
+  let node = run tree.append(parent, move style)
+  if !emphasis {
+    drop run tree.appendText(node, run words(&mut random, count))
+    return
+  }
+  let lead = count / 3
+  let mut before = run words(&mut random, lead)
+  run String.append(&mut before, " ")
+  drop run tree.appendText(node, move before)
+  let strong = run tree.append(node, inline())
+  drop run tree.appendText(strong, run words(&mut random, 2))
+  let mut after = String.make()
+  run String.append(&mut after, " ")
+  let rest = run words(&mut random, count - lead - 2)
+  run String.append(&mut after, String.view(&rest))
+  drop run tree.appendText(node, move after)
+}
+
+effect fn list(tree: &mut Tree, parent: NodeId, random: &mut Random) ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let mut style = body()
+  style.padding.left = Dimension.px(20.0)
+  style.margin.bottom = Dimension.px(8.0)
+  let node = run tree.append(parent, move style)
+  let mut index: usize = 0
+  while index < 3 {
+    let mut itemStyle = body()
+    itemStyle.margin.bottom = Dimension.px(4.0)
+    let item = run tree.append(node, move itemStyle)
+    let length = 6 + random.below(8)
+    drop run tree.appendText(item, run words(&mut random, length))
+    index = index + 1
+  }
+}
+
+effect fn code(tree: &mut Tree, parent: NodeId, random: &mut Random) ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let mut style = body()
+  style.fontKey = CODE_FONT
+  style.lineHeight = LineHeight.Length { value: 18.0 }
+  style.whiteSpaceCollapse = WhiteSpaceCollapse.Preserve
+  style.textWrap = TextWrap.NoWrap
+  style.overflowX = Overflow.Auto
+  style.overflowY = Overflow.Hidden
+  style.margin.bottom = Dimension.px(8.0)
+  padded(&mut style, 12.0, 12.0)
+  let node = run tree.append(parent, move style)
+  let mut text = String.make()
+  let lines = 4 + random.below(5)
+  let mut line: usize = 0
+  while line < lines {
+    if line > 0 { run String.append(&mut text, "\n") }
+    if line % 3 != 0 { run String.append(&mut text, "  ") }
+    let length = 3 + random.below(6)
+    let content = run words(&mut random, length)
+    run String.append(&mut text, String.view(&content))
+    line = line + 1
+  }
+  drop run tree.appendText(node, move text)
+}
+
+// A table as a grid of `columns` equal `minmax(0, 1fr)` columns, the template
+// of a utility class such as `grid-cols-4`, with `rows` auto rows of cells.
+effect fn table(tree: &mut Tree, parent: NodeId, random: &mut Random, columns: usize, rows: usize)
+  ! OutOfMemoryError | InvalidNode | GridError ? &mut Allocator {
+  let mut style = body()
+  style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Grid }
+  style.rowGap = Dimension.px(1.0)
+  style.columnGap = Dimension.px(1.0)
+  style.margin.bottom = Dimension.px(8.0)
+  let node = run tree.append(parent, move style)
+  let mut template = GridTemplate.make()
+  let mut column: usize = 0
+  while column < columns {
+    run template.columns.tracks.append(GridTrack.minmax(GridBreadth.fixed(0.0), GridBreadth.flex(1.0)))
+    column = column + 1
+  }
+  run tree.setGrid(node, move template)
+  let mut cell: usize = 0
+  while cell < columns * rows {
+    let mut cellStyle = body()
+    padded(&mut cellStyle, 4.0, 8.0)
+    let item = run tree.append(node, move cellStyle)
+    let length = 1 + random.below(3)
+    drop run tree.appendText(item, run words(&mut random, length))
+    cell = cell + 1
+  }
+}
+
+fn page(width: f32) -> Style {
+  let mut style = flex(FlexDirection.Column, 16.0)
+  style.width = SizeValue.px(width)
+  padded(&mut style, 16.0, 24.0)
+  style.boxSizing = BoxSizing.BorderBox
+  return style
+}
+
+// A chat transcript: every message is a flex row of an avatar and a flex
+// column holding a header row, a markdown body (wrapped paragraphs, and at
+// intervals a list, a code block and a 4-column grid table) and an action row.
+pub effect fn chat(messages: usize) -> Tree ! OutOfMemoryError | InvalidNode | GridError ? &mut Allocator {
+  let mut random = Random { state: 20261118 }
+  let mut tree = run Tree.make(page(960.0))
+  let root = tree.root()
+  let mut index: usize = 0
+  while index < messages {
+    let mut rowStyle = flex(FlexDirection.Row, 12.0)
+    padded(&mut rowStyle, 8.0, 0.0)
+    let row = run tree.append(root, move rowStyle)
+    let mut avatar = body()
+    avatar.width = SizeValue.px(32.0)
+    avatar.height = SizeValue.px(32.0)
+    avatar.flexShrink = 0.0
+    drop run tree.append(row, move avatar)
+    let mut columnStyle = flex(FlexDirection.Column, 4.0)
+    columnStyle.flexGrow = 1.0
+    columnStyle.minWidth = SizeValue.px(0.0)
+    let column = run tree.append(row, move columnStyle)
+
+    let mut headerStyle = flex(FlexDirection.Row, 8.0)
+    headerStyle.alignItems = Align.Baseline
+    let header = run tree.append(column, move headerStyle)
+    let name = run tree.append(header, body())
+    drop run tree.appendText(name, run words(&mut random, 2))
+    let time = run tree.append(header, body())
+    drop run tree.appendText(time, run words(&mut random, 1))
+
+    let content = run tree.append(column, body())
+    let first = 30 + random.below(40)
+    run paragraph(&mut tree, content, &mut random, first, true)
+    let second = 20 + random.below(40)
+    run paragraph(&mut tree, content, &mut random, second, false)
+    if index % 2 == 0 { run list(&mut tree, content, &mut random) }
+    if index % 4 == 1 { run code(&mut tree, content, &mut random) }
+    if index % 3 == 2 { run table(&mut tree, content, &mut random, 4, 3) }
+
+    let actions = run tree.append(column, flex(FlexDirection.Row, 4.0))
+    let mut button: usize = 0
+    while button < 2 {
+      let mut buttonStyle = body()
+      buttonStyle.width = SizeValue.px(24.0)
+      buttonStyle.height = SizeValue.px(24.0)
+      drop run tree.append(actions, move buttonStyle)
+      button = button + 1
+    }
+    index = index + 1
+  }
+  return move tree
+}
+
+// `count` small tables, each a grid of four `minmax(0, 1fr)` columns and three rows.
+pub effect fn grids(count: usize) -> Tree ! OutOfMemoryError | InvalidNode | GridError ? &mut Allocator {
+  let mut random = Random { state: 4242 }
+  let mut tree = run Tree.make(page(960.0))
+  let root = tree.root()
+  let mut index: usize = 0
+  while index < count {
+    run table(&mut tree, root, &mut random, 4, 3)
+    index = index + 1
+  }
+  return move tree
+}
+
+// `chains` chains of flex containers nested `depth` deep, alternating row and
+// column, every level holding a short label beside the next level and the
+// innermost a wrapped paragraph. No level has a definite size, so each is
+// sized from its content.
+pub effect fn nested(chains: usize, depth: usize) -> Tree ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let mut random = Random { state: 777 }
+  let mut tree = run Tree.make(page(1600.0))
+  let root = tree.root()
+  let mut chain: usize = 0
+  while chain < chains {
+    let mut parent = root
+    let mut level: usize = 0
+    while level < depth {
+      let mut style = flex(if level % 2 == 0 { FlexDirection.Row } else { FlexDirection.Column }, 4.0)
+      padded(&mut style, 1.0, 2.0)
+      let node = run tree.append(parent, move style)
+      let label = run tree.append(node, body())
+      drop run tree.appendText(label, run words(&mut random, 1))
+      parent = node
+      level = level + 1
+    }
+    let length = 40 + random.below(40)
+    run paragraph(&mut tree, parent, &mut random, length, false)
+    chain = chain + 1
+  }
+  return move tree
+}
