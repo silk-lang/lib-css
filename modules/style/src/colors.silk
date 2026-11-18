@@ -2007,14 +2007,40 @@ fn mixSpace(source: &Input<'_>, cursor: &mut Cursor) -> Option<Space> {
   return Option<Space>.None
 }
 
-/// Reads a gradient's `<color-interpolation-method>` (`in <space> [<hue> hue]`) when it is
-/// next. None: it is there but invalid. The tree still interpolates gradients in sRGB.
-pub fn interpolationMethod(source: &Input<'_>, cursor: &mut Cursor) -> Option<bool> {
+/// A gradient's `<color-interpolation-method>`. `given` is false when the gradient names none;
+/// it then mixes in sRGB when every stop is a legacy color and in Oklab otherwise (Images 4 §3.5,
+/// as Chromium does), and `space` is unused.
+pub struct Interpolation {
+  pub space: Space,
+  pub hue: HueMethod,
+  pub given: bool,
+}
+
+impl Copy for Interpolation {}
+
+impl Interpolation {
+  /// No `in <space>`.
+  pub fn absent() -> Interpolation {
+    return Interpolation { space: Space.Oklab, hue: HueMethod.Shorter, given: false }
+  }
+}
+
+/// Whether `space` has a hue the hue methods steer.
+pub fn isPolar(space: Space) -> bool { return polarSpace(space) }
+
+/// Reads a gradient's `<color-interpolation-method>` (`in <space> [<hue> hue]`) into `out` when it
+/// is next. None: it is there but invalid; Some(false): it is not there.
+pub fn interpolationMethod(source: &Input<'_>, cursor: &mut Cursor, out: &mut Interpolation) -> Option<bool> {
   if !cursor.ident(source, b"in") { return Option<bool>.some(false) }
   let space = match mixSpace(source, &mut cursor.*) { Option<Space>.Some { value } => value _ => { return Option<bool>.None } }
-  let hue = cursor.ident(source, b"shorter") || cursor.ident(source, b"longer")
-    || cursor.ident(source, b"increasing") || cursor.ident(source, b"decreasing")
-  if hue && (!polarSpace(space) || !cursor.ident(source, b"hue")) { return Option<bool>.None }
+  let mut hue = HueMethod.Shorter
+  let mut named = true
+  if cursor.ident(source, b"shorter") {} else if cursor.ident(source, b"longer") { hue = HueMethod.Longer }
+  else if cursor.ident(source, b"increasing") { hue = HueMethod.Increasing }
+  else if cursor.ident(source, b"decreasing") { hue = HueMethod.Decreasing }
+  else { named = false }
+  if named && (!polarSpace(space) || !cursor.ident(source, b"hue")) { return Option<bool>.None }
+  out.* = Interpolation { space: space, hue: hue, given: true }
   return Option<bool>.some(true)
 }
 

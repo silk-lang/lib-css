@@ -824,6 +824,9 @@ effect fn color(buffer: &TokenBuffer, start: usize, end: usize, out: &mut List<V
 effect fn function(buffer: &TokenBuffer, name: &[u8], start: usize, end: usize, out: &mut List<Value>) -> bool
   ! OutOfMemoryError
   ? &mut Allocator {
+  if isGradient(name) && hasModernColor(buffer, start, end) {
+    return false
+  }
   match &keywords.lookup(name) {
     Option<Keyword>.Some { value: known } => {
       let mut arguments = List<Value>.make()
@@ -842,6 +845,39 @@ effect fn function(buffer: &TokenBuffer, name: &[u8], start: usize, end: usize, 
       return false
     }
   }
+}
+
+fn isGradient(name: &[u8]) -> bool {
+  let suffix = b"-gradient"
+  if name.length < suffix.length {
+    return false
+  }
+  return tokens.insensitive(Slice.view<u8>(name, name.length - suffix.length, suffix.length), suffix)
+}
+
+/// Whether `start..end` spells a color other than a legacy sRGB one (`lab()`, `oklch()`,
+/// `color()`, ...). A gradient with one keeps its tokens: folding the stops into sRGB `rgb()`
+/// would lose the chroma a mix in another space starts from, and the Oklab default it picks.
+fn hasModernColor(buffer: &TokenBuffer, start: usize, end: usize) -> bool {
+  let items = buffer.tokens.asSlice()
+  let mut at = start
+  while at < end && at < items.length {
+    match &items[at].kind {
+      Kind.Function { name } => {
+        let spelled = buffer.text(name)
+        if tokens.insensitive(spelled, b"lab") || tokens.insensitive(spelled, b"lch")
+          || tokens.insensitive(spelled, b"oklab")
+          || tokens.insensitive(spelled, b"oklch")
+          || tokens.insensitive(spelled, b"color")
+          || tokens.insensitive(spelled, b"color-mix") {
+          return true
+        }
+      }
+      _ => {}
+    }
+    at = at + 1
+  }
+  return false
 }
 
 /// Appends `calc(...)` for the expression in `start..end`. A sum writes its own `calc()`, so
