@@ -104,26 +104,9 @@ fn basis(size: Option<f32>, fallback: f32) -> f32 {
 }
 
 /// CSS pixels per one `unit`, or `None` when `unit` is not a length this context resolves.
+/// Absolute and viewport units multiply by the zoom; font-relative units read sizes that are
+/// zoomed already, and container units read zoomed boxes.
 pub fn pixelsPer(unit: Unit, context: &Context) -> Option<f32> {
-  let found = unzoomedPixelsPer(unit, context)
-  if context.zoom == 1.0 || !zoomScales(unit) { return found }
-  return match found {
-    Option.Some { value } => Option<f32>.some(value * context.zoom)
-    Option.None => Option<f32>.None
-  }
-}
-
-// Font-relative units read sizes that are zoomed already; container units read zoomed boxes.
-fn zoomScales(unit: Unit) -> bool {
-  return match unit {
-    Unit.Em | Unit.Rem | Unit.Ex | Unit.Ch | Unit.Ic | Unit.Cap | Unit.Lh
-      | Unit.Rex | Unit.Rch | Unit.Ric | Unit.Rcap | Unit.Rlh
-      | Unit.Cqw | Unit.Cqh | Unit.Cqi | Unit.Cqb | Unit.Cqmin | Unit.Cqmax => false
-    _ => true
-  }
-}
-
-fn unzoomedPixelsPer(unit: Unit, context: &Context) -> Option<f32> {
   let smaller = if context.viewportWidth < context.viewportHeight {
     context.viewportWidth
   } else {
@@ -151,13 +134,13 @@ fn unzoomedPixelsPer(unit: Unit, context: &Context) -> Option<f32> {
     Unit.Cqb => Option<f32>.some(containerBlock / 100.0)
     Unit.Cqmin => Option<f32>.some(containerMin / 100.0)
     Unit.Cqmax => Option<f32>.some(containerMax / 100.0)
-    Unit.Px => Option<f32>.some(1.0)
-    Unit.Cm => Option<f32>.some(96.0 / 2.54)
-    Unit.Mm => Option<f32>.some(96.0 / 25.4)
-    Unit.Q => Option<f32>.some(96.0 / 101.6)
-    Unit.In => Option<f32>.some(96.0)
-    Unit.Pt => Option<f32>.some(96.0 / 72.0)
-    Unit.Pc => Option<f32>.some(16.0)
+    Unit.Px => Option<f32>.some(context.zoom)
+    Unit.Cm => Option<f32>.some((96.0 / 2.54) * context.zoom)
+    Unit.Mm => Option<f32>.some((96.0 / 25.4) * context.zoom)
+    Unit.Q => Option<f32>.some((96.0 / 101.6) * context.zoom)
+    Unit.In => Option<f32>.some(96.0 * context.zoom)
+    Unit.Pt => Option<f32>.some((96.0 / 72.0) * context.zoom)
+    Unit.Pc => Option<f32>.some(16.0 * context.zoom)
     Unit.Em => Option<f32>.some(context.fontSize)
     Unit.Rem => Option<f32>.some(context.rootFontSize)
     Unit.Ex => Option<f32>.some(context.metrics().xHeight)
@@ -170,30 +153,30 @@ fn unzoomedPixelsPer(unit: Unit, context: &Context) -> Option<f32> {
     Unit.Ric => Option<f32>.some(context.rootMetrics().ideographAdvance)
     Unit.Rcap => Option<f32>.some(context.rootMetrics().capHeight)
     Unit.Rlh => Option<f32>.some(context.rootMetrics().lineHeight)
-    Unit.Vw => Option<f32>.some(context.viewportWidth / 100.0)
-    Unit.Svw => Option<f32>.some(smallWidth / 100.0)
-    Unit.Lvw => Option<f32>.some(context.viewportWidth / 100.0)
-    Unit.Dvw => Option<f32>.some(context.viewportWidth / 100.0)
-    Unit.Vi => Option<f32>.some(inlineSize / 100.0)
-    Unit.Svi => Option<f32>.some(smallInline / 100.0)
-    Unit.Lvi => Option<f32>.some(inlineSize / 100.0)
-    Unit.Dvi => Option<f32>.some(inlineSize / 100.0)
-    Unit.Vh => Option<f32>.some(context.viewportHeight / 100.0)
-    Unit.Svh => Option<f32>.some(smallHeight / 100.0)
-    Unit.Lvh => Option<f32>.some(context.viewportHeight / 100.0)
-    Unit.Dvh => Option<f32>.some(context.viewportHeight / 100.0)
-    Unit.Vb => Option<f32>.some(blockSize / 100.0)
-    Unit.Svb => Option<f32>.some(smallBlock / 100.0)
-    Unit.Lvb => Option<f32>.some(blockSize / 100.0)
-    Unit.Dvb => Option<f32>.some(blockSize / 100.0)
-    Unit.Vmin => Option<f32>.some(smaller / 100.0)
-    Unit.Svmin => Option<f32>.some((if smallWidth < smallHeight { smallWidth } else { smallHeight }) / 100.0)
-    Unit.Lvmin => Option<f32>.some(smaller / 100.0)
-    Unit.Dvmin => Option<f32>.some(smaller / 100.0)
-    Unit.Vmax => Option<f32>.some(larger / 100.0)
-    Unit.Svmax => Option<f32>.some((if smallWidth > smallHeight { smallWidth } else { smallHeight }) / 100.0)
-    Unit.Lvmax => Option<f32>.some(larger / 100.0)
-    Unit.Dvmax => Option<f32>.some(larger / 100.0)
+    Unit.Vw => Option<f32>.some((context.viewportWidth / 100.0) * context.zoom)
+    Unit.Svw => Option<f32>.some((smallWidth / 100.0) * context.zoom)
+    Unit.Lvw => Option<f32>.some((context.viewportWidth / 100.0) * context.zoom)
+    Unit.Dvw => Option<f32>.some((context.viewportWidth / 100.0) * context.zoom)
+    Unit.Vi => Option<f32>.some((inlineSize / 100.0) * context.zoom)
+    Unit.Svi => Option<f32>.some((smallInline / 100.0) * context.zoom)
+    Unit.Lvi => Option<f32>.some((inlineSize / 100.0) * context.zoom)
+    Unit.Dvi => Option<f32>.some((inlineSize / 100.0) * context.zoom)
+    Unit.Vh => Option<f32>.some((context.viewportHeight / 100.0) * context.zoom)
+    Unit.Svh => Option<f32>.some((smallHeight / 100.0) * context.zoom)
+    Unit.Lvh => Option<f32>.some((context.viewportHeight / 100.0) * context.zoom)
+    Unit.Dvh => Option<f32>.some((context.viewportHeight / 100.0) * context.zoom)
+    Unit.Vb => Option<f32>.some((blockSize / 100.0) * context.zoom)
+    Unit.Svb => Option<f32>.some((smallBlock / 100.0) * context.zoom)
+    Unit.Lvb => Option<f32>.some((blockSize / 100.0) * context.zoom)
+    Unit.Dvb => Option<f32>.some((blockSize / 100.0) * context.zoom)
+    Unit.Vmin => Option<f32>.some((smaller / 100.0) * context.zoom)
+    Unit.Svmin => Option<f32>.some(((if smallWidth < smallHeight { smallWidth } else { smallHeight }) / 100.0) * context.zoom)
+    Unit.Lvmin => Option<f32>.some((smaller / 100.0) * context.zoom)
+    Unit.Dvmin => Option<f32>.some((smaller / 100.0) * context.zoom)
+    Unit.Vmax => Option<f32>.some((larger / 100.0) * context.zoom)
+    Unit.Svmax => Option<f32>.some(((if smallWidth > smallHeight { smallWidth } else { smallHeight }) / 100.0) * context.zoom)
+    Unit.Lvmax => Option<f32>.some((larger / 100.0) * context.zoom)
+    Unit.Dvmax => Option<f32>.some((larger / 100.0) * context.zoom)
     _ => Option<f32>.None
   }
 }
