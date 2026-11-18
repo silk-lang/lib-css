@@ -981,7 +981,9 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let mut rawTokens = Intrinsic.replace(output.rawTokens, List<TextToken<'source>>.make())
   run tokensFor(nodes, raw, scopes, &mut rawTokens)
   let origins = Intrinsic.replace(text.origins, List<usize>.make())
-  let mut normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins)
+  let mut gathered = Intrinsic.replace(output.normalTokens, List<TextToken<'source>>.make())
+  let mut normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins, &mut gathered)
+  output.normalTokens = move gathered
   output.rawTokens = move rawTokens
   let tokens = normalized.tokens.asSlice()
   let mut plain = tokens.length != 0
@@ -2212,7 +2214,9 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     let mut rawTokens = Intrinsic.replace(output.rawTokens, List<TextToken<'source>>.make())
     run tokensFor(nodes, raw, scopes, &mut rawTokens)
     let origins = Intrinsic.replace(normalized.origins, List<usize>.make())
-    normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins)
+    let mut gathered = Intrinsic.replace(output.normalTokens, List<TextToken<'source>>.make())
+    normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins, &mut gathered)
+    output.normalTokens = move gathered
     output.rawTokens = move rawTokens
   }
   // Kept analysis covers exactly the tokens it was made for.
