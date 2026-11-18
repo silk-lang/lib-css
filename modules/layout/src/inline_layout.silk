@@ -5,7 +5,7 @@ import silk.core.option { Option }
 import silk.mem.box { Box }
 import silk.text.string { String }
 import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min }
-import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, TextBoxTrim, TextEdge }
+import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, TextBoxTrim, TextEdge, EmphasisSide }
 import tree { Node, NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, TextFragment, TextFragmentKind }
@@ -43,7 +43,13 @@ fn fontBoxFromMetrics(metrics: FontMetrics, style: &Style) -> FontBox {
     LineHeight.Length { value } => { lineHeight = value }
   }
   let leading = (lineHeight - height) / 2.0
-  return FontBox { metrics: metrics, baseline: baseline, height: height, lineHeight: lineHeight, before: baseline + leading, after: height - baseline + leading }
+  let mut before = baseline + leading
+  let mut after = height - baseline + leading
+  // CSS Text Decoration 3 §3.5: emphasis marks, half the font size, sit beyond the font's
+  // ascent or descent; the line grows only by what the half-leading cannot hold.
+  if style.emphasis == EmphasisSide.Over { before = max(before, baseline + height * 0.5) }
+  else if style.emphasis == EmphasisSide.Under { after = max(after, (height - baseline) + height * 0.5) }
+  return FontBox { metrics: metrics, baseline: baseline, height: height, lineHeight: lineHeight, before: before, after: after }
 }
 fn fontBaselines(font: &FontBox, mode: WritingMode) -> BaselineSet {
   if mode == WritingMode.VerticalLr { return font.metrics.baselines.reversed(font.height) }
