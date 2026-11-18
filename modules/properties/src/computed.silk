@@ -363,6 +363,31 @@ impl Equal for TabSize {
     }
   }
 }
+/// A `text-box-edge` metric (CSS Inline 3 §3.2). `Auto` is the over edge of `auto`, which
+/// means `text` until `line-fit-edge` exists.
+pub enum(u8) TextEdge { Auto, Text, Cap, Ex, Alphabetic }
+/// `text-box-edge`: the over and under edges `text-box-trim` trims to.
+pub struct TextBoxEdge { pub over: TextEdge, pub under: TextEdge }
+impl Copy for TextBoxEdge {}
+impl Equal for TextBoxEdge {
+  fn equals(left: &TextBoxEdge, right: &TextBoxEdge) -> bool {
+    return left.over == right.over && left.under == right.under
+  }
+}
+impl TextBoxEdge {
+  pub fn auto() -> TextBoxEdge {
+    return TextBoxEdge { over: TextEdge.Auto, under: TextEdge.Auto }
+  }
+}
+/// `text-box-trim`: which of a block's first and last line boxes lose their half-leading
+/// and the font's space beyond `text-box-edge`.
+pub enum(u8) TextBoxTrim { None, Start, End, Both }
+impl Equal for TextBoxTrim {
+  fn equals(left: &TextBoxTrim, right: &TextBoxTrim) -> bool { return left.* == right.* }
+}
+impl Equal for TextEdge {
+  fn equals(left: &TextEdge, right: &TextEdge) -> bool { return left.* == right.* }
+}
 pub struct TextIndent { pub value: Dimension, pub hanging: bool, pub eachLine: bool }
 impl Copy for TextIndent {}
 impl Equal for TextIndent {
@@ -542,6 +567,8 @@ pub struct Text {
   pub selectionColor: Rgba<f32>,
   pub placeholderColor: Rgba<f32>,
   pub hasPlaceholderColor: bool,
+  /// `text-box-edge`, in the padding after the flag above.
+  pub textBoxEdge: TextBoxEdge,
 }
 impl Copy for Text {}
 impl Text {
@@ -589,6 +616,7 @@ impl Text {
       placeholderColor: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
       hasPlaceholderColor: false,
       fillColor: 0,
+      textBoxEdge: TextBoxEdge.auto(),
     }
   }
 
