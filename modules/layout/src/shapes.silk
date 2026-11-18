@@ -11,7 +11,7 @@ import style { Dimension, DimensionKind }
 import axes { Axes }
 
 // CSS Shapes 1 §3.1: what `shape-outside` gives a float to wrap lines around.
-pub enum ShapeKind { None, Box, Circle, Ellipse, Inset, Polygon }
+pub enum ShapeKind { None, Box, Circle, Ellipse, Inset, Polygon, Image }
 // The reference box a shape's percentages and position resolve against.
 pub enum ShapeBox { MarginBox, BorderBox, PaddingBox, ContentBox }
 // A circle or ellipse radius: a length or percentage in `values`, or a side keyword.
@@ -23,21 +23,34 @@ pub enum ShapeRadius { Length, ClosestSide, FarthestSide }
 // Circle: radius, center x, center y. Ellipse: radius x, radius y, center x, center y.
 // Inset: top, right, bottom, left, then corner radii as for Box, of the reference box.
 // Polygon: x and y of each point.
+// Image: `values` is empty and `rows` holds the image's opaque extent row by row, a low and
+// a high fraction of the content box's width per row (high below low for a row with none),
+// the rows splitting the content box's height evenly (CSS Shapes 1 §3.1 <image>: the
+// image is stretched over the content box, and its pixels above `shape-image-threshold`
+// make the area). The host reads the image; layout only stretches the rows.
 // `margin` is `shape-margin`, a percentage of the containing block's inline size.
 pub struct FloatShape {
   pub kind: ShapeKind, pub reference: ShapeBox,
   pub radiusX: ShapeRadius, pub radiusY: ShapeRadius,
   pub margin: Dimension,
   pub values: List<Dimension>,
+  pub rows: List<f32>,
 }
 impl FloatShape {
   pub fn make() -> FloatShape {
-    return FloatShape { kind: ShapeKind.None, reference: ShapeBox.MarginBox, radiusX: ShapeRadius.Length, radiusY: ShapeRadius.Length, margin: Dimension.px(0.0), values: List<Dimension>.make() }
+    return FloatShape { kind: ShapeKind.None, reference: ShapeBox.MarginBox, radiusX: ShapeRadius.Length, radiusY: ShapeRadius.Length, margin: Dimension.px(0.0), values: List<Dimension>.make(), rows: List<f32>.make() }
   }
   pub fn isNone(self: &Self) -> bool { return self.kind == ShapeKind.None }
   pub fn same(self: &Self, other: &FloatShape) -> bool {
     if self.kind != other.kind || self.reference != other.reference || self.radiusX != other.radiusX || self.radiusY != other.radiusY { return false }
-    if !sameDimension(self.margin, other.margin) || self.values.length() != other.values.length() { return false }
+    if !sameDimension(self.margin, other.margin) || self.values.length() != other.values.length() || self.rows.length() != other.rows.length() { return false }
+    let ra = self.rows.asSlice()
+    let rb = other.rows.asSlice()
+    let mut r: usize = 0
+    while r < ra.length {
+      if ra[r] != rb[r] { return false }
+      r = r + 1
+    }
     let a = self.values.asSlice()
     let b = other.values.asSlice()
     let mut i: usize = 0
@@ -50,7 +63,9 @@ impl FloatShape {
   pub effect fn copy(self: &Self) -> FloatShape ! OutOfMemoryError ? &mut Allocator {
     let mut values = List<Dimension>.make()
     run values.appendSlice(self.values.asSlice())
-    return FloatShape { kind: self.kind, reference: self.reference, radiusX: self.radiusX, radiusY: self.radiusY, margin: self.margin, values: move values }
+    let mut rows = List<f32>.make()
+    run rows.appendSlice(self.rows.asSlice())
+    return FloatShape { kind: self.kind, reference: self.reference, radiusX: self.radiusX, radiusY: self.radiusY, margin: self.margin, values: move values, rows: move rows }
   }
 }
 fn sameDimension(a: Dimension, b: Dimension) -> bool { return a.kind == b.kind && a.value == b.value && a.percent == b.percent }
@@ -59,12 +74,14 @@ const SHAPE_NONE: u8 = 0
 const SHAPE_ELLIPSE: u8 = 1
 const SHAPE_RECT: u8 = 2
 const SHAPE_POLYGON: u8 = 3
+const SHAPE_ROWS: u8 = 4
 
 // A float area in logical coordinates (line axis x, block axis y) relative to the
 // float's margin box, before `margin` widens it. Ellipse: the box (x0, y0)-(x1, y1).
 // Rect: the box and its corner radii (x of top-left, top-right, bottom-right,
 // bottom-left, then y). Polygon: `count` points from `start` of the formatting
-// context's point list.
+// context's point list. Rows: `count` rows over y0 to y1 from `start` of the point list,
+// each a point whose x and y are the row's low and high line offsets.
 pub struct ResolvedShape {
   pub kind: u8,
   pub margin: f32,
@@ -170,6 +187,30 @@ impl ResolvedShape {
         i = i + 1
       }
       if high < low { return Span.none() }
+    } else if self.kind == SHAPE_ROWS {
+      if self.count == 0 || self.y1 <= self.y0 { return Span.none() }
+      let step = (self.y1 - self.y0) / u32.toF32(self.count)
+      let last = self.count - 1
+      let from = rowAt(top - m - self.y0, step, last)
+      let to = rowAt(bottom + m - self.y0, step, last)
+      let first = u32.toUsize(self.start)
+      let mut r = from
+      while r <= to {
+        let row = points[first + u32.toUsize(r)]
+        if row.y >= row.x {
+          let y = self.y0 + u32.toF32(r) * step
+          // The row's distance from the band; a row within `margin` widens by what a
+          // circle of that radius keeps at that distance.
+          let d = max(0.0, max(top - (y + step), y - bottom))
+          if (y < bottom && y + step > top) || (m > 0.0 && d <= m) {
+            let w: f32 = if m > 0.0 { f32.sqrt(max(0.0, m * m - d * d)) } else { 0.0 }
+            low = min(low, row.x - w)
+            high = max(high, row.y + w)
+          }
+        }
+        r = r + 1
+      }
+      if high < low { return Span.none() }
     } else {
       return Span.none()
     }
@@ -178,6 +219,12 @@ impl ResolvedShape {
   }
 }
 fn usizeF32(value: usize) -> f32 { return u32.toF32(usize.toU32(value)) }
+fn rowAt(offset: f32, step: f32, last: u32) -> u32 {
+  if offset <= 0.0 { return 0 }
+  let index = offset / step
+  if index >= u32.toF32(last) { return last }
+  return f32.toU32(index)
+}
 
 // The least distance a rounded rectangle's side keeps from its straight edge over
 // block offsets `top` to `bottom`, given the radii of its upper and lower corners.
@@ -287,6 +334,28 @@ pub effect fn resolveShape(shape: &FloatShape, frame: ShapeFrame, points: &mut L
     result.x1 = center.x + rx
     result.y0 = center.y - ry
     result.y1 = center.y + ry
+    return result
+  }
+  if shape.kind == ShapeKind.Image {
+    // Stretched over the content box. Vertical writing modes keep the margin box.
+    let rows = shape.rows.asSlice()
+    let count = rows.length / 2
+    if count == 0 || frame.axes.vertical { return result }
+    let content = Edges4 { left: 0.0, top: 0.0, right: width, bottom: height }.inset(m).inset(b).inset(p)
+    let cw = max(0.0, content.right - content.left)
+    points.truncate(u32.toUsize(start))
+    run points.reserve(count)
+    let mut i: usize = 0
+    while i < count {
+      run points.append(Point { x: content.left + rows[2 * i] * cw, y: content.left + rows[2 * i + 1] * cw })
+      i = i + 1
+    }
+    result.kind = SHAPE_ROWS
+    result.x0 = content.left
+    result.x1 = content.right
+    result.y0 = content.top
+    result.y1 = max(content.top, content.bottom)
+    result.count = usize.toU32(count)
     return result
   }
   if shape.kind == ShapeKind.Polygon {

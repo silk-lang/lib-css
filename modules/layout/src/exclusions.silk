@@ -1,0 +1,16 @@
+import silk.core.ownership { Copy }
+import geometry { Rect }
+import style { WrapFlow }
+
+// CSS Exclusions 1 §3: an absolutely positioned box with `wrap-flow` other than auto
+// excludes its border box from the inline content of its containing block, its
+// wrapping context. As in the spec's processing model (§5), a compute lays the boxes
+// out without exclusions, takes the areas from where that positions them, and lays
+// out again around those areas. Positions that depend on the wrapped content (a
+// bottom inset under text that grows) are not resolved again. `rect` is relative to
+// `owner`'s content box. Two full layouts a compute is the cost, paid only by trees
+// that set `wrap-flow`.
+// Limits: horizontal writing modes only; formatting contexts inside the wrapping
+// context (flow roots, flex and grid items) and fragmented flows do not wrap.
+pub struct ExclusionArea { pub owner: usize, pub rect: Rect, pub flow: WrapFlow }
+impl Copy for ExclusionArea {}

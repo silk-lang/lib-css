@@ -1,6 +1,6 @@
 import layout.lib { Style, Dimension, SizeValue, DimensionKind, Edges, Display, DisplayOutside, DisplayInside, BoxSizing, Direction, UnicodeBidi, WritingMode, TextOrientation, FlexDirection, FlexWrap, Align, OverflowAlignment, Overflow, ScrollbarWidth, ScrollbarGutter, Position, Float, Clear, Visibility }
 import layout.lib { LineHeight, VerticalAlign, VerticalAlignKind, BaselineSource, TextAlign, TextJustify, TextIndent, TextWrap, WhiteSpaceCollapse, TabSize, BoxDecorationBreak }
-import layout.lib { BreakBetween, BreakInside, MarginBreak }
+import layout.lib { BreakBetween, BreakInside, MarginBreak, WrapFlow, WrapThrough }
 import layout.lib { FloatShape, ShapeKind, ShapeBox, ShapeRadius, Tree, NodeId, InvalidNode }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.f32
@@ -160,6 +160,25 @@ effect fn parseClear(value: &Value) -> Clear ! ProtocolError {
   if name == "right" { return Clear.Right }
   if name == "both" { return Clear.Both }
   fail P.invalid("invalid Clear value")
+}
+
+effect fn parseWrapFlow(value: &Value) -> WrapFlow ! ProtocolError {
+  let name = run P.text(value)
+  if name == "auto" { return WrapFlow.Auto }
+  if name == "both" { return WrapFlow.Both }
+  if name == "start" { return WrapFlow.Start }
+  if name == "end" { return WrapFlow.End }
+  if name == "minimum" { return WrapFlow.Minimum }
+  if name == "maximum" { return WrapFlow.Maximum }
+  if name == "clear" { return WrapFlow.Clear }
+  fail P.invalid("invalid WrapFlow value")
+}
+
+effect fn parseWrapThrough(value: &Value) -> WrapThrough ! ProtocolError {
+  let name = run P.text(value)
+  if name == "wrap" { return WrapThrough.Wrap }
+  if name == "none" { return WrapThrough.None }
+  fail P.invalid("invalid WrapThrough value")
 }
 
 effect fn parseVisibility(value: &Value) -> Visibility ! ProtocolError {
@@ -402,7 +421,7 @@ effect fn parseLineCount(value: &Value) -> usize ! ProtocolError {
 
 
 pub effect fn parse(value: &Value) -> Style ! ProtocolError {
-  run P.fields(value, &["width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight", "flexBasis", "rowGap", "columnGap", "display", "boxSizing", "direction", "unicodeBidi", "writingMode", "textOrientation", "flexDirection", "flexWrap", "justifyContent", "justifySelf", "justifyItems", "alignItems", "alignSelf", "alignContent", "overflowX", "overflowY", "scrollbarWidth", "scrollbarGutter", "position", "float", "clear", "visibility", "margin", "padding", "border", "inset", "flexGrow", "flexShrink", "aspectRatio", "aspectRatioAuto", "justifyContentSafety", "justifySelfSafety", "justifyItemsSafety", "alignContentSafety", "alignItemsSafety", "alignSelfSafety", "replaced", "order", "marginTop", "marginRight", "marginBottom", "marginLeft", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTop", "borderRight", "borderBottom", "borderLeft", "insetTop", "insetRight", "insetBottom", "insetLeft", "fontKey", "lineHeight", "verticalAlign", "baselineSource", "textAlign", "textAlignLast", "textJustify", "textIndent", "textWrap", "whiteSpaceCollapse", "tabSize", "boxDecorationBreak", "marginBreak", "breakBefore", "breakAfter", "breakInside", "orphans", "widows", "gridTemplateRows", "gridTemplateColumns", "gridTemplateAreas", "gridAutoRows", "gridAutoColumns", "gridAutoFlow", "gridRowStart", "gridRowEnd", "gridColumnStart", "gridColumnEnd", "shapeOutside", "shapeMargin"])
+  run P.fields(value, &["width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight", "flexBasis", "rowGap", "columnGap", "display", "boxSizing", "direction", "unicodeBidi", "writingMode", "textOrientation", "flexDirection", "flexWrap", "justifyContent", "justifySelf", "justifyItems", "alignItems", "alignSelf", "alignContent", "overflowX", "overflowY", "scrollbarWidth", "scrollbarGutter", "position", "float", "clear", "visibility", "margin", "padding", "border", "inset", "flexGrow", "flexShrink", "aspectRatio", "aspectRatioAuto", "justifyContentSafety", "justifySelfSafety", "justifyItemsSafety", "alignContentSafety", "alignItemsSafety", "alignSelfSafety", "replaced", "order", "marginTop", "marginRight", "marginBottom", "marginLeft", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTop", "borderRight", "borderBottom", "borderLeft", "insetTop", "insetRight", "insetBottom", "insetLeft", "fontKey", "lineHeight", "verticalAlign", "baselineSource", "textAlign", "textAlignLast", "textJustify", "textIndent", "textWrap", "whiteSpaceCollapse", "tabSize", "boxDecorationBreak", "marginBreak", "breakBefore", "breakAfter", "breakInside", "orphans", "widows", "gridTemplateRows", "gridTemplateColumns", "gridTemplateAreas", "gridAutoRows", "gridAutoColumns", "gridAutoFlow", "gridRowStart", "gridRowEnd", "gridColumnStart", "gridColumnEnd", "shapeOutside", "shapeMargin", "wrapFlow", "wrapThrough"])
   let mut style = Style.make()
   if P.has(value, "width") { style.width = SizeValue.of(run dimension(run P.required(value, "width"))) }
   if P.has(value, "height") { style.height = SizeValue.of(run dimension(run P.required(value, "height"))) }
@@ -435,6 +454,8 @@ pub effect fn parse(value: &Value) -> Style ! ProtocolError {
   if P.has(value, "float") { style.float = run parseFloat(run P.required(value, "float")) }
   if P.has(value, "clear") { style.clear = run parseClear(run P.required(value, "clear")) }
   if P.has(value, "visibility") { style.visibility = run parseVisibility(run P.required(value, "visibility")) }
+  if P.has(value, "wrapFlow") { style.wrapFlow = run parseWrapFlow(run P.required(value, "wrapFlow")) }
+  if P.has(value, "wrapThrough") { style.wrapThrough = run parseWrapThrough(run P.required(value, "wrapThrough")) }
   if P.has(value, "margin") { style.margin = run edges(run P.required(value, "margin"), style.margin) }
   if P.has(value, "marginTop") { style.margin.top = run dimension(run P.required(value, "marginTop")) }
   if P.has(value, "marginRight") { style.margin.right = run dimension(run P.required(value, "marginRight")) }
@@ -501,7 +522,7 @@ effect fn shapeRadius(value: &Value, key: string) -> ShapeRadius ! ProtocolError
   fail P.invalid("invalid shape radius")
 }
 
-// `shapeOutside` is { kind, box, radiusX, radiusY, values } as in layout's FloatShape;
+// `shapeOutside` is { kind, box, radiusX, radiusY, values, rows } as in layout's FloatShape;
 // `shapeMargin` is a dimension.
 pub effect fn applyShape(value: &Value, tree: &mut Tree, id: NodeId)
   ! ProtocolError | OutOfMemoryError | InvalidNode
@@ -511,9 +532,9 @@ pub effect fn applyShape(value: &Value, tree: &mut Tree, id: NodeId)
   if P.has(value, "shapeMargin") { shape.margin = run dimension(run P.required(value, "shapeMargin")) }
   if P.has(value, "shapeOutside") {
     let outside = run P.required(value, "shapeOutside")
-    run P.fields(outside, &["kind", "box", "radiusX", "radiusY", "values"])
+    run P.fields(outside, &["kind", "box", "radiusX", "radiusY", "values", "rows"])
     let kind = run P.text(run P.required(outside, "kind"))
-    shape.kind = if kind == "none" { ShapeKind.None } else if kind == "box" { ShapeKind.Box } else if kind == "circle" { ShapeKind.Circle } else if kind == "ellipse" { ShapeKind.Ellipse } else if kind == "inset" { ShapeKind.Inset } else if kind == "polygon" { ShapeKind.Polygon } else { fail P.invalid("invalid shape kind") }
+    shape.kind = if kind == "none" { ShapeKind.None } else if kind == "box" { ShapeKind.Box } else if kind == "circle" { ShapeKind.Circle } else if kind == "ellipse" { ShapeKind.Ellipse } else if kind == "inset" { ShapeKind.Inset } else if kind == "polygon" { ShapeKind.Polygon } else if kind == "image" { ShapeKind.Image } else { fail P.invalid("invalid shape kind") }
     if P.has(outside, "box") {
       let name = run P.text(run P.required(outside, "box"))
       shape.reference = if name == "margin-box" { ShapeBox.MarginBox } else if name == "border-box" { ShapeBox.BorderBox } else if name == "padding-box" { ShapeBox.PaddingBox } else if name == "content-box" { ShapeBox.ContentBox } else { fail P.invalid("invalid shape box") }
@@ -525,6 +546,14 @@ pub effect fn applyShape(value: &Value, tree: &mut Tree, id: NodeId)
       let mut i: usize = 0
       while i < items.length {
         run shape.values.append(run dimension(&items[i]))
+        i = i + 1
+      }
+    }
+    if P.has(outside, "rows") {
+      let items = run P.array(run P.required(outside, "rows"))
+      let mut i: usize = 0
+      while i < items.length {
+        run shape.rows.append(run P.finite(&items[i]))
         i = i + 1
       }
     }
