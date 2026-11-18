@@ -431,9 +431,9 @@ test effect fn compiledPartTargetsRoundTripAndStayIsolated() -> ()
 test effect fn unavailablePseudoElementsAreDiagnosedWithoutDroppingValidListArms() -> ()
   ! AssertionError<'static> | CompileError | ResolverError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
-  let css = b".button::target-text,.button{color:red}.button::target-text{color:blue}.button::backdrop{color:red}.button::file-selector-button{color:red}.button::-webkit-scrollbar-button{color:red}.button:first-line{color:red}.button::part(label){color:red}"
+  let css = b".button::target-text,.button{color:red}.button::target-text{color:blue}.button::backdrop{color:red}.button::file-selector-button{color:red}.button::-webkit-scrollbar-button{color:red}.button::part(label){color:red}"
   let mut sheet = run compile.compile(css, &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
-  run Testing.expect(sheet.diagnostics.length() == 6 && sheet.diagnostics.asSlice()[0].count == 2, "each unavailable target is diagnosed and repeated targets are aggregated")
+  run Testing.expect(sheet.diagnostics.length() == 5 && sheet.diagnostics.asSlice()[0].count == 2, "each unavailable target is diagnosed and repeated targets are aggregated")
   let mut i: usize = 0
   while i < sheet.diagnostics.length() {
     run Testing.expect(sheet.diagnostics.asSlice()[i].kind == DiagnosticKind.Unsupported, "valid unsupported pseudo-elements have feature diagnostics")

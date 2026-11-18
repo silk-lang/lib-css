@@ -44,11 +44,25 @@ pub struct Node {
   pub parent: usize, pub firstChild: usize, pub lastChild: usize, pub nextSibling: usize, pub previousSibling: usize,
   pub measureKey: usize, pub measurement: Measurement,
   pub scrollOffset: Point,
+  // Leading text bytes another box lays out (a host's ::first-letter); offsets stay the text's.
+  pub textStart: usize,
 }
 impl Node {
   pub fn text<'a>(self: &'a Self) -> Option<string<'a>> {
     return match &self.content {
       SourceContent.Text { value } => Option<string<'a>>.Some { value: String.view(&value) }
+      SourceContent.Element => Option<string<'a>>.None
+    }
+  }
+  /// The text this node lays out: all of it after `textStart`.
+  pub fn laidText<'a>(self: &'a Self) -> Option<string<'a>> {
+    return match &self.content {
+      SourceContent.Text { value } => {
+        let full = String.view(&value)
+        let length = String.byteLength(full)
+        let start = if self.textStart < length { self.textStart } else { length }
+        Option<string<'a>>.Some { value: String.slice(full, start, length - start) }
+      }
       SourceContent.Element => Option<string<'a>>.None
     }
   }
@@ -200,7 +214,7 @@ impl Tree {
     run styles.append(move value)
     let mut changed = List<usize>.make()
     run changed.reserve(1)
-    run nodes.append(Node { styleIndex: 0, content: SourceContent.Element, parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE, previousSibling: NO_NODE, measureKey: 0, measurement: Measurement.None, scrollOffset: Point { x: 0.0, y: 0.0 } })
+    run nodes.append(Node { styleIndex: 0, content: SourceContent.Element, parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE, previousSibling: NO_NODE, measureKey: 0, measurement: Measurement.None, scrollOffset: Point { x: 0.0, y: 0.0 }, textStart: 0 })
     run changed.append(1)
     let mut outer = List<usize>.make()
     run outer.append(1)
@@ -433,14 +447,14 @@ impl Tree {
     } else {
       run self.styles.append(move value)
     }
-    let index = run self.publish(Node { styleIndex: styleIndex, content: SourceContent.Element, parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE, previousSibling: NO_NODE, measureKey: 0, measurement: Measurement.None, scrollOffset: Point { x: 0.0, y: 0.0 } })
+    let index = run self.publish(Node { styleIndex: styleIndex, content: SourceContent.Element, parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE, previousSibling: NO_NODE, measureKey: 0, measurement: Measurement.None, scrollOffset: Point { x: 0.0, y: 0.0 }, textStart: 0 })
     return NodeId { index: index }
   }
   // Makes a text node outside the tree. It takes its parent's style once
   // attached.
   pub effect fn createText(self: &mut Self, value: String) -> NodeId ! OutOfMemoryError ? &mut Allocator {
     run self.reserveSlot()
-    let index = run self.publish(Node { styleIndex: 0, content: SourceContent.Text { value: move value }, parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE, previousSibling: NO_NODE, measureKey: 0, measurement: Measurement.None, scrollOffset: Point { x: 0.0, y: 0.0 } })
+    let index = run self.publish(Node { styleIndex: 0, content: SourceContent.Text { value: move value }, parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE, previousSibling: NO_NODE, measureKey: 0, measurement: Measurement.None, scrollOffset: Point { x: 0.0, y: 0.0 }, textStart: 0 })
     return NodeId { index: index }
   }
   effect fn reserveSlot(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
@@ -663,6 +677,19 @@ impl Tree {
     }
     let nodes = self.nodes.asMutSlice()
     nodes[id.index].content = SourceContent.Text { value: move value }
+    nodes[id.index].textStart = 0
+    self.touch(id.index)
+    if blank != wasBlank { self.generated = self.current }
+  }
+  /// Leaves the first `start` bytes of text node `id` to another box: layout reads the rest,
+  /// at the same offsets. A host's ::first-letter box lays out the letter it takes.
+  pub effect fn setTextStart(self: &mut Self, id: NodeId, start: usize) ! InvalidNode {
+    if !self.contains(id) || !self.nodes.asSlice()[id.index].isText() { fail InvalidNode { index: id.index } }
+    if self.nodes.asSlice()[id.index].textStart == start { return }
+    let wasBlank = match self.nodes.asSlice()[id.index].laidText() { Option<string>.Some { value } => whitespace(value) Option<string>.None => true }
+    let nodes = self.nodes.asMutSlice()
+    nodes[id.index].textStart = start
+    let blank = match self.nodes.asSlice()[id.index].laidText() { Option<string>.Some { value } => whitespace(value) Option<string>.None => true }
     self.touch(id.index)
     if blank != wasBlank { self.generated = self.current }
   }
