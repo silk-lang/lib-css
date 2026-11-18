@@ -2,11 +2,12 @@ import fragmentation { FragmentationError }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
 import silk.num.usize
+import silk.num.f32
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableSpace, AvailableKind, max }
-import style { Style, Display, DisplayOutside, DisplayInside, Dimension, SizeValue, DimensionKind, Direction, Float, Clear, Position, WritingMode, Align, Overflow, OverflowAlignment }
+import style { Style, Display, DisplayOutside, DisplayInside, Dimension, SizeValue, Bounds, DimensionKind, Direction, Float, Clear, Position, WritingMode, Align, Overflow, OverflowAlignment }
 import tree { Tree, LayoutTree, InvalidNode }
 import context { Input }
 import engine { layoutNode, layoutNodeInPlace, probeNode }
@@ -477,6 +478,35 @@ test effect fn blockVerticalPercentageEdgesUseContainingInlineSize() -> () ! Out
   run Testing.expect(layouts.boxes.get(layouts.firstBySource.get(a.index)).location.x == 20.0, "block margin percentage resolves against containing height")
   run Testing.expect(layouts.boxes.get(layouts.firstBySource.get(a.index)).location.y == 10.0, "inline margin percentage uses same basis")
   run Testing.expect(layouts.boxes.get(layouts.firstBySource.get(0)).size.width == 50.0, "percentage margin and padding contribute to auto physical width")
+}
+
+effect fn boundedChild(width: f32) -> Rect ! OutOfMemoryError | TextError | FragmentationError | InvalidNode ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let rootId = tree.root()
+  let mut child = Style.make()
+  // padding-left: clamp(10px, 5%, 30px); margin-left: max(16px, (100% - 300px) / 2);
+  // width: clamp(100px, 50% + 20px, 300px)
+  let mut bounds = Bounds.none()
+  child.padding.left = Dimension.bounded(0.0, 0.05, bounds.slotOf(10.0, 30.0).unwrapOr(9))
+  child.margin.left = Dimension.bounded(-150.0, 0.5, bounds.slotOf(16.0, f32.INFINITY).unwrapOr(9))
+  child.width = SizeValue.bounded(20.0, 0.5, bounds.slotOf(100.0, 300.0).unwrapOr(9))
+  child.bounds = bounds
+  let a = run tree.append(rootId, move child)
+  let layouts = run arrange(&tree, width)
+  let found = layouts.boxes.get(layouts.firstBySource.get(a.index))
+  return Rect { x: found.location.x, y: 0.0, width: found.size.width, height: 0.0 }
+}
+
+test effect fn boundedEdgesAndSizesHoldBetweenTheirBounds() -> () ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let narrow = run boundedChild(400.0) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(narrow.width == 240.0, "a percentage between its bounds is used as is")
+  run Testing.expect(narrow.x == 50.0, "max() takes the length plus percentage once it is larger")
+  let wide = run boundedChild(1000.0) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(wide.width == 330.0, "the upper bounds cap the width and the padding")
+  run Testing.expect(wide.x == 350.0, "an unbounded max() grows with the basis")
+  let small = run boundedChild(100.0) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(small.width == 110.0 && small.x == 16.0, "the lower bounds floor them")
 }
 
 test effect fn blockSidewaysRlFloatsAndClearFollowLogicalBlockAxis() -> () ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {

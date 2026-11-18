@@ -15,8 +15,8 @@ import geometry {
   max,
   clamp
 }
-import style { Style, Dimension, DimensionKind, Direction, Align, Position, WritingMode }
-import context { Input, ResolvedBox, UNBOUNDED, childrenInput, resolve }
+import style { Style, Dimension, Bounds, DimensionKind, Direction, Align, Position, WritingMode }
+import context { Input, ResolvedBox, UNBOUNDED, childrenInput, resolveGap }
 import box_tree { BoxTree }
 import layout_pass { LayoutPass }
 import engine { layoutNodeInPlace, plainGridItem, percentFree, probeNode, shapedBox, widthIgnoresHeight, baselineValue, ITEM_SUBGRID, ITEM_SELF_BASELINE }
@@ -212,6 +212,8 @@ pub struct AxisSizing {
   pub maximum: f32,
   pub available: AvailableSpace,
   pub gap: Dimension,
+  // The container's, for a `Bounded` gap.
+  pub bounds: Bounds,
   pub usedGap: f32,
   pub stretch: bool,
   pub resolveCyclic: bool,
@@ -742,7 +744,7 @@ pub effect fn sizeAxis<'pass, 'source, M: Measure + TextMeasure>(
     return
   }
   sizing.resolvedCyclic = false
-  sizing.usedGap = max(0.0, resolve(sizing.gap, sizing.size, sizing.definite, sizing.gap.value))
+  sizing.usedGap = max(0.0, resolveGap(sizing.gap, &sizing.bounds, sizing.size, sizing.definite))
   run initializeTracks(
     template,
     automatic,
@@ -821,7 +823,7 @@ pub effect fn sizeAxis<'pass, 'source, M: Measure + TextMeasure>(
     && (sizing.gap.percent != 0.0 || cyclicTracks(template)
       || ((sizing.origin < 0 || sizing.count > template.length) && cyclicTracks(automatic))) {
     sizing.resolvedCyclic = true
-    sizing.usedGap = max(0.0, resolve(sizing.gap, sizing.size, true, sizing.gap.value))
+    sizing.usedGap = max(0.0, resolveGap(sizing.gap, &sizing.bounds, sizing.size, true))
     run initializeTracks(
       template,
       automatic,
@@ -1220,10 +1222,8 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     maximum: max(0.0, limits.max.width - logical.inset.horizontal()),
     available: gridSpace(logical.size.widthDefinite, inlineSize, inlineAvailable),
     gap: style.columnGap,
-    usedGap: max(
-      0.0,
-      resolve(style.columnGap, inlineSize, logical.size.widthDefinite, style.columnGap.value),
-    ),
+    bounds: style.bounds,
+    usedGap: max(0.0, resolveGap(style.columnGap, &style.bounds, inlineSize, logical.size.widthDefinite)),
     stretch: stretchContent(style.justifyContent),
     resolveCyclic: !input.intrinsicWidth && !input.intrinsicHeight,
     resolvedCyclic: false,
@@ -1240,10 +1240,8 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
     maximum: max(0.0, limits.max.height - logical.inset.vertical()),
     available: gridSpace(logical.size.heightDefinite, blockSize, blockAvailable),
     gap: style.rowGap,
-    usedGap: max(
-      0.0,
-      resolve(style.rowGap, blockSize, logical.size.heightDefinite, style.rowGap.value),
-    ),
+    bounds: style.bounds,
+    usedGap: max(0.0, resolveGap(style.rowGap, &style.bounds, blockSize, logical.size.heightDefinite)),
     stretch: stretchContent(style.alignContent),
     resolveCyclic: !input.intrinsicWidth && !input.intrinsicHeight,
     resolvedCyclic: false,

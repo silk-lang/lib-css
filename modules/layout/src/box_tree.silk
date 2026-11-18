@@ -546,6 +546,7 @@ fn runStyle(parent: &Style) -> Style {
   style.columnCount = parent.columnCount
   style.columnWidth = parent.columnWidth
   style.columnGap = parent.columnGap
+  style.bounds = parent.bounds
   style.columnFill = parent.columnFill
   return move style
 }

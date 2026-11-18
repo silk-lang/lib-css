@@ -3,6 +3,8 @@ pub import style {
   SizeContainment,
   Dimension,
   SizeValue,
+  Bound,
+  Bounds,
   DimensionKind,
   Edges,
   Display,
