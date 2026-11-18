@@ -150,6 +150,22 @@ effect fn appShorthands() -> () ! AssertionError<'static> | OutOfMemoryError ? &
   run expectLonghand(Property.Overflow, &overflow, Property.OverflowY, b"auto", "overflow's second value is overflow-y")
   let clip = values.keyword(Keyword.Clip)
   run expectLonghand(Property.Overflow, &clip, Property.OverflowY, b"clip", "one overflow value sets both axes")
+  let motion = run values.text(b"10px 30% path('M 0 0 L 10 0') 50% auto 30deg / left top")
+  run expectLonghand(Property.Offset, &motion, Property.OffsetPosition, b"10px 30%", "offset position comes before the path")
+  run expectLonghand(Property.Offset, &motion, Property.OffsetPath, b"path('M 0 0 L 10 0')", "offset path")
+  run expectLonghand(Property.Offset, &motion, Property.OffsetDistance, b"50%", "offset distance")
+  run expectLonghand(Property.Offset, &motion, Property.OffsetRotate, b"auto 30deg", "offset rotate takes two words")
+  run expectLonghand(Property.Offset, &motion, Property.OffsetAnchor, b"left top", "offset anchor after the slash")
+  let shape = run values.text(b"circle(5px at 1px 2px) content-box 0deg 4px")
+  run expectLonghand(Property.Offset, &shape, Property.OffsetPath, b"circle(5px at 1px 2px) content-box", "a box keyword joins the shape")
+  run expectLonghand(Property.Offset, &shape, Property.OffsetDistance, b"4px", "distance after rotate")
+  run expectLonghand(Property.Offset, &shape, Property.OffsetPosition, b"normal", "an omitted position is normal")
+  run expectLonghand(Property.Offset, &shape, Property.OffsetAnchor, b"auto", "an omitted anchor is auto")
+  let place = run values.text(b"left 20px")
+  run expectLonghand(Property.Offset, &place, Property.OffsetPosition, b"left 20px", "offset can be a position alone")
+  run expectLonghand(Property.Offset, &place, Property.OffsetPath, b"none", "with no path")
+  let twice = run values.text(b"ray(0deg) 1px 2px")
+  run expectLonghand(Property.Offset, &twice, Property.OffsetDistance, b"", "two distances do not expand")
 }
 
 test effect fn appShorthandsExpand() -> () ! AssertionError<'static> | OutOfMemoryError {

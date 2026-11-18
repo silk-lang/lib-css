@@ -452,9 +452,15 @@ pub enum(u16) Property {
   PositionAnchor,
   PositionArea,
   PositionTryFallbacks,
+  OffsetPath,
+  OffsetDistance,
+  OffsetRotate,
+  OffsetAnchor,
+  OffsetPosition,
+  Offset,
 }
 
-pub const COUNT: usize = 449
+pub const COUNT: usize = 455
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -907,6 +913,12 @@ pub fn all() -> [Property; COUNT] {
     Property.PositionAnchor,
     Property.PositionArea,
     Property.PositionTryFallbacks,
+    Property.OffsetPath,
+    Property.OffsetDistance,
+    Property.OffsetRotate,
+    Property.OffsetAnchor,
+    Property.OffsetPosition,
+    Property.Offset,
   ]
 }
 
@@ -1361,6 +1373,12 @@ pub fn index(property: Property) -> usize {
     Property.PositionAnchor => 446
     Property.PositionArea => 447
     Property.PositionTryFallbacks => 448
+    Property.OffsetPath => 449
+    Property.OffsetDistance => 450
+    Property.OffsetRotate => 451
+    Property.OffsetAnchor => 452
+    Property.OffsetPosition => 453
+    Property.Offset => 454
   }
 }
 
@@ -1815,6 +1833,12 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.PositionAnchor => b"position-anchor"
     Property.PositionArea => b"position-area"
     Property.PositionTryFallbacks => b"position-try-fallbacks"
+    Property.OffsetPath => b"offset-path"
+    Property.OffsetDistance => b"offset-distance"
+    Property.OffsetRotate => b"offset-rotate"
+    Property.OffsetAnchor => b"offset-anchor"
+    Property.OffsetPosition => b"offset-position"
+    Property.Offset => b"offset"
   }
 }
 
@@ -1916,6 +1940,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     6 => {
+      if first == 111 && insensitive(name, b"offset") {
+        return Option<Property>.some(Property.Offset)
+      }
       if first == 115 && insensitive(name, b"stroke") {
         return Option<Property>.some(Property.Stroke)
       }
@@ -2172,6 +2199,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     11 => {
+      if first == 111 && insensitive(name, b"offset-path") {
+        return Option<Property>.some(Property.OffsetPath)
+      }
       if first == 97 && insensitive(name, b"anchor-name") {
         return Option<Property>.some(Property.AnchorName)
       }
@@ -2389,6 +2419,12 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     13 => {
+      if first == 111 && insensitive(name, b"offset-anchor") {
+        return Option<Property>.some(Property.OffsetAnchor)
+      }
+      if first == 111 && insensitive(name, b"offset-rotate") {
+        return Option<Property>.some(Property.OffsetRotate)
+      }
       if first == 112 && insensitive(name, b"position-area") {
         return Option<Property>.some(Property.PositionArea)
       }
@@ -2564,6 +2600,12 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     15 => {
+      if first == 111 && insensitive(name, b"offset-position") {
+        return Option<Property>.some(Property.OffsetPosition)
+      }
+      if first == 111 && insensitive(name, b"offset-distance") {
+        return Option<Property>.some(Property.OffsetDistance)
+      }
       if first == 112 && insensitive(name, b"position-anchor") {
         return Option<Property>.some(Property.PositionAnchor)
       }
@@ -3712,6 +3754,12 @@ pub fn inherited(property: Property) -> bool {
     Property.PositionAnchor => false
     Property.PositionArea => false
     Property.PositionTryFallbacks => false
+    Property.OffsetPath => false
+    Property.OffsetDistance => false
+    Property.OffsetRotate => false
+    Property.OffsetAnchor => false
+    Property.OffsetPosition => false
+    Property.Offset => false
   }
 }
 
@@ -4168,6 +4216,12 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.PositionAnchor => b"auto"
     Property.PositionArea => b"none"
     Property.PositionTryFallbacks => b"none"
+    Property.OffsetPath => b"none"
+    Property.OffsetDistance => b"0px"
+    Property.OffsetRotate => b"auto"
+    Property.OffsetAnchor => b"auto"
+    Property.OffsetPosition => b"normal"
+    Property.Offset => b"normal"
   }
 }
 
@@ -4202,7 +4256,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 372
+    Property.All => 377
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -4276,6 +4330,7 @@ pub fn longhandCount(property: Property) -> usize {
     Property.Columns => 2
     Property.ColumnRule => 3
     Property.BorderImage => 5
+    Property.Offset => 5
     _ => 1
   }
 }
@@ -4566,6 +4621,18 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       let longhands = [
         Property.ContainIntrinsicWidth,
         Property.ContainIntrinsicHeight,
+      ]
+      if index < longhands.length {
+        return longhands[index]
+      }
+    }
+    Property.Offset => {
+      let longhands = [
+        Property.OffsetPosition,
+        Property.OffsetPath,
+        Property.OffsetDistance,
+        Property.OffsetRotate,
+        Property.OffsetAnchor,
       ]
       if index < longhands.length {
         return longhands[index]
@@ -5764,6 +5831,21 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 371 {
         return Property.PositionTryFallbacks
+      }
+      if index == 372 {
+        return Property.OffsetPath
+      }
+      if index == 373 {
+        return Property.OffsetDistance
+      }
+      if index == 374 {
+        return Property.OffsetRotate
+      }
+      if index == 375 {
+        return Property.OffsetAnchor
+      }
+      if index == 376 {
+        return Property.OffsetPosition
       }
     }
     Property.WhiteSpace => {
