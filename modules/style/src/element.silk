@@ -1,6 +1,7 @@
 //! Selector matching borrows a host tree instead of duplicating its nodes.
 import silk.core.option { Option }
 import media_features { Environment }
+import variables { ScopeId }
 import silk.num.usize
 import tokens { CssError, CssErrorKind }
 import tokens
@@ -90,6 +91,13 @@ pub interface ElementTree {
   /// viewport metrics remain those of the host. Static hosts may expose no containers.
   fn container(self: &Self, node: usize, name: &[u8], axes: u32, pseudo: PseudoTarget) -> Option<Environment> {
     return Option<Environment>.None
+  }
+
+  /// The variable scope of the style container a `style()` container query asks: the
+  /// nearest ancestor, or the nearest one with container name `name` when nonempty. Every
+  /// element is a style container. Hosts without variable scopes return none.
+  fn styleContainer(self: &Self, node: usize, name: &[u8], pseudo: PseudoTarget) -> Option<ScopeId> {
+    return Option<ScopeId>.None
   }
 
   /// States applicable to this element, including host-computed focus-within.
