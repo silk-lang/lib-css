@@ -107,6 +107,10 @@ effect fn phase(label: string<'static>, nanoseconds: i64, scale: f64, entered: u
   if entered != 0 { run Format.format("{entered:>10} times", &.{ entered: entered }) }
   run Writer.writeString("\n")
 }
+fn quarter(values: &[usize; 16], from: usize) -> [usize; 4] {
+  return [values[from], values[from + 1], values[from + 2], values[from + 3]]
+}
+
 effect fn buckets(label: string<'static>, names: string<'static>, values: &[usize]) ! WriterError ? &mut Writer {
   run Format.format("  {label:<28}", &.{ label: label })
   let mut index: usize = 0
@@ -222,6 +226,11 @@ effect fn measure(name: string<'static>, tree: &Tree, viewport: OptionalSize, ru
   run buckets("computed by width", "known, max, min, available", &census.byWidth)
   run buckets("computed by height", "known, max, min, available", &census.byHeight)
   run count("computed twice", census.repeated)
+  run count("computed with an earlier size", census.sameAnswer)
+  run buckets("  after a known width", "known, max, min, available", &quarter(&census.sameAnswerBy, 0))
+  run buckets("  after max-content", "known, max, min, available", &quarter(&census.sameAnswerBy, 4))
+  run buckets("  after min-content", "known, max, min, available", &quarter(&census.sameAnswerBy, 8))
+  run buckets("  after an available width", "known, max, min, available", &quarter(&census.sameAnswerBy, 12))
   run count("allocation requests", counting.requests)
   run count("bytes requested", counting.bytes)
   run count("requests of 1 MiB or more", counting.larges)
