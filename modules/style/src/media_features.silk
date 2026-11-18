@@ -148,6 +148,8 @@ enum Feature {
   DeviceAspectRatio,
   Orientation,
   Resolution,
+  // `-webkit-device-pixel-ratio` (Compat spec): resolution in dppx, as a number.
+  DevicePixelRatio,
   Color,
   ColorIndex,
   Monochrome,
@@ -285,6 +287,7 @@ fn ranged(feature: Feature) -> bool {
     Feature.AspectRatio => true
     Feature.DeviceAspectRatio => true
     Feature.Resolution => true
+    Feature.DevicePixelRatio => true
     Feature.Color => true
     Feature.ColorIndex => true
     Feature.Monochrome => true
@@ -308,7 +311,18 @@ fn name(source: &Input<'_>, start: usize, end: usize) -> Name {
     Option<TokenView>.Some { value } => {
       match &value.token.kind {
         Kind.Ident { text } => {
-          let bytes = value.text(text)
+          let mut bytes = value.text(text)
+          let webkit = bytes.length > 8 && insensitive(Slice.view<u8>(bytes, 0, 8), b"-webkit-")
+          if webkit {
+            bytes = Slice.view<u8>(bytes, 8, bytes.length - 8)
+            let ratio = b"device-pixel-ratio"
+            let minimum = bytes.length > 4 && insensitive(Slice.view<u8>(bytes, 0, 4), b"min-")
+            let maximum = bytes.length > 4 && insensitive(Slice.view<u8>(bytes, 0, 4), b"max-")
+            let rest = if minimum || maximum { Slice.view<u8>(bytes, 4, bytes.length - 4) } else { bytes }
+            if !insensitive(rest, ratio) { return unknown }
+            let relation = if minimum { Relation.GreaterEqual } else if maximum { Relation.LessEqual } else { Relation.Equal }
+            return Name { feature: Feature.DevicePixelRatio, relation: relation, prefixed: minimum || maximum }
+          }
           if bytes.length > 4 {
             let prefix = Slice.view<u8>(bytes, 0, 4)
             let minimum = insensitive(prefix, b"min-")
@@ -405,6 +419,7 @@ fn actual(feature: Feature, environment: &Environment) -> f64 {
     } else {
       environment.resolutionDppx
     }
+    Feature.DevicePixelRatio => if environment.infiniteResolution { f64.INFINITY } else { environment.resolutionDppx }
     Feature.Color => u32.toF64(environment.colorBits)
     Feature.ColorIndex => u32.toF64(environment.colorIndex)
     Feature.Monochrome => u32.toF64(environment.monochromeBits)
@@ -578,7 +593,7 @@ effect fn numeric(
     || feature == Feature.Grid
   let expected = if feature == Feature.Resolution {
     Dimension.Resolution
-  } else if ratio || integer {
+  } else if ratio || integer || feature == Feature.DevicePixelRatio {
     Dimension.Number
   } else {
     Dimension.Length
