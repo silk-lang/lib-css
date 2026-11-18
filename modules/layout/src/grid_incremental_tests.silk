@@ -32,7 +32,7 @@ import text {
   TextShapeRequest,
   TextRun
 }
-import grid_style { GridTemplate, GridTrack, GridBreadth, GridError, GridRepeat, GridRepeatKind, GridLine, GridLineKind }
+import grid_style { GridTemplate, GridTrack, GridBreadth, GridError, GridRepeat, GridRepeatKind, GridLine, GridLineKind, GridMasonry }
 import tree { Tree, LayoutTree, NodeId, InvalidNode }
 import engine { compute }
 
@@ -578,4 +578,108 @@ test effect fn stretchedItemKeepsItsMinimumInAFlexibleColumn()
   ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | GridError | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run flexibleColumnMinimum() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+fn lanesStyle(inside: DisplayInside) -> Style {
+  let mut result = Style.make()
+  result.display = Display.Box { outside: DisplayOutside.Block, inside: inside }
+  return move result
+}
+
+fn tall(height: f32) -> Style {
+  let mut result = Style.make()
+  result.height = SizeValue.px(height)
+  return move result
+}
+
+// Grid 3 §4.4 with TextHost's 10px font as the 1em tie tolerance: two 100px lanes, items
+// 40, 10, 30 and 20 tall. An edit to the first item's height moves the later ones.
+effect fn lanesEdit(inside: DisplayInside, masonry: GridMasonry)
+  ! OutOfMemoryError
+    | TextError
+    | FragmentationError
+    | InvalidNode
+    | GridError
+    | AssertionError<'static>
+  ? &mut Allocator {
+  let mut tree = run Tree.make(lanesStyle(inside))
+  let root = tree.root()
+  let mut template = GridTemplate.make()
+  run template.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(100.0)))
+  run template.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(100.0)))
+  template.masonry = masonry
+  run tree.setGrid(root, move template)
+  let first = run tree.append(root, tall(40.0))
+  let second = run tree.append(root, tall(10.0))
+  let third = run tree.append(root, tall(30.0))
+  let fourth = run tree.append(root, tall(20.0))
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, root, 0.0, 0.0, 300.0, 60.0)
+  run expectBounds(&mut output, first, 0.0, 0.0, 100.0, 40.0)
+  run expectBounds(&mut output, second, 100.0, 0.0, 100.0, 10.0)
+  run expectBounds(&mut output, third, 100.0, 10.0, 100.0, 30.0)
+  run expectBounds(&mut output, fourth, 0.0, 40.0, 100.0, 20.0)
+  run tree.setStyle(first, tall(5.0))
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, root, 0.0, 0.0, 300.0, 35.0)
+  run expectBounds(&mut output, first, 0.0, 0.0, 100.0, 5.0)
+  run expectBounds(&mut output, second, 100.0, 0.0, 100.0, 10.0)
+  run expectBounds(&mut output, third, 0.0, 5.0, 100.0, 30.0)
+  run expectBounds(&mut output, fourth, 100.0, 10.0, 100.0, 20.0)
+}
+
+test effect fn gridLanesRestackAfterAnItemEdit()
+  ! OutOfMemoryError
+    | TextError
+    | FragmentationError
+    | InvalidNode
+    | GridError
+    | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run lanesEdit(DisplayInside.GridLanes, GridMasonry.None) |> Effect.provideMut<Allocator>(&mut allocator)
+  // The older spelling, `display: grid; grid-template-rows: masonry`.
+  run lanesEdit(DisplayInside.Grid, GridMasonry.Rows) |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// Switching a grid to grid lanes, and back, lays its items out again.
+effect fn lanesSwitch()
+  ! OutOfMemoryError
+    | TextError
+    | FragmentationError
+    | InvalidNode
+    | GridError
+    | AssertionError<'static>
+  ? &mut Allocator {
+  let mut tree = run Tree.make(gridStyle())
+  let root = tree.root()
+  let mut template = GridTemplate.make()
+  run template.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(100.0)))
+  run template.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(100.0)))
+  run tree.setGrid(root, move template)
+  drop run tree.append(root, tall(40.0))
+  drop run tree.append(root, tall(10.0))
+  let third = run tree.append(root, tall(30.0))
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, third, 0.0, 40.0, 100.0, 30.0)
+  run tree.setStyle(root, lanesStyle(DisplayInside.GridLanes))
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, third, 100.0, 10.0, 100.0, 30.0)
+  run tree.setStyle(root, gridStyle())
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, third, 0.0, 40.0, 100.0, 30.0)
+}
+
+test effect fn gridLanesFollowDisplaySwitches()
+  ! OutOfMemoryError
+    | TextError
+    | FragmentationError
+    | InvalidNode
+    | GridError
+    | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run lanesSwitch() |> Effect.provideMut<Allocator>(&mut allocator)
 }

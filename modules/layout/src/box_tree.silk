@@ -370,7 +370,7 @@ impl<'tree> BoxTree<'tree> {
     let mut kind = BoxKind.Block
     if !replaced {
       if display.insideIs(DisplayInside.Flex) { kind = BoxKind.Flex }
-      if display.insideIs(DisplayInside.Grid) { kind = BoxKind.Grid }
+      if display.isGrid() { kind = BoxKind.Grid }
       if inlineLevel && display.insideIs(DisplayInside.Flow) && !differentWritingMode { kind = BoxKind.Inline }
       if display.insideIs(DisplayInside.Table) { kind = BoxKind.Table }
       if tablePart && !display.insideIs(DisplayInside.TableCell) && !display.insideIs(DisplayInside.TableCaption) && !display.insideIs(DisplayInside.TableColumn) { kind = BoxKind.TablePart }

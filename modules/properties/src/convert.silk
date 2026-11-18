@@ -580,6 +580,8 @@ pub fn display(value: &Value) -> Option<Display> {
       Keyword.InlineFlex => box(DisplayOutside.Inline, DisplayInside.Flex)
       Keyword.Grid => box(DisplayOutside.Block, DisplayInside.Grid)
       Keyword.InlineGrid => box(DisplayOutside.Inline, DisplayInside.Grid)
+      Keyword.GridLanes => box(DisplayOutside.Block, DisplayInside.GridLanes)
+      Keyword.InlineGridLanes => box(DisplayOutside.Inline, DisplayInside.GridLanes)
       Keyword.Table => box(DisplayOutside.Block, DisplayInside.Table)
       Keyword.InlineTable => box(DisplayOutside.Inline, DisplayInside.Table)
       Keyword.TableRowGroup => box(DisplayOutside.Block, DisplayInside.TableRowGroup)
@@ -606,6 +608,7 @@ pub fn displayKeyword(value: Display) -> Keyword {
       DisplayInside.FlowRoot => if outside == DisplayOutside.Block { Keyword.FlowRoot } else { Keyword.InlineBlock }
       DisplayInside.Flex => if outside == DisplayOutside.Block { Keyword.Flex } else { Keyword.InlineFlex }
       DisplayInside.Grid => if outside == DisplayOutside.Block { Keyword.Grid } else { Keyword.InlineGrid }
+      DisplayInside.GridLanes => if outside == DisplayOutside.Block { Keyword.GridLanes } else { Keyword.InlineGridLanes }
       DisplayInside.Table => if outside == DisplayOutside.Block { Keyword.Table } else { Keyword.InlineTable }
       DisplayInside.TableRowGroup => Keyword.TableRowGroup
       DisplayInside.TableHeaderGroup => Keyword.TableHeaderGroup

@@ -1,0 +1,67 @@
+{
+  "name": "grid-lanes-rows-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "With only grid-template-rows, lanes are rows and items stack in the inline axis by their widths.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "height": 200,
+          "gridTemplateRows": [
+            {
+              "fr": 1
+            },
+            {
+              "fr": 1
+            }
+          ],
+          "columnGap": 5,
+          "rowGap": 10
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "width": 50
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "width": 30
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "width": 80
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "width": 20
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "width": 40
+        }
+      }
+    ]
+  }
+}
