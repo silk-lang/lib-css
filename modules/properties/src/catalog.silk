@@ -453,9 +453,10 @@ pub enum(u16) Property {
   PositionArea,
   PositionTryFallbacks,
   Zoom,
+  FontSmooth,
 }
 
-pub const COUNT: usize = 450
+pub const COUNT: usize = 451
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -909,6 +910,7 @@ pub fn all() -> [Property; COUNT] {
     Property.PositionArea,
     Property.PositionTryFallbacks,
     Property.Zoom,
+    Property.FontSmooth,
   ]
 }
 
@@ -1364,6 +1366,7 @@ pub fn index(property: Property) -> usize {
     Property.PositionArea => 447
     Property.PositionTryFallbacks => 448
     Property.Zoom => 449
+    Property.FontSmooth => 450
   }
 }
 
@@ -1819,6 +1822,7 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.PositionArea => b"position-area"
     Property.PositionTryFallbacks => b"position-try-fallbacks"
     Property.Zoom => b"zoom"
+    Property.FontSmooth => b"font-smooth"
   }
 }
 
@@ -2179,6 +2183,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     11 => {
+      if first == 102 && insensitive(name, b"font-smooth") {
+        return Option<Property>.some(Property.FontSmooth)
+      }
       if first == 97 && insensitive(name, b"anchor-name") {
         return Option<Property>.some(Property.AnchorName)
       }
@@ -3077,6 +3084,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     22 => {
+      if first == 45 && insensitive(name, b"-webkit-font-smoothing") {
+        return Option<Property>.some(Property.FontSmooth)
+      }
       if first == 112 && insensitive(name, b"position-try-fallbacks") {
         return Option<Property>.some(Property.PositionTryFallbacks)
       }
@@ -3109,6 +3119,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     23 => {
+      if first == 45 && insensitive(name, b"-moz-osx-font-smoothing") {
+        return Option<Property>.some(Property.FontSmooth)
+      }
       if first == 45 && insensitive(name, b"-webkit-background-clip") {
         return Option<Property>.some(Property.BackgroundClip)
       }
@@ -3720,6 +3733,7 @@ pub fn inherited(property: Property) -> bool {
     Property.PositionArea => false
     Property.PositionTryFallbacks => false
     Property.Zoom => false
+    Property.FontSmooth => true
   }
 }
 
@@ -4177,6 +4191,7 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.PositionArea => b"none"
     Property.PositionTryFallbacks => b"none"
     Property.Zoom => b"1"
+    Property.FontSmooth => b"auto"
   }
 }
 
@@ -4211,7 +4226,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 373
+    Property.All => 374
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5776,6 +5791,9 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 372 {
         return Property.Zoom
+      }
+      if index == 373 {
+        return Property.FontSmooth
       }
     }
     Property.WhiteSpace => {
