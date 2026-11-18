@@ -3,7 +3,7 @@ import silk.num.usize
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
 import style { SizeContainment, Style, Display, Dimension, SizeValue, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
-import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, absolutelyPositioned, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, absolutelyPositioned, containsAbsolute, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
 import flex { layoutFlex, emptyFlexSize, FlexScratch }
 import grid { layoutGrid, layoutEmptyGrid }
@@ -2134,7 +2134,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
   exportScrollBaselines(style, node.kind, &mut result)
   if input.performLayout {
     overflowGeometry(nodes, &output, id, &sizing.box, &mut result)
-    if node.kind == BoxKind.Grid && node.measurement != Measurement.Content && !style.replaced && style.position != Position.Static {
+    if node.kind == BoxKind.Grid && node.measurement != Measurement.Content && !style.replaced && containsAbsolute(style) {
       output.cache.gridGeometry.finish(id, result.contentRect(), result.paddingRect(), result.scrollableOverflow)
     }
   }
@@ -2187,19 +2187,27 @@ effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since:
 // previous output and its ancestors keep their results, so the compute
 // reuses them whole; otherwise its ancestors are cleared as usual.
 const CUTOFF_BOXES: usize = 64
+// A layout-contained box is a relayout boundary its author asked for (CSS
+// Containment 2 §3.2): nothing inside reaches out, so its cutoff seldom fails.
+const CONTAINED_CUTOFF_BOXES: usize = 4096
 
-// Whether the subtree has at most CUTOFF_BOXES boxes, all static, unscrolled,
+fn cutoffLimit(style: &Style) -> usize { return if style.layoutContainment { CONTAINED_CUTOFF_BOXES } else { CUTOFF_BOXES } }
+
+// Whether the subtree has at most cutoffLimit boxes, all static, unscrolled,
 // unfloated and in one piece, adding their count to `seen`.
 fn staticSubtree(nodes: &BoxTree<'_>, id: usize, seen: &mut usize) -> bool {
+  return staticWithin(nodes, id, &mut seen, cutoffLimit(nodes.style(id)))
+}
+fn staticWithin(nodes: &BoxTree<'_>, id: usize, seen: &mut usize, limit: usize) -> bool {
   seen.* = seen.* + 1
-  if seen.* > CUTOFF_BOXES { return false }
+  if seen.* > limit { return false }
   let node = nodes.node(id)
   let style = nodes.style(id)
   if style.position != Position.Static || style.float != Float.None || style.overflowX != Overflow.Visible || style.overflowY != Overflow.Visible { return false }
   if node.nextContinuation != NO_NODE || node.previousContinuation != NO_NODE || node.interruptionFirst != NO_NODE { return false }
   let mut child = node.firstChild
   while child != NO_NODE {
-    if !staticSubtree(nodes, child, &mut seen) { return false }
+    if !staticWithin(nodes, child, &mut seen, limit) { return false }
     child = nodes.node(child).nextSibling
   }
   return true
@@ -2246,9 +2254,10 @@ fn staticBelow(nodes: &BoxTree<'_>, id: usize, seen: &mut usize) -> bool {
   let node = nodes.node(id)
   let style = nodes.style(id)
   if style.float != Float.None || style.overflowX != Overflow.Visible || style.overflowY != Overflow.Visible || node.interruptionFirst != NO_NODE { return false }
+  let limit = cutoffLimit(style)
   let mut child = node.firstChild
   while child != NO_NODE {
-    if !staticSubtree(nodes, child, &mut seen) { return false }
+    if !staticWithin(nodes, child, &mut seen, limit) { return false }
     child = nodes.node(child).nextSibling
   }
   return true
@@ -2439,6 +2448,7 @@ fn cutoffAncestor(nodes: &BoxTree<'_>, changes: &[usize], boxes: &[usize], id: u
 }
 // Whether the width and height take no part of the box's content.
 fn fixedSize(style: &Style) -> bool {
+  if style.sizeContainment == SizeContainment.Size { return true }
   return (style.width.kind == DimensionKind.Length || style.width.kind == DimensionKind.Percent)
     && (style.height.kind == DimensionKind.Length || style.height.kind == DimensionKind.Percent)
 }
