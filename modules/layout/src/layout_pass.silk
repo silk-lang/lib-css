@@ -601,8 +601,16 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
       run self.selectFrameScrollbars(nodes)
       return
     }
-    let mut id: usize = 0
-    while id < nodes.boxes.length() {
+    // Only a box whose overflow is auto on an axis can gain a scrollbar: the
+    // facts list those, when they were made for these boxes.
+    let listed = self.facts.scrollersFor == nodes.boxes.length()
+    let mut count = nodes.boxes.length()
+    if listed { count = self.facts.scrollers.length() }
+    let mut at: usize = 0
+    while at < count {
+      let mut id = at
+      if listed { id = self.facts.scrollers.get(at) }
+      at = at + 1
       let layout = self.boxes[id]
       let style = nodes.style(id)
       if layout.hasBox() && layout.acceptsScrollbars() && style.scrollbarWidth != ScrollbarWidth.None {
@@ -618,9 +626,9 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
           self.boxes[id].verticalScrollbar = vertical
         }
       }
-      id = id + 1
     }
     if !self.needsRelayout { return }
+    let mut id: usize = 0
     if self.selections.length() == 0 {
       run self.selections.reserveExact(nodes.boxes.length())
       id = 0
