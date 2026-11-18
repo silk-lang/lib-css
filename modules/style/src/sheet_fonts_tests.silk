@@ -55,7 +55,7 @@ test effect fn compiledFontFacesRoundTripWithoutDescriptorParsing() ! CompileErr
 test effect fn compiledFontFacesValidateNumbersAndReportUnsupportedDescriptors() ! CompileError | CssError | OutOfMemoryError | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut sheet = run compile.compile(b"@font-face{font-family:Brand;src:url(a.ttf);font-weight:calc(300 + 100);size-adjust:110%;unknown-face-descriptor:1;font-display:block}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
-  run Testing.expect(sheet.diagnostics.length() == 4 && sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Unsupported, "unsupported descriptors are counted rather than silently applied")
+  run Testing.expect(sheet.diagnostics.length() == 3 && sheet.diagnostics.asSlice()[0].kind == DiagnosticKind.Unsupported, "unsupported descriptors are counted rather than silently applied; font-display is supported")
   let faces = sheet.fontFaces.asMutSlice()
   faces[0].rule.weight = Option<Range>.some(Range { min: f64.INFINITY, max: f64.INFINITY })
   let invalid = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
@@ -88,4 +88,16 @@ test effect fn compiledFontFaceDescriptorsKeepKeywordsEscapesAndAlternatives() !
   run Testing.expect(match &rule.sources.asSlice()[1] { FaceSource.Url { url, format, tech } => String.view(&url) == "a b.woff2" && equal(format.asSlice(),b"WOFF2") && equal(tech.asSlice(),b"variations,color-COLRv1") _ => false }, "source hints and relative URL text survive")
   let auto = &decoded.fontFaces.asSlice()[1].rule
   run Testing.expect(auto.weight.isNone() && auto.width.isNone() && auto.style.isNone(), "auto descriptors stay unspecified")
+}
+
+test effect fn paletteAndFeatureValueRulesAreKeptWhole() ! CompileError | CssError | DecodeError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut sheet = run compile.compile(b"@font-palette-values --warm{font-family:Bixa;base-palette:1;override-colors:0 red}@FONT-FEATURE-VALUES Font One{@styleset{nice:12}}@media(width>1px){@font-palette-values --nested{base-palette:2}}", &Options.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.metadata.length() == 2 && sheet.diagnostics.length() == 1, "top-level rules are kept, a conditioned one is reported")
+  run Testing.expect(equal(sheet.metadata.asSlice()[0].name.asSlice(), b"font-palette-values") && equal(sheet.metadata.asSlice()[1].name.asSlice(), b"font-feature-values"), "names are lowercase")
+  let bytes = run sheet.encode() |> Effect.provideMut<Allocator>(&mut allocator)
+  let decoded = run Sheet.decode(bytes.asSlice(), &Limits.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let rule = &decoded.metadata.asSlice()[0]
+  let buffer = &decoded.buffers.asSlice()[rule.buffer]
+  run Testing.expect(decoded.metadata.length() == 2 && rule.body.end > rule.body.start && buffer.tokens.length() >= rule.body.end, "their tokens survive a round trip")
 }
