@@ -1,0 +1,58 @@
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.mem.layout { Layout as Storage }
+import silk.mem.raw_buffer { RawBuffer }
+import silk.core.option { Option }
+import silk.num.usize
+import geometry { Layout }
+
+// The box layouts for laying out a changed subtree alone (see the early
+// cutoff in compute): a layout for every box of the tree, of which a cutoff
+// reads and writes only its subtree's, after resetting them.
+//
+// The storage is asked for zeroed. Under the system allocator a large zeroed
+// block is fresh pages that cost nothing until written, so the table costs
+// the pages of the subtrees laid out in it; a list filled with Layout.zero()
+// held every page for as long as the tree lived, about 230 bytes a box.
+// Zero bytes are a valid Layout (every field is a number or a flag), though
+// not Layout.zero(), whose scrollbar metrics are overlay: a cutoff resets
+// what it uses.
+pub struct ScratchBoxes { storage: Option<Intrinsic.RawBuffer<Layout>> }
+impl ScratchBoxes {
+  pub fn make() -> ScratchBoxes { return ScratchBoxes { storage: Option<Intrinsic.RawBuffer<Layout>>.None } }
+  pub fn length(self: &Self) -> usize {
+    return match &self.storage {
+      Option<Intrinsic.RawBuffer<Layout>>.Some { value } => RawBuffer.count<Layout>(&value)
+      Option<Intrinsic.RawBuffer<Layout>>.None => 0
+    }
+  }
+  // Bytes of storage asked for, written or not.
+  pub fn storageBytes(self: &Self) -> usize { return self.length() * Intrinsic.layoutOf<Layout>().bytes }
+  // Makes room for `count` boxes. A table that holds fewer is replaced by a
+  // new one with an eighth to spare, so a tree that grows a box at a time
+  // asks for storage rarely; what the old one held is dropped.
+  pub effect fn reserve(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {
+    if self.length() >= count { return }
+    let room = count + count / 8
+    let each = Intrinsic.layoutOf<Layout>()
+    let allocation = run Allocator.allocateZeroed(Storage { bytes: room * each.bytes, alignment: each.alignment })
+    // The allocation holds `room` layouts, and zero bytes are a Layout.
+    self.storage = Option<Intrinsic.RawBuffer<Layout>>.Some { value: unsafe RawBuffer.from<Layout>(move allocation, room) }
+  }
+  pub fn asSlice(self: &Self) -> &[Layout] {
+    return match &self.storage {
+      // The view covers the whole buffer, which started zeroed.
+      Option<Intrinsic.RawBuffer<Layout>>.Some { value } => unsafe RawBuffer.view<Layout>(&value, 0, RawBuffer.count<Layout>(&value))
+      Option<Intrinsic.RawBuffer<Layout>>.None => &[]
+    }
+  }
+  // The table must hold storage (see reserve).
+  pub fn asMutSlice(self: &mut Self) -> &mut [Layout] {
+    return match &mut self.storage {
+      Option<Intrinsic.RawBuffer<Layout>>.Some { value } => {
+        let count = RawBuffer.count<Layout>(&value)
+        unsafe RawBuffer.viewMut<Layout>(&mut value, 0, count)
+      }
+      Option<Intrinsic.RawBuffer<Layout>>.None => Intrinsic.trap("css-layout: the scratch boxes hold no storage; reserve it first")
+    }
+  }
+}

@@ -11,6 +11,7 @@ import exclusions { ExclusionArea }
 import silk.core.option { Option }
 import box_tree { BoxTree, BoxNode }
 import fragments { FragmentArena, FragmentKind, TextFragmentKind }
+import scratch_boxes { ScratchBoxes }
 import layout_cache { LayoutCache, Snapshot, BoxFacts, BoxWrites }
 import flex { FlexScratch }
 import inline_layout { InlineScratch }
@@ -770,7 +771,7 @@ pub struct LayoutTree {
   pub viewportOverflow: Rect,
   // Spare storage for laying out a changed subtree alone (see the early
   // cutoff in compute).
-  pub scratchBoxes: List<Layout>, pub scratchFragments: FragmentArena,
+  pub scratchBoxes: ScratchBoxes, pub scratchFragments: FragmentArena,
   // Boxes whose early cutoff failed lately, tried again only after a few
   // computes (see the early cutoff in compute).
   pub cutoffMisses: List<CutoffMiss>,
@@ -792,7 +793,7 @@ impl LayoutTree {
       anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
       firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), keptColumnSets: false,
       fragments: FragmentArena.make(), viewportOverflow: Rect.zero(),
-      scratchBoxes: List<Layout>.make(), scratchFragments: FragmentArena.make(), cutoffMisses: List<CutoffMiss>.make(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), exclusions: List<ExclusionArea>.make(),
+      scratchBoxes: ScratchBoxes.make(), scratchFragments: FragmentArena.make(), cutoffMisses: List<CutoffMiss>.make(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), exclusions: List<ExclusionArea>.make(),
     }
   }
   pub effect fn prepare(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {
