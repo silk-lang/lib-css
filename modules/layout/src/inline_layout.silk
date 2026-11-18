@@ -1858,6 +1858,20 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
     }
   }
   let mut next: usize = 0
+  // What the last text run's box and font gave, which the next run of the
+  // same box in the same font has too.
+  let mut sameId = NO_NODE
+  let mut sameScope = NO_NODE
+  let mut sameKey: usize = 0
+  let mut fontId: usize = 0
+  let mut boxId: usize = 0
+  let mut runBefore: f32 = 0.0
+  let mut runAfter: f32 = 0.0
+  let mut runOffset: f32 = 0.0
+  // The analysis boundary after `boundaryFrom`, which every cursor from
+  // there to short of it shares.
+  let mut boundaryFrom = TextCursor { unit: 0, offset: 0 }
+  let mut boundary = boundaryFrom
   unit = start.unit
   while unit < end.unit || (unit == end.unit && end.offset != 0) {
     let token = &context.tokens[unit]
@@ -1885,33 +1899,49 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
           if (token.kind == TextTokenKind.Tab || token.kind == TextTokenKind.SegmentBreak) && advance != 0.0 {
             fail TextError { source: token.source, message: "Text service assigned glyph advance to an engine-positioned whitespace token" }
           }
-          drop run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: low })
-          let runEnd = run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: high })
-          if analysis.boundaryAfter(TextCursor { unit: unit, offset: low }).before(runEnd) {
+          // A token's start and end are cursors as they are; `checked` tells
+          // the others.
+          let runStart = TextCursor { unit: unit, offset: low }
+          if low != 0 { drop run TextFlow.checked(context.tokens, runStart) }
+          let mut runEnd = TextCursor { unit: unit + 1, offset: 0 }
+          if high != TextFlow.length(token) { runEnd = run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: high }) }
+          if runStart.before(boundaryFrom) || !runStart.before(boundary) {
+            boundaryFrom = runStart
+            boundary = analysis.boundaryAfter(runStart)
+          }
+          if boundary.before(runEnd) {
             fail TextError { source: token.source, message: "Text service merged across a paragraph analysis boundary" }
           }
-          let fontId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, fontKey)
-          let style = nodes.style(base.id)
-          let mut boxId = fontId
-          if style.fontKey != fontKey { boxId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, style.fontKey) }
-          let font = &fonts.asSlice()[fontId].font
-          let parent = &scopes[base.scope]
-          let parentStyle = nodes.style(parent.id)
-          let boxFont = &fonts.asSlice()[boxId].font
+          if base.id != sameId || base.scope != sameScope || fontKey != sameKey {
+            fontId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, fontKey)
+            let style = nodes.style(base.id)
+            boxId = fontId
+            if style.fontKey != fontKey { boxId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, style.fontKey) }
+            let font = &fonts.asSlice()[fontId].font
+            let parent = &scopes[base.scope]
+            let parentStyle = nodes.style(parent.id)
+            let boxFont = &fonts.asSlice()[boxId].font
+            // The primary font sets the box; with line-height: normal a fallback font used
+            // for the run can only grow it (CSS Inline 3 §4.1 and Blink's used-font metrics).
+            runBefore = boxFont.before
+            runAfter = boxFont.after
+            let normalHeight = match style.lineHeight {
+              LineHeight.Normal => true
+              _ => false
+            }
+            if boxId != fontId && normalHeight {
+              runBefore = max(runBefore, font.before)
+              runAfter = max(runAfter, font.after)
+            }
+            runOffset = parent.offset + fontAlignmentOffset(&parent.font, style, parentStyle) - fontAlignmentOffset(boxFont, style, parentStyle)
+            sameId = base.id
+            sameScope = base.scope
+            sameKey = fontKey
+          }
           item.advance = advance
-          // The primary font sets the box; with line-height: normal a fallback font used
-          // for the run can only grow it (CSS Inline 3 §4.1 and Blink's used-font metrics).
-          item.before = boxFont.before
-          item.after = boxFont.after
-          let normalHeight = match style.lineHeight {
-            LineHeight.Normal => true
-            _ => false
-          }
-          if boxId != fontId && normalHeight {
-            item.before = max(item.before, font.before)
-            item.after = max(item.after, font.after)
-          }
-          item.offset = parent.offset + fontAlignmentOffset(&parent.font, style, parentStyle) - fontAlignmentOffset(boxFont, style, parentStyle)
+          item.before = runBefore
+          item.after = runAfter
+          item.offset = runOffset
           item.level = bidiLevel
           item.start = TextCursor { unit: unit, offset: low }
           item.leaf = result.texts.length()
