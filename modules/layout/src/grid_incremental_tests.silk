@@ -218,6 +218,15 @@ effect fn fixedAreaTextEdit()
   run expectBounds(&mut output, item, 0.0, 0.0, 70.0, 30.0)
   run expectBounds(&mut output, text, 0.0, 0.0, 10.0, 10.0)
   run expectBounds(&mut output, sibling, 80.0, 0.0, 70.0, 30.0)
+  // A host's ::first-letter takes the leading byte: layout reads the rest, at its own offsets.
+  run tree.setTextStart(text, 1)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, text, 0.0, 0.0, 5.0, 10.0)
+  let texts = output.fragments.texts.asSlice()
+  run Testing.expect(texts.length != 0 && texts[texts.length - 1].sourceStart == 1 && texts[texts.length - 1].sourceEnd == 2, "the text after its start keeps the text's offsets")
+  run tree.setText(text, run String.copy("abc"))
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, text, 0.0, 0.0, 15.0, 10.0)
 }
 
 test effect fn gridTextEditKeepsUnchangedAreaAndAncestors()
@@ -682,4 +691,28 @@ test effect fn gridLanesFollowDisplaySwitches()
     | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run lanesSwitch() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn startAfterInline()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static>
+  ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut inlineStyle = Style.make()
+  inlineStyle.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flow }
+  let letter = run tree.append(root, move inlineStyle)
+  let first = run tree.appendText(letter, run String.copy("a"))
+  let text = run tree.appendText(root, run String.copy("abcd"))
+  run tree.setTextStart(text, 1)
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, first, 0.0, 0.0, 5.0, 10.0)
+  run expectBounds(&mut output, text, 5.0, 0.0, 15.0, 10.0)
+}
+
+test effect fn textStartAfterAnInlineBox()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run startAfterInline() |> Effect.provideMut<Allocator>(&mut allocator)
 }

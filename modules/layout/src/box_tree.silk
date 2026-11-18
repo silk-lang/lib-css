@@ -345,7 +345,7 @@ impl<'tree> BoxTree<'tree> {
     if self.sources[source].isText() {
       if itemParent(self.node(flow.container).kind) {
         run flow.flexText.append(source)
-        match self.sources[source].text() {
+        match self.sources[source].laidText() {
           Option<string>.Some { value } => {
             if !documentWhitespace(value) { flow.flexTextVisible = true }
           }
@@ -549,7 +549,7 @@ impl<'tree> BoxTree<'tree> {
   }
   fn blankText(self: &Self, source: usize) -> bool {
     if !self.sources[source].isText() { return false }
-    return match self.sources[source].text() {
+    return match self.sources[source].laidText() {
       Option<string>.Some { value } => documentWhitespace(value)
       Option<string>.None => true
     }

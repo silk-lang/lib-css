@@ -1603,15 +1603,17 @@ effect fn tokensFor<'a>(nodes: &BoxTree<'a>, items: &[Item], scopes: &[Scope], r
       ItemKind.Close => TextTokenKind.Close
     }
     let mut value: string<'a> = ""
+    let mut start: usize = 0
     if item.kind == ItemKind.Text {
       let source: &'a Node = &nodes.sources[node.source]
-      value = match move Node.text<'a>(source) {
+      start = source.textStart
+      value = match move Node.laidText<'a>(source) {
         Option<string<'a>>.Some { value: content } => content
         Option<string<'a>>.None => { fail TextError { source: node.source, message: "Generated text box has no source text" } }
       }
     }
     let barrier = shapingBarrier(nodes, &item, scopes)
-    run result.append(TextToken { kind: kind, text: value, source: node.source, sourceStart: 0, sourceEnd: String.byteLength(value), fontKey: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: style.unicodeBidi, replacedInline: inlineReplaced(style), whiteSpaceCollapse: style.whiteSpaceCollapse, textJustify: style.textJustify, shapingBarrier: barrier })
+    run result.append(TextToken { kind: kind, text: value, source: node.source, sourceStart: start, sourceEnd: start + String.byteLength(value), fontKey: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: style.unicodeBidi, replacedInline: inlineReplaced(style), whiteSpaceCollapse: style.whiteSpaceCollapse, textJustify: style.textJustify, shapingBarrier: barrier })
     index = index + 1
   }
 }
