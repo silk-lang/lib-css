@@ -266,11 +266,16 @@ effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
         let close = itemEnd(css, end)
         let mut stop = end + 1
         let mut quote: u8 = 0
-        while stop < close && (quote != 0 || css[stop] != 41) {
+        let mut depth: usize = 0
+        while stop < close && (quote != 0 || depth > 0 || css[stop] != 41) {
           if quote != 0 {
             if css[stop] == 92 { stop = stop + 1 } else if css[stop] == quote { quote = 0 }
           } else if css[stop] == 34 || css[stop] == 39 {
             quote = css[stop]
+          } else if css[stop] == 40 {
+            depth = depth + 1
+          } else if css[stop] == 41 {
+            depth = depth - 1
           }
           stop = stop + 1
         }
