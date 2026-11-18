@@ -132,6 +132,26 @@ impl Shift {
 
 // Whether a list's spare room is worth giving back: over a quarter of what
 // it uses and over 64 KiB.
+// The capacity a full list of `length` entries grows to, when the last box
+// it holds entries of is `reached` of `boxes`. Layout visits boxes roughly
+// in order, so once a sixteenth of them are in, what they took projects
+// what the rest will take: the list grows to that and an eighth more, and
+// at least by an eighth. Before that it doubles. A long first layout then
+// asks for its storage a few times instead of once per doubling, and ends
+// without spare room worth trimming (see trimSlack). Only a list filled
+// from empty in box order projects (`ordered`), and never past four times
+// its size.
+pub fn headedFor(length: usize, reached: usize, boxes: usize, ordered: bool) -> usize {
+  let mut doubled = length * 2
+  if doubled < 64 { doubled = 64 }
+  if !ordered || length < 1024 || reached == NO_NODE || reached >= boxes || (reached + 1) * 16 < boxes { return doubled }
+  let projected = length * boxes / (reached + 1)
+  let padded = projected + projected / 8
+  let least = length + length / 8
+  if padded < least { return least }
+  if padded > length * 4 { return length * 4 }
+  return padded
+}
 fn large(length: usize, capacity: usize, bytes: usize) -> bool {
   let spare = capacity - length
   return spare * 4 > length && spare * bytes > 64 * 1024
@@ -607,6 +627,44 @@ impl FragmentArena {
     self.lastByBox.set(box, last)
   }
 
+  // The last box with a fragment among the latest written, or NO_NODE.
+  fn reached(self: &Self) -> usize {
+    let values = self.values.asSlice()
+    let mut reached = NO_NODE
+    let mut index = self.count
+    let mut seen: usize = 0
+    while index > 0 && seen < 64 {
+      index = index - 1
+      let box = values[index].box
+      if box != NO_NODE && (reached == NO_NODE || box > reached) { reached = box }
+      seen = seen + 1
+    }
+    return reached
+  }
+  // Room for one more fragment (see headedFor).
+  @inlineAlways
+  effect fn room(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    if self.values.length() == self.values.capacity() { run self.growValues() }
+  }
+  @inlineNever
+  effect fn growValues(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    let length = self.values.length()
+    let target = headedFor(length, self.reached(), self.firstByBox.length(), !self.inPlace && !self.viewing)
+    run self.values.reserveExact(target - length)
+    let marks = self.textMarks.length()
+    if self.textMarks.capacity() < target { run self.textMarks.reserveExact(target - marks) }
+  }
+  // Room for one more text.
+  @inlineAlways
+  effect fn textRoom(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    if self.texts.length() == self.texts.capacity() { run self.growTexts() }
+  }
+  @inlineNever
+  effect fn growTexts(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    let length = self.texts.length()
+    let target = headedFor(length, self.reached(), self.firstByBox.length(), !self.inPlace && !self.viewing)
+    run self.texts.reserveExact(target - length)
+  }
   // Writes a fragment at the write position.
   effect fn put(self: &mut Self, value: Fragment) -> usize ! OutOfMemoryError ? &mut Allocator {
     let index = self.count
@@ -618,6 +676,7 @@ impl FragmentArena {
       self.values.set(index, value)
       self.textMarks.set(index, mark)
     } else {
+      run self.room()
       run self.values.append(value)
       run self.textMarks.append(mark)
     }
@@ -639,6 +698,7 @@ impl FragmentArena {
       values[index] = Fragment.make(box, source, kind)
       self.textMarks.set(index, self.textCount)
     } else {
+      run self.room()
       run self.values.append(Fragment.make(box, source, kind))
       run self.textMarks.append(self.textCount)
     }
@@ -660,6 +720,7 @@ impl FragmentArena {
       values[index] = Fragment.make(box, source, kind)
       self.textMarks.set(index, self.textCount)
     } else {
+      run self.room()
       run self.values.append(Fragment.make(box, source, kind))
       run self.textMarks.append(self.textCount)
     }
@@ -671,7 +732,10 @@ impl FragmentArena {
     let index = self.textCount
     run self.saveText(index)
     if index < self.texts.length() { self.texts.set(index, value) }
-    else { run self.texts.append(value) }
+    else {
+      run self.textRoom()
+      run self.texts.append(value)
+    }
     self.textCount = index + 1
     if self.inPlace && self.textCount > self.textsWritten { self.textsWritten = self.textCount }
     return index
@@ -758,8 +822,8 @@ impl FragmentArena {
 
   pub effect fn appendText(self: &mut Self, fragment: Fragment, text: TextFragment) -> FragmentId ! OutOfMemoryError ? &mut Allocator {
     // Reserve both arenas before publishing either half of the association.
-    run self.values.reserve(1)
-    run self.texts.reserve(1)
+    run self.room()
+    run self.textRoom()
     run self.textMarks.reserve(1)
     let mut value = fragment
     value.textData = run self.putText(text)

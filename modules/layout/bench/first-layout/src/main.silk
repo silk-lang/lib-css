@@ -24,16 +24,24 @@ import provider { FixedAdvance }
 // Counts what a compute asks of the allocator. It reports no growth in place,
 // so a list that grows asks again for its whole new storage, as it does where
 // the heap cannot extend a block.
-struct Counting { bytes: usize, requests: usize }
-effect fn allocateCounted(self: &mut Counting, layout: Layout) -> Intrinsic.Allocation ! OutOfMemoryError {
-  self.bytes = self.bytes + layout.bytes
+// `large` holds the first requests of 1 MiB or more, in order.
+struct Counting { bytes: usize, requests: usize, large: [usize; 96], larges: usize, largeBytes: usize }
+fn noteRequest(self: &mut Counting, bytes: usize) {
+  self.bytes = self.bytes + bytes
   self.requests = self.requests + 1
+  if bytes >= 1048576 {
+    if self.larges < 96 { self.large[self.larges] = bytes }
+    self.larges = self.larges + 1
+    self.largeBytes = self.largeBytes + bytes
+  }
+}
+effect fn allocateCounted(self: &mut Counting, layout: Layout) -> Intrinsic.Allocation ! OutOfMemoryError {
+  noteRequest(&mut self, layout.bytes)
   let mut system = Allocator.systemAllocatorProvider()
   return run Allocator.allocate(move layout) |> Effect.provideMut<Allocator>(&mut system)
 }
 effect fn allocateZeroedCounted(self: &mut Counting, layout: Layout) -> Intrinsic.Allocation ! OutOfMemoryError {
-  self.bytes = self.bytes + layout.bytes
-  self.requests = self.requests + 1
+  noteRequest(&mut self, layout.bytes)
   let mut system = Allocator.systemAllocatorProvider()
   return run Allocator.allocateZeroed(move layout) |> Effect.provideMut<Allocator>(&mut system)
 }
@@ -65,17 +73,18 @@ fn elapsed(start: &Instant, end: &Instant) -> i64 {
   return (SystemClock.seconds(end) - SystemClock.seconds(start)) * 1000000000 + SystemClock.nanoseconds(end) - SystemClock.nanoseconds(start)
 }
 
-struct Options { runs: usize, only: String, size: usize }
+struct Options { runs: usize, only: String, size: usize, large: bool }
 
 effect fn options() -> Options ! HostInputError | OutOfMemoryError ? &mut HostInput | &mut Allocator {
   let arguments = run HostInput.arguments()
-  let mut result = Options { runs: 9, only: String.make(), size: 0 }
+  let mut result = Options { runs: 9, only: String.make(), size: 0, large: false }
   let mut index: usize = 1
   while index + 1 < arguments.length() {
     let name = HostInput.text(arguments.asSlice()[index].asSlice()).unwrapOr("")
     let value = HostInput.text(arguments.asSlice()[index + 1].asSlice()).unwrapOr("")
     if name == "--runs" { result.runs = usize.parse(value).unwrapOr(9) }
     if name == "--document" { result.only = run String.copy(value) }
+    if name == "--large" { result.large = value == "list" }
     if name == "--size" { result.size = usize.parse(value).unwrapOr(0) }
     index = index + 2
   }
@@ -108,7 +117,7 @@ effect fn buckets(label: string<'static>, names: string<'static>, values: &[usiz
   run Format.format("  ({names})\n", &.{ names: names })
 }
 
-effect fn measure(name: string<'static>, tree: &Tree, viewport: OptionalSize, runs: usize)
+effect fn measure(name: string<'static>, tree: &Tree, viewport: OptionalSize, runs: usize, listLarge: bool)
   ! OutOfMemoryError | InvalidNode | TextError | FragmentationError | WriterError ? &mut Allocator | &mut Writer {
   let mut clock = OsMonotonicClock.make()
   let mut samples = List<i64>.make()
@@ -141,7 +150,7 @@ effect fn measure(name: string<'static>, tree: &Tree, viewport: OptionalSize, ru
   }
 
   // One more first layout under the counting allocator.
-  let mut counting = Counting { bytes: 0, requests: 0 }
+  let mut counting = Counting { bytes: 0, requests: 0, large: [0; 96], larges: 0, largeBytes: 0 }
   let mut output = LayoutTree.make()
   let mut text = FixedAdvance.make()
   let before = heapInUse()
@@ -215,6 +224,15 @@ effect fn measure(name: string<'static>, tree: &Tree, viewport: OptionalSize, ru
   run count("computed twice", census.repeated)
   run count("allocation requests", counting.requests)
   run count("bytes requested", counting.bytes)
+  run count("requests of 1 MiB or more", counting.larges)
+  run count("bytes in those", counting.largeBytes)
+  if listLarge {
+    let mut large: usize = 0
+    while large < counting.larges && large < 96 {
+      run count("    request", counting.large[large])
+      large = large + 1
+    }
+  }
   run count("bytes held after", held)
   run count("transient bytes", if counting.bytes > held { counting.bytes - held } else { 0 })
   run count("analyze calls", text.analyzeCalls)
@@ -229,15 +247,15 @@ effect fn program() ! HostInputError | OutOfMemoryError | InvalidNode | GridErro
   let only = String.view(&options.only)
   if only == "" || only == "chat" {
     let tree = run Documents.chat(if options.size == 0 { 1000 } else { options.size })
-    run measure("chat", &tree, OptionalSize.definite(960.0, 800.0), options.runs)
+    run measure("chat", &tree, OptionalSize.definite(960.0, 800.0), options.runs, options.large)
   }
   if only == "" || only == "grids" {
     let tree = run Documents.grids(if options.size == 0 { 2000 } else { options.size })
-    run measure("grids", &tree, OptionalSize.definite(960.0, 800.0), options.runs)
+    run measure("grids", &tree, OptionalSize.definite(960.0, 800.0), options.runs, options.large)
   }
   if only == "" || only == "nested" {
     let tree = run Documents.nested(if options.size == 0 { 100 } else { options.size }, 32)
-    run measure("nested", &tree, OptionalSize.definite(1600.0, 800.0), options.runs)
+    run measure("nested", &tree, OptionalSize.definite(1600.0, 800.0), options.runs, options.large)
   }
 }
 

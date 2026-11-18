@@ -7,7 +7,7 @@ import silk.num.u32
 import context { Input }
 import style { WritingMode }
 import geometry { Layout, OptionalSize, AvailableSpace, AvailableKind, Rect, Point, ResolvedEdges }
-import fragments { FragmentArena, Shift, one }
+import fragments { FragmentArena, Shift, one, headedFor }
 import bfc { FloatBox }
 import silk.collections.slice { Slice }
 import inline_prepared { KeptText, PlainLine }
@@ -942,6 +942,13 @@ impl LayoutCache {
       }
     }
     let index = self.entries.length()
+    // A first layout's probes come roughly in box order (see headedFor).
+    if index == self.entries.capacity() {
+      let target = headedFor(index, id, self.results.length(), self.emptyAtStart)
+      run self.entries.reserveExact(target - index)
+      if self.inputs.capacity() < target { run self.inputs.reserveExact(target - index) }
+      if self.layouts.capacity() < target { run self.layouts.reserveExact(target - index) }
+    }
     run self.inputs.appendSlice(one<Input>(input))
     run self.layouts.appendSlice(one<Layout>(layout))
     run self.entries.append(Entry { kind: kind, next: previous, generation: self.generation })
