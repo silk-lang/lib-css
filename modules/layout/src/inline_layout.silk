@@ -1597,29 +1597,38 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
       let size = axes.size(Size { width: max(0.0, item.advance), height: font.height })
       let baseline = extents.get(item.group).baseline + item.offset
       let point = axes.physicalPoint(Point { x: offset + x, y: baseline - font.baseline }, size, physicalSize)
-      let mut value = output.fragment(item.id, nodes.node(item.id).source, FragmentKind.Text)
-      value.parent = parent.fragment
-      value.location = Point { x: point.x - parent.origin.x, y: point.y - parent.origin.y }
-      value.size = size
-      value.contentRect = Rect { x: 0.0, y: 0.0, width: size.width, height: size.height }
-      value.paddingRect = value.contentRect
+      let location = Point { x: point.x - parent.origin.x, y: point.y - parent.origin.y }
+      let contentRect = Rect { x: 0.0, y: 0.0, width: size.width, height: size.height }
       let layoutSize = axes.size(Size { width: max(0.0, item.advance), height: font.lineHeight })
       let layoutPoint = axes.physicalPoint(Point { x: 0.0, y: font.baseline - font.before }, layoutSize, size)
-      value.layoutBounds = Rect { x: layoutPoint.x, y: layoutPoint.y, width: layoutSize.width, height: layoutSize.height }
-      value.scrollableOverflow = value.contentRect
+      let layoutBounds = Rect { x: layoutPoint.x, y: layoutPoint.y, width: layoutSize.width, height: layoutSize.height }
+      let mut fragmentainer: usize = 0
+      if output.frame != NO_NODE { fragmentainer = output.frame }
+      let slot = run output.fragments.appendTextMade(item.id, nodes.node(item.id).source, parent.fragment, fragmentainer, TextFragment { sourceStart: text.start, sourceEnd: text.end, fontKey: fonts[text.font].key, shapeKey: text.key, bidiLevel: item.level, kind: text.kind })
+      let value = &mut output.fragments.values.asMutSlice()[slot]
+      value.location = location
+      value.size = size
+      value.contentRect = contentRect
+      value.paddingRect = contentRect
+      value.layoutBounds = layoutBounds
+      value.scrollableOverflow = contentRect
       value.firstBaselines = fontBaselines(font, style.writingMode)
       value.lastBaselines = value.firstBaselines
       value.hasFirstBaseline = true
       value.hasLastBaseline = true
       value.decorationEdges = 0
-      drop run output.fragments.appendText(value, TextFragment { sourceStart: text.start, sourceEnd: text.end, fontKey: fonts[text.font].key, shapeKey: text.key, bidiLevel: item.level, kind: text.kind })
-      let mut scalar = Layout.zero()
-      scalar.location = value.location
-      scalar.size = size
-      scalar.contentSize = size
-      scalar.setOverflowGeometry(value.contentRect, value.paddingRect, value.layoutBounds)
-      scalar.scrollableOverflow = value.scrollableOverflow
-      run output.store(item.id, &scalar, false)
+      // The box keeps its last fragment's geometry: when the next item is
+      // the same box's next run, that one's store replaces this one's.
+      let replaced = !line.visual.active && output.frame == NO_NODE && index + 1 < limit && items[index + 1].kind == ItemKind.Text && items[index + 1].id == item.id
+      if !replaced {
+        let mut scalar = Layout.zero()
+        scalar.location = location
+        scalar.size = size
+        scalar.contentSize = size
+        scalar.setOverflowGeometry(contentRect, contentRect, layoutBounds)
+        scalar.scrollableOverflow = contentRect
+        run output.store(item.id, &scalar, false)
+      }
     } else if item.kind == ItemKind.Anchor {
       let inlineLevel = nodes.style(item.id).display.outsideIs(DisplayOutside.Inline)
       let mut point = Point { x: offset + x, y: 0.0 }

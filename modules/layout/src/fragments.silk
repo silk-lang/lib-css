@@ -830,6 +830,21 @@ impl FragmentArena {
     return run self.append(value)
   }
 
+  // appendText of a text fragment made in its slot, whose index is returned:
+  // the caller writes its geometry there instead of building a fragment to
+  // move in.
+  pub effect fn appendTextMade(self: &mut Self, box: usize, source: usize, parent: usize, fragmentainer: usize, text: TextFragment) -> usize ! OutOfMemoryError ? &mut Allocator {
+    run self.room()
+    run self.textRoom()
+    run self.textMarks.reserve(1)
+    // The fragment's text mark counts the texts before its own.
+    let id = run self.appendBox(box, source, FragmentKind.Text, parent, fragmentainer, true, true)
+    let data = run self.putText(text)
+    let values = self.values.asMutSlice()
+    values[id.index].textData = data
+    return id.index
+  }
+
   pub fn checkpoint(self: &Self) -> usize { return self.count }
   pub fn textCheckpoint(self: &Self) -> usize { return self.textCount }
 
