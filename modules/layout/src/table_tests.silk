@@ -5,7 +5,7 @@ import silk.num.usize
 import silk.num.f32
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Edges, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind }
+import style { Style, Edges, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind, Visibility }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableKind, max, abs }
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import tree { Tree, LayoutTree, NodeId, InvalidNode }
@@ -245,8 +245,8 @@ effect fn partsAndBorders() ! OutOfMemoryError | TextError | FragmentationError 
   inner.height = SizeValue.px(20.0)
   let content = run tree.append(r, move inner)
   run lay(&tree, &mut output, 500.0)
-  run expectBox(&output, l, 0.0, 90.0, 22.0, 62.0, "an outer cell's border lies on the table's")
-  run expectBox(&output, r, 21.0, 90.0, 22.0, 62.0, "a cell's border lies on its neighbour's")
+  run expectBox(&output, l, 0.5, 90.5, 21.0, 61.0, "an outer cell keeps half the border it shares with the table")
+  run expectBox(&output, r, 21.5, 90.5, 21.0, 61.0, "and half the one it shares with its neighbour")
   run expectBox(&output, grid, 0.0, 90.0, 43.0, 62.0, "a collapsed table has no padding")
   run expectBox(&output, content, 22.0, 111.0, 20.0, 20.0, "vertical-align: middle centres a cell's content")
 }
@@ -254,4 +254,261 @@ effect fn partsAndBorders() ! OutOfMemoryError | TextError | FragmentationError 
 test effect fn tablePartsAndBorders() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run partsAndBorders() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn percentCell(tree: &mut Tree, parent: NodeId, word: usize, percent: f32) -> NodeId ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let mut style = styled(DisplayInside.TableCell)
+  style.width = SizeValue.pct(percent)
+  let id = run tree.append(parent, move style)
+  run tree.setMeasurement(id, word * 1000 + word)
+  return id
+}
+fn sizedTable(width: f32, spacing: f32) -> Style {
+  let mut style = styled(DisplayInside.Table)
+  if width > 0.0 { style.width = SizeValue.px(width) }
+  style.borderSpacingX = spacing
+  style.borderSpacingY = spacing
+  return move style
+}
+
+// Percentage widths, as Chromium lays them out: a percentage column gets its share
+// of the grid, widening an auto table so the other columns keep their widths.
+effect fn percentages() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let auto = run tree.append(root, sizedTable(0.0, 0.0))
+  let row = run tree.append(auto, styled(DisplayInside.TableRow))
+  let a = run percentCell(&mut tree, row, 30, 0.25)
+  let b = run cell(&mut tree, row, 100, 100)
+  let mut output = LayoutTree.make()
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, auto, 0.0, 0.0, 133.333, 20.0, "an auto table widens so its percentage columns get their share")
+  run expectBox(&output, a, 0.0, 0.0, 33.333, 20.0, "a 25% column takes a quarter")
+  run expectBox(&output, b, 33.333, 0.0, 100.0, 20.0, "and the auto column its maximum")
+  run tree.setStyle(auto, sizedTable(400.0, 0.0))
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, a, 0.0, 0.0, 100.0, 20.0, "a percentage of a set width")
+  run expectBox(&output, b, 100.0, 0.0, 300.0, 20.0, "leaves the rest to auto columns")
+  run tree.remove(auto)
+
+  // Percentages resolve against the width inside the spacing.
+  let spaced = run tree.append(root, sizedTable(400.0, 4.0))
+  let row2 = run tree.append(spaced, styled(DisplayInside.TableRow))
+  let c = run percentCell(&mut tree, row2, 30, 0.25)
+  let d = run percentCell(&mut tree, row2, 10, 0.5)
+  let e = run cell(&mut tree, row2, 20, 20)
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, c, 4.0, 4.0, 96.0, 20.0, "spacing is not part of the percentage basis")
+  run expectBox(&output, d, 104.0, 4.0, 192.0, 20.0, "half of the grid")
+  run expectBox(&output, e, 300.0, 4.0, 96.0, 20.0, "and the rest")
+  run tree.remove(spaced)
+
+  // More than 100%: the later percentage is cut, and too little room shares it out.
+  let over = run tree.append(root, sizedTable(0.0, 0.0))
+  let row3 = run tree.append(over, styled(DisplayInside.TableRow))
+  let f = run percentCell(&mut tree, row3, 30, 0.5)
+  let g = run percentCell(&mut tree, row3, 10, 0.7)
+  let h = run cell(&mut tree, row3, 20, 20)
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, over, 0.0, 0.0, 400.0, 20.0, "percentages of 100% leave an auto table all the room")
+  run expectBox(&output, f, 0.0, 0.0, 190.5556, 20.0, "percentage columns grow from their minimums toward their shares")
+  run expectBox(&output, g, 190.5556, 0.0, 189.4444, 20.0, "a percentage past 100% is cut to what is left")
+  run expectBox(&output, h, 380.0, 0.0, 20.0, 20.0, "an auto column keeps its minimum")
+  run tree.remove(over)
+
+  // A spanning cell's percentage spreads over its columns; a percentage never goes below the minimum.
+  let spans = run tree.append(root, sizedTable(0.0, 0.0))
+  let top = run tree.append(spans, styled(DisplayInside.TableRow))
+  let mut wide = styled(DisplayInside.TableCell)
+  wide.width = SizeValue.pct(0.6)
+  wide.columnSpan = 2
+  let i = run tree.append(top, move wide)
+  run tree.setMeasurement(i, 30 * 1000 + 30)
+  let j = run cell(&mut tree, top, 40, 40)
+  let bottom = run tree.append(spans, styled(DisplayInside.TableRow))
+  let k = run cell(&mut tree, bottom, 10, 10)
+  let l = run cell(&mut tree, bottom, 10, 10)
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, i, 0.0, 0.0, 60.0, 20.0, "a spanning 60% cell")
+  run expectBox(&output, j, 60.0, 0.0, 40.0, 20.0, "beside a column of 40")
+  run expectBox(&output, k, 0.0, 20.0, 30.0, 20.0, "shares its percentage over its columns")
+  run expectBox(&output, l, 30.0, 20.0, 30.0, 20.0, "by their maximums")
+  run tree.remove(spans)
+
+  let floor = run tree.append(root, sizedTable(400.0, 0.0))
+  let row4 = run tree.append(floor, styled(DisplayInside.TableRow))
+  let mut padded = styled(DisplayInside.TableCell)
+  padded.width = SizeValue.pct(0.1)
+  padded.padding.left = Dimension.px(10.0)
+  padded.padding.right = Dimension.px(10.0)
+  let m = run tree.append(row4, move padded)
+  run tree.setMeasurement(m, 100 * 1000 + 100)
+  let mut set = styled(DisplayInside.TableCell)
+  set.width = SizeValue.px(100.0)
+  let n = run tree.append(row4, move set)
+  let o = run cell(&mut tree, row4, 0, 0)
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, m, 0.0, 0.0, 120.0, 20.0, "a percentage below the content's minimum takes the minimum")
+  run expectBox(&output, n, 120.0, 0.0, 100.0, 20.0, "a length column keeps its width")
+  run expectBox(&output, o, 220.0, 0.0, 180.0, 20.0, "and an auto column takes the rest")
+  run tree.remove(floor)
+
+  // The fixed layout: a column's percentage of the table, a spanning cell's split evenly.
+  let mut fixedStyle = sizedTable(300.0, 0.0)
+  fixedStyle.tableLayout = TableLayout.Fixed
+  let fixed = run tree.append(root, move fixedStyle)
+  let mut columnStyle = styled(DisplayInside.TableColumn)
+  columnStyle.width = SizeValue.pct(0.2)
+  drop run tree.append(fixed, move columnStyle)
+  let row5 = run tree.append(fixed, styled(DisplayInside.TableRow))
+  let p = run cell(&mut tree, row5, 30, 30)
+  let mut fifty = styled(DisplayInside.TableCell)
+  fifty.width = SizeValue.px(50.0)
+  let q = run tree.append(row5, move fifty)
+  let r = run cell(&mut tree, row5, 20, 20)
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, p, 0.0, 0.0, 60.0, 20.0, "a 20% column of a fixed table")
+  run expectBox(&output, q, 60.0, 0.0, 50.0, 20.0, "a length cell")
+  run expectBox(&output, r, 110.0, 0.0, 190.0, 20.0, "and the rest")
+  run tree.remove(fixed)
+
+  let mut halfStyle = sizedTable(200.0, 0.0)
+  halfStyle.tableLayout = TableLayout.Fixed
+  let half = run tree.append(root, move halfStyle)
+  let row6 = run tree.append(half, styled(DisplayInside.TableRow))
+  let mut spanStyle = styled(DisplayInside.TableCell)
+  spanStyle.width = SizeValue.pct(0.5)
+  spanStyle.columnSpan = 2
+  let s = run tree.append(row6, move spanStyle)
+  drop run cell(&mut tree, row6, 10, 10)
+  let row7 = run tree.append(half, styled(DisplayInside.TableRow))
+  let t = run cell(&mut tree, row7, 10, 10)
+  let u = run cell(&mut tree, row7, 10, 10)
+  let v = run cell(&mut tree, row7, 10, 10)
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, s, 0.0, 0.0, 100.0, 20.0, "a spanning 50% cell in a fixed table")
+  run expectBox(&output, t, 0.0, 20.0, 50.0, 20.0, "splits over its columns")
+  run expectBox(&output, u, 50.0, 20.0, 50.0, 20.0, "evenly")
+  run expectBox(&output, v, 100.0, 20.0, 100.0, 20.0, "and the free column takes the rest")
+}
+
+test effect fn tablePercentages() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run percentages() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// `visibility: collapse` rows and columns take no room and one spacing less, and
+// their cells still size the columns; a collapsed column narrows the table.
+effect fn collapsedTracks() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let table = run tree.append(root, sizedTable(0.0, 4.0))
+  let first = run tree.append(table, styled(DisplayInside.TableRow))
+  let a = run cell(&mut tree, first, 30, 30)
+  let b = run cell(&mut tree, first, 40, 40)
+  let mut hidden = styled(DisplayInside.TableRow)
+  hidden.visibility = Visibility.Collapse
+  let second = run tree.append(table, move hidden)
+  let c = run cell(&mut tree, second, 80, 80)
+  let third = run tree.append(table, styled(DisplayInside.TableRow))
+  let d = run cell(&mut tree, third, 10, 10)
+  let mut output = LayoutTree.make()
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, a, 4.0, 4.0, 80.0, 20.0, "a collapsed row's cells still size the columns")
+  run expectBox(&output, b, 88.0, 4.0, 40.0, 20.0, "the next column follows")
+  run expectBox(&output, second, 4.0, 24.0, 124.0, 0.0, "a collapsed row has no height and no spacing before it")
+  run expectBox(&output, c, 4.0, 24.0, 80.0, 0.0, "nor do its cells")
+  run expectBox(&output, d, 4.0, 28.0, 80.0, 20.0, "the next row follows one spacing on")
+  run expectBox(&output, table, 0.0, 0.0, 132.0, 52.0, "the table loses the row and a spacing")
+  run tree.remove(table)
+  output = LayoutTree.make()
+
+  let columns = run tree.append(root, sizedTable(0.0, 4.0))
+  drop run tree.append(columns, styled(DisplayInside.TableColumn))
+  let mut gone = styled(DisplayInside.TableColumn)
+  gone.visibility = Visibility.Collapse
+  let col = run tree.append(columns, move gone)
+  drop run tree.append(columns, styled(DisplayInside.TableColumn))
+  let row = run tree.append(columns, styled(DisplayInside.TableRow))
+  let e = run cell(&mut tree, row, 30, 30)
+  let f = run cell(&mut tree, row, 40, 40)
+  let g = run cell(&mut tree, row, 40, 40)
+  let next = run tree.append(columns, styled(DisplayInside.TableRow))
+  let mut span = styled(DisplayInside.TableCell)
+  span.columnSpan = 2
+  let h = run tree.append(next, move span)
+  run tree.setMeasurement(h, 100 * 1000 + 100)
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, e, 4.0, 4.0, 41.1429, 20.0, "columns are sized before one collapses")
+  run expectBox(&output, f, 45.1429, 4.0, 0.0, 20.0, "a collapsed column has no width")
+  run expectBox(&output, col, 45.1429, 4.0, 0.0, 84.0, "and no spacing before it")
+  run expectBox(&output, g, 49.1429, 4.0, 40.0, 20.0, "the next column follows one spacing on")
+  run expectBox(&output, h, 4.0, 28.0, 41.1429, 60.0, "a spanning cell loses the collapsed column")
+  run expectBox(&output, columns, 0.0, 0.0, 93.1429, 92.0, "and the table its width")
+}
+
+test effect fn tableCollapsedTracks() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run collapsedTracks() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+fn bordered(inside: DisplayInside, width: f32) -> Style {
+  let mut style = styled(inside)
+  style.border = Edges.all(Dimension.px(width))
+  return move style
+}
+
+// Collapsed borders resolve per grid line (CSS 2 §17.6.2.1): the widest wins, a hidden
+// one suppresses all, and each cell and the table get half of the winning widths.
+effect fn borderConflicts() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut tableStyle = bordered(DisplayInside.Table, 4.0)
+  tableStyle.borderCollapse = BorderCollapse.Collapse
+  let table = run tree.append(root, move tableStyle)
+  let first = run tree.append(table, styled(DisplayInside.TableRow))
+  let mut thin = bordered(DisplayInside.TableCell, 2.0)
+  thin.width = SizeValue.px(50.0)
+  thin.height = SizeValue.px(20.0)
+  let a = run tree.append(first, move thin)
+  let mut thick = bordered(DisplayInside.TableCell, 10.0)
+  thick.width = SizeValue.px(50.0)
+  thick.height = SizeValue.px(20.0)
+  let b = run tree.append(first, move thick)
+  let second = run tree.append(table, styled(DisplayInside.TableRow))
+  let c = run tree.append(second, bordered(DisplayInside.TableCell, 1.0))
+  run tree.setMeasurement(c, 0)
+  let d = run tree.append(second, bordered(DisplayInside.TableCell, 3.0))
+  run tree.setMeasurement(d, 0)
+  let mut output = LayoutTree.make()
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, table, 0.0, 0.0, 124.0, 64.0, "the table holds half its widest outer borders")
+  run expectBox(&output, a, 2.0, 5.0, 57.0, 30.0, "a thin cell gives way to the table and to its thick neighbour")
+  run expectBox(&output, b, 59.0, 5.0, 60.0, 30.0, "a thick cell keeps half of its own borders")
+  run expectBox(&output, c, 2.0, 35.0, 57.0, 27.0, "a thinner cell below takes the wider borders above and outside it")
+  run expectBox(&output, d, 59.0, 35.0, 60.0, 27.0, "and so does its neighbour")
+  run tree.remove(table)
+
+  let mut hiddenStyle = bordered(DisplayInside.Table, 5.0)
+  hiddenStyle.borderCollapse = BorderCollapse.Collapse
+  hiddenStyle.borderHidden = 15
+  let hiddenTable = run tree.append(root, move hiddenStyle)
+  let row = run tree.append(hiddenTable, styled(DisplayInside.TableRow))
+  let e = run tree.append(row, bordered(DisplayInside.TableCell, 3.0))
+  run tree.setMeasurement(e, 10 * 1000 + 10)
+  let mut right = styled(DisplayInside.TableCell)
+  right.border.left = Dimension.px(7.0)
+  right.border.right = Dimension.px(2.0)
+  right.borderHidden = 8
+  let f = run tree.append(row, move right)
+  run tree.setMeasurement(f, 10 * 1000 + 10)
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, hiddenTable, 0.0, 0.0, 20.0, 20.0, "a hidden table border hides every outer border")
+  run expectBox(&output, e, 0.0, 0.0, 10.0, 20.0, "and a hidden cell side its neighbour's")
+  run expectBox(&output, f, 10.0, 0.0, 10.0, 20.0, "so the cells have no borders")
+}
+
+test effect fn tableBorderConflicts() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run borderConflicts() |> Effect.provideMut<Allocator>(&mut allocator)
 }

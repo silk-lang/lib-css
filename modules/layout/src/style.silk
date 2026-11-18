@@ -114,6 +114,9 @@ pub struct Style {
   // grid; `normal` is 1em here.
   pub tableLayout: TableLayout, pub borderCollapse: BorderCollapse, pub captionSide: CaptionSide,
   pub columnFill: ColumnFill, pub multicolSpan: ColumnSpan,
+  // The sides whose `border-style` is `hidden`, which win collapsed-border conflicts
+  // (CSS 2 §17.6.2.1): top 1, right 2, bottom 4, left 8.
+  pub borderHidden: u8,
   pub borderSpacingX: f32, pub borderSpacingY: f32,
   pub columnCount: u32, pub columnWidth: f32,
   // A cell's columns and rows, and a column's columns, from the host's `colspan`,
@@ -196,7 +199,7 @@ impl Style {
       scrollbarWidth: ScrollbarWidth.Auto, scrollbarGutter: ScrollbarGutter.Auto,
       position: Position.Static, float: Float.None, clear: Clear.None, visibility: Visibility.Visible,
       aspectRatio: 0.0, aspectRatioAuto: false, replaced: false,
-      tableLayout: TableLayout.Auto, borderCollapse: BorderCollapse.Separate, captionSide: CaptionSide.Top,
+      tableLayout: TableLayout.Auto, borderCollapse: BorderCollapse.Separate, captionSide: CaptionSide.Top, borderHidden: 0,
       borderSpacingX: 0.0, borderSpacingY: 0.0, columnSpan: 1, rowSpan: 1,
       shape: 0,
     }
