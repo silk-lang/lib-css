@@ -46,9 +46,17 @@ fn fontBoxFromMetrics(metrics: FontMetrics, style: &Style) -> FontBox {
   let mut before = baseline + leading
   let mut after = height - baseline + leading
   // CSS Text Decoration 3 §3.5: emphasis marks, half the font size, sit beyond the font's
-  // ascent or descent; the line grows only by what the half-leading cannot hold.
-  if style.emphasis == EmphasisSide.Over { before = max(before, baseline + height * 0.5) }
-  else if style.emphasis == EmphasisSide.Under { after = max(after, (height - baseline) + height * 0.5) }
+  // ascent or descent (beside the em box on a central baseline); the line grows only by what
+  // the half-leading cannot hold.
+  let mark = metrics.fontSize * 0.5
+  let central = (style.writingMode == WritingMode.VerticalRl || style.writingMode == WritingMode.VerticalLr) && style.textOrientation != TextOrientation.Sideways
+  if style.emphasis == EmphasisSide.Over {
+    let reach: f32 = if central { metrics.fontSize } else { baseline + mark }
+    before = max(before, reach)
+  } else if style.emphasis == EmphasisSide.Under {
+    let reach: f32 = if central { metrics.fontSize } else { height - baseline + mark }
+    after = max(after, reach)
+  }
   return FontBox { metrics: metrics, baseline: baseline, height: height, lineHeight: lineHeight, before: before, after: after }
 }
 fn fontBaselines(font: &FontBox, mode: WritingMode) -> BaselineSet {

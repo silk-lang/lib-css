@@ -5,7 +5,7 @@ import silk.num.usize
 import silk.text.string { String }
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, Align, Edges, LineHeight, TextBoxTrim, TextBoxEdge, TextEdge, EmphasisSide }
+import style { Style, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, Align, Edges, LineHeight, TextBoxTrim, TextBoxEdge, TextEdge, EmphasisSide, WritingMode, TextOrientation }
 import geometry {
   Measure,
   MeasureRequest,
@@ -800,6 +800,16 @@ effect fn emphasizedLines()
   run tree.setStyle(block, style)
   run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
   run expectBounds(&mut output, block, 0.0, 0.0, 300.0, 20.0)
+  // Central baseline 8: marks reach a full em (10) over it, the descent 2 stays under it.
+  style.lineHeight = LineHeight.Normal
+  style.emphasis = EmphasisSide.Over
+  style.writingMode = WritingMode.VerticalRl
+  style.textOrientation = TextOrientation.Upright
+  style.width = SizeValue.auto()
+  style.height = SizeValue.of(Dimension.px(100.0))
+  run tree.setStyle(block, style)
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0))
+  run expectBounds(&mut output, block, 0.0, 0.0, 12.0, 100.0)
 }
 
 test effect fn emphasisMarksTakeLineRoom()
