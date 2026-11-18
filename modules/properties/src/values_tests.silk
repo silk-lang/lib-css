@@ -182,6 +182,43 @@ test effect fn writtenValuesConvertToComputed() -> () ! AssertionError<'static> 
   run conversion() |> Effect.provideMut<Allocator>(&mut allocator)
 }
 
+effect fn numbers() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  // The short way writes what the formatter writes: ordinary values, values that round up
+  // into the next digit, halves, tiny and huge ones, and a walk over many others.
+  let picked: [f32; 22] = [
+    0.0, -0.0, 1.0, -1.0, 0.15, 0.5, 360.0, 0.0078125, -0.0078125, 0.9999995, 0.9999994,
+    1234567.9, 0.000001, 0.0000004, -0.0000004, 16777216.0, 3999999999.0, 4000000000.0,
+    1.0e20, -2.5, 99.999999, 0.1,
+  ]
+  let mut i: usize = 0
+  while i < picked.length {
+    let mut short = Bytes.make()
+    let mut long = Bytes.make()
+    run values.writeNumber(&mut short, picked[i])
+    run values.writeFormatted(&mut long, picked[i])
+    run Testing.expect(sameText(short.asSlice(), long.asSlice()), "a picked number is written as the formatter writes it")
+    i = i + 1
+  }
+  let mut walked: f32 = -37.5
+  let mut step: f32 = 0.000137
+  let mut k: usize = 0
+  while k < 20000 {
+    let mut short = Bytes.make()
+    let mut long = Bytes.make()
+    run values.writeNumber(&mut short, walked)
+    run values.writeFormatted(&mut long, walked)
+    run Testing.expect(sameText(short.asSlice(), long.asSlice()), "a walked number is written as the formatter writes it")
+    walked = walked + step
+    step = step * 1.0007
+    k = k + 1
+  }
+}
+
+test effect fn numbersTakeTheShortWayUnchanged() -> () ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run numbers() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
 test effect fn everyKeywordFindsItselfByName() -> () ! AssertionError<'static> {
   run Testing.expect(keywords.name(Keyword.FlexStart).length == 10, "flex-start is spelled in kebab case")
   let found = match keywords.lookup(b"Space-Between") {
