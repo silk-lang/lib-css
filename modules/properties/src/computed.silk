@@ -446,6 +446,9 @@ pub struct Text {
   pub features: FontFeatures,
   /// `font-width` as a percentage; `normal` is 100.
   pub width: f32,
+  /// `-webkit-text-fill-color` as RGBA8 (red in the low byte), 0 for `currentcolor`. One
+  /// word, so `Text` keeps its size: `packFill` never returns 0.
+  pub fillColor: u32,
   pub orphans: usize,
   pub widows: usize,
   pub visibility: Visibility,
@@ -472,9 +475,6 @@ pub struct Text {
   pub selectionColor: Rgba<f32>,
   pub placeholderColor: Rgba<f32>,
   pub hasPlaceholderColor: bool,
-  /// `-webkit-text-fill-color` as RGBA8 (red in the low byte), when `hasFillColor`.
-  pub hasFillColor: bool,
-  pub fillColor: u32,
 }
 impl Copy for Text {}
 impl Text {
@@ -521,14 +521,13 @@ impl Text {
       selectionColor: Rgba<f32> { r: 0.706, g: 0.835, b: 0.996, a: 1.0 },
       placeholderColor: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
       hasPlaceholderColor: false,
-      hasFillColor: false,
       fillColor: 0,
     }
   }
 
   /// The color glyphs are filled with: `-webkit-text-fill-color`, else `color`.
   pub fn fill(self: &Self) -> Rgba<f32> {
-    if !self.hasFillColor {
+    if self.fillColor == 0 {
       return self.color
     }
     let word = self.fillColor
@@ -540,9 +539,10 @@ impl Text {
     }
   }
 
-  /// Packs `color` for `fillColor`.
+  /// Packs `color` for `fillColor`; fully transparent black keeps a red bit, still invisible.
   pub fn packFill(color: Rgba<f32>) -> u32 {
-    return channel(color.r) + channel(color.g) * 256 + channel(color.b) * 65536 + channel(color.a) * 16777216
+    let word = channel(color.r) + channel(color.g) * 256 + channel(color.b) * 65536 + channel(color.a) * 16777216
+    return if word == 0 { 1 } else { word }
   }
 
   /// The color decorations are drawn in.
