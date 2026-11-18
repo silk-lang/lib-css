@@ -261,8 +261,11 @@ fn columnOrigin(nodes: &BoxTree<'_>, set: usize, box: &ResolvedBox, columns: Col
   let step = usize.toF32(index) * (columns.width + columns.gap)
   let rtl = style.direction == Direction.Rtl
   if vertical(style) {
+    // An auto block size is the columns' height (see layoutVerticalSet).
+    let mut width = height + box.inset.horizontal()
+    if box.size.widthDefinite { width = box.size.width }
     let mut x = box.inset.left
-    if !blockStartsLeft(style) { x = box.size.width - box.inset.right - height }
+    if !blockStartsLeft(style) { x = width - box.inset.right - height }
     let mut y = box.inset.top + step
     if rtl { y = box.size.height - box.inset.bottom - columns.width - step }
     return Point { x: x, y: y }
@@ -328,17 +331,15 @@ effect fn fillColumns<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<
         else if flip { reach = layout.size.width - overflow.x }
         result.reach = max(result.reach, reach)
         result.reach = max(result.reach, run columnReach(&output, start, style))
-        if flip { layout.size.width = height } else { layout.size.height = height }
-        // A fragmented vertical-rl flow places its children from its right
-        // edge, at negative x; move them into the column's box.
-        let shift = flip && !blockStartsLeft(style)
-        if shift { layout.scrollableOverflow.x = layout.scrollableOverflow.x + height }
-        layout.location = columnOrigin(nodes, set, box, columns, index, height)
+        // A fragmented vertical-rl flow places its children leftwards from
+        // its origin (see fragment_position.blockStart), so its origin goes
+        // on the column's right edge.
+        let mut placedExtent = height
+        if !flip { layout.size.height = height }
+        else if blockStartsLeft(style) { layout.size.width = height }
+        else { placedExtent = 0.0 }
+        layout.location = columnOrigin(nodes, set, box, columns, index, placedExtent)
         run output.store(flow, &layout, true)
-        if shift {
-          let own = output.publication(flow)
-          run shiftChildren(&mut output, start, own, height)
-        }
       }
     }
     if output.resumes.get(flow).contentComplete {
@@ -381,21 +382,6 @@ effect fn columnReach(output: &LayoutPass<'_, '_>, start: usize, style: &Style) 
     index = index + 1
   }
   return reach
-}
-
-// Moves the fragments appended since `start` whose parent is `parent` by `dx`.
-effect fn shiftChildren(output: &mut LayoutPass<'_, '_>, start: usize, parent: usize, dx: f32) ! OutOfMemoryError ? &mut Allocator {
-  if parent == NO_NODE { return }
-  let end = output.fragments.checkpoint()
-  let mut index = start
-  while index < end && index < output.fragments.values.length() {
-    if output.fragments.values.asSlice()[index].parent == parent {
-      run output.fragments.edit(index)
-      let values = output.fragments.values.asMutSlice()
-      values[index].location.x = values[index].location.x + dx
-    }
-    index = index + 1
-  }
 }
 
 // One column of the flow, relaxing break rules when nothing fits (Break3 §4.4);
