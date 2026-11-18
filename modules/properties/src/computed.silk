@@ -372,6 +372,49 @@ impl Equal for TabSize {
     }
   }
 }
+/// A `text-box-edge` metric (CSS Inline 3 §3.2). `Auto` is the over edge of `auto`, which
+/// means `text` until `line-fit-edge` exists.
+pub enum(u8) TextEdge { Auto, Text, Cap, Ex, Alphabetic }
+/// `text-box-edge`: the over and under edges `text-box-trim` trims to.
+pub struct TextBoxEdge { pub over: TextEdge, pub under: TextEdge }
+impl Copy for TextBoxEdge {}
+impl Equal for TextBoxEdge {
+  fn equals(left: &TextBoxEdge, right: &TextBoxEdge) -> bool {
+    return left.over == right.over && left.under == right.under
+  }
+}
+impl TextBoxEdge {
+  pub fn auto() -> TextBoxEdge {
+    return TextBoxEdge { over: TextEdge.Auto, under: TextEdge.Auto }
+  }
+}
+/// `text-box-trim`: which of a block's first and last line boxes lose their half-leading
+/// and the font's space beyond `text-box-edge`.
+pub enum(u8) TextBoxTrim { None, Start, End, Both }
+/// The line side `text-emphasis` marks take room on (CSS Text Decoration 3 §3.5).
+pub enum(u8) EmphasisSide { None, Over, Under }
+impl Equal for EmphasisSide {
+  fn equals(left: &EmphasisSide, right: &EmphasisSide) -> bool { return left.* == right.* }
+}
+/// `text-emphasis-style`, `-color` and `-position`. `mark` is 0 for `none`; a keyword mark
+/// is `EMPHASIS_KEYWORD` plus its shape (0 for the writing mode's default, 1 dot, 2 circle,
+/// 3 double-circle, 4 triangle, 5 sesame) plus `EMPHASIS_OPEN` when open; anything from 32 is
+/// a custom mark's code point. `color` is packed as `fillColor`, 0 for `currentcolor`.
+pub struct TextEmphasis { pub mark: u32, pub color: u32, pub under: bool, pub left: bool }
+impl Copy for TextEmphasis {}
+impl Equal for TextEmphasis {
+  fn equals(left: &TextEmphasis, right: &TextEmphasis) -> bool {
+    return left.mark == right.mark && left.color == right.color && left.under == right.under && left.left == right.left
+  }
+}
+pub const EMPHASIS_KEYWORD: u32 = 16
+pub const EMPHASIS_OPEN: u32 = 8
+impl Equal for TextBoxTrim {
+  fn equals(left: &TextBoxTrim, right: &TextBoxTrim) -> bool { return left.* == right.* }
+}
+impl Equal for TextEdge {
+  fn equals(left: &TextEdge, right: &TextEdge) -> bool { return left.* == right.* }
+}
 pub struct TextIndent { pub value: Dimension, pub hanging: bool, pub eachLine: bool }
 impl Copy for TextIndent {}
 impl Equal for TextIndent {
@@ -558,6 +601,9 @@ pub struct Text {
   pub selectionColor: Rgba<f32>,
   pub placeholderColor: Rgba<f32>,
   pub hasPlaceholderColor: bool,
+  /// `text-box-edge`, in the padding after the flag above.
+  pub textBoxEdge: TextBoxEdge,
+  pub emphasis: TextEmphasis,
 }
 impl Copy for Text {}
 impl Text {
@@ -606,6 +652,8 @@ impl Text {
       placeholderColor: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
       hasPlaceholderColor: false,
       fillColor: 0,
+      textBoxEdge: TextBoxEdge.auto(),
+      emphasis: TextEmphasis { mark: 0, color: 0, under: false, left: false },
     }
   }
 

@@ -5,7 +5,7 @@ import silk.core.option { Option }
 import silk.mem.box { Box }
 import silk.text.string { String }
 import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min }
-import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind }
+import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, TextBoxTrim, TextEdge, EmphasisSide }
 import tree { Node, NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, TextFragment, TextFragmentKind }
@@ -43,7 +43,21 @@ fn fontBoxFromMetrics(metrics: FontMetrics, style: &Style) -> FontBox {
     LineHeight.Length { value } => { lineHeight = value }
   }
   let leading = (lineHeight - height) / 2.0
-  return FontBox { metrics: metrics, baseline: baseline, height: height, lineHeight: lineHeight, before: baseline + leading, after: height - baseline + leading }
+  let mut before = baseline + leading
+  let mut after = height - baseline + leading
+  // CSS Text Decoration 3 §3.5: emphasis marks, half the font size, sit beyond the font's
+  // ascent or descent (beside the em box on a central baseline); the line grows only by what
+  // the half-leading cannot hold.
+  let mark = metrics.fontSize * 0.5
+  let central = (style.writingMode == WritingMode.VerticalRl || style.writingMode == WritingMode.VerticalLr) && style.textOrientation != TextOrientation.Sideways
+  if style.emphasis == EmphasisSide.Over {
+    let reach: f32 = if central { metrics.fontSize } else { baseline + mark }
+    before = max(before, reach)
+  } else if style.emphasis == EmphasisSide.Under {
+    let reach: f32 = if central { metrics.fontSize } else { height - baseline + mark }
+    after = max(after, reach)
+  }
+  return FontBox { metrics: metrics, baseline: baseline, height: height, lineHeight: lineHeight, before: before, after: after }
 }
 fn fontBaselines(font: &FontBox, mode: WritingMode) -> BaselineSet {
   if mode == WritingMode.VerticalLr { return font.metrics.baselines.reversed(font.height) }
@@ -1097,8 +1111,39 @@ pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   lists.items.clear()
   lists.atomics.clear()
   lists.text.clear()
-  let result = run layoutInlineWith(nodes, &mut output, &mut measurer, id, &input, &physicalBox, &mut bfc, &mut lists.scopes, &mut lists.extents, &mut lists.items, &mut lists.atomics, &mut lists.text)
+  let trimmed = trimmedBox(nodes, &mut measurer, id, physicalBox.*)
+  let result = run layoutInlineWith(nodes, &mut output, &mut measurer, id, &input, &trimmed, &mut bfc, &mut lists.scopes, &mut lists.extents, &mut lists.items, &mut lists.atomics, &mut lists.text)
   run output.inlineScratch.append(move scratch)
+  return result
+}
+
+// CSS Inline 3 §3.1 `text-box-trim`: a run that starts its container's content loses the space
+// above its root inline box's over edge on the first line, one that ends it the space below
+// the under edge on the last line. Both are taken off the run's insets, so lines, floats and
+// baselines move with them. The strut's metrics stand for the line's: taller inline content
+// overflows the trimmed edge instead of moving it. Horizontal writing modes only.
+fn trimmedBox<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, id: usize, box: ResolvedBox) -> ResolvedBox {
+  let style = nodes.style(id)
+  if style.textBoxTrim == TextBoxTrim.None || style.writingMode != WritingMode.HorizontalTb { return box }
+  let node = nodes.node(id)
+  let start = (style.textBoxTrim == TextBoxTrim.Start || style.textBoxTrim == TextBoxTrim.Both)
+    && node.parent != NO_NODE && nodes.node(node.parent).firstChild == id
+  let end = (style.textBoxTrim == TextBoxTrim.End || style.textBoxTrim == TextBoxTrim.Both) && node.nextSibling == NO_NODE
+  if !start && !end { return box }
+  let font = fontBox(&mut measurer, style)
+  let mut result = box
+  if start {
+    let over = match style.textBoxEdge.over {
+      TextEdge.Cap => if font.metrics.capHeight > 0.0 { font.metrics.capHeight } else { font.baseline }
+      TextEdge.Ex => if font.metrics.xHeight > 0.0 { font.metrics.xHeight } else { font.baseline }
+      _ => font.baseline
+    }
+    result.inset.top = result.inset.top - (font.before - over)
+  }
+  if end {
+    let under: f32 = if style.textBoxEdge.under == TextEdge.Alphabetic { 0.0 } else { font.height - font.baseline }
+    result.inset.bottom = result.inset.bottom - (font.after - under)
+  }
   return result
 }
 
@@ -1627,15 +1672,17 @@ effect fn tokensFor<'a>(nodes: &BoxTree<'a>, items: &[Item], scopes: &[Scope], r
       ItemKind.Close => TextTokenKind.Close
     }
     let mut value: string<'a> = ""
+    let mut start: usize = 0
     if item.kind == ItemKind.Text {
       let source: &'a Node = &nodes.sources[node.source]
-      value = match move Node.text<'a>(source) {
+      start = source.textStart
+      value = match move Node.laidText<'a>(source) {
         Option<string<'a>>.Some { value: content } => content
         Option<string<'a>>.None => { fail TextError { source: node.source, message: "Generated text box has no source text" } }
       }
     }
     let barrier = shapingBarrier(nodes, &item, scopes)
-    run result.append(TextToken { kind: kind, text: value, source: node.source, sourceStart: 0, sourceEnd: String.byteLength(value), fontKey: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: style.unicodeBidi, replacedInline: inlineReplaced(style), whiteSpaceCollapse: style.whiteSpaceCollapse, textJustify: style.textJustify, shapingBarrier: barrier })
+    run result.append(TextToken { kind: kind, text: value, source: node.source, sourceStart: start, sourceEnd: start + String.byteLength(value), fontKey: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: style.unicodeBidi, replacedInline: inlineReplaced(style), whiteSpaceCollapse: style.whiteSpaceCollapse, textJustify: style.textJustify, shapingBarrier: barrier })
     index = index + 1
   }
 }
