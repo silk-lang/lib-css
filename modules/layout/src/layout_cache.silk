@@ -967,6 +967,12 @@ impl LayoutCache {
     }
     self.plainLines.set(slot, move line)
   }
+  // Drops every box's PlainLine and its storage: the next probe of each
+  // shapes its line again.
+  pub fn dropPlains(self: &mut Self) {
+    self.plainSlots.clearAndFree()
+    self.plainLines.clearAndFree()
+  }
   pub fn takeText(self: &mut Self, id: usize) -> Option<KeptText> {
     if id >= self.texts.length() { return Option<KeptText>.None }
     return self.texts.asMutSlice()[id].pop()

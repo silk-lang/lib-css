@@ -10,7 +10,7 @@ import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensi
 import tree { Tree, LayoutTree, InvalidNode }
 import engine { compute, repositionScroll }
 
-struct Host { horizontal: f32, vertical: f32 }
+struct Host { horizontal: f32, vertical: f32, overlay: bool }
 impl Measure for Host {
   fn font(provider: &mut Self, request: FontRequest) -> FontMetrics {
     drop provider
@@ -19,7 +19,7 @@ impl Measure for Host {
   }
   fn scrollbars(provider: &mut Self, request: ScrollbarRequest) -> ScrollbarMetrics {
     drop request
-    return ScrollbarMetrics { horizontal: provider.horizontal, vertical: provider.vertical, overlay: false, horizontalOnTop: false, verticalOnLeft: false }
+    return ScrollbarMetrics { horizontal: provider.horizontal, vertical: provider.vertical, overlay: provider.overlay, horizontalOnTop: false, verticalOnLeft: false }
   }
   fn natural(provider: &mut Self, key: usize) -> NaturalDimensions {
     drop provider
@@ -67,11 +67,11 @@ test effect fn providerReplacementAndExactFitClearPriorScrollbarSelection() ! Ou
   childStyle.height = SizeValue.px(101.0)
   let child = run tree.append(root, move childStyle) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut output = LayoutTree.make()
-  let mut original = Host { horizontal: 12.0, vertical: 15.0 }
+  let mut original = Host { horizontal: 12.0, vertical: 15.0, overlay: false }
   run compute(&tree, &mut output, &mut original, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
   let first = output.boxes.get(output.firstBySource.get(root.index))
   run Testing.expect(first.contentSize.width == 85.0 && first.contentSize.height == 88.0 && first.horizontalScrollbar && first.verticalScrollbar, "vertical overflow induces the other scrollbar through reduced content space")
-  let mut replacement = Host { horizontal: 7.0, vertical: 5.0 }
+  let mut replacement = Host { horizontal: 7.0, vertical: 5.0, overlay: false }
   run compute(&tree, &mut output, &mut replacement, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
   let second = output.boxes.get(output.firstBySource.get(root.index))
   run Testing.expect(second.contentSize.width == 95.0 && second.contentSize.height == 93.0 && second.scrollbarGutter.right == 5.0 && second.scrollbarGutter.bottom == 7.0, "replacing the host refreshes scrollbar metrics without modifying the tree")
@@ -118,7 +118,7 @@ effect fn retainedScrolling(overflow: Overflow) ! OutOfMemoryError | TextError |
   absolute.inset.bottom = Dimension.px(10.0)
   absolute.height = SizeValue.px(20.0)
   drop run tree.append(container, move absolute) |> Effect.provideMut<Allocator>(&mut allocator)
-  let mut host = Host { horizontal: 12.0, vertical: 15.0 }
+  let mut host = Host { horizontal: 12.0, vertical: 15.0, overlay: false }
   let viewport = OptionalSize.definite(300.0, 200.0)
   let mut output = LayoutTree.make()
   run compute(&tree, &mut output, &mut host, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -177,7 +177,7 @@ test effect fn deferredStickyStaysAtItsNormalPosition() ! OutOfMemoryError | Tex
   drop run tree.append(container, move tall) |> Effect.provideMut<Allocator>(&mut allocator)
   tree.stickyDeferred = true
   run tree.setScrollOffset(container, Point { x: 0.0, y: 100.0 })
-  let mut host = Host { horizontal: 0.0, vertical: 0.0 }
+  let mut host = Host { horizontal: 0.0, vertical: 0.0, overlay: false }
   let mut output = LayoutTree.make()
   run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 200.0)) |> Effect.provideMut<Allocator>(&mut allocator)
   output.fragments.resolveLocations()
@@ -191,4 +191,38 @@ test effect fn deferredStickyStaysAtItsNormalPosition() ! OutOfMemoryError | Tex
     i = i + 1
   }
   run Testing.expect(y == -50.0, "a deferred sticky box scrolls with its normal position")
+}
+
+// A scrollbar that overlays the content takes no room, so whether an auto one
+// shows changes no geometry: the results of a tree that holds one are kept as
+// any other tree's. One that takes room still turns reuse off.
+test effect fn overlayAutoScrollbarsKeepResults() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut style = Style.make()
+  style.width = SizeValue.px(100.0)
+  style.height = SizeValue.px(100.0)
+  style.overflowY = Overflow.Auto
+  let mut tree = run Tree.make(move style) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let mut childStyle = Style.make()
+  childStyle.width = SizeValue.px(100.0)
+  childStyle.height = SizeValue.px(300.0)
+  let child = run tree.append(root, move childStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut output = LayoutTree.make()
+  let mut overlay = Host { horizontal: 10.0, vertical: 10.0, overlay: true }
+  run compute(&tree, &mut output, &mut overlay, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let first = output.boxes.get(output.firstBySource.get(root.index))
+  run Testing.expect(first.verticalScrollbar && first.contentSize.width == 100.0 && output.reusable(), "an overlay scrollbar shows over the content and the results are kept")
+  let childStyleIndex = tree.nodes.asSlice()[child.index].styleIndex
+  let styles = tree.styles.asMutSlice()
+  styles[childStyleIndex].height = SizeValue.px(80.0)
+  drop styles
+  run tree.markDirty(child)
+  run compute(&tree, &mut output, &mut overlay, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let fitted = output.boxes.get(output.firstBySource.get(root.index))
+  run Testing.expect(!fitted.verticalScrollbar && output.reusable(), "content that fits again shows no scrollbar, with results kept")
+  let mut gutter = Host { horizontal: 10.0, vertical: 10.0, overlay: false }
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut gutter, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(!fresh.reusable(), "an auto scrollbar that takes room keeps reuse off: which ones show is in no cache key")
 }
