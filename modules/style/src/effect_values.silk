@@ -138,6 +138,17 @@ pub union Image {
     pub stops: List<GradientStop>,
     pub interpolation: colors.Interpolation,
   },
+  /// `cross-fade()`: images mixed by weight. A missing percentage shares what the given ones
+  /// leave of 100%. `-webkit-cross-fade(A, B, p)` is read as `cross-fade(A, B p)`.
+  CrossFade { pub layers: List<FadeLayer> },
+  /// `filter(<image>, <filter-value-list>)`: `source` holds the one image.
+  Filtered { pub source: List<Image>, pub filters: List<Filter> },
+}
+
+pub struct FadeLayer {
+  pub image: Image,
+  /// A percentage, 0% to 100%.
+  pub percent: Option<ExprId>,
 }
 
 pub struct MaskLayer {
@@ -505,6 +516,27 @@ effect fn copyImage(image: &Image) -> Image
       position: position,
       stops: run copyStops(&stops),
       interpolation: interpolation,
+    }
+    Image.CrossFade { layers } => {
+      let mut copied = List<FadeLayer>.make()
+      let mut i: usize = 0
+      while i < layers.length() {
+        let item = &layers.asSlice()[i]
+        run copied.append(FadeLayer { image: run copyImage(&item.image), percent: item.percent })
+        i = i + 1
+      }
+      return Image.CrossFade { layers: move copied }
+    }
+    Image.Filtered { source, filters } => {
+      let mut images = List<Image>.make()
+      if source.length() > 0 { run images.append(run copyImage(&source.asSlice()[0])) }
+      let mut list = List<Filter>.make()
+      let mut i: usize = 0
+      while i < filters.length() {
+        run list.append(run copyFilter(&filters.asSlice()[i]))
+        i = i + 1
+      }
+      return Image.Filtered { source: move images, filters: move list }
     }
   }
 }
@@ -1103,6 +1135,15 @@ effect fn imageInner(
   if cursor.function(input, b"image-set") || cursor.function(input, b"-webkit-image-set") {
     return run imageSet(&mut store.*, input, &mut cursor.*)
   }
+  if cursor.function(input, b"cross-fade") {
+    return run crossFade(&mut store.*, input, &mut cursor.*, false)
+  }
+  if cursor.function(input, b"-webkit-cross-fade") {
+    return run crossFade(&mut store.*, input, &mut cursor.*, true)
+  }
+  if cursor.function(input, b"filter") {
+    return run filteredImage(&mut store.*, input, &mut cursor.*)
+  }
   let mut repeating = false
   let mut radial = false
   if cursor.function(input, b"conic-gradient") {
@@ -1360,6 +1401,83 @@ effect fn conic(
       interpolation: interpolation,
     },
   )
+}
+
+// https://drafts.csswg.org/css-images-4/#cross-fade-function
+// Images only: a `<color>` layer is not read.
+effect fn crossFade(
+  store: &mut dimensions.Store<'_>,
+  input: &Input<'_>,
+  cursor: &mut Cursor,
+  legacy: bool,
+) -> Option<Image>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut layers = List<FadeLayer>.make()
+  while true {
+    cursor.skip(input)
+    if legacy && layers.length() == 2 {
+      // The third argument weighs the second image.
+      let percent = match run numeric(&mut store.*, input, &mut cursor.*, Dimension.Percentage, true, false) {
+        Option<ExprId>.Some { value } => value
+        _ => { return Option<Image>.None }
+      }
+      let slots = layers.asMutSlice()
+      slots[1].percent = Option<ExprId>.some(percent)
+      if !cursor.close(input) { return Option<Image>.None }
+      break
+    }
+    let mut percent = if legacy { Option<ExprId>.None } else { run numeric(&mut store.*, input, &mut cursor.*, Dimension.Percentage, true, false) }
+    cursor.skip(input)
+    let image = match run parseImage(&mut store.*, input, &mut cursor.*) {
+      Option<Image>.Some { value } => move value
+      _ => { return Option<Image>.None }
+    }
+    cursor.skip(input)
+    if !legacy && percent.isNone() {
+      percent = run numeric(&mut store.*, input, &mut cursor.*, Dimension.Percentage, true, false)
+    }
+    run layers.append(FadeLayer { image: move image, percent: percent })
+    cursor.skip(input)
+    if cursor.comma(input) { continue }
+    if legacy || !cursor.close(input) { return Option<Image>.None }
+    break
+  }
+  if layers.length() == 0 { return Option<Image>.None }
+  return Option<Image>.some(Image.CrossFade { layers: move layers })
+}
+
+// https://drafts.fxtf.org/filter-effects-1/#FilterCSSImageValue
+effect fn filteredImage(
+  store: &mut dimensions.Store<'_>,
+  input: &Input<'_>,
+  cursor: &mut Cursor,
+) -> Option<Image>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  cursor.skip(input)
+  let image = match run parseImage(&mut store.*, input, &mut cursor.*) {
+    Option<Image>.Some { value } => move value
+    _ => { return Option<Image>.None }
+  }
+  cursor.skip(input)
+  if !cursor.comma(input) { return Option<Image>.None }
+  let mut filters = List<Filter>.make()
+  while true {
+    cursor.skip(input)
+    let start = cursor.position
+    match run filterItem(&mut store.*, input, &mut cursor.*, false) {
+      Option<Filter>.Some { value } => { run filters.append(move value) }
+      _ => {
+        if cursor.position != start { return Option<Image>.None }
+        break
+      }
+    }
+  }
+  if filters.length() == 0 || !cursor.close(input) { return Option<Image>.None }
+  let mut source = List<Image>.make()
+  run source.append(move image)
+  return Option<Image>.some(Image.Filtered { source: move source, filters: move filters })
 }
 
 pub effect fn parseImage(
@@ -2942,6 +3060,33 @@ pub effect fn computeImage(
       position: run transform_values.computePosition(&position, &mut store.*, context),
       stops: run computeStops(&list, &mut store.*, context, colorContext),
       interpolation: interpolation,
+    }
+    Image.CrossFade { layers } => {
+      let mut computed = List<FadeLayer>.make()
+      let mut i: usize = 0
+      while i < layers.length() {
+        let item = &layers.asSlice()[i]
+        let percent = match item.percent {
+          Option<ExprId>.Some { value: given } => Option<ExprId>.some(run dimensions.compute(&mut store.*, given, context))
+          _ => Option<ExprId>.None
+        }
+        run computed.append(FadeLayer { image: run computeImage(&item.image, &mut store.*, context, colorContext), percent: percent })
+        i = i + 1
+      }
+      return Image.CrossFade { layers: move computed }
+    }
+    Image.Filtered { source, filters } => {
+      let mut images = List<Image>.make()
+      if source.length() > 0 {
+        run images.append(run computeImage(&source.asSlice()[0], &mut store.*, context, colorContext))
+      }
+      let mut list = List<Filter>.make()
+      let mut i: usize = 0
+      while i < filters.length() {
+        run list.append(run computeFilter(&filters.asSlice()[i], &mut store.*, context, colorContext))
+        i = i + 1
+      }
+      return Image.Filtered { source: move images, filters: move list }
     }
   }
 }
