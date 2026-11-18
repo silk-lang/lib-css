@@ -452,9 +452,10 @@ pub enum(u16) Property {
   PositionAnchor,
   PositionArea,
   PositionTryFallbacks,
+  InitialLetter,
 }
 
-pub const COUNT: usize = 449
+pub const COUNT: usize = 450
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -907,6 +908,7 @@ pub fn all() -> [Property; COUNT] {
     Property.PositionAnchor,
     Property.PositionArea,
     Property.PositionTryFallbacks,
+    Property.InitialLetter,
   ]
 }
 
@@ -1361,6 +1363,7 @@ pub fn index(property: Property) -> usize {
     Property.PositionAnchor => 446
     Property.PositionArea => 447
     Property.PositionTryFallbacks => 448
+    Property.InitialLetter => 449
   }
 }
 
@@ -1815,6 +1818,7 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.PositionAnchor => b"position-anchor"
     Property.PositionArea => b"position-area"
     Property.PositionTryFallbacks => b"position-try-fallbacks"
+    Property.InitialLetter => b"initial-letter"
   }
 }
 
@@ -2469,6 +2473,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     14 => {
+      if first == 105 && insensitive(name, b"initial-letter") {
+        return Option<Property>.some(Property.InitialLetter)
+      }
       if first == 115 && insensitive(name, b"stroke-opacity") {
         return Option<Property>.some(Property.StrokeOpacity)
       }
@@ -3712,6 +3719,7 @@ pub fn inherited(property: Property) -> bool {
     Property.PositionAnchor => false
     Property.PositionArea => false
     Property.PositionTryFallbacks => false
+    Property.InitialLetter => false
   }
 }
 
@@ -4168,6 +4176,7 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.PositionAnchor => b"auto"
     Property.PositionArea => b"none"
     Property.PositionTryFallbacks => b"none"
+    Property.InitialLetter => b"normal"
   }
 }
 
@@ -4202,7 +4211,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 372
+    Property.All => 373
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5764,6 +5773,9 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 371 {
         return Property.PositionTryFallbacks
+      }
+      if index == 372 {
+        return Property.InitialLetter
       }
     }
     Property.WhiteSpace => {
