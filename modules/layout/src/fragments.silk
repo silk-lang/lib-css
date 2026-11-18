@@ -35,29 +35,33 @@ pub struct Fragment {
   pub location: Point, pub visualOffset: Point,
   pub worldLocation: Point,
   pub kind: FragmentKind,
+  // One-byte fields fill the word `kind` starts, where they would otherwise
+  // pad it and the end of the struct: a long document holds hundreds of
+  // thousands of fragments.
+  pub first: bool, pub last: bool,
+  pub hasFirstBaseline: bool, pub hasLastBaseline: bool,
+  // Physical top=1, right=2, bottom=4, left=8.
+  pub decorationEdges: u8,
+  pub phantom: bool, pub repeated: bool,
   pub box: usize, pub source: usize,
   pub fragmentainer: usize,
   pub firstChild: usize, pub lastChild: usize,
   pub previousSibling: usize, pub nextSibling: usize,
   pub previousForBox: usize, pub nextForBox: usize,
+  pub textData: usize,
   pub size: Size,
   pub contentRect: Rect, pub paddingRect: Rect,
   pub layoutBounds: Rect, pub scrollableOverflow: Rect,
   // Logical block offsets in the owning box's writing mode.
   pub firstBaselines: BaselineSet, pub lastBaselines: BaselineSet,
-  pub hasFirstBaseline: bool, pub hasLastBaseline: bool,
   pub usedMargin: ResolvedEdges,
-  // Physical top=1, right=2, bottom=4, left=8.
-  pub decorationEdges: u8,
-  pub first: bool, pub last: bool,
-  pub phantom: bool, pub repeated: bool, pub overflowOnly: bool,
+  pub overflowOnly: bool,
   // No backgrounds, borders, shadows, or own scrollable overflow. Inline
   // interruptions retain source/containing geometry; anonymous Line anchors
   // only retain ancestry and pass through descendant overflow.
   pub nonpainting: bool,
   // An ancestry/containing-block carrier, not a generated source rectangle.
   pub positioningShell: bool,
-  pub textData: usize,
 }
 impl Copy for Fragment {}
 impl Fragment {
