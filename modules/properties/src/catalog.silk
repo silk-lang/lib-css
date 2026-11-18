@@ -454,9 +454,12 @@ pub enum(u16) Property {
   PositionTryFallbacks,
   Zoom,
   InitialLetter,
+  TextBox,
+  TextBoxTrim,
+  TextBoxEdge,
 }
 
-pub const COUNT: usize = 451
+pub const COUNT: usize = 454
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -911,6 +914,9 @@ pub fn all() -> [Property; COUNT] {
     Property.PositionTryFallbacks,
     Property.Zoom,
     Property.InitialLetter,
+    Property.TextBox,
+    Property.TextBoxTrim,
+    Property.TextBoxEdge,
   ]
 }
 
@@ -1367,6 +1373,9 @@ pub fn index(property: Property) -> usize {
     Property.PositionTryFallbacks => 448
     Property.Zoom => 449
     Property.InitialLetter => 450
+    Property.TextBox => 451
+    Property.TextBoxTrim => 452
+    Property.TextBoxEdge => 453
   }
 }
 
@@ -1823,6 +1832,9 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.PositionTryFallbacks => b"position-try-fallbacks"
     Property.Zoom => b"zoom"
     Property.InitialLetter => b"initial-letter"
+    Property.TextBox => b"text-box"
+    Property.TextBoxTrim => b"text-box-trim"
+    Property.TextBoxEdge => b"text-box-edge"
   }
 }
 
@@ -2003,6 +2015,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     8 => {
+      if first == 116 && insensitive(name, b"text-box") {
+        return Option<Property>.some(Property.TextBox)
+      }
       if first == 111 && insensitive(name, b"overflow") {
         return Option<Property>.some(Property.Overflow)
       }
@@ -2400,6 +2415,12 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     13 => {
+      if first == 116 && insensitive(name, b"text-box-trim") {
+        return Option<Property>.some(Property.TextBoxTrim)
+      }
+      if first == 116 && insensitive(name, b"text-box-edge") {
+        return Option<Property>.some(Property.TextBoxEdge)
+      }
       if first == 112 && insensitive(name, b"position-area") {
         return Option<Property>.some(Property.PositionArea)
       }
@@ -3728,6 +3749,9 @@ pub fn inherited(property: Property) -> bool {
     Property.PositionTryFallbacks => false
     Property.Zoom => false
     Property.InitialLetter => false
+    Property.TextBox => false
+    Property.TextBoxTrim => false
+    Property.TextBoxEdge => true
   }
 }
 
@@ -4186,6 +4210,9 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.PositionTryFallbacks => b"none"
     Property.Zoom => b"1"
     Property.InitialLetter => b"normal"
+    Property.TextBox => b"normal"
+    Property.TextBoxTrim => b"none"
+    Property.TextBoxEdge => b"auto"
   }
 }
 
@@ -4220,7 +4247,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 374
+    Property.All => 377
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5788,6 +5815,15 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 373 {
         return Property.InitialLetter
+      }
+      if index == 374 {
+        return Property.TextBox
+      }
+      if index == 375 {
+        return Property.TextBoxTrim
+      }
+      if index == 376 {
+        return Property.TextBoxEdge
       }
     }
     Property.WhiteSpace => {
