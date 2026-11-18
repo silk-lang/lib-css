@@ -267,6 +267,21 @@ test effect fn containerUnitsUseIndependentAxesAndSmallViewportFallback() ! Asse
 }
 
 
+test effect fn zoomMultipliesAbsoluteAndViewportUnits() ! AssertionError<'static> {
+  let mut context = Context.make()
+  context.viewportWidth = 1000.0
+  context.fontSize = 32.0
+  context.zoom = 2.0
+  let px = convert.pixelsPer(Unit.Px, &context)
+  let inch = convert.pixelsPer(Unit.In, &context)
+  let vw = convert.pixelsPer(Unit.Vw, &context)
+  let em = convert.pixelsPer(Unit.Em, &context)
+  run Testing.expect(match px { Option<f32>.Some { value } => value == 2.0 _ => false }, "px multiplies by the zoom")
+  run Testing.expect(match inch { Option<f32>.Some { value } => value == 192.0 _ => false }, "absolute units multiply by the zoom")
+  run Testing.expect(match vw { Option<f32>.Some { value } => value == 20.0 _ => false }, "viewport units multiply by the zoom")
+  run Testing.expect(match em { Option<f32>.Some { value } => value == 32.0 _ => false }, "font units read the already zoomed size")
+}
+
 effect fn fontUnits() ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
   let mut context = Context.make()
   context.fontSize = 20.0

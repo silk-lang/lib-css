@@ -71,6 +71,9 @@ pub struct Context {
   pub containerHeight: Option<f32>,
   pub containerInlineSize: Option<f32>,
   pub containerBlockSize: Option<f32>,
+  /// The element's effective `zoom`. Absolute and viewport units are multiplied by it; the
+  /// font sizes and metrics above are already zoomed, and container units read zoomed boxes.
+  pub zoom: f32,
 }
 
 impl Copy for Context {}
@@ -84,6 +87,7 @@ impl Context {
       smallViewportWidth: Option<f32>.None, smallViewportHeight: Option<f32>.None, vertical: false,
       containerWidth: Option<f32>.None, containerHeight: Option<f32>.None,
       containerInlineSize: Option<f32>.None, containerBlockSize: Option<f32>.None,
+      zoom: 1.0,
     }
   }
 
@@ -104,6 +108,25 @@ fn basis(size: Option<f32>, fallback: f32) -> f32 {
 
 /// CSS pixels per one `unit`, or `None` when `unit` is not a length this context resolves.
 pub fn pixelsPer(unit: Unit, context: &Context) -> Option<f32> {
+  let found = unzoomedPixelsPer(unit, context)
+  if context.zoom == 1.0 || !zoomScales(unit) { return found }
+  return match found {
+    Option.Some { value } => Option<f32>.some(value * context.zoom)
+    Option.None => Option<f32>.None
+  }
+}
+
+// Font-relative units read sizes that are zoomed already; container units read zoomed boxes.
+fn zoomScales(unit: Unit) -> bool {
+  return match unit {
+    Unit.Em | Unit.Rem | Unit.Ex | Unit.Ch | Unit.Ic | Unit.Cap | Unit.Lh
+      | Unit.Rex | Unit.Rch | Unit.Ric | Unit.Rcap | Unit.Rlh
+      | Unit.Cqw | Unit.Cqh | Unit.Cqi | Unit.Cqb | Unit.Cqmin | Unit.Cqmax => false
+    _ => true
+  }
+}
+
+fn unzoomedPixelsPer(unit: Unit, context: &Context) -> Option<f32> {
   let smaller = if context.viewportWidth < context.viewportHeight {
     context.viewportWidth
   } else {
