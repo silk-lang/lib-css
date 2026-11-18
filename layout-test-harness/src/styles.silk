@@ -520,7 +520,7 @@ effect fn shapeRadius(value: &Value, key: string) -> ShapeRadius ! ProtocolError
   fail P.invalid("invalid shape radius")
 }
 
-// `shapeOutside` is { kind, box, radiusX, radiusY, values } as in layout's FloatShape;
+// `shapeOutside` is { kind, box, radiusX, radiusY, values, rows } as in layout's FloatShape;
 // `shapeMargin` is a dimension.
 pub effect fn applyShape(value: &Value, tree: &mut Tree, id: NodeId)
   ! ProtocolError | OutOfMemoryError | InvalidNode
@@ -530,9 +530,9 @@ pub effect fn applyShape(value: &Value, tree: &mut Tree, id: NodeId)
   if P.has(value, "shapeMargin") { shape.margin = run dimension(run P.required(value, "shapeMargin")) }
   if P.has(value, "shapeOutside") {
     let outside = run P.required(value, "shapeOutside")
-    run P.fields(outside, &["kind", "box", "radiusX", "radiusY", "values"])
+    run P.fields(outside, &["kind", "box", "radiusX", "radiusY", "values", "rows"])
     let kind = run P.text(run P.required(outside, "kind"))
-    shape.kind = if kind == "none" { ShapeKind.None } else if kind == "box" { ShapeKind.Box } else if kind == "circle" { ShapeKind.Circle } else if kind == "ellipse" { ShapeKind.Ellipse } else if kind == "inset" { ShapeKind.Inset } else if kind == "polygon" { ShapeKind.Polygon } else { fail P.invalid("invalid shape kind") }
+    shape.kind = if kind == "none" { ShapeKind.None } else if kind == "box" { ShapeKind.Box } else if kind == "circle" { ShapeKind.Circle } else if kind == "ellipse" { ShapeKind.Ellipse } else if kind == "inset" { ShapeKind.Inset } else if kind == "polygon" { ShapeKind.Polygon } else if kind == "image" { ShapeKind.Image } else { fail P.invalid("invalid shape kind") }
     if P.has(outside, "box") {
       let name = run P.text(run P.required(outside, "box"))
       shape.reference = if name == "margin-box" { ShapeBox.MarginBox } else if name == "border-box" { ShapeBox.BorderBox } else if name == "padding-box" { ShapeBox.PaddingBox } else if name == "content-box" { ShapeBox.ContentBox } else { fail P.invalid("invalid shape box") }
@@ -544,6 +544,14 @@ pub effect fn applyShape(value: &Value, tree: &mut Tree, id: NodeId)
       let mut i: usize = 0
       while i < items.length {
         run shape.values.append(run dimension(&items[i]))
+        i = i + 1
+      }
+    }
+    if P.has(outside, "rows") {
+      let items = run P.array(run P.required(outside, "rows"))
+      let mut i: usize = 0
+      while i < items.length {
+        run shape.rows.append(run P.finite(&items[i]))
         i = i + 1
       }
     }
