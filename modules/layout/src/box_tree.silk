@@ -4,9 +4,9 @@ import silk.core.ownership { Copy }
 import silk.core.option { Option }
 import silk.text.string { String }
 import geometry { Point }
-import style { SizeContainment, Style, Display, DisplayOutside, DisplayInside, WritingMode, Direction, Align, Float, Position, BreakBetween, Visibility, DimensionKind, Overflow, ColumnSpan, WhiteSpaceCollapse }
+import style { SizeContainment, Style, Display, DisplayOutside, DisplayInside, WritingMode, Direction, Align, Float, BreakBetween, Visibility, DimensionKind, Overflow, ColumnSpan, WhiteSpaceCollapse }
 import tree { Node, Measurement, NO_NODE }
-import context { outOfFlow, scrollable, overflowForAxis }
+import context { outOfFlow, scrollable, overflowForAxis, containsAbsolute }
 import grid_style { GridTemplate }
 import silk.num.u32
 import shapes { FloatShape }
@@ -60,12 +60,17 @@ pub struct BoxTree<'a> {
   textStyles: List<usize>,
   // Whether any box is a column set (see columnChildren).
   pub columnSets: bool,
+  // Construction of a column flow (see columnChildren): the multi-column
+  // box whose spanners may sit at this depth, a spanner met below it, and
+  // the source path a split resumes along, with the next entry to take.
+  spanRoot: usize, spanHit: usize,
+  resumePath: List<usize>, resumeDepth: usize, resumeAfter: usize,
 }
 impl<'tree> BoxTree<'tree> {
   // A box tree built from these sources at an earlier revision, when no
   // change since could alter which boxes are generated.
   pub fn restore<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [GridTemplate], gridNames: &'a [String], boxes: List<BoxNode>, anonymousStyles: List<Style>, anonymousOrigins: List<usize>, anonymousText: List<bool>, firstBySource: List<usize>, lastBySource: List<usize>, copyScrolls: bool) -> BoxTree<'a> {
-    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, sources: sources, styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false }
+    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, sources: sources, styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false, spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE }
     if !copyScrolls { return move result }
     let values = result.boxes.asMutSlice()
     let mut index: usize = 0
@@ -124,12 +129,16 @@ impl<'tree> BoxTree<'tree> {
     while index > 0 {
       index = index - 1
       let node = self.boxes.get(index)
-      let needed = index == 0 || node.needsFragmentGeometry || self.style(index).position != Position.Static
+      let needed = index == 0 || node.needsFragmentGeometry || containsAbsolute(self.style(index))
       let style = self.style(index)
       // Break3 §4.1 suppresses internal break points and propagation through
       // monolithic content. Classification is stable across fragmentainers.
       let inlineLevel = style.display.outsideIs(DisplayOutside.Inline) && !node.blockify
-      let orthogonal = node.kind != BoxKind.Flex && (style.writingMode == WritingMode.HorizontalTb) != (frameMode == WritingMode.HorizontalTb)
+      // Against the parent's mode, so a vertical column flow's own content
+      // is not orthogonal to its columns.
+      let mut reference = frameMode
+      if node.parent != NO_NODE { reference = self.style(node.parent).writingMode }
+      let orthogonal = node.kind != BoxKind.Flex && (style.writingMode == WritingMode.HorizontalTb) != (reference == WritingMode.HorizontalTb)
       let x = overflowForAxis(style, true)
       let y = overflowForAxis(style, false)
       let mut dimension = style.height
@@ -140,7 +149,9 @@ impl<'tree> BoxTree<'tree> {
         overflow = x }
       let scrolling = x == Overflow.Auto || x == Overflow.Scroll || y == Overflow.Auto || y == Overflow.Scroll
       let clipped = overflow == Overflow.Hidden && dimension.kind != DimensionKind.Auto && maximum.kind == DimensionKind.None
-      let monolithic = node.kind == BoxKind.Table || node.kind == BoxKind.TablePart || style.sizeContainment == SizeContainment.Size || style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
+      // A column set inside another fragmentation context (columns or pages) keeps
+      // all its columns in one outer fragmentainer; it does not continue in the next.
+      let monolithic = node.columnSet || node.kind == BoxKind.Table || node.kind == BoxKind.TablePart || style.sizeContainment == SizeContainment.Size || style.layoutContainment || style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
       let applicable = !outOfFlow(style) && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex || node.kind == BoxKind.Grid)
       let mut before = applicable && style.breakBefore != BreakBetween.Auto
       let mut dynamicBefore = false
@@ -313,9 +324,19 @@ impl<'tree> BoxTree<'tree> {
 
   effect fn children(self: &mut Self, source: usize, flow: &mut Flow, inline: usize, parentWritingMode: WritingMode) ! OutOfMemoryError ? &mut Allocator {
     let mut child = self.sources[source].firstChild
+    if self.resumeDepth < self.resumePath.length() && self.resumePath.get(self.resumeDepth) == source {
+      // The continuation of a block a spanner split: go on after the spanner.
+      self.resumeDepth = self.resumeDepth + 1
+      if self.resumeDepth < self.resumePath.length() { child = self.resumePath.get(self.resumeDepth) } else { child = self.resumeAfter }
+    }
     while child != NO_NODE {
       let next = self.sources[child].nextSibling
+      if self.spanRoot != NO_NODE && inline == NO_NODE && self.spanner(child) {
+        self.spanHit = child
+        return
+      }
       run self.construct(child, &mut flow, inline, parentWritingMode)
+      if self.spanHit != NO_NODE { return }
       child = next
     }
   }
@@ -370,7 +391,7 @@ impl<'tree> BoxTree<'tree> {
     let mut kind = BoxKind.Block
     if !replaced {
       if display.insideIs(DisplayInside.Flex) { kind = BoxKind.Flex }
-      if display.insideIs(DisplayInside.Grid) { kind = BoxKind.Grid }
+      if display.isGrid() { kind = BoxKind.Grid }
       if inlineLevel && display.insideIs(DisplayInside.Flow) && !differentWritingMode { kind = BoxKind.Inline }
       if display.insideIs(DisplayInside.Table) { kind = BoxKind.Table }
       if tablePart && !display.insideIs(DisplayInside.TableCell) && !display.insideIs(DisplayInside.TableCaption) && !display.insideIs(DisplayInside.TableColumn) { kind = BoxKind.TablePart }
@@ -378,7 +399,7 @@ impl<'tree> BoxTree<'tree> {
     // Writing Modes 4 3.2 compares against the nearest box-generating parent;
     // contents and generated wrappers do not substitute a source parent here.
     let multicol = kind == BoxKind.Block && !measured && style.multicol()
-    let independent = kind != BoxKind.Inline && (multicol || style.sizeContainment != SizeContainment.None || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || display.insideIs(DisplayInside.TableCell) || display.insideIs(DisplayInside.TableCaption) || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
+    let independent = kind != BoxKind.Inline && (multicol || style.sizeContainment != SizeContainment.None || style.layoutContainment || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || display.insideIs(DisplayInside.TableCell) || display.insideIs(DisplayInside.TableCaption) || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
     let node = BoxNode {
       source: source, styleOwner: source, anonymousStyle: NO_NODE, styleIndex: self.sources[source].styleIndex, kind: kind,
       parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE,
@@ -399,7 +420,10 @@ impl<'tree> BoxTree<'tree> {
     if kind == BoxKind.Inline {
       let parent = run self.inlineParent(&mut flow, inline)
       let id = run self.append(node, parent)
+      let spanRoot = self.spanRoot
+      self.spanRoot = NO_NODE
       if !measured { run self.children(source, &mut flow, id, writingMode) }
+      self.spanRoot = spanRoot
       // Even a trailing block requires an empty closing continuation.
       drop run self.inlineParent(&mut flow, id)
       return
@@ -435,6 +459,10 @@ impl<'tree> BoxTree<'tree> {
     // Replaced content is opaque even if the source API contains descendants.
     // Measured leaves retain their provider key; construction invents no text.
     // A column's children are not rendered (CSS 2 §17.2).
+    // Spanners split only in-flow blocks of the column flow's own formatting
+    // context (Multicol 1 §6.1).
+    let spanRoot = self.spanRoot
+    if independent || kind != BoxKind.Block || inlineLevel || inline != NO_NODE { self.spanRoot = NO_NODE }
     if multicol {
       run self.columnChildren(source, id, writingMode)
     } else if !replaced && !measured && !(tablePart && display.insideIs(DisplayInside.TableColumn)) {
@@ -442,14 +470,19 @@ impl<'tree> BoxTree<'tree> {
       run self.children(source, &mut nested, NO_NODE, writingMode)
       run self.finishFlow(&mut nested)
     }
+    self.spanRoot = spanRoot
   }
 
   // A multi-column container's children: runs of content in column sets,
   // each a column set box holding one column flow box, split at spanners
   // (`column-span: all` children), which stay the container's own children.
   // Collapsible whitespace between spanners makes no column set.
+  // A spanner deeper in the flow splits the blocks around it: the part before
+  // ends the set, the spanner follows it, and continuations of those blocks
+  // carry what comes after into the next set.
   effect fn columnChildren(self: &mut Self, source: usize, id: usize, writingMode: WritingMode) ! OutOfMemoryError ? &mut Allocator {
     let collapsible = self.style(id).whiteSpaceCollapse == WhiteSpaceCollapse.Collapse
+    let spanRoot = self.spanRoot
     let mut flow = Flow.make(NO_NODE)
     let mut child = self.sources[source].firstChild
     while child != NO_NODE {
@@ -459,16 +492,54 @@ impl<'tree> BoxTree<'tree> {
           run self.finishFlow(&mut flow)
           flow = Flow.make(NO_NODE)
         }
-        let mut outer = Flow.make(id)
-        run self.construct(child, &mut outer, NO_NODE, writingMode)
-        run self.finishFlow(&mut outer)
+        run self.spannerBox(child, id, writingMode)
       } else if flow.container != NO_NODE || !(collapsible && self.blankText(child)) {
         if flow.container == NO_NODE { flow = Flow.make(run self.columnSet(id)) }
+        self.spanRoot = id
         run self.construct(child, &mut flow, NO_NODE, writingMode)
+        while self.spanHit != NO_NODE {
+          let hit = self.spanHit
+          self.spanHit = NO_NODE
+          run self.finishFlow(&mut flow)
+          run self.spannerBox(hit, id, writingMode)
+          self.resumePath.clear()
+          let mut at = self.sources[hit].parent
+          while true {
+            run self.resumePath.append(at)
+            if at == child { break }
+            at = self.sources[at].parent
+          }
+          let path = self.resumePath.asMutSlice()
+          let mut low: usize = 0
+          let mut high = path.length
+          while low + 1 < high {
+            high = high - 1
+            let value = path[low]
+            path[low] = path[high]
+            path[high] = value
+            low = low + 1
+          }
+          self.resumeDepth = 0
+          self.resumeAfter = self.sources[hit].nextSibling
+          flow = Flow.make(run self.columnSet(id))
+          self.spanRoot = id
+          run self.construct(child, &mut flow, NO_NODE, writingMode)
+        }
+        self.resumePath.clear()
+        self.resumeDepth = 0
       }
       child = next
     }
     if flow.container != NO_NODE { run self.finishFlow(&mut flow) }
+    self.spanRoot = spanRoot
+  }
+  // A spanner is the multi-column container's own child and a formatting
+  // context of its own.
+  effect fn spannerBox(self: &mut Self, source: usize, container: usize, writingMode: WritingMode) ! OutOfMemoryError ? &mut Allocator {
+    self.spanRoot = NO_NODE
+    let mut outer = Flow.make(container)
+    run self.construct(source, &mut outer, NO_NODE, writingMode)
+    run self.finishFlow(&mut outer)
   }
   fn spanner(self: &Self, source: usize) -> bool {
     if self.sources[source].isText() { return false }
@@ -546,6 +617,7 @@ fn runStyle(parent: &Style) -> Style {
   style.columnCount = parent.columnCount
   style.columnWidth = parent.columnWidth
   style.columnGap = parent.columnGap
+  style.bounds = parent.bounds
   style.columnFill = parent.columnFill
   return move style
 }
@@ -624,6 +696,7 @@ pub effect fn build<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [Gr
     anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
     firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), sources: sources,
     styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false,
+    spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE,
   }
   run result.boxes.reserveExact(sources.length + 1)
   run result.firstBySource.reserveExact(sources.length)

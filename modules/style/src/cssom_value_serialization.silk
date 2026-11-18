@@ -13,7 +13,7 @@ import values {
 }
 import values
 import colors
-import colors { ColorProgram, ColorNode, HueMethod }
+import colors { ColorProgram, ColorNode, ChannelOp, HueMethod, Space }
 import properties { Property }
 import properties
 import cssom_shorthand
@@ -27,6 +27,7 @@ import silk.collections.bytes { Bytes }
 import silk.core.option { Option }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.f64
+import silk.num.u8
 
 effect fn appendKeyword(out: &mut Bytes, name: &[u8]) -> ()
   ! OutOfMemoryError
@@ -420,5 +421,77 @@ effect fn appendColorNode(out: &mut Bytes, program: &ColorProgram, index: usize)
       run serialization.appendNumber(&mut out.*, (1.0 - leftWeight) * alphaMultiplier * 100.0)
       run out.append(b"%)")
     }
+    ColorNode.Relative { origin, space, legacy, first, lengths } => {
+      let generic = !legacy && (space == Space.Srgb || space == Space.SrgbLinear || space == Space.DisplayP3
+        || space == Space.DisplayP3Linear || space == Space.A98Rgb || space == Space.ProphotoRgb
+        || space == Space.Rec2020 || space == Space.XyzD50 || space == Space.XyzD65)
+      run out.append(if legacy { b"rgb" } else if generic { b"color" } else { colors.spaceName(space) })
+      run out.append(b"(from ")
+      run appendColorNode(&mut out.*, program, origin)
+      if generic {
+        run out.append(b" ")
+        run out.append(colors.spaceName(space))
+      }
+      let names = colors.channelNames(space)
+      let mut at = first
+      let mut k: usize = 0
+      while k < 4 {
+        run out.append(if k == 3 { b" / " } else { b" " })
+        let count = u8.toUsize(lengths[k])
+        run appendChannel(&mut out.*, program.ops.asSlice(), at, count, names)
+        at = at + count
+        k = k + 1
+      }
+      run out.append(b")")
+    }
+  }
+}
+
+/// One relative color channel: a keyword, a number, `none`, or `calc()` over them.
+effect fn appendChannel(out: &mut Bytes, ops: &[ChannelOp], start: usize, count: usize, names: [&'static [u8]; 3]) -> ()
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut stack = List<Bytes>.make()
+  let mut i = start
+  while i < start + count && i < ops.length {
+    match ops[i] {
+      ChannelOp.Number { value } => {
+        let mut text = Bytes.make()
+        run serialization.appendNumber(&mut text, value)
+        run stack.append(move text)
+      }
+      ChannelOp.Channel { index } => {
+        let mut text = Bytes.make()
+        run text.append(if index == 3 { b"alpha" } else { names[u8.toUsize(index)] })
+        run stack.append(move text)
+      }
+      ChannelOp.Missing => {
+        let mut text = Bytes.make()
+        run text.append(b"none")
+        run stack.append(move text)
+      }
+      _ => {
+        if stack.length() < 2 { return () }
+        let last = stack.length() - 1
+        let right = stack.remove(last)
+        let before = last - 1
+        let left = stack.remove(before)
+        let mut text = Bytes.make()
+        run text.append(b"(")
+        run text.append(left.asSlice())
+        run text.append(match ops[i] { ChannelOp.Add => b" + " ChannelOp.Subtract => b" - " ChannelOp.Multiply => b" * " _ => b" / " })
+        run text.append(right.asSlice())
+        run text.append(b")")
+        run stack.append(move text)
+      }
+    }
+    i = i + 1
+  }
+  if stack.length() != 1 { return () }
+  let only = stack.asSlice()[0].asSlice()
+  if count > 1 {
+    run out.append(b"calc")
+    run out.append(only)
+  } else {
+    run out.append(only)
   }
 }
