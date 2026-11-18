@@ -132,7 +132,7 @@ impl Edges {
 pub enum DisplayOutside { Block, Inline }
 // CSS Display 3 §2.4: the layout-internal table values are kept as inner display types of
 // block-level boxes, so `outsideIs(Block)` holds for them.
-pub enum DisplayInside { Flow, FlowRoot, Flex, Grid, Table, TableRowGroup, TableHeaderGroup, TableFooterGroup, TableRow, TableColumnGroup, TableColumn, TableCell, TableCaption }
+pub enum DisplayInside { Flow, FlowRoot, Flex, Grid, Table, TableRowGroup, TableHeaderGroup, TableFooterGroup, TableRow, TableColumnGroup, TableColumn, TableCell, TableCaption, GridLanes }
 pub union Display {
   Box { pub outside: DisplayOutside, pub inside: DisplayInside },
   None,
@@ -173,10 +173,17 @@ impl Display {
       _ => false
     }
   }
+  // A grid container, including a grid lanes (masonry) one.
+  pub fn isGrid(self: &Self) -> bool {
+    return match self.* {
+      Display.Box { outside: _, inside } => inside == DisplayInside.Grid || inside == DisplayInside.GridLanes
+      _ => false
+    }
+  }
   // A layout-internal table box: a row group, row, column (group), cell or caption.
   pub fn isTablePart(self: &Self) -> bool {
     return match self.* {
-      Display.Box { outside: _, inside } => inside != DisplayInside.Flow && inside != DisplayInside.FlowRoot && inside != DisplayInside.Flex && inside != DisplayInside.Grid && inside != DisplayInside.Table
+      Display.Box { outside: _, inside } => inside != DisplayInside.Flow && inside != DisplayInside.FlowRoot && inside != DisplayInside.Flex && inside != DisplayInside.Grid && inside != DisplayInside.Table && inside != DisplayInside.GridLanes
       _ => false
     }
   }

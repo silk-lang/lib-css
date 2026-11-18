@@ -1,0 +1,51 @@
+{
+  "name": "grid-lanes-max-height-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "max-height clamps the container; items overflow it.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "width": 200,
+          "maxHeight": 50,
+          "minHeight": 20,
+          "gridTemplateColumns": [
+            100,
+            100
+          ]
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 40
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 10
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 30
+        }
+      }
+    ]
+  }
+}
