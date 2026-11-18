@@ -1,4 +1,6 @@
 import silk.core.ownership { Copy }
+import silk.num.u64
+import silk.num.f32
 import style { SizeContainment }
 import geometry { OptionalSize, AvailableSpace, Size, Point, ResolvedEdges, ScrollbarMetrics, max, min, clamp }
 import style { Dimension, SizeValue, Bounds, DimensionKind, Edges, Style, BoxSizing, Position, Display, DisplayInside, DisplayOutside, Overflow, ScrollbarWidth, ScrollbarGutter, Float, WritingMode, TextOrientation, Direction, Align, OverflowAlignment, VerticalAlignKind }
@@ -35,6 +37,7 @@ pub struct Input {
   pub gridContext: usize,
   // A digest of the placements a table gave a row group's or row's children
   // (table.silk), so a cached part is reused only under the same placements.
+  // With CELL_BORDERS set, a collapsed-border cell's used borders instead (cellBorders).
   pub tablePlan: u64,
   pub fragmentation: FragmentInput,
 }
@@ -162,6 +165,21 @@ fn minimumLength(value: SizeValue, bounds: &Bounds, basis: f32, definite: bool) 
   if value.kind == DimensionKind.Clamp { return max(value.value, min(value.percent * used, value.bound)) }
   return bounds.hold(value.kind, value.slot, value.value + value.percent * used)
 }
+// A cell of a table with collapsing borders gets half of each resolved border
+// (CSS 2 §17.6.2), packed in its tablePlan as four 15-bit counts of 1/64 px.
+pub const CELL_BORDERS: u64 = 9223372036854775808
+const BORDER_BITS: u64 = 32767
+fn borderUnits(value: f32) -> u64 { return f32.toU64(min(32767.0, f32.round(max(0.0, value) * 64.0))) }
+pub fn packCellBorders(border: ResolvedEdges) -> u64 {
+  let low = u64.bitOr(borderUnits(border.top), u64.shiftLeft(borderUnits(border.right), 15))
+  let high = u64.bitOr(u64.shiftLeft(borderUnits(border.bottom), 30), u64.shiftLeft(borderUnits(border.left), 45))
+  return u64.bitOr(CELL_BORDERS, u64.bitOr(low, high))
+}
+fn unpackBorder(plan: u64, shift: u64) -> f32 { return u64.toF32(u64.bitAnd(u64.shiftRight(plan, shift), BORDER_BITS)) / 64.0 }
+pub fn cellBorders(plan: u64) -> ResolvedEdges {
+  return ResolvedEdges { top: unpackBorder(plan, 0), right: unpackBorder(plan, 15), bottom: unpackBorder(plan, 30), left: unpackBorder(plan, 45) }
+}
+
 @inlineAlways
 pub fn resolveBox(style: &Style, input: &Input) -> ResolvedBox {
   return resolveBoxEdges(style, input, false)
@@ -185,6 +203,7 @@ pub fn resolveBoxEdges(style: &Style, input: &Input, zeroEdges: bool) -> Resolve
     border = edges(style.border, 0.0, false)
     margin = edgesIn(style.margin, &style.bounds, basis, basisDefinite)
   }
+  if input.tablePlan >= CELL_BORDERS { border = cellBorders(input.tablePlan) }
   let inset = ResolvedEdges { top: padding.top + border.top, right: padding.right + border.right, bottom: padding.bottom + border.bottom, left: padding.left + border.left }
   let mut addWidth = inset.horizontal()
   let mut addHeight = inset.vertical()
