@@ -5,7 +5,7 @@ import silk.num.usize
 import silk.num.f32
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Edges, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind, Visibility }
+import style { Style, Edges, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind, Visibility, CaptionSide }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableKind, max, abs }
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import tree { Tree, LayoutTree, NodeId, InvalidNode }
@@ -511,4 +511,38 @@ effect fn borderConflicts() ! OutOfMemoryError | TextError | FragmentationError 
 test effect fn tableBorderConflicts() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run borderConflicts() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// Captions sit outside the table's borders and padding, across its width, as in browsers.
+effect fn captionsOutsideBorders() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut style = bordered(DisplayInside.Table, 3.0)
+  style.padding = Edges.all(Dimension.px(5.0))
+  style.borderSpacingX = 2.0
+  style.borderSpacingY = 2.0
+  let table = run tree.append(root, move style)
+  let mut top = styled(DisplayInside.TableCaption)
+  top.height = SizeValue.px(10.0)
+  let above = run tree.append(table, move top)
+  let row = run tree.append(table, styled(DisplayInside.TableRow))
+  let mut set = styled(DisplayInside.TableCell)
+  set.width = SizeValue.px(50.0)
+  set.height = SizeValue.px(20.0)
+  let cell = run tree.append(row, move set)
+  let mut bottom = styled(DisplayInside.TableCaption)
+  bottom.height = SizeValue.px(10.0)
+  bottom.captionSide = CaptionSide.Bottom
+  let below = run tree.append(table, move bottom)
+  let mut output = LayoutTree.make()
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, table, 0.0, 0.0, 70.0, 60.0, "the table holds its captions, borders, padding and spacing")
+  run expectBox(&output, above, 0.0, 0.0, 70.0, 10.0, "a top caption comes before the border")
+  run expectBox(&output, cell, 10.0, 20.0, 50.0, 20.0, "the grid sits inside the border, padding and spacing")
+  run expectBox(&output, below, 0.0, 50.0, 70.0, 10.0, "a bottom caption comes after the border")
+}
+
+test effect fn tableCaptionsOutsideBorders() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run captionsOutsideBorders() |> Effect.provideMut<Allocator>(&mut allocator)
 }

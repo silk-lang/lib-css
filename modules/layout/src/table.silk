@@ -882,12 +882,13 @@ pub effect fn layoutTable<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxT
   if !fixed { high = gridMaximum(plan.columns.asSlice()) }
   let mut tableMin = low + gaps + insetWidth
   let mut tableMax = max(tableMin, high + gaps + insetWidth)
-  // §17.4: the table is at least as wide as its captions need.
+  // §17.4: the table is at least as wide as its captions need. As in browsers, captions
+  // sit outside the table's borders and padding, across its whole width.
   index = 0
   while index < plan.captions.length() {
     let caption = plan.captions.get(index)
     run probeNode(nodes, &mut output, &mut measurer, caption, &widthProbe(&base, true, 0))
-    tableMin = max(tableMin, output.boxes[caption].size.width + insetWidth)
+    tableMin = max(tableMin, output.boxes[caption].size.width)
     tableMax = max(tableMax, tableMin)
     index = index + 1
   }
@@ -975,7 +976,7 @@ pub effect fn layoutTable<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxT
     else { visibleRows = visibleRows + 1 }
     index = index + 1
   }
-  let captionWidth = max(0.0, width - insetWidth)
+  let captionWidth = width
   let mut above: f32 = 0.0
   let mut below: f32 = 0.0
   index = 0
@@ -1008,7 +1009,7 @@ pub effect fn layoutTable<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxT
       index = index + 1
     }
   }
-  let gridTop = frame.top + above
+  let gridTop = above + frame.top
   let mut y = gridTop + frame.spacingY
   index = 0
   while index < rowCount {
@@ -1098,13 +1099,13 @@ pub effect fn layoutTable<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxT
     }
     pass = pass + 1
   }
-  let mut captionTop = frame.top
-  let mut captionBottom = gridTop + grid
+  let mut captionTop: f32 = 0.0
+  let mut captionBottom = gridTop + grid + frame.bottom
   index = 0
   while index < plan.captions.length() {
     let caption = plan.captions.get(index)
     let height = output.boxes[caption].size.height
-    let mut rect = Rect { x: frame.left, y: captionTop, width: captionWidth, height: height }
+    let mut rect = Rect { x: 0.0, y: captionTop, width: captionWidth, height: height }
     if nodes.style(caption).captionSide == CaptionSide.Bottom {
       rect.y = captionBottom
       captionBottom = captionBottom + height
