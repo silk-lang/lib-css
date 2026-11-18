@@ -273,6 +273,10 @@ pub struct FontFeatures {
   pub count: usize,
   /// `font-variation-settings` as a handle the host defines; 0 is `normal`.
   pub variations: u32,
+  /// Other font properties the host packs into one word (`font-palette`,
+  /// `font-variant-alternates`, `font-size-adjust`, `font-smooth`); 0 is every one initial.
+  /// It sits in what was padding, so `Text` keeps its size.
+  pub extras: u32,
 }
 
 impl Copy for FontFeatures {}
@@ -321,12 +325,14 @@ impl FontFeatures {
       values: [0, 0, 0, 0, 0, 0, 0, 0],
       count: 0,
       variations: 0,
+      extras: 0,
     }
   }
 
   /// Whether `self` and `other` ask the shaper for the same features and axis values.
   pub fn same(self: &Self, other: &FontFeatures) -> bool {
-    if self.variant != other.variant || self.count != other.count || self.variations != other.variations {
+    if self.variant != other.variant || self.count != other.count || self.variations != other.variations
+      || self.extras != other.extras {
       return false
     }
     let mut i: usize = 0
