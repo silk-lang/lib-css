@@ -255,6 +255,17 @@ pub enum MathOperator {
   Min,
   Max,
   Clamp,
+  // The stepped-value and sign functions over values only known once a font or a viewport is:
+  // `round(up, 2.3em, 1em)`. Over constants they are folded where they are read.
+  RoundNearest,
+  RoundUp,
+  RoundDown,
+  RoundToZero,
+  Mod,
+  Rem,
+  Abs,
+  Sign,
+  Hypot,
 }
 
 /// What separates the items of a value with several components.
@@ -676,6 +687,21 @@ effect fn writeMath(out: &mut Bytes, operator: MathOperator, values: &List<Value
     }
     MathOperator.Clamp => {
       run out.append(b"clamp(")
+      run writeJoined(&mut out.*, values, b", ", false)
+      run out.append(b")")
+    }
+    _ => {
+      run out.append(match operator {
+        MathOperator.RoundNearest => b"round("
+        MathOperator.RoundUp => b"round(up, "
+        MathOperator.RoundDown => b"round(down, "
+        MathOperator.RoundToZero => b"round(to-zero, "
+        MathOperator.Mod => b"mod("
+        MathOperator.Rem => b"rem("
+        MathOperator.Abs => b"abs("
+        MathOperator.Sign => b"sign("
+        _ => b"hypot("
+      })
       run writeJoined(&mut out.*, values, b", ", false)
       run out.append(b")")
     }

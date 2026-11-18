@@ -2,7 +2,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
 import context { UNBOUNDED }
-import style { Dimension }
+import style { Dimension, Bounds }
 import grid_style {
   GridAxis,
   GridBreadth,
@@ -33,6 +33,7 @@ fn sizing(size: f32) -> RepeatSizing {
     maximum: UNBOUNDED,
     definite: true,
     gap: Dimension.px(0.0),
+    bounds: Bounds.none(),
   }
 }
 
