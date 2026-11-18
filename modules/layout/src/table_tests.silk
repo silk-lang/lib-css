@@ -5,8 +5,12 @@ import silk.num.usize
 import silk.num.f32
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Edges, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind, Visibility, CaptionSide }
-import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableKind, max, abs }
+import style { Style, Edges, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind, Visibility, CaptionSide, BreakBetween, Direction, WritingMode }
+import silk.core.option { Option }
+import fragment_flow { computeFragmented }
+import fragmentation { Fragmentainers, FragmentAncestor }
+import breaks { FragmentainerKind }
+import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, Point, OptionalSize, AvailableKind, max, abs }
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import tree { Tree, LayoutTree, NodeId, InvalidNode }
 import engine { compute }
@@ -545,4 +549,186 @@ effect fn captionsOutsideBorders() ! OutOfMemoryError | TextError | Fragmentatio
 test effect fn tableCaptionsOutsideBorders() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run captionsOutsideBorders() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+fn pages<'a>(rects: &'a [Rect]) -> Fragmentainers<'a> {
+  return Fragmentainers {
+    rects: Option<&'a [Rect]>.Some { value: rects }, repeatStep: Option<Point>.None, uniform: Option<Rect>.None,
+    contexts: Option<&'a [FragmentainerKind]>.None, ancestors: Option<&'a [FragmentAncestor]>.None,
+    kind: FragmentainerKind.Page, writingMode: WritingMode.HorizontalTb,
+    direction: Direction.Ltr, firstPageRight: true, rectoOnRight: true,
+  }
+}
+// The `index`th fragment of `id`, zero when it has fewer.
+effect fn nth(output: &LayoutTree, id: NodeId, index: usize) -> Rect ! InvalidNode {
+  let mut rects = run output.sourceRects(id)
+  let mut at: usize = 0
+  while true {
+    match move rects.next() {
+      Option<Rect>.Some { value } => {
+        if at == index { return value }
+        at = at + 1
+      }
+      Option<Rect>.None => { return Rect.zero() }
+    }
+  }
+  return Rect.zero()
+}
+effect fn fragments(output: &LayoutTree, id: NodeId) -> usize ! InvalidNode {
+  let mut rects = run output.sourceRects(id)
+  let mut count: usize = 0
+  while true {
+    match move rects.next() {
+      Option<Rect>.Some { value } => {
+        drop value
+        count = count + 1
+      }
+      Option<Rect>.None => { return count }
+    }
+  }
+  return count
+}
+effect fn expectRect(rect: Rect, x: f32, y: f32, width: f32, height: f32, message: string<'static>) ! AssertionError<'static> {
+  let close = abs(rect.x - x) < 0.01 && abs(rect.y - y) < 0.01 && abs(rect.width - width) < 0.01 && abs(rect.height - height) < 0.01
+  run Testing.expect(close, message)
+}
+effect fn paged(tree: &Tree, output: &mut LayoutTree, rects: &[Rect]) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let mut host = WordHost {}
+  run computeFragmented(&tree, &mut output, &mut host, OptionalSize.definite(200.0, 100.0), pages(rects))
+}
+effect fn rowOf(tree: &mut Tree, parent: NodeId, word: usize) -> NodeId ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let row = run tree.append(parent, styled(DisplayInside.TableRow))
+  drop run cell(&mut tree, row, word, word)
+  return row
+}
+
+// Pages break a table between rows; a short header group repeats on each page.
+effect fn pagedRows() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let table = run tree.append(root, styled(DisplayInside.Table))
+  let head = run tree.append(table, styled(DisplayInside.TableHeaderGroup))
+  let heading = run tree.append(head, styled(DisplayInside.TableRow))
+  let title = run cell(&mut tree, heading, 40, 40)
+  let body = run tree.append(table, styled(DisplayInside.TableRowGroup))
+  let mut rows = List<NodeId>.make()
+  let mut index: usize = 0
+  while index < 6 {
+    run rows.append(run rowOf(&mut tree, body, 40))
+    index = index + 1
+  }
+  let mut rects = List<Rect>.make()
+  run rects.append(Rect { x: 0.0, y: 0.0, width: 200.0, height: 100.0 })
+  run rects.append(Rect { x: 0.0, y: 120.0, width: 200.0, height: 100.0 })
+  let mut output = LayoutTree.make()
+  run paged(&tree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, table, 0), 0.0, 0.0, 40.0, 100.0, "the first page holds the header and four rows")
+  run expectRect(run nth(&output, rows.get(3), 0), 0.0, 80.0, 40.0, 20.0, "the fourth row ends the first page")
+  run expectRect(run nth(&output, rows.get(4), 0), 0.0, 140.0, 40.0, 20.0, "the fifth row opens the second page below the header")
+  run expectRect(run nth(&output, rows.get(5), 0), 0.0, 160.0, 40.0, 20.0, "and the sixth follows it")
+  let countheading2 = run fragments(&output, heading)
+  run Testing.expect(countheading2 == 2, "the header row repeats on the second page")
+  run expectRect(run nth(&output, heading, 1), 0.0, 120.0, 40.0, 20.0, "at its top")
+  run expectRect(run nth(&output, body, 1), 0.0, 140.0, 40.0, 40.0, "the body's second fragment holds its last two rows")
+  run expectRect(run nth(&output, table, 1), 0.0, 120.0, 40.0, 60.0, "and the table's the header and those rows")
+
+  // A cell spanning two rows keeps them on one page: the fourth row moves with the fifth.
+  // The fifth row's own cell moves past the spanning one, into a second column.
+  let spanRow = rows.get(3)
+  run tree.remove(spanRow)
+  let mut joinedStyle = styled(DisplayInside.TableRow)
+  joinedStyle.height = SizeValue.px(20.0)
+  let joined = run tree.create(move joinedStyle)
+  run tree.insertBefore(body, joined, Option<NodeId>.Some { value: rows.get(4) })
+  drop run spanning(&mut tree, joined, 40, 40, 1, 2)
+  run paged(&tree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, rows.get(2), 0), 0.0, 60.0, 80.0, 20.0, "the third row stays on the first page")
+  run expectRect(run nth(&output, joined, 0), 0.0, 140.0, 80.0, 20.0, "the spanned rows open the second page together")
+  run expectRect(run nth(&output, rows.get(4), 0), 0.0, 160.0, 80.0, 20.0, "the row the cell spans into follows")
+
+  // A header taller than a quarter of the page does not repeat.
+  let mut tall = styled(DisplayInside.TableCell)
+  tall.height = SizeValue.px(30.0)
+  run tree.setStyle(title, move tall)
+  run paged(&tree, &mut output, rects.asSlice())
+  let countheading1 = run fragments(&output, heading)
+  run Testing.expect(countheading1 == 1, "a tall header stays on the first page")
+}
+test effect fn tableBreaksBetweenRows() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run pagedRows() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// A table whose first row does not fit moves to the next page; a short footer repeats
+// at the end of each fragment and a forced break between rows starts a new page.
+effect fn pagedFooter() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut tall = Style.make()
+  tall.height = SizeValue.px(90.0)
+  let before = run tree.append(root, move tall)
+  let mut tableStyle = styled(DisplayInside.Table)
+  tableStyle.borderSpacingX = 2.0
+  tableStyle.borderSpacingY = 2.0
+  let table = run tree.append(root, move tableStyle)
+  let body = run tree.append(table, styled(DisplayInside.TableRowGroup))
+  let first = run rowOf(&mut tree, body, 40)
+  let second = run rowOf(&mut tree, body, 40)
+  let third = run rowOf(&mut tree, body, 40)
+  let foot = run tree.append(table, styled(DisplayInside.TableFooterGroup))
+  let total = run rowOf(&mut tree, foot, 40)
+  let mut rects = List<Rect>.make()
+  run rects.append(Rect { x: 0.0, y: 0.0, width: 200.0, height: 100.0 })
+  run rects.append(Rect { x: 0.0, y: 120.0, width: 200.0, height: 100.0 })
+  run rects.append(Rect { x: 0.0, y: 240.0, width: 200.0, height: 100.0 })
+  let mut output = LayoutTree.make()
+  run paged(&tree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, first, 0), 2.0, 122.0, 40.0, 20.0, "the table moves to the second page when its first row does not fit")
+  run expectRect(run nth(&output, third, 0), 2.0, 166.0, 40.0, 20.0, "the rows follow it")
+  run expectRect(run nth(&output, total, 0), 2.0, 188.0, 40.0, 20.0, "and the footer ends the table")
+  let counttotal1 = run fragments(&output, total)
+  run Testing.expect(counttotal1 == 1, "a table on one page has one footer")
+  run tree.remove(before)
+  let mut forced = styled(DisplayInside.TableRow)
+  forced.breakBefore = BreakBetween.Page
+  run tree.setStyle(second, move forced)
+  run paged(&tree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, first, 0), 2.0, 2.0, 40.0, 20.0, "without the tall block the table starts on the first page")
+  run expectRect(run nth(&output, total, 0), 2.0, 24.0, 40.0, 20.0, "the footer repeats after the first page's rows")
+  run expectRect(run nth(&output, second, 0), 2.0, 122.0, 40.0, 20.0, "break-before: page on a row starts a new page")
+  run expectRect(run nth(&output, total, 1), 2.0, 166.0, 40.0, 20.0, "the last footer ends the table")
+  let counttotal2 = run fragments(&output, total)
+  run Testing.expect(counttotal2 == 2, "one footer per fragment")
+}
+test effect fn tableFooterRepeatsAndForcedBreaks() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run pagedFooter() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// In a multi-column container a table balances across the columns, row by row.
+effect fn columnRows() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut container = Style.make()
+  container.width = SizeValue.px(200.0)
+  container.columnCount = 2
+  container.columnGap = Dimension.px(10.0)
+  let columns = run tree.append(root, move container)
+  let table = run tree.append(columns, styled(DisplayInside.Table))
+  let mut rows = List<NodeId>.make()
+  let mut index: usize = 0
+  while index < 4 {
+    run rows.append(run rowOf(&mut tree, table, 40))
+    index = index + 1
+  }
+  let mut output = LayoutTree.make()
+  run lay(&tree, &mut output, 400.0)
+  run expectBox(&output, columns, 0.0, 0.0, 200.0, 40.0, "the columns balance to two rows each")
+  run expectRect(run nth(&output, rows.get(1), 0), 0.0, 20.0, 40.0, 20.0, "the second row ends the first column")
+  run expectRect(run nth(&output, rows.get(2), 0), 105.0, 0.0, 40.0, 20.0, "the third row opens the second column")
+  run expectRect(run nth(&output, table, 1), 105.0, 0.0, 40.0, 40.0, "where the table continues")
+}
+test effect fn tableBreaksAcrossColumns() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run columnRows() |> Effect.provideMut<Allocator>(&mut allocator)
 }

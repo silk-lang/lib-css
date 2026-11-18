@@ -151,14 +151,15 @@ impl<'tree> BoxTree<'tree> {
       let clipped = overflow == Overflow.Hidden && dimension.kind != DimensionKind.Auto && maximum.kind == DimensionKind.None
       // A column set inside another fragmentation context (columns or pages) keeps
       // all its columns in one outer fragmentainer; it does not continue in the next.
-      let monolithic = node.columnSet || node.kind == BoxKind.Table || node.kind == BoxKind.TablePart || style.sizeContainment == SizeContainment.Size || style.layoutContainment || style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
-      let applicable = !outOfFlow(style) && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex || node.kind == BoxKind.Grid)
+      // A table breaks between rows (table.layoutFragment); its parts stay whole.
+      let monolithic = node.columnSet || node.kind == BoxKind.TablePart || style.sizeContainment == SizeContainment.Size || style.layoutContainment || style.replaced || node.measurement != Measurement.None || inlineLevel || orthogonal || scrolling || clipped
+      let applicable = !outOfFlow(style) && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex || node.kind == BoxKind.Grid || node.kind == BoxKind.Table)
       let mut before = applicable && style.breakBefore != BreakBetween.Auto
       let mut dynamicBefore = false
       let ownAfter = applicable && style.breakAfter != BreakBetween.Auto
       let mut after = ownAfter
       let mut dynamicAfter = false
-      if applicable && !monolithic {
+      if applicable && !monolithic && node.kind != BoxKind.Table {
         let mut child = node.firstChild
         let mut first = true
         while child != NO_NODE {
