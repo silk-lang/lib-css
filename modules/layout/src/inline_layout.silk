@@ -4,7 +4,7 @@ import silk.core.ownership { Copy }
 import silk.core.option { Option }
 import silk.mem.box { Box }
 import silk.text.string { String }
-import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min }
+import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min, TRACE_TEXT_PROBE, TRACE_TEXT_LAYOUT, TRACE_EMIT }
 import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, TextBoxTrim, TextEdge, EmphasisSide }
 import tree { Node, NO_NODE }
 import box_tree { BoxTree, BoxKind }
@@ -1112,7 +1112,11 @@ pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   lists.atomics.clear()
   lists.text.clear()
   let trimmed = trimmedBox(nodes, &mut measurer, id, physicalBox.*)
+  let mut span = TRACE_TEXT_PROBE
+  if input.performLayout { span = TRACE_TEXT_LAYOUT }
+  Measure.traceEnter(&mut measurer, span)
   let result = run layoutInlineWith(nodes, &mut output, &mut measurer, id, &input, &trimmed, &mut bfc, &mut lists.scopes, &mut lists.extents, &mut lists.items, &mut lists.atomics, &mut lists.text)
+  Measure.traceLeave(&mut measurer)
   run output.inlineScratch.append(move scratch)
   return result
 }
@@ -2100,6 +2104,7 @@ effect fn analyzeAnchors<M: TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, 
 // Emits the fragments of a paragraph's fitted lines. `held` lends the span
 // list's storage.
 effect fn emitLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, lines: &[LineBox], items: &[Item], atomics: &[AtomicData], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, held: &mut List<Span>, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, baselineOffsets: &BaselineSet, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  Measure.traceEnter(&mut measurer, TRACE_EMIT)
   let mut spans = Spans { values: Intrinsic.replace(held.*, List<Span>.make()), first: NO_NODE, last: NO_NODE }
   spans.values.clear()
   run spans.values.reserveExact(scopes.length)
@@ -2113,6 +2118,7 @@ effect fn emitLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
     index = index + 1
   }
   held.* = move spans.values
+  Measure.traceLeave(&mut measurer)
 }
 // The box's paragraph as this pass last prepared it, else the core an earlier
 // compute kept, else an empty one.

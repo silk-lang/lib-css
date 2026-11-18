@@ -1,6 +1,11 @@
 import layout.lib { Size, Rect, Measure, MeasureRequest, Measured, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, BaselineSet }
 import layout.lib { TextMeasure, TextError, TextContext, TextBreak, TextBreakKind, TextCursor, TextAnalysis, TextShapeRequest, TextRun, TextToken, TextTokenKind, WhiteSpaceCollapse }
+import layout.lib { TRACE_END }
 import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.system.monotonic_clock { MonotonicClock }
+import silk.system.monotonic_clock_native { OsMonotonicClock }
+import silk.system.system_clock { SystemClock }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.usize
 import silk.text.string { String }
@@ -11,10 +16,39 @@ pub const CODE_FONT: usize = 1
 // Text of a fixed advance per byte, so that a layout's time holds no shaping:
 // 7 px in the 14 px body font, 8 px in the 13 px code font. Breaks follow
 // spaces, and segment breaks are forced.
-pub struct FixedAdvance { pub analyzeCalls: usize, pub shapeCalls: usize }
+//
+// With `timing` set it also times the compute it serves: `phases` holds the
+// time of each TRACE_ phase outside any span, `spans` the time inside each
+// TRACE_ span outside the spans nested in it, `entered` how often each began.
+pub struct FixedAdvance {
+  pub analyzeCalls: usize, pub shapeCalls: usize,
+  pub timing: bool, pub phases: [i64; 4], pub spans: [i64; 5], pub entered: [usize; 5],
+  phase: usize, last: i64, depth: usize, open: [usize; 256],
+}
 
 impl FixedAdvance {
-  pub fn make() -> FixedAdvance { return FixedAdvance { analyzeCalls: 0, shapeCalls: 0 } }
+  pub fn make() -> FixedAdvance {
+    return FixedAdvance { analyzeCalls: 0, shapeCalls: 0, timing: false, phases: [0; 4], spans: [0; 5], entered: [0; 5], phase: TRACE_END, last: 0, depth: 0, open: [0; 256] }
+  }
+  // Gives the time since the last event to the innermost open span, else to
+  // the phase.
+  fn charge(self: &mut Self) {
+    let now = nanoseconds()
+    let spent = now - self.last
+    self.last = now
+    if self.depth > 0 && self.depth <= 256 {
+      let span = self.open[self.depth - 1]
+      self.spans[span] = self.spans[span] + spent
+    } else if self.phase < TRACE_END {
+      self.phases[self.phase] = self.phases[self.phase] + spent
+    }
+  }
+}
+
+fn nanoseconds() -> i64 {
+  let mut clock = OsMonotonicClock.make()
+  let now = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
+  return SystemClock.seconds(&now) * 1000000000 + SystemClock.nanoseconds(&now)
 }
 
 fn advanceOf(fontKey: usize) -> f32 {
@@ -23,6 +57,23 @@ fn advanceOf(fontKey: usize) -> f32 {
 }
 
 impl Measure for FixedAdvance {
+  fn tracePhase(provider: &mut Self, phase: usize) {
+    if !provider.timing { return }
+    provider.charge()
+    provider.phase = phase
+  }
+  fn traceEnter(provider: &mut Self, span: usize) {
+    if !provider.timing { return }
+    provider.charge()
+    if provider.depth < 256 { provider.open[provider.depth] = span }
+    provider.depth = provider.depth + 1
+    provider.entered[span] = provider.entered[span] + 1
+  }
+  fn traceLeave(provider: &mut Self) {
+    if !provider.timing { return }
+    provider.charge()
+    provider.depth = provider.depth - 1
+  }
   fn font(provider: &mut Self, request: FontRequest) -> FontMetrics {
     let mut font = FontMetrics.zero()
     let code = request.key == CODE_FONT

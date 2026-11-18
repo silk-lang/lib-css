@@ -1,6 +1,6 @@
 // First-layout benchmark of long documents. Text is measured by a fixed-advance
-// stub, so no shaping is in the times. See ../README.md.
-import layout.lib { Tree, LayoutTree, OptionalSize, InvalidNode, GridError, TextError, FragmentationError, compute, fragmentDigest }
+// stub, so no shaping is in the times. See README.md.
+import layout.lib { Tree, LayoutTree, OptionalSize, InvalidNode, GridError, TextError, FragmentationError, compute, fragmentDigest, FragmentKind, TRACE_BOXES, TRACE_LAYOUT, TRACE_POSITION, TRACE_KEEP, TRACE_TEXT_PROBE, TRACE_TEXT_LAYOUT, TRACE_EMIT, TRACE_FLEX, TRACE_GRID }
 import silk.collections.list { List }
 import silk.core.effect { Effect }
 import silk.io.writer { Writer, WriterError }
@@ -93,6 +93,21 @@ effect fn ratio(label: string<'static>, value: f64) ! WriterError ? &mut Writer 
   run Format.format("  {label:<28}{value:>10.3}\n", &.{ label: label, value: value })
 }
 
+effect fn phase(label: string<'static>, nanoseconds: i64, scale: f64, entered: usize) ! WriterError ? &mut Writer {
+  run Format.format("    {label:<26}{ms:>10.3} ms", &.{ label: label, ms: i64.toF64(nanoseconds) * scale / 1000000.0 })
+  if entered != 0 { run Format.format("{entered:>10} times", &.{ entered: entered }) }
+  run Writer.writeString("\n")
+}
+effect fn buckets(label: string<'static>, names: string<'static>, values: &[usize]) ! WriterError ? &mut Writer {
+  run Format.format("  {label:<28}", &.{ label: label })
+  let mut index: usize = 0
+  while index < values.length {
+    run Format.format("{value:>8}", &.{ value: values[index] })
+    index = index + 1
+  }
+  run Format.format("  ({names})\n", &.{ names: names })
+}
+
 effect fn measure(name: string<'static>, tree: &Tree, viewport: OptionalSize, runs: usize)
   ! OutOfMemoryError | InvalidNode | TextError | FragmentationError | WriterError ? &mut Allocator | &mut Writer {
   let mut clock = OsMonotonicClock.make()
@@ -134,18 +149,70 @@ effect fn measure(name: string<'static>, tree: &Tree, viewport: OptionalSize, ru
   let held = heapInUse() - before
   let counted = fragmentDigest(&output)
 
+  // And one timed by phase, with the probe cache's lookups counted. Reading
+  // the clock at each span adds to this run's time, so its parts are scaled
+  // to the median above.
+  let mut traced = LayoutTree.make()
+  traced.cache.counting = true
+  let mut timed = FixedAdvance.make()
+  timed.timing = true
+  run compute<FixedAdvance>(tree, &mut traced, &mut timed, viewport)
+  let census = traced.cache.census(traced.boxes.length())
+  let mut tracedTotal: i64 = 0
+  let mut part: usize = 0
+  while part < 4 { tracedTotal = tracedTotal + timed.phases[part]
+    part = part + 1 }
+  part = 0
+  while part < 5 { tracedTotal = tracedTotal + timed.spans[part]
+    part = part + 1 }
+  let median = samples.get(samples.length() / 2)
+  let scale = i64.toF64(median) / i64.toF64(tracedTotal)
+
+  let mut lines: usize = 0
+  let fragments = output.fragments.values.asSlice()
+  let mut fragment: usize = 0
+  while fragment < fragments.length {
+    if fragments[fragment].kind == FragmentKind.Line { lines = lines + 1 }
+    fragment = fragment + 1
+  }
+  let textTime = timed.spans[TRACE_TEXT_PROBE] + timed.spans[TRACE_TEXT_LAYOUT] + timed.spans[TRACE_EMIT]
+
   let boxes = output.boxes.length()
   let stats = output.stats
   run Format.format("{name}\n", &.{ name: name })
   run count("nodes", tree.nodes.length())
   run count("boxes", boxes)
   run count("fragments", output.fragments.values.length())
+  run count("lines", lines)
   run micros("first layout, median", samples.get(samples.length() / 2))
   run micros("first layout, fastest", samples.get(0))
+  run Writer.writeString("  by phase (share of a timed run, scaled to the median)\n")
+  run phase("boxes and facts", timed.phases[TRACE_BOXES], scale, 0)
+  run phase("text in size probes", timed.spans[TRACE_TEXT_PROBE], scale, timed.entered[TRACE_TEXT_PROBE])
+  run phase("text line fitting", timed.spans[TRACE_TEXT_LAYOUT], scale, timed.entered[TRACE_TEXT_LAYOUT])
+  run phase("text fragment emission", timed.spans[TRACE_EMIT], scale, timed.entered[TRACE_EMIT])
+  if lines != 0 { run ratio("    text per line, ns", i64.toF64(textTime) * scale / usize.toF64(lines)) }
+  run phase("flex", timed.spans[TRACE_FLEX], scale, timed.entered[TRACE_FLEX])
+  run phase("grid", timed.spans[TRACE_GRID], scale, timed.entered[TRACE_GRID])
+  run phase("block and the rest", timed.phases[TRACE_LAYOUT], scale, 0)
+  run phase("positioning", timed.phases[TRACE_POSITION], scale, 0)
+  run phase("keeping the result", timed.phases[TRACE_KEEP], scale, 0)
   run count("full layouts", stats.fullLayouts)
   run count("size probes", stats.sizeProbes)
   run count("size probe cache hits", stats.cacheHits)
   run ratio("size probes per box", usize.toF64(stats.sizeProbes) / usize.toF64(boxes))
+  run Writer.writeString("  probe cache (independent boxes and intrinsic contents)\n")
+  run count("lookups", census.asked)
+  run ratio("lookups per box", usize.toF64(census.asked) / usize.toF64(boxes))
+  run count("most lookups of one box", census.mostAsked)
+  run buckets("boxes by lookups", "0, 1, 2, 3-4, 5-8, 9+", &census.askedPerBox)
+  run count("probes computed", census.computed)
+  run ratio("computed per box", usize.toF64(census.computed) / usize.toF64(boxes))
+  run count("most computed for one box", census.mostComputed)
+  run buckets("boxes by computed", "0, 1, 2, 3, 4+", &census.perBox)
+  run buckets("computed by width", "known, max, min, available", &census.byWidth)
+  run buckets("computed by height", "known, max, min, available", &census.byHeight)
+  run count("computed twice", census.repeated)
   run count("allocation requests", counting.requests)
   run count("bytes requested", counting.bytes)
   run count("bytes held after", held)
