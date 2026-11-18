@@ -26,8 +26,12 @@ For each document it prints:
 - size probes: the engine's counters, and a census of the probe cache: how
   often each box was looked up, how many probes were computed for it and
   under which width and height constraints, and how many of those another
-  probe of the same box already answered. Probes answered without the
-  cache (a childless box, a kept plain width) are in `size probes` only;
+  probe of the same box already answered (`computed twice`). `computed with
+  an earlier size` counts probes whose size an earlier probe of the box had
+  already given, by the width constraint of each: an upper bound on probes
+  that a wider cache key could spare, since two questions can share an
+  answer by chance. Probes answered without the cache (a childless box, a
+  kept plain width) are in `size probes` only;
 - what one more run asked of the allocator: requests, bytes requested, bytes
   the heap holds afterwards, and their difference, the transient bytes. The
   counting allocator reports no growth in place, so a list that doubles
