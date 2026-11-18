@@ -15,11 +15,13 @@ import layout.lib {
   GridLineKind,
   GridArea,
   GridAutoFlow,
+  GridMasonry,
   MAX_GRID_TRACKS
 }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
-import silk.json.value { Value }
+import silk.json.value { Json, Value }
+import silk.core.option { Option }
 import silk.num.i32
 import silk.num.f32
 import protocol as P
@@ -359,6 +361,14 @@ effect fn areas(value: &Value, result: &mut GridTemplate, tree: &mut Tree)
   }
 }
 
+// The older grid lanes spelling, `grid-template-rows: masonry`.
+fn masonry(value: &Value, name: string) -> bool {
+  return match move Json.asString(Json.field(value, name)) {
+    Option<string>.Some { value: text } => text == "masonry"
+    Option<string>.None => false
+  }
+}
+
 pub effect fn apply(value: &Value, tree: &mut Tree, id: NodeId)
   ! ProtocolError | GridError | OutOfMemoryError | InvalidNode
   ? &mut Allocator {
@@ -375,10 +385,14 @@ pub effect fn apply(value: &Value, tree: &mut Tree, id: NodeId)
   if !present && tree.styles.asSlice()[tree.nodes.asSlice()[id.index].styleIndex].grid == 0 {
     return
   }
-  if P.has(value, "gridTemplateRows") {
+  if masonry(value, "gridTemplateRows") {
+    result.masonry = GridMasonry.Rows
+  } else if P.has(value, "gridTemplateRows") {
     result.rows = run axis(run P.required(value, "gridTemplateRows"), &mut tree)
   }
-  if P.has(value, "gridTemplateColumns") {
+  if masonry(value, "gridTemplateColumns") {
+    result.masonry = GridMasonry.Columns
+  } else if P.has(value, "gridTemplateColumns") {
     result.columns = run axis(run P.required(value, "gridTemplateColumns"), &mut tree)
   }
   if P.has(value, "gridAutoRows") {

@@ -17,6 +17,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.text.format { Format }
 import silk.num.f32
 import silk.num.f64
+import silk.num.u64
 
 /// The unit of a numeric value. `Number` is a plain number and `Percent` a percentage.
 pub enum Unit {
@@ -255,6 +256,17 @@ pub enum MathOperator {
   Min,
   Max,
   Clamp,
+  // The stepped-value and sign functions over values only known once a font or a viewport is:
+  // `round(up, 2.3em, 1em)`. Over constants they are folded where they are read.
+  RoundNearest,
+  RoundUp,
+  RoundDown,
+  RoundToZero,
+  Mod,
+  Rem,
+  Abs,
+  Sign,
+  Hypot,
 }
 
 /// What separates the items of a value with several components.
@@ -545,6 +557,55 @@ impl Writer for NumberWriter {
 /// Appends a number the way CSSOM serializes one: no exponent, at most six decimals,
 /// trailing zeros removed.
 pub effect fn writeNumber(out: &mut Bytes, value: f32) -> () ! OutOfMemoryError ? &mut Allocator {
+  // Nearly every number a style holds is small, and then its six decimals are one integer
+  // away. A value exactly halfway between two of them keeps the formatter's rounding.
+  let size = f64.abs(f32.toF64(value))
+  if size < 4000000000.0 {
+    let scaled = size * 1000000.0
+    let whole = f64.floor(scaled)
+    let part = scaled - whole
+    if part != 0.5 {
+      let rounded = f64.toU64(if part > 0.5 { whole + 1.0 } else { whole })
+      let mut text: [u8; 24] = [0; 24]
+      let mut length: usize = 0
+      if value < 0.0 && rounded != 0 {
+        text[0] = 45
+        length = 1
+      }
+      let mut integer = rounded / 1000000
+      let mut reversed: [u8; 12] = [0; 12]
+      let mut count: usize = 0
+      while integer != 0 || count == 0 {
+        reversed[count] = 48 + u64.toU8(integer % 10)
+        integer = integer / 10
+        count = count + 1
+      }
+      while count > 0 {
+        count = count - 1
+        text[length] = reversed[count]
+        length = length + 1
+      }
+      let mut fraction = rounded % 1000000
+      if fraction != 0 {
+        text[length] = 46
+        length = length + 1
+        let mut place: u64 = 100000
+        while fraction != 0 {
+          text[length] = 48 + u64.toU8(fraction / place)
+          fraction = fraction % place
+          place = place / 10
+          length = length + 1
+        }
+      }
+      run out.append(Slice.view<u8>(&text, 0, length))
+      return
+    }
+  }
+  run writeFormatted(&mut out.*, value)
+}
+
+/// [`writeNumber`] through the general formatter, for the numbers its short way leaves.
+pub effect fn writeFormatted(out: &mut Bytes, value: f32) -> () ! OutOfMemoryError ? &mut Allocator {
   let wide = f32.toF64(value)
   let mut writer = NumberWriter { bytes: [0; 384], length: 0 }
   let mut options = Format.defaultOptions()
@@ -676,6 +737,21 @@ effect fn writeMath(out: &mut Bytes, operator: MathOperator, values: &List<Value
     }
     MathOperator.Clamp => {
       run out.append(b"clamp(")
+      run writeJoined(&mut out.*, values, b", ", false)
+      run out.append(b")")
+    }
+    _ => {
+      run out.append(match operator {
+        MathOperator.RoundNearest => b"round("
+        MathOperator.RoundUp => b"round(up, "
+        MathOperator.RoundDown => b"round(down, "
+        MathOperator.RoundToZero => b"round(to-zero, "
+        MathOperator.Mod => b"mod("
+        MathOperator.Rem => b"rem("
+        MathOperator.Abs => b"abs("
+        MathOperator.Sign => b"sign("
+        _ => b"hypot("
+      })
       run writeJoined(&mut out.*, values, b", ", false)
       run out.append(b")")
     }

@@ -1,0 +1,64 @@
+{
+  "name": "grid-lanes-margins-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "Stacking uses each item's outer size: margins push the next item in that lane down.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "width": 200,
+          "gridTemplateColumns": [
+            {
+              "fr": 1
+            },
+            {
+              "fr": 1
+            }
+          ],
+          "rowGap": 4
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 40,
+          "marginTop": 5,
+          "marginBottom": 7
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 10,
+          "marginLeft": 6
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 30
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 20,
+          "marginBottom": 3
+        }
+      }
+    ]
+  }
+}

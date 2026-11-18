@@ -180,7 +180,7 @@ effect fn launch(program: &Path, profile: &Path, runtime: Bytes) -> Chrome ! Ope
   let mut profileArgument = run Bytes.copy(b"--user-data-dir=")
   run profileArgument.append(Path.rawBytes(profile))
   run ChildProcess.addArgumentBytes(&mut request, profileArgument.asSlice())
-  let arguments = ["--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-extensions", "--force-device-scale-factor=1", "about:blank"]
+  let arguments = ["--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-extensions", "--enable-blink-features=CSSGridLanesLayout", "--force-device-scale-factor=1", "about:blank"]
   let mut argument: usize = 0
   while argument < arguments.length {
     run ChildProcess.addArgument(&mut request, arguments[argument])

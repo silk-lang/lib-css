@@ -40,7 +40,9 @@ impl Options {
 }
 pub struct CompileError { pub diagnostics: usize }
 
-struct Compiler { sheet: Sheet, supports: Store<'static>, limits: Limits, frames: usize }
+// `scope` is the innermost @scope root as `:where(start)`, which `:scope` stands for, and
+// `limit` the `:not(...)` every subject inside it takes for the scopes' `to (...)` limits.
+struct Compiler { sheet: Sheet, supports: Store<'static>, limits: Limits, frames: usize, scope: Bytes, limit: Bytes }
 
 fn space(buffer: &TokenBuffer, at: usize) -> bool {
   return match &buffer.tokens.asSlice()[at].kind { Kind.Whitespace => true _ => false }
@@ -185,7 +187,7 @@ impl Compiler {
     ! CssError | OutOfMemoryError ? &mut Allocator {
     if depth >= self.limits.maxDepth { fail CssError { kind: CssErrorKind.NestingLimit, offset: rule.prelude.start } }
     if rule.kind == RuleKind.Qualified {
-      let text = run nestedSelector(source, rule.prelude, parent)
+      let text = run nestedSelector(source, rule.prelude, parent, self.scope.asSlice(), self.limit.asSlice())
       let buffer = run lexer.tokenize(text.asSlice(), &self.limits)
       let parsed = run selectors.parse(&buffer, buffer.all(), &[], &self.limits)
       match &parsed {
@@ -210,6 +212,10 @@ impl Compiler {
       if let Option<usize>.Some { value } = selected {
         if rule.kind == RuleKind.AtBlock { run self.group(source, rule.body, parent, value, condition, depth + 1) }
       } else { run self.report(DiagnosticKind.AtRule, b"layer") }
+      return
+    }
+    if insensitive(name, b"scope") && rule.kind == RuleKind.AtBlock {
+      run self.scoped(source, rule, parent, layer, condition, depth)
       return
     }
     if insensitive(name, b"supports") && rule.kind == RuleKind.AtBlock {
@@ -285,6 +291,75 @@ impl Compiler {
     run self.report(DiagnosticKind.AtRule, name)
   }
 
+  // https://drafts.csswg.org/css-cascade-6/#scope-atrule
+  // `@scope (start) to (limit)` compiles as nesting under `:where(start)`, so the root adds no
+  // specificity; the limit becomes a `:not()` on each subject. Proximity is not ranked.
+  effect fn scoped(self: &mut Self, source: &TokenBuffer, rule: Rule, parent: &[u8], layer: usize, condition: usize, depth: usize) -> ()
+    ! CssError | OutOfMemoryError ? &mut Allocator {
+    let tokens = source.tokens.asSlice()
+    let end = rule.prelude.end
+    let mut at = skip(source, rule.prelude.start, end)
+    let mut root = Bytes.make()
+    let mut limited = false
+    let mut bounds = TokenRange { start: at, end: at }
+    if at < end {
+      let open = match &tokens[at].kind { Kind.OpenParen => true _ => false }
+      if !open || tokens[at].matching <= at || tokens[at].matching >= end {
+        run self.report(DiagnosticKind.AtRule, b"scope")
+        return
+      }
+      let start = TokenRange { start: at + 1, end: tokens[at].matching }
+      at = skip(source, tokens[at].matching + 1, end)
+      let text = run nestedSelector(source, start, parent, self.scope.asSlice(), self.limit.asSlice())
+      run root.append(b":where(")
+      run root.append(text.asSlice())
+      run root.append(b")")
+      if at < end {
+        let to = match &tokens[at].kind { Kind.Ident { text: word } => insensitive(source.text(word), b"to") _ => false }
+        at = skip(source, at + 1, end)
+        let paren = at < end && match &tokens[at].kind { Kind.OpenParen => true _ => false }
+        if !to || !paren || tokens[at].matching <= at || tokens[at].matching >= end
+          || skip(source, tokens[at].matching + 1, end) != end {
+          run self.report(DiagnosticKind.AtRule, b"scope")
+          return
+        }
+        bounds = TokenRange { start: at + 1, end: tokens[at].matching }
+        limited = true
+      }
+    } else if parent.length != 0 {
+      run root.append(b":where(")
+      run root.append(parent)
+      run root.append(b")")
+    } else {
+      run root.append(b":where(:root)")
+    }
+    let mut limit = run Bytes.copy(self.limit.asSlice())
+    if limited {
+      let spelled = run spelling(source, bounds)
+      run limit.append(b":not(")
+      run limit.append(root.asSlice())
+      run limit.append(b" :where(")
+      run limit.append(spelled.asSlice())
+      run limit.append(b"),")
+      run limit.append(root.asSlice())
+      run limit.append(b" :where(")
+      run limit.append(spelled.asSlice())
+      run limit.append(b") *)")
+    }
+    let check = run lexer.tokenize(root.asSlice(), &self.limits)
+    if let Option<SelectorList>.None = run selectors.parse(&check, check.all(), &[], &self.limits) {
+      run self.report(DiagnosticKind.Selector, root.asSlice())
+      return
+    }
+    let outerScope = run Bytes.copy(self.scope.asSlice())
+    let outerLimit = run Bytes.copy(self.limit.asSlice())
+    self.scope = run Bytes.copy(root.asSlice())
+    self.limit = move limit
+    run self.block(source, rule.body, root.asSlice(), layer, condition, depth + 1)
+    self.scope = move outerScope
+    self.limit = move outerLimit
+  }
+
   effect fn block(self: &mut Self, source: &TokenBuffer, range: TokenRange, selector: &[u8], layer: usize, condition: usize, depth: usize) -> ()
     ! CssError | OutOfMemoryError ? &mut Allocator {
     if depth >= self.limits.maxDepth { fail CssError { kind: CssErrorKind.NestingLimit, offset: range.start } }
@@ -354,7 +429,15 @@ impl Compiler {
           let mut cursor = Cursor.make(&input)
           let colorMix = cursor.function(&input, b"color-mix")
           cursor = Cursor.make(&input)
-          if colorMix {
+          // A relative color from currentcolor or a system color is a program too.
+          let mut contextual = false
+          if !colorMix && colors.relativeStart(&input, &cursor) {
+            let mut probe = cursor
+            if let Option<ColorProgram>.Some { value } = run colors.parseProgram(&input, &mut probe) {
+              contextual = value.contextual() && probe.done(&input)
+            }
+          }
+          if colorMix || contextual {
             let program = run colors.parseProgram(&input, &mut cursor)
             if let Option<ColorProgram>.Some { value } = move program {
               if cursor.done(&input) {
@@ -482,7 +565,7 @@ effect fn spelling(source: &TokenBuffer, range: TokenRange) -> Bytes
   return move out
 }
 
-effect fn nestedSelector(source: &TokenBuffer, range: TokenRange, parent: &[u8]) -> Bytes
+effect fn nestedSelector(source: &TokenBuffer, range: TokenRange, parent: &[u8], scope: &[u8], limit: &[u8]) -> Bytes
   ! OutOfMemoryError ? &mut Allocator {
   if parent.length == 0 { return run spelling(source, range) }
   let mut out = Bytes.make()
@@ -493,7 +576,7 @@ effect fn nestedSelector(source: &TokenBuffer, range: TokenRange, parent: &[u8])
       match &source.tokens.asSlice()[at].kind { Kind.Comma => true _ => false }
     }
     if at == range.end || comma {
-      let arm = run nestedArm(source, TokenRange { start: start, end: at }, parent)
+      let arm = run nestedArm(source, TokenRange { start: start, end: at }, parent, scope, limit)
       run out.append(arm.asSlice())
       if at == range.end { break }
       run out.append(b",")
@@ -504,23 +587,37 @@ effect fn nestedSelector(source: &TokenBuffer, range: TokenRange, parent: &[u8])
   return move out
 }
 
-effect fn nestedArm(source: &TokenBuffer, range: TokenRange, parent: &[u8]) -> Bytes
+fn colon(source: &TokenBuffer, at: usize, end: usize) -> bool {
+  return at < end && match &source.tokens.asSlice()[at].kind { Kind.Colon => true _ => false }
+}
+
+effect fn nestedArm(source: &TokenBuffer, range: TokenRange, parent: &[u8], scope: &[u8], limit: &[u8]) -> Bytes
   ! OutOfMemoryError ? &mut Allocator {
   let mut out = Bytes.make()
   let mut found = false
   let mut start = range.start
+  // A limit filters the subject, so it goes before a trailing pseudo-element.
+  let mut cut = range.start
+  while cut < range.end && !(colon(source, cut, range.end) && colon(source, cut + 1, range.end)) {
+    cut = after(source, cut, range.end)
+  }
+  if cut == range.end { while limit.length != 0 && cut > range.start && space(source, cut - 1) { cut = cut - 1 } }
   let mut i = start
-  while i < range.end {
-    if let Kind.Delim { scalar } = source.tokens.asSlice()[i].kind {
-      if scalar != 38 { i = i + 1
-        continue }
+  while i < cut {
+    let token = source.tokens.asSlice()[i]
+    let ampersand = match &token.kind { Kind.Delim { scalar } => scalar == 38 _ => false }
+    let rooted = scope.length != 0 && colon(source, i, cut) && i + 1 < cut
+      && match &source.tokens.asSlice()[i + 1].kind { Kind.Ident { text } => insensitive(source.text(text), b"scope") _ => false }
+    if ampersand || rooted {
       let before = run spelling(source, TokenRange { start: start, end: i })
       run out.append(before.asSlice())
       run out.append(b":is(")
-      run out.append(parent)
+      run out.append(if ampersand { parent } else { scope })
       run out.append(b")")
       found = true
-      start = i + 1
+      start = if ampersand { i + 1 } else { i + 2 }
+      i = start
+      continue
     }
     i = i + 1
   }
@@ -529,15 +626,18 @@ effect fn nestedArm(source: &TokenBuffer, range: TokenRange, parent: &[u8]) -> B
     run out.append(parent)
     run out.append(b") ")
   }
-  let rest = run spelling(source, TokenRange { start: start, end: range.end })
+  let rest = run spelling(source, TokenRange { start: start, end: cut })
   run out.append(rest.asSlice())
+  run out.append(limit)
+  let pseudo = run spelling(source, TokenRange { start: cut, end: range.end })
+  run out.append(pseudo.asSlice())
   return move out
 }
 
 pub effect fn compile(css: &[u8], options: &Options) -> Sheet
   ! CompileError | CssError | OutOfMemoryError ? &mut Allocator {
   let source = run lexer.tokenize(css, &options.limits)
-  let mut compiler = Compiler { sheet: Sheet.make(), supports: Store.make(), limits: options.limits, frames: 0 }
+  let mut compiler = Compiler { sheet: Sheet.make(), supports: Store.make(), limits: options.limits, frames: 0, scope: Bytes.make(), limit: Bytes.make() }
   run compiler.sheet.buffers.append(run source.copy())
   run compiler.rules(&source, source.all(), b"", NONE, NONE, 0)
   let mut i: usize = 0

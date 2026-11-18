@@ -63,6 +63,9 @@ pub struct PassCheckpoint {
 impl Copy for PassCheckpoint {}
 // Size-only results go to `cache`; compute lends it the LayoutTree's cache so
 // clean entries survive between computes (see LayoutCache).
+// The most paragraphs one compute hands to the cache prepared (see keepTexts).
+const KEPT_PARAGRAPHS: usize = 2048
+
 pub struct LayoutPass<'a, 'source> {
   pub boxes: &'a mut [Layout],
   pub fragments: &'a mut FragmentArena,
@@ -123,6 +126,9 @@ pub struct LayoutPass<'a, 'source> {
   frameSelections: List<List<FrameScrollbarSelection>>,
   scrollbarSnapshots: List<ScrollbarSnapshot>,
   pub hasAutoScrollbars: bool, pub needsRelayout: bool,
+  // Whether an auto scrollbar of this compute takes room when it shows: one
+  // that overlays the content changes no geometry by showing or not.
+  pub gutterScrollbars: bool,
   pub stats: LayoutStats,
   // Spare item and line lists for flex passes, reused instead of allocated per pass.
   pub flexScratch: List<FlexScratch>,
@@ -141,7 +147,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   pub effect fn over(boxes: &'a mut [Layout], fragments: &'a mut FragmentArena, sources: &'source [Node], cache: &'a mut LayoutCache, previous: &'a mut Snapshot, writes: &'a mut BoxWrites, facts: &'a mut BoxFacts) -> LayoutPass<'a, 'source> ! OutOfMemoryError ? &mut Allocator {
     // The paragraph cache may borrow text from these source nodes.
     drop sources
-    return LayoutPass { boxes: move boxes, fragments: move fragments, fragmentParent: NO_NODE, frame: NO_NODE, resumes: ResumeStore.make(), frames: Fragmentainers.empty(), frameRoots: List<usize>.make(), frameOffsets: List<f32>.make(), fullBoxes: List<FullBoxGeometry>.make(), fullIndices: List<usize>.make(), inlinePrepared: List<List<PreparedInline<'source>>>.make(), rawTokens: List<TextToken<'source>>.make(), lineLimits: List<LineLimit>.make(), cache: move cache, previous: move previous, facts: move facts, floatContext: List<FloatBox>.make(), outOfFlowBoxes: List<u64>.make(), overflowEscapes: List<usize>.make(), overflowMarks: List<u64>.make(), overflowRuns: 0, relativeOffsets: List<Point>.make(), absoluteInputOwner: NO_NODE, absoluteInput: Input.make(OptionalSize.definite(0.0, 0.0)), absoluteBox: ResolvedBox { padding: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(), min: Size.zero(), max: Size.zero(), size: OptionalSize.none() }, absoluteRect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, absoluteLimits: ResolvedEdges.zero(), absoluteLimitsSet: false, absoluteScrollParent: NO_NODE, absoluteScrolled: false, absoluteScrollport: Size.zero(), inPlace: false, writes: move writes, tracking: true, deferSticky: false, anchors: List<StaticAnchor>.make(), selections: List<ScrollbarSelection>.make(), frameSelections: List<List<FrameScrollbarSelection>>.make(), scrollbarSnapshots: List<ScrollbarSnapshot>.make(), hasAutoScrollbars: false, needsRelayout: false, stats: LayoutStats.zero(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), tableSlots: List<Rect>.make(), tablePlans: List<u64>.make() }
+    return LayoutPass { boxes: move boxes, fragments: move fragments, fragmentParent: NO_NODE, frame: NO_NODE, resumes: ResumeStore.make(), frames: Fragmentainers.empty(), frameRoots: List<usize>.make(), frameOffsets: List<f32>.make(), fullBoxes: List<FullBoxGeometry>.make(), fullIndices: List<usize>.make(), inlinePrepared: List<List<PreparedInline<'source>>>.make(), rawTokens: List<TextToken<'source>>.make(), lineLimits: List<LineLimit>.make(), cache: move cache, previous: move previous, facts: move facts, floatContext: List<FloatBox>.make(), outOfFlowBoxes: List<u64>.make(), overflowEscapes: List<usize>.make(), overflowMarks: List<u64>.make(), overflowRuns: 0, relativeOffsets: List<Point>.make(), absoluteInputOwner: NO_NODE, absoluteInput: Input.make(OptionalSize.definite(0.0, 0.0)), absoluteBox: ResolvedBox { padding: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(), min: Size.zero(), max: Size.zero(), size: OptionalSize.none() }, absoluteRect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, absoluteLimits: ResolvedEdges.zero(), absoluteLimitsSet: false, absoluteScrollParent: NO_NODE, absoluteScrolled: false, absoluteScrollport: Size.zero(), inPlace: false, writes: move writes, tracking: true, deferSticky: false, anchors: List<StaticAnchor>.make(), selections: List<ScrollbarSelection>.make(), frameSelections: List<List<FrameScrollbarSelection>>.make(), scrollbarSnapshots: List<ScrollbarSnapshot>.make(), hasAutoScrollbars: false, gutterScrollbars: false, needsRelayout: false, stats: LayoutStats.zero(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), tableSlots: List<Rect>.make(), tablePlans: List<u64>.make() }
   }
   // Fragmentation state for the column flows of a continuous pass.
   pub effect fn beginColumns(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
@@ -612,9 +618,29 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
       id = id + 1
     }
   }
-  // Hands every paragraph prepared in this compute to the cache.
+  // Hands every paragraph prepared in this compute to the cache, unless there
+  // are more than KEPT_PARAGRAPHS of them. A prepared paragraph (its analysis,
+  // breaks and shaped ranges) is several kilobytes that only a later layout of
+  // the same text at another width reads; the layout results that answer an
+  // unchanged box are kept apart. A long document keeps none: laying it out at
+  // another width prepares its text again, as its first layout did.
   pub effect fn keepTexts(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    let mut prepared: usize = 0
     let mut id: usize = 0
+    while id < self.inlinePrepared.length() {
+      if self.inlinePrepared.asSlice()[id].length() != 0 { prepared = prepared + 1 }
+      id = id + 1
+    }
+    if prepared > KEPT_PARAGRAPHS {
+      id = 0
+      while id < self.inlinePrepared.length() {
+        self.inlinePrepared.asMutSlice()[id].clearAndFree()
+        id = id + 1
+      }
+      self.cache.dropPlains()
+      return
+    }
+    id = 0
     while id < self.inlinePrepared.length() {
       match self.inlinePrepared.asMutSlice()[id].pop() {
         Option<PreparedInline<'source>>.Some { value } => {
@@ -649,6 +675,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
     }
     self.needsRelayout = false
     self.hasAutoScrollbars = false
+    self.gutterScrollbars = false
   }
   // Records the full layout of a reusable box that just emitted fragments
   // [start, current end), if its own fragment opens the range.

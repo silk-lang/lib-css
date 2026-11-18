@@ -42,6 +42,15 @@ pub effect fn encode(value: &Value, writer: &mut Writer) -> ()
         MathOperator.Min => 4
         MathOperator.Max => 5
         MathOperator.Clamp => 6
+        MathOperator.RoundNearest => 7
+        MathOperator.RoundUp => 8
+        MathOperator.RoundDown => 9
+        MathOperator.RoundToZero => 10
+        MathOperator.Mod => 11
+        MathOperator.Rem => 12
+        MathOperator.Abs => 13
+        MathOperator.Sign => 14
+        MathOperator.Hypot => 15
       })
       run encodeList(children.asSlice(), &mut writer.*)
     }
@@ -122,6 +131,15 @@ pub effect fn decode(reader: &mut Reader<'_>, limits: &Limits, depth: usize) -> 
       4 => MathOperator.Min
       5 => MathOperator.Max
       6 => MathOperator.Clamp
+      7 => MathOperator.RoundNearest
+      8 => MathOperator.RoundUp
+      9 => MathOperator.RoundDown
+      10 => MathOperator.RoundToZero
+      11 => MathOperator.Mod
+      12 => MathOperator.Rem
+      13 => MathOperator.Abs
+      14 => MathOperator.Sign
+      15 => MathOperator.Hypot
       _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
     }
     return Value.Math { operator: operator, values: run decodeList(&mut reader.*, limits, depth) }

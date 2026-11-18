@@ -3,6 +3,7 @@ import catalog { Property }
 import computed {
   Dimension,
   SizeValue,
+  Bounds,
   DimensionKind,
   Display,
   DisplayOutside,
@@ -182,6 +183,43 @@ test effect fn writtenValuesConvertToComputed() -> () ! AssertionError<'static> 
   run conversion() |> Effect.provideMut<Allocator>(&mut allocator)
 }
 
+effect fn numbers() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  // The short way writes what the formatter writes: ordinary values, values that round up
+  // into the next digit, halves, tiny and huge ones, and a walk over many others.
+  let picked: [f32; 22] = [
+    0.0, -0.0, 1.0, -1.0, 0.15, 0.5, 360.0, 0.0078125, -0.0078125, 0.9999995, 0.9999994,
+    1234567.9, 0.000001, 0.0000004, -0.0000004, 16777216.0, 3999999999.0, 4000000000.0,
+    1.0e20, -2.5, 99.999999, 0.1,
+  ]
+  let mut i: usize = 0
+  while i < picked.length {
+    let mut short = Bytes.make()
+    let mut long = Bytes.make()
+    run values.writeNumber(&mut short, picked[i])
+    run values.writeFormatted(&mut long, picked[i])
+    run Testing.expect(sameText(short.asSlice(), long.asSlice()), "a picked number is written as the formatter writes it")
+    i = i + 1
+  }
+  let mut walked: f32 = -37.5
+  let mut step: f32 = 0.000137
+  let mut k: usize = 0
+  while k < 20000 {
+    let mut short = Bytes.make()
+    let mut long = Bytes.make()
+    run values.writeNumber(&mut short, walked)
+    run values.writeFormatted(&mut long, walked)
+    run Testing.expect(sameText(short.asSlice(), long.asSlice()), "a walked number is written as the formatter writes it")
+    walked = walked + step
+    step = step * 1.0007
+    k = k + 1
+  }
+}
+
+test effect fn numbersTakeTheShortWayUnchanged() -> () ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run numbers() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
 test effect fn everyKeywordFindsItselfByName() -> () ! AssertionError<'static> {
   run Testing.expect(keywords.name(Keyword.FlexStart).length == 10, "flex-start is spelled in kebab case")
   let found = match keywords.lookup(b"Space-Between") {
@@ -228,6 +266,21 @@ test effect fn containerUnitsUseIndependentAxesAndSmallViewportFallback() ! Asse
   run Testing.expect(match convert.pixelsPer(Unit.Cqmax, &context) { Option<f32>.Some { value } => value == 6.0 _ => false }, "only the missing logical axis falls back, using vertical small viewport axes")
 }
 
+
+test effect fn zoomMultipliesAbsoluteAndViewportUnits() ! AssertionError<'static> {
+  let mut context = Context.make()
+  context.viewportWidth = 1000.0
+  context.fontSize = 32.0
+  context.zoom = 2.0
+  let px = convert.pixelsPer(Unit.Px, &context)
+  let inch = convert.pixelsPer(Unit.In, &context)
+  let vw = convert.pixelsPer(Unit.Vw, &context)
+  let em = convert.pixelsPer(Unit.Em, &context)
+  run Testing.expect(match px { Option<f32>.Some { value } => value == 2.0 _ => false }, "px multiplies by the zoom")
+  run Testing.expect(match inch { Option<f32>.Some { value } => value == 192.0 _ => false }, "absolute units multiply by the zoom")
+  run Testing.expect(match vw { Option<f32>.Some { value } => value == 20.0 _ => false }, "viewport units multiply by the zoom")
+  run Testing.expect(match em { Option<f32>.Some { value } => value == 32.0 _ => false }, "font units read the already zoomed size")
+}
 
 effect fn fontUnits() ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
   let mut context = Context.make()
@@ -318,6 +371,74 @@ effect fn pair(first: Value, second: Value) -> List<Value> ! OutOfMemoryError ? 
   run parts.append(move first)
   run parts.append(move second)
   return move parts
+}
+
+effect fn triple(first: Value, second: Value, third: Value) -> List<Value> ! OutOfMemoryError ? &mut Allocator {
+  let mut parts = run pair(move first, move second)
+  run parts.append(move third)
+  return move parts
+}
+
+effect fn boundCases() ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let mut context = Context.make()
+  context.fontSize = 10.0
+  let mut bounds = Bounds.none()
+  let padding = values.math(MathOperator.Clamp, run triple(values.unit(1.0, Unit.Em), values.percent(5.0), values.unit(30.0, Unit.Px)))
+  run Testing.expect(isDimension(convert.edge(&padding, &context, &mut bounds), Dimension.bounded(0.0, 0.05, 0)), "an edge holds a percentage between two lengths")
+  run Testing.expect(bounds.count == 1 && bounds.lower[0] == 10.0 && bounds.upper[0] == 30.0, "the bounds take a slot")
+  run Testing.expect(isDimension(convert.edge(&padding, &context, &mut bounds), Dimension.bounded(0.0, 0.05, 0)) && bounds.count == 1, "the same bounds share their slot")
+  // max(1em, (100% - 600px) / 2), as a centred column's padding is written.
+  let mut half = List<Value>.make()
+  run half.append(run values.calc(-600.0, 100.0))
+  run half.append(values.math(MathOperator.Invert, run single(values.number(2.0))))
+  let gutter = values.math(MathOperator.Max, run pair(values.unit(1.0, Unit.Em), values.math(MathOperator.Product, move half)))
+  run Testing.expect(isDimension(convert.edge(&gutter, &context, &mut bounds), Dimension.bounded(-300.0, 0.5, 1)), "max() of a length and a length plus a percentage")
+  run Testing.expect(bounds.lower[1] == 10.0 && bounds.upper[1] > 1.0e30 && bounds.hold(DimensionKind.Bounded, 1, -300.0 + 0.5 * 500.0) == 10.0, "a max() bound has no upper end")
+  let mixed = values.math(MathOperator.Clamp, run triple(values.unit(200.0, Unit.Px), run values.calc(20.0, 50.0), values.unit(800.0, Unit.Px)))
+  run Testing.expect(convert.size(&mixed, &context).isNone(), "a size kind has no length beside a percentage in clamp()")
+  run Testing.expect(isSize(convert.sizeIn(&mixed, &context, &mut bounds), SizeValue.bounded(20.0, 0.5, 2)), "clamp() of a length plus a percentage")
+  // calc(min(100%, 600px) - 2em) moves the bound with the length.
+  let lessened = values.math(MathOperator.Sum, run pair(values.math(MathOperator.Min, run pair(values.percent(100.0), values.unit(600.0, Unit.Px))), values.unit(-2.0, Unit.Em)))
+  let mut other = Bounds.none()
+  run Testing.expect(isDimension(convert.edge(&lessened, &context, &mut other), Dimension.bounded(-20.0, 1.0, 0)) && other.upper[0] == 580.0, "a sum moves a bound")
+  let wider = values.math(MathOperator.Clamp, run triple(values.unit(1.0, Unit.Px), values.percent(10.0), values.unit(2.0, Unit.Px)))
+  run Testing.expect(convert.edge(&wider, &context, &mut bounds).isNone(), "a fourth pair of bounds finds no slot")
+  let twoValues = values.math(MathOperator.Min, run pair(values.percent(10.0), run values.calc(5.0, 20.0)))
+  run Testing.expect(convert.edge(&twoValues, &context, &mut other).isNone(), "two different values that need the basis do not compare")
+}
+
+effect fn single(value: Value) -> List<Value> ! OutOfMemoryError ? &mut Allocator {
+  let mut parts = List<Value>.make()
+  run parts.append(move value)
+  return move parts
+}
+
+effect fn steppedCases() ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  let mut context = Context.make()
+  context.fontSize = 10.0
+  let up = values.math(MathOperator.RoundUp, run pair(values.unit(2.3, Unit.Em), values.unit(1.0, Unit.Em)))
+  run Testing.expect(isDimension(convert.dimension(&up, &context), Dimension.px(30.0)), "round(up) over em")
+  let nearest = values.math(MathOperator.RoundNearest, run pair(values.unit(2.3, Unit.Em), values.unit(4.0, Unit.Px)))
+  run Testing.expect(isDimension(convert.dimension(&nearest, &context), Dimension.px(24.0)), "round() to a pixel step")
+  let modulo = values.math(MathOperator.Mod, run pair(values.unit(-1.7, Unit.Em), values.unit(5.0, Unit.Px)))
+  run Testing.expect(isDimension(convert.dimension(&modulo, &context), Dimension.px(3.0)), "mod() takes the divisor's sign")
+  let remainder = values.math(MathOperator.Rem, run pair(values.unit(-1.7, Unit.Em), values.unit(5.0, Unit.Px)))
+  run Testing.expect(isDimension(convert.dimension(&remainder, &context), Dimension.px(-2.0)), "rem() takes the dividend's sign")
+  run Testing.expect(isDimension(convert.dimension(&values.math(MathOperator.Abs, run single(values.unit(-1.0, Unit.Em))), &context), Dimension.px(10.0)), "abs() over em")
+  run Testing.expect(isDimension(convert.dimension(&values.math(MathOperator.Hypot, run pair(values.unit(3.0, Unit.Em), values.unit(4.0, Unit.Em))), &context), Dimension.px(50.0)), "hypot() over em")
+  let signed = values.math(MathOperator.Product, run pair(values.math(MathOperator.Sign, run single(values.unit(-1.0, Unit.Em))), values.unit(8.0, Unit.Px)))
+  run Testing.expect(isDimension(convert.dimension(&signed, &context), Dimension.px(-8.0)), "sign() is a number")
+  run Testing.expect(convert.dimension(&values.math(MathOperator.RoundUp, run pair(values.percent(33.0), values.unit(10.0, Unit.Px))), &context).isNone(), "round() of a percentage needs the basis")
+}
+
+test effect fn boundsHoldLengthsPlusPercentages() ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run boundCases() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+test effect fn steppedFunctionsComputeOverFontLengths() ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run steppedCases() |> Effect.provideMut<Allocator>(&mut allocator)
 }
 
 test effect fn sizesCompareLengthsWithPercentages() ! AssertionError<'static> | OutOfMemoryError {
