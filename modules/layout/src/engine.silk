@@ -2250,6 +2250,19 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
   return result
 }
 
+// Lists the boxes whose overflow is auto on an axis (see BoxFacts.scrollers).
+effect fn autoScrollers(nodes: &BoxTree<'_>, facts: &mut BoxFacts) ! OutOfMemoryError ? &mut Allocator {
+  facts.scrollers.clear()
+  let count = nodes.boxes.length()
+  let mut id: usize = 0
+  while id < count {
+    let style = nodes.style(id)
+    if overflowForAxis(style, true) == Overflow.Auto || overflowForAxis(style, false) == Overflow.Auto { run facts.scrollers.append(id) }
+    id = id + 1
+  }
+  facts.scrollersFor = count
+}
+
 fn sameViewport(a: &OptionalSize, b: &OptionalSize) -> bool {
   return a.widthDefinite == b.widthDefinite && a.heightDefinite == b.heightDefinite && a.width == b.width && a.height == b.height
 }
@@ -3051,6 +3064,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     // boxes when it changes; see Tree.setStyle.
     if !restoring {
       if run positionVisits(&nodes, &mut facts.visits) { facts.visitsRevision = facts.visitsRevision + 1 }
+      run autoScrollers(&nodes, &mut facts)
       run Incremental.indexStyleSources(tree, &nodes, &mut facts.styledOffsets, &mut facts.styledBoxes)
     }
   } else if boxesStand && facts.covers(nodes.boxes.length()) && facts.styledOffsets.length() == tree.nodes.length() + 1 && facts.styledBoxes.length() == nodes.boxes.length() {
@@ -3059,6 +3073,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     run Incremental.markSubtrees(&nodes, &mut facts)
     run keyShapes(&nodes, &mut facts.keyShapes, &mut facts.itemFlags)
     if run positionVisits(&nodes, &mut facts.visits) { facts.visitsRevision = facts.visitsRevision + 1 }
+      run autoScrollers(&nodes, &mut facts)
     run Incremental.indexStyleSources(tree, &nodes, &mut facts.styledOffsets, &mut facts.styledBoxes)
   }
   // Changed boxes laid out alone first; see cutoffCandidates.

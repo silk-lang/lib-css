@@ -52,9 +52,13 @@ impl Copy for PositionedRun {}
 // style; see Incremental.indexStyleSources. parents: each box's parent.
 // `marks[id] == mark` marks a box in the current remark (see
 // Incremental.remarkSubtrees).
-pub struct BoxFacts { pub own: List<u8>, pub reusable: List<u8>, pub viewportFree: List<bool>, pub keyShapes: List<u16>, pub itemFlags: List<u8>, pub visits: List<usize>, pub styledOffsets: List<usize>, pub styledBoxes: List<usize>, pub parents: List<usize>, pub marks: List<usize>, pub mark: usize, pub visitsRevision: usize }
+pub struct BoxFacts { pub own: List<u8>, pub reusable: List<u8>, pub viewportFree: List<bool>, pub keyShapes: List<u16>, pub itemFlags: List<u8>, pub visits: List<usize>, pub styledOffsets: List<usize>, pub styledBoxes: List<usize>, pub parents: List<usize>, pub marks: List<usize>, pub mark: usize, pub visitsRevision: usize,
+  // The boxes whose overflow is auto on an axis, ascending, which are all that
+  // selectScrollbars can give a scrollbar; of `scrollersFor` boxes. Made with
+  // `visits`: a change of overflow generates boxes again.
+  pub scrollers: List<usize>, pub scrollersFor: usize }
 impl BoxFacts {
-  pub fn make() -> BoxFacts { return BoxFacts { own: List<u8>.make(), reusable: List<u8>.make(), viewportFree: List<bool>.make(), keyShapes: List<u16>.make(), itemFlags: List<u8>.make(), visits: List<usize>.make(), styledOffsets: List<usize>.make(), styledBoxes: List<usize>.make(), parents: List<usize>.make(), marks: List<usize>.make(), mark: 0, visitsRevision: 0 } }
+  pub fn make() -> BoxFacts { return BoxFacts { own: List<u8>.make(), reusable: List<u8>.make(), viewportFree: List<bool>.make(), keyShapes: List<u16>.make(), itemFlags: List<u8>.make(), visits: List<usize>.make(), styledOffsets: List<usize>.make(), styledBoxes: List<usize>.make(), parents: List<usize>.make(), marks: List<usize>.make(), mark: 0, visitsRevision: 0, scrollers: List<usize>.make(), scrollersFor: usize.MAX } }
   pub fn covers(self: &Self, count: usize) -> bool {
     return self.own.length() == count && self.reusable.length() == count && self.viewportFree.length() == count && self.keyShapes.length() == count && self.itemFlags.length() == count && self.parents.length() == count
   }
