@@ -725,7 +725,12 @@ effect fn svgColor(
   ! OutOfMemoryError
   ? &mut Allocator {
   let mut probe = cursor.*
-  if probe.function(source, b"color-mix") {
+  let mut relative = false
+  if colors.relativeStart(source, &cursor.*) {
+    let mut trial = cursor.*
+    relative = (run colors.parse(source, &mut trial)).isNone()
+  }
+  if relative || probe.function(source, b"color-mix") {
     let program = run colors.parseProgram(source, &mut cursor.*)
     if let Option<ColorProgram>.Some { value } = move program {
       let id = ColorId { index: store.baseColors.length + store.colorPrograms.length() }

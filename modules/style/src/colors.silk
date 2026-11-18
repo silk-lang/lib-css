@@ -15,6 +15,7 @@ import svg_geometry.math
 import silk.num.f64
 import silk.num.u32
 import silk.num.u8
+import silk.num.usize
 import silk.text.string { String }
 import silk.core.option { Option }
 import silk.core.ownership { Copy }
@@ -484,7 +485,7 @@ fn predefined(source: &Input<'_>, cursor: &mut Cursor) -> Option<Space> {
 }
 
 // The channel keywords of a relative color in `space`, in the order of its channels.
-fn channelNames(space: Space) -> [&'static [u8]; 3] {
+pub fn channelNames(space: Space) -> [&'static [u8]; 3] {
   return match space {
     Space.Hsl => [b"h", b"s", b"l"]
     Space.Hwb => [b"h", b"w", b"b"]
@@ -531,6 +532,8 @@ effect fn relative(source: &Input<'_>, cursor: &mut Cursor, functionAt: usize, s
       return Option<Color>.None
     }
   }
+  // An origin known only later (currentcolor, a system color) makes a program instead.
+  match &origin.identity { Identity.Absolute => {} _ => { return Option<Color>.None } }
   let mut target = space
   if generic {
     match predefined(source, &mut cursor.*) {
@@ -1846,10 +1849,66 @@ pub union ColorNode {
   Leaf { pub color: Color },
   Mix { pub left: usize, pub right: usize, pub space: Space, pub hue: HueMethod,
     pub leftWeight: f64, pub alphaMultiplier: f64 },
+  /// A relative color (`rgb(from <origin> ...)`) whose origin is known only later. Its four
+  /// channels (the last is alpha) are `lengths` steps of `ops` from `first`. `legacy` is
+  /// `rgb()`, whose channels count to 255.
+  Relative { pub origin: usize, pub space: Space, pub legacy: bool, pub first: usize, pub lengths: [u8; 4] },
 }
 impl Copy for ColorNode {}
 
-pub struct ColorProgram { pub nodes: List<ColorNode> }
+/// One step of a relative color channel, in postfix: numbers and the origin's channels.
+pub union ChannelOp {
+  Number { pub value: f64 },
+  /// The origin's channel 0 to 2, or 3 for alpha.
+  Channel { pub index: u8 },
+  Add,
+  Subtract,
+  Multiply,
+  Divide,
+  /// `none`: the channel is missing.
+  Missing,
+}
+impl Copy for ChannelOp {}
+
+pub struct ColorProgram { pub nodes: List<ColorNode>, pub ops: List<ChannelOp> }
+
+/// The value of one relative color channel, or None when it is missing or invalid.
+fn channelValue(ops: &[ChannelOp], start: usize, count: usize, inputs: [f64; 4]) -> Option<f64> {
+  if start + count > ops.length || count == 0 { return Option<f64>.None }
+  let mut stack: [f64; 16] = [0.0; 16]
+  let mut size: usize = 0
+  let mut i = start
+  while i < start + count {
+    match ops[i] {
+      ChannelOp.Number { value } => {
+        if size == 16 { return Option<f64>.None }
+        stack[size] = value
+        size = size + 1
+      }
+      ChannelOp.Channel { index } => {
+        if size == 16 || index > 3 { return Option<f64>.None }
+        stack[size] = inputs[u8.toUsize(index)]
+        size = size + 1
+      }
+      ChannelOp.Missing => { return Option<f64>.None }
+      _ => {
+        if size < 2 { return Option<f64>.None }
+        let b = stack[size - 1]
+        let a = stack[size - 2]
+        size = size - 1
+        stack[size - 1] = match ops[i] {
+          ChannelOp.Add => a + b
+          ChannelOp.Subtract => a - b
+          ChannelOp.Multiply => a * b
+          _ => a / b
+        }
+      }
+    }
+    i = i + 1
+  }
+  if size != 1 || !f64.isFinite(stack[0]) { return Option<f64>.None }
+  return Option<f64>.some(stack[0])
+}
 
 fn polarSpace(space: Space) -> bool {
   return space == Space.Hsl || space == Space.Hwb || space == Space.Lch || space == Space.Oklch
@@ -1929,6 +1988,10 @@ pub fn mix(left: Color, right: Color, space: Space, method: HueMethod, leftWeigh
 }
 
 impl ColorProgram {
+  pub fn make() -> ColorProgram {
+    return ColorProgram { nodes: List<ColorNode>.make(), ops: List<ChannelOp>.make() }
+  }
+
   pub fn contextual(self: &Self) -> bool {
     let mut i: usize = 0
     while i < self.nodes.length() {
@@ -1954,6 +2017,41 @@ impl ColorProgram {
         let a = match self.evaluateNode(left, context, depth + 1) { Option<Color>.Some { value } => value _ => { return Option<Color>.None } }
         let b = match self.evaluateNode(right, context, depth + 1) { Option<Color>.Some { value } => value _ => { return Option<Color>.None } }
         mix(a, b, space, hue, leftWeight, alphaMultiplier)
+      }
+      ColorNode.Relative { origin, space, legacy, first, lengths } => {
+        if origin >= index { return Option<Color>.None }
+        let base = match self.evaluateNode(origin, context, depth + 1) { Option<Color>.Some { value } => value _ => { return Option<Color>.None } }
+        let converted = match convert(base, space) { Option<Color>.Some { value } => value _ => { return Option<Color>.None } }
+        let scale: f64 = if legacy { 255.0 } else { 1.0 }
+        let bits: [u8; 4] = [1, 2, 4, 8]
+        let mut inputs: [f64; 4] = [0.0; 4]
+        let mut k: usize = 0
+        while k < 3 {
+          let value = converted.channels[k] * scale
+          inputs[k] = if value != value || converted.missing & bits[k] != 0 { 0.0 } else { value }
+          k = k + 1
+        }
+        inputs[3] = if converted.alpha != converted.alpha || converted.missing & 8 != 0 { 0.0 } else { converted.alpha }
+        let mut result = Color { space: space, channels: [0.0; 3], alpha: 1.0, missing: 0, identity: Identity.Absolute }
+        let mut at = first
+        k = 0
+        while k < 4 {
+          let count = u8.toUsize(lengths[k])
+          match channelValue(self.ops.asSlice(), at, count, inputs) {
+            Option<f64>.Some { value } => {
+              if k == 3 { result.alpha = clamp(value, 0.0, 1.0) }
+              else if polarSpace(space) && k == hueChannel(space) { result.channels[k] = hue(value) }
+              else { result.channels[k] = value / scale }
+            }
+            _ => {
+              result.missing = result.missing | bits[k]
+              if k == 3 { result.alpha = 0.0 }
+            }
+          }
+          at = at + count
+          k = k + 1
+        }
+        Option<Color>.some(result)
       }
     }
   }
@@ -1986,9 +2084,13 @@ impl ColorProgram {
   }
 
   pub effect fn copy(self: &Self) -> ColorProgram ! OutOfMemoryError ? &mut Allocator {
-    let mut result = ColorProgram { nodes: List<ColorNode>.make() }
+    let mut result = ColorProgram.make()
     let mut i: usize = 0
     while i < self.nodes.length() { run result.nodes.append(self.nodes.asSlice()[i])
+      i = i + 1
+    }
+    i = 0
+    while i < self.ops.length() { run result.ops.append(self.ops.asSlice()[i])
       i = i + 1
     }
     return move result
@@ -2067,7 +2169,13 @@ effect fn colorNode(out: &mut ColorProgram, source: &Input<'_>, cursor: &mut Cur
   ! OutOfMemoryError ? &mut Allocator {
   if depth >= 64 || out.nodes.length() >= 4096 { return Option<usize>.None }
   if !cursor.function(source, b"color-mix") {
-    let color = match run parseInner(source, &mut cursor.*) {
+    let mut trial = cursor.*
+    let parsed = run parseInner(source, &mut trial)
+    if parsed.isNone() && relativeStart(source, &cursor.*) {
+      return run relativeNode(&mut out.*, source, &mut cursor.*, depth)
+    }
+    cursor.position = trial.position
+    let color = match parsed {
       Option<Color>.Some { value } => value _ => { return Option<usize>.None }
     }
     let index = out.nodes.length()
@@ -2108,7 +2216,7 @@ effect fn colorNode(out: &mut ColorProgram, source: &Input<'_>, cursor: &mut Cur
 pub effect fn parseProgram(source: &Input<'_>, cursor: &mut Cursor) -> Option<ColorProgram>
   ! OutOfMemoryError ? &mut Allocator {
   let mut trial = cursor.*
-  let mut program = ColorProgram { nodes: List<ColorNode>.make() }
+  let mut program = ColorProgram.make()
   let root = run colorNode(&mut program, source, &mut trial, 0)
   if !root.isSome() { return Option<ColorProgram>.None }
   cursor.position = trial.position
@@ -2125,4 +2233,297 @@ pub fn spaceName(space: Space) -> &'static [u8] {
     Space.Hsl => b"hsl" Space.Hwb => b"hwb" Space.Lab => b"lab" Space.Lch => b"lch"
     Space.Oklab => b"oklab" Space.Oklch => b"oklch"
   }
+}
+
+
+/// Whether a color function with `from` (a relative color) comes next.
+pub fn relativeStart(source: &Input<'_>, cursor: &Cursor) -> bool {
+  let mut probe = cursor.*
+  probe.skip(source)
+  let named = match &source.at(probe.position) {
+    Option<TokenView>.Some { value } => match &value.token.kind {
+      Kind.Function { name } => functionSpace(value.text(name)).isSome() || insensitive(value.text(name), b"color")
+      _ => false
+    }
+    _ => false
+  }
+  if !named { return false }
+  probe.position = probe.position + 1
+  return probe.ident(source, b"from")
+}
+
+/// The end of the component that starts at `start` (a token, or a function or parenthesis
+/// with its contents), or None at a close or the end.
+fn componentEnd(source: &Input<'_>, start: usize, end: usize) -> Option<usize> {
+  let mut depth: usize = 0
+  let mut i = start
+  while i < end {
+    let view = match source.at(i) { Option<TokenView>.Some { value } => value _ => { return Option<usize>.None } }
+    match &view.token.kind {
+      Kind.Function { .. } => { depth = depth + 1 }
+      Kind.OpenParen => { depth = depth + 1 }
+      Kind.CloseParen => {
+        if depth == 0 { return Option<usize>.None }
+        depth = depth - 1
+      }
+      _ => {}
+    }
+    i = i + 1
+    if depth == 0 { return Option<usize>.some(i) }
+  }
+  return Option<usize>.None
+}
+
+/// Compiles a relative channel's arithmetic into postfix steps.
+struct Channels<'n> {
+  names: [&'n [u8]; 3],
+  position: usize,
+  end: usize,
+  refs: bool,
+  units: bool,
+}
+
+fn skipSpace(source: &Input<'_>, at: &mut Channels<'_>) -> () {
+  while at.position < at.end {
+    match &source.at(at.position) {
+      Option<TokenView>.Some { value } => match &value.token.kind {
+        Kind.Whitespace => { at.position = at.position + 1 }
+        _ => { return () }
+      }
+      _ => { return () }
+    }
+  }
+}
+
+fn delimNext(source: &Input<'_>, at: &mut Channels<'_>) -> u32 {
+  skipSpace(source, &mut at.*)
+  if at.position >= at.end { return 0 }
+  return match &source.at(at.position) {
+    Option<TokenView>.Some { value } => match &value.token.kind { Kind.Delim { scalar } => scalar _ => 0 }
+    _ => 0
+  }
+}
+
+fn channelIndex(names: [&'_ [u8]; 3], word: &[u8]) -> u8 {
+  if insensitive(word, b"alpha") { return 3 }
+  let mut i: usize = 0
+  while i < 3 {
+    if insensitive(word, names[i]) { return usize.toU8(i) }
+    i = i + 1
+  }
+  return 4
+}
+
+effect fn unary(out: &mut List<ChannelOp>, source: &Input<'_>, at: &mut Channels<'_>, depth: usize) -> bool
+  ! OutOfMemoryError ? &mut Allocator {
+  skipSpace(source, &mut at.*)
+  if at.position >= at.end || depth > 16 { return false }
+  let view = match source.at(at.position) { Option<TokenView>.Some { value } => value _ => { return false } }
+  at.position = at.position + 1
+  match &view.token.kind {
+    Kind.Number { value, .. } => { run out.append(ChannelOp.Number { value: value }) }
+    Kind.Percentage { value, .. } => {
+      at.units = true
+      run out.append(ChannelOp.Number { value: value })
+    }
+    Kind.Dimension { value, .. } => {
+      at.units = true
+      run out.append(ChannelOp.Number { value: value })
+    }
+    Kind.Ident { text } => {
+      let index = channelIndex(at.names, view.text(text))
+      if index == 4 { return false }
+      at.refs = true
+      run out.append(ChannelOp.Channel { index: index })
+    }
+    Kind.Function { name } => {
+      if !insensitive(view.text(name), b"calc") { return false }
+      if !(run sum(&mut out.*, source, &mut at.*, depth + 1)) { return false }
+      return closeNext(source, &mut at.*)
+    }
+    Kind.OpenParen => {
+      if !(run sum(&mut out.*, source, &mut at.*, depth + 1)) { return false }
+      return closeNext(source, &mut at.*)
+    }
+    _ => { return false }
+  }
+  return true
+}
+
+fn closeNext(source: &Input<'_>, at: &mut Channels<'_>) -> bool {
+  skipSpace(source, &mut at.*)
+  if at.position >= at.end { return false }
+  return match &source.at(at.position) {
+    Option<TokenView>.Some { value } => match &value.token.kind {
+      Kind.CloseParen => {
+        at.position = at.position + 1
+        true
+      }
+      _ => false
+    }
+    _ => false
+  }
+}
+
+effect fn product(out: &mut List<ChannelOp>, source: &Input<'_>, at: &mut Channels<'_>, depth: usize) -> bool
+  ! OutOfMemoryError ? &mut Allocator {
+  if !(run unary(&mut out.*, source, &mut at.*, depth)) { return false }
+  while true {
+    let next = delimNext(source, &mut at.*)
+    if next != 42 && next != 47 { return true }
+    at.position = at.position + 1
+    if !(run unary(&mut out.*, source, &mut at.*, depth)) { return false }
+    run out.append(if next == 42 { ChannelOp.Multiply } else { ChannelOp.Divide })
+  }
+  return true
+}
+
+effect fn sum(out: &mut List<ChannelOp>, source: &Input<'_>, at: &mut Channels<'_>, depth: usize) -> bool
+  ! OutOfMemoryError ? &mut Allocator {
+  if !(run product(&mut out.*, source, &mut at.*, depth)) { return false }
+  while true {
+    let next = delimNext(source, &mut at.*)
+    if next != 43 && next != 45 { return true }
+    at.position = at.position + 1
+    if !(run product(&mut out.*, source, &mut at.*, depth)) { return false }
+    run out.append(if next == 43 { ChannelOp.Add } else { ChannelOp.Subtract })
+  }
+  return true
+}
+
+/// A relative color whose origin is known only later: its origin node, then the node.
+effect fn relativeNode(out: &mut ColorProgram, source: &Input<'_>, cursor: &mut Cursor, depth: usize) -> Option<usize>
+  ! OutOfMemoryError ? &mut Allocator {
+  let mut trial = cursor.*
+  trial.skip(source)
+  let functionAt = trial.position
+  let mut generic = false
+  let mut space = Space.Srgb
+  match &source.at(functionAt) {
+    Option<TokenView>.Some { value } => match &value.token.kind {
+      Kind.Function { name } => {
+        generic = insensitive(value.text(name), b"color")
+        if !generic {
+          space = match functionSpace(value.text(name)) { Option<Space>.Some { value: found } => found _ => { return Option<usize>.None } }
+        }
+      }
+      _ => { return Option<usize>.None }
+    }
+    _ => { return Option<usize>.None }
+  }
+  trial.position = functionAt + 1
+  if !trial.ident(source, b"from") { return Option<usize>.None }
+  let origin = match run colorNode(&mut out.*, source, &mut trial, depth + 1) { Option<usize>.Some { value } => value _ => { return Option<usize>.None } }
+  if generic {
+    space = match predefined(source, &mut trial) { Option<Space>.Some { value } => value _ => { return Option<usize>.None } }
+  }
+  // Three channels, then `/ alpha` or nothing, then the close.
+  let mut starts: [usize; 4] = [0; 4]
+  let mut ends: [usize; 4] = [0; 4]
+  let mut count: usize = 0
+  while true {
+    trial.skip(source)
+    if trial.position >= trial.end { return Option<usize>.None }
+    let view = match source.at(trial.position) { Option<TokenView>.Some { value } => value _ => { return Option<usize>.None } }
+    let closing = match &view.token.kind { Kind.CloseParen => true _ => false }
+    let slash = match &view.token.kind { Kind.Delim { scalar } => scalar == 47 _ => false }
+    if closing {
+      trial.position = trial.position + 1
+      break
+    }
+    if slash {
+      if count != 3 { return Option<usize>.None }
+      trial.position = trial.position + 1
+      trial.skip(source)
+    } else if count >= 3 { return Option<usize>.None }
+    let at = if slash { 3 } else { count }
+    let stop = match componentEnd(source, trial.position, trial.end) { Option<usize>.Some { value } => value _ => { return Option<usize>.None } }
+    starts[at] = trial.position
+    ends[at] = stop
+    trial.position = stop
+    count = if slash { 4 } else { count + 1 }
+  }
+  if count < 3 { return Option<usize>.None }
+  let names = channelNames(space)
+  let first = out.ops.length()
+  let mut lengths: [u8; 4] = [0; 4]
+  let mut constant: [bool; 4] = [false; 4]
+  let mut k: usize = 0
+  while k < 4 {
+    let before = out.ops.length()
+    if k == 3 && count == 3 {
+      run out.ops.append(ChannelOp.Channel { index: 3 })
+    } else {
+      let mut at = Channels { names: names, position: starts[k], end: ends[k], refs: false, units: false }
+      let single = ends[k] == starts[k] + 1
+      let word = if single { match &source.at(starts[k]) { Option<TokenView>.Some { value } => match &value.token.kind { Kind.Ident { text } => insensitive(value.text(text), b"none") _ => false } _ => false } } else { false }
+      if word {
+        run out.ops.append(ChannelOp.Missing)
+      } else {
+        let mut steps = List<ChannelOp>.make()
+        if !(run sum(&mut steps, source, &mut at, 0)) || at.position != ends[k] { constant[k] = true }
+        else if !at.refs { constant[k] = true }
+        else if at.units { return Option<usize>.None }
+        else { run out.ops.appendSlice(steps.asSlice()) }
+      }
+    }
+    if out.ops.length() - before > 64 { return Option<usize>.None }
+    lengths[k] = usize.toU8(out.ops.length() - before)
+    k = k + 1
+  }
+  // Constant channels take the value the color function gives them on its own.
+  if constant[0] || constant[1] || constant[2] || constant[3] {
+    let mut css = Bytes.make()
+    match &source.at(functionAt) { Option<TokenView>.Some { value } => run spell(&mut css, &value) _ => { return Option<usize>.None } }
+    if generic {
+      run css.append(spaceName(space))
+      run css.append(b" ")
+    }
+    k = 0
+    while k < 4 {
+      if k == 3 { run css.append(b" / ") } else if k > 0 { run css.append(b" ") }
+      if constant[k] {
+        let mut i = starts[k]
+        while i < ends[k] {
+          match &source.at(i) { Option<TokenView>.Some { value } => run spell(&mut css, &value) _ => {} }
+          i = i + 1
+        }
+      } else {
+        run css.append(if k == 3 { b"1" } else { b"0" })
+      }
+      k = k + 1
+    }
+    run css.append(b")")
+    let buffer = match move run Effect.catch<CssError>(tokenized(css.asSlice()), noTokens) {
+      Option<TokenBuffer>.Some { value } => move value
+      _ => { return Option<usize>.None }
+    }
+    let spelled = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+    let mut inner = Cursor.make(&spelled)
+    let probe = match run parseInner(&spelled, &mut inner) { Option<Color>.Some { value } => value _ => { return Option<usize>.None } }
+    if !inner.done(&spelled) { return Option<usize>.None }
+    // Rebuild the steps with each constant in place, in channel order.
+    let mut steps = List<ChannelOp>.make()
+    let scale: f64 = if !generic && space == Space.Srgb { 255.0 } else { 1.0 }
+    let mut at = first
+    k = 0
+    while k < 4 {
+      if constant[k] {
+        let value = if k == 3 { probe.alpha } else { probe.channels[k] * scale }
+        run steps.append(ChannelOp.Number { value: value })
+        lengths[k] = 1
+      } else {
+        let length = u8.toUsize(lengths[k])
+        run steps.appendSlice(Slice.view<ChannelOp>(out.ops.asSlice(), at, length))
+        at = at + length
+      }
+      k = k + 1
+    }
+    out.ops.truncate(first)
+    run out.ops.appendSlice(steps.asSlice())
+  }
+  cursor.position = trial.position
+  let index = out.nodes.length()
+  run out.nodes.append(ColorNode.Relative { origin: origin, space: space, legacy: !generic && space == Space.Srgb, first: first, lengths: lengths })
+  return Option<usize>.some(index)
 }

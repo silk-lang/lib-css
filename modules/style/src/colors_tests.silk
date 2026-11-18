@@ -421,3 +421,63 @@ test effect fn relativeColorsReadTheirOriginsChannels() -> () ! AssertionError<'
   let mut allocator = Allocator.systemAllocatorProvider()
   run relativeColors() |> Effect.provideMut<Allocator>(&mut allocator)
 }
+
+/// `data` as a program, evaluated with `current` as currentcolor and `system` as every system color.
+effect fn later(data: &[u8], current: Color, system: Color) -> Option<Color>
+  ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let buffer = run lexer.tokenize(data, &Limits.make())
+  let source = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+  let mut cursor = Cursor.make(&source)
+  let parsed = run colors.parseProgram(&source, &mut cursor)
+  run Testing.expect(cursor.done(&source), "a relative color program takes the whole value")
+  return match &parsed {
+    Option<ColorProgram>.Some { value } => {
+      run Testing.expect(value.contextual(), "its origin stays for later")
+      let mut writer = Writer.make()
+      run sheet_colors.encode(&value, &mut writer)
+      let mut reader = Reader.make(writer.bytes.asSlice())
+      let decoded = run Effect.result(sheet_colors.decode(&mut reader, &Limits.make()))
+      match &decoded {
+        Result<ColorProgram, DecodeError | OutOfMemoryError>.Success { value: back } => back.evaluate(&Context.make(current, [system; 19]))
+        _ => Option<Color>.None
+      }
+    }
+    _ => Option<Color>.None
+  }
+}
+
+effect fn laterIs(data: &[u8], current: Color, system: Color, r: f64, g: f64, b: f64, a: f64, message: string<'static>) -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let found = run later(data, current, system)
+  run Testing.expect(match &found {
+    Option<Color>.Some { value } => {
+      let rgba = colors.toSrgb(value)
+      near(rgba.r, r) && near(rgba.g, g) && near(rgba.b, b) && near(rgba.a, a)
+    }
+    _ => false
+  }, message)
+}
+
+effect fn laterRelative() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let red = Color.srgb(1.0, 0.0, 0.0, 1.0)
+  let blue = Color.srgb(0.0, 0.0, 1.0, 1.0)
+  let white = Color.srgb(1.0, 1.0, 1.0, 1.0)
+  run laterIs(b"rgb(from currentcolor r g b / 50%)", red, blue, 1.0, 0.0, 0.0, 0.5, "currentcolor's channels, with a constant alpha")
+  run laterIs(b"rgb(from currentcolor r g b / 50%)", blue, red, 0.0, 0.0, 1.0, 0.5, "the same program follows another currentcolor")
+  run laterIs(b"hsl(from currentcolor calc(h + 120) s l)", red, blue, 0.0, 1.0, 0.0, 1.0, "calc() over a channel")
+  run laterIs(b"oklch(from canvastext l c h / calc(alpha / 4))", red, blue, 0.0, 0.0, 1.0, 0.25, "a system color origin")
+  run laterIs(b"color(from currentcolor srgb calc(r / 2) g 0)", white, blue, 0.5, 1.0, 0.0, 1.0, "color() with a number channel")
+  run laterIs(b"rgb(from color-mix(in srgb, currentcolor, white) r g calc((b + 255) / 2))", Color.srgb(0.0, 0.0, 0.0, 1.0), blue, 0.5, 0.5, 0.75, 1.0, "a color-mix() origin, and nested parentheses")
+  run laterIs(b"hsl(from currentcolor h 50% l)", red, blue, 0.75, 0.25, 0.25, 1.0, "a percentage channel")
+  let none = run later(b"rgb(from currentcolor none g b)", red, blue)
+  run Testing.expect(match &none { Option<Color>.Some { value } => value.missing & 1 != 0 _ => false }, "none is a missing channel")
+  run Testing.expect((run parsed(b"rgb(from currentcolor r g b)")).isNone(), "a plain color parse still has no value for it")
+}
+
+test effect fn relativeColorsFromLaterOriginsBecomePrograms() -> () ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run laterRelative() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+import sheet_colors
+import sheet_binary { Writer, Reader, DecodeError }
+import silk.core.result { Result }

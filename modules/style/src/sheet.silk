@@ -30,7 +30,7 @@ import silk.num.u64
 import silk.num.u32
 import silk.text.string { String, InvalidUtf8 }
 
-pub const VERSION: u32 = 8
+pub const VERSION: u32 = 9
 pub const NONE: usize = UNLAYERED
 
 pub union Declaration {
