@@ -1,7 +1,7 @@
 import silk.core.ownership { Copy }
 import style { SizeContainment }
 import geometry { OptionalSize, AvailableSpace, Size, Point, ResolvedEdges, ScrollbarMetrics, max, min, clamp }
-import style { Dimension, SizeValue, DimensionKind, Edges, Style, BoxSizing, Position, Display, DisplayInside, DisplayOutside, Overflow, ScrollbarWidth, ScrollbarGutter, Float, WritingMode, TextOrientation, Direction, Align, OverflowAlignment, VerticalAlignKind }
+import style { Dimension, SizeValue, Bounds, DimensionKind, Edges, Style, BoxSizing, Position, Display, DisplayInside, DisplayOutside, Overflow, ScrollbarWidth, ScrollbarGutter, Float, WritingMode, TextOrientation, Direction, Align, OverflowAlignment, VerticalAlignKind }
 import fragmentation { FragmentInput }
 
 pub const UNBOUNDED: f32 = 1.0e30
@@ -104,16 +104,29 @@ pub fn resolve(value: Dimension, basis: f32, definite: bool, fallback: f32) -> f
   if definite && (value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc) { return value.value + value.percent * basis }
   return fallback
 }
+// An inset or margin: `resolve`, with a `Bounded` value held between its bounds.
+pub fn resolveIn(value: Dimension, bounds: &Bounds, basis: f32, definite: bool, fallback: f32) -> f32 {
+  if value.kind == DimensionKind.Length { return value.value }
+  if definite && value.relative() { return bounds.hold(value.kind, value.slot, value.value + value.percent * basis) }
+  return fallback
+}
+// A gap: its length plus its percentage of a definite basis; `normal` is zero here.
+pub fn resolveGap(value: Dimension, bounds: &Bounds, basis: f32, definite: bool) -> f32 {
+  let mut used: f32 = 0.0
+  if definite { used = basis }
+  return bounds.hold(value.kind, value.slot, value.value + value.percent * used)
+}
 pub fn sizeResolves(value: SizeValue, definite: bool) -> bool {
   return value.kind == DimensionKind.Length || (definite && value.relative())
 }
-pub fn resolveSize(value: SizeValue, basis: f32, definite: bool, fallback: f32) -> f32 {
+pub fn resolveSize(value: SizeValue, bounds: &Bounds, basis: f32, definite: bool, fallback: f32) -> f32 {
   if value.kind == DimensionKind.Length { return value.value }
   if definite {
     if value.kind == DimensionKind.Percent || value.kind == DimensionKind.Calc { return value.value + value.percent * basis }
     if value.kind == DimensionKind.Least { return min(value.bound, value.value + value.percent * basis) }
     if value.kind == DimensionKind.Most { return max(value.bound, value.value + value.percent * basis) }
     if value.kind == DimensionKind.Clamp { return max(value.value, min(value.percent * basis, value.bound)) }
+    if value.kind == DimensionKind.Bounded { return bounds.hold(value.kind, value.slot, value.value + value.percent * basis) }
   }
   return fallback
 }
@@ -128,14 +141,26 @@ pub fn edges(value: Edges, basis: f32, definite: bool) -> ResolvedEdges {
     bottom: value.bottom.value + value.bottom.percent * used, left: value.left.value + value.left.percent * used,
   }
 }
+// `edges` of a style's margin or padding, with its `Bounded` sides held between their bounds.
+@inlineAlways
+pub fn edgesIn(value: Edges, bounds: &Bounds, basis: f32, definite: bool) -> ResolvedEdges {
+  let mut result = edges(value, basis, definite)
+  if bounds.count != 0 {
+    result.top = bounds.hold(value.top.kind, value.top.slot, result.top)
+    result.right = bounds.hold(value.right.kind, value.right.slot, result.right)
+    result.bottom = bounds.hold(value.bottom.kind, value.bottom.slot, result.bottom)
+    result.left = bounds.hold(value.left.kind, value.left.slot, result.left)
+  }
+  return result
+}
 // resolve(value, basis, definite, value.value) without branches; see edges.
-fn minimumLength(value: SizeValue, basis: f32, definite: bool) -> f32 {
+fn minimumLength(value: SizeValue, bounds: &Bounds, basis: f32, definite: bool) -> f32 {
   let mut used: f32 = 0.0
   if definite { used = basis }
   if value.kind == DimensionKind.Least { return min(value.bound, value.value + value.percent * used) }
   if value.kind == DimensionKind.Most { return max(value.bound, value.value + value.percent * used) }
   if value.kind == DimensionKind.Clamp { return max(value.value, min(value.percent * used, value.bound)) }
-  return value.value + value.percent * used
+  return bounds.hold(value.kind, value.slot, value.value + value.percent * used)
 }
 @inlineAlways
 pub fn resolveBox(style: &Style, input: &Input) -> ResolvedBox {
@@ -156,9 +181,9 @@ pub fn resolveBoxEdges(style: &Style, input: &Input, zeroEdges: bool) -> Resolve
       basis = input.parent.height
       basisDefinite = input.parent.heightDefinite
     }
-    padding = edges(style.padding, basis, basisDefinite)
+    padding = edgesIn(style.padding, &style.bounds, basis, basisDefinite)
     border = edges(style.border, 0.0, false)
-    margin = edges(style.margin, basis, basisDefinite)
+    margin = edgesIn(style.margin, &style.bounds, basis, basisDefinite)
   }
   let inset = ResolvedEdges { top: padding.top + border.top, right: padding.right + border.right, bottom: padding.bottom + border.bottom, left: padding.left + border.left }
   let mut addWidth = inset.horizontal()
@@ -166,9 +191,9 @@ pub fn resolveBoxEdges(style: &Style, input: &Input, zeroEdges: bool) -> Resolve
   if style.boxSizing == BoxSizing.BorderBox { addWidth = 0.0
     addHeight = 0.0 }
   let mut size = OptionalSize.none()
-  if !input.intrinsicWidth && sizeResolves(style.width, input.parent.widthDefinite) { size.width = max(inset.horizontal(), resolveSize(style.width, input.parent.width, input.parent.widthDefinite, 0.0) + addWidth)
+  if !input.intrinsicWidth && sizeResolves(style.width, input.parent.widthDefinite) { size.width = max(inset.horizontal(), resolveSize(style.width, &style.bounds, input.parent.width, input.parent.widthDefinite, 0.0) + addWidth)
     size.widthDefinite = true }
-  if !input.intrinsicHeight && sizeResolves(style.height, input.parent.heightDefinite) { size.height = max(inset.vertical(), resolveSize(style.height, input.parent.height, input.parent.heightDefinite, 0.0) + addHeight)
+  if !input.intrinsicHeight && sizeResolves(style.height, input.parent.heightDefinite) { size.height = max(inset.vertical(), resolveSize(style.height, &style.bounds, input.parent.height, input.parent.heightDefinite, 0.0) + addHeight)
     size.heightDefinite = true }
   if input.known.widthDefinite { size.width = input.known.width
     size.widthDefinite = true }
@@ -177,8 +202,8 @@ pub fn resolveBoxEdges(style: &Style, input: &Input, zeroEdges: bool) -> Resolve
   let mut result = ResolvedBox {
     padding: padding, border: border, margin: margin, inset: inset, size: size,
     gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(),
-    min: Size { width: max(input.minimum.width, max(inset.horizontal(), minimumLength(style.minWidth, input.parent.width, input.parent.widthDefinite) + addWidth)), height: max(input.minimum.height, max(inset.vertical(), minimumLength(style.minHeight, input.parent.height, input.parent.heightDefinite) + addHeight)) },
-    max: Size { width: max(inset.horizontal(), resolveSize(style.maxWidth, input.parent.width, input.parent.widthDefinite, UNBOUNDED) + addWidth), height: max(inset.vertical(), resolveSize(style.maxHeight, input.parent.height, input.parent.heightDefinite, UNBOUNDED) + addHeight) },
+    min: Size { width: max(input.minimum.width, max(inset.horizontal(), minimumLength(style.minWidth, &style.bounds, input.parent.width, input.parent.widthDefinite) + addWidth)), height: max(input.minimum.height, max(inset.vertical(), minimumLength(style.minHeight, &style.bounds, input.parent.height, input.parent.heightDefinite) + addHeight)) },
+    max: Size { width: max(inset.horizontal(), resolveSize(style.maxWidth, &style.bounds, input.parent.width, input.parent.widthDefinite, UNBOUNDED) + addWidth), height: max(inset.vertical(), resolveSize(style.maxHeight, &style.bounds, input.parent.height, input.parent.heightDefinite, UNBOUNDED) + addHeight) },
   }
   if input.intrinsicWidth {
     result.min.width = inset.horizontal()
@@ -214,12 +239,12 @@ pub fn childrenInput(input: &Input, style: &Style, box: &ResolvedBox, parent: Op
   }
   let requestMinimum = input.effectiveMinimum()
   let minimum = Size {
-    width: max(requestMinimum.width - box.inset.horizontal(), max(0.0, resolveSize(style.minWidth, input.parent.width, input.parent.widthDefinite, 0.0) - subtractWidth)),
-    height: max(requestMinimum.height - box.inset.vertical(), max(0.0, resolveSize(style.minHeight, input.parent.height, input.parent.heightDefinite, 0.0) - subtractHeight)),
+    width: max(requestMinimum.width - box.inset.horizontal(), max(0.0, resolveSize(style.minWidth, &style.bounds, input.parent.width, input.parent.widthDefinite, 0.0) - subtractWidth)),
+    height: max(requestMinimum.height - box.inset.vertical(), max(0.0, resolveSize(style.minHeight, &style.bounds, input.parent.height, input.parent.heightDefinite, 0.0) - subtractHeight)),
   }
   result.parentMaxSize = Size {
-    width: max(minimum.width, resolveSize(style.maxWidth, input.parent.width, input.parent.widthDefinite, UNBOUNDED) - subtractWidth),
-    height: max(minimum.height, resolveSize(style.maxHeight, input.parent.height, input.parent.heightDefinite, UNBOUNDED) - subtractHeight),
+    width: max(minimum.width, resolveSize(style.maxWidth, &style.bounds, input.parent.width, input.parent.widthDefinite, UNBOUNDED) - subtractWidth),
+    height: max(minimum.height, resolveSize(style.maxHeight, &style.bounds, input.parent.height, input.parent.heightDefinite, UNBOUNDED) - subtractHeight),
   }
   result.scrollportSize = input.scrollportSize
   if scrollable(usedOverflowForAxis(style, true)) || scrollable(usedOverflowForAxis(style, false)) {
@@ -251,7 +276,7 @@ pub fn effectiveDisplay(style: &Style, input: &Input) -> Display {
   return style.display
 }
 pub fn isFlex(style: &Style) -> bool { return style.display.insideIs(DisplayInside.Flex) }
-pub fn isGrid(style: &Style) -> bool { return style.display.insideIs(DisplayInside.Grid) }
+pub fn isGrid(style: &Style) -> bool { return style.display.isGrid() }
 pub fn scrollable(value: Overflow) -> bool { return value == Overflow.Auto || value == Overflow.Scroll || value == Overflow.Hidden }
 // Pinned Overflow 3 §3.1: visible becomes auto beside a scrollable axis.
 // Clip remains non-scrollable; the draft permits single-axis scroll containers.
@@ -272,7 +297,7 @@ pub fn usedOverflowForAxis(style: &Style, horizontal: bool) -> Overflow {
 }
 pub fn establishesContext(style: &Style, input: &Input) -> bool {
   let display = effectiveDisplay(style, &input)
-  return style.sizeContainment != SizeContainment.None || style.layoutContainment || display.insideIs(DisplayInside.Flex) || display.insideIs(DisplayInside.Grid) || style.alignContent != Align.Normal || (style.float != Float.None && !input.blockify) || display.insideIs(DisplayInside.FlowRoot) || outOfFlow(style) || scrollable(style.overflowX) || scrollable(style.overflowY)
+  return style.sizeContainment != SizeContainment.None || style.layoutContainment || display.insideIs(DisplayInside.Flex) || display.isGrid() || style.alignContent != Align.Normal || (style.float != Float.None && !input.blockify) || display.insideIs(DisplayInside.FlowRoot) || outOfFlow(style) || scrollable(style.overflowX) || scrollable(style.overflowY)
 }
 
 // CSS 2.1 §10.3.3: auto margins absorb positive free space; the containing
@@ -356,5 +381,5 @@ pub fn selfCollapsingSize(style: &Style, parent: OptionalSize, inlineDefinite: b
   let automaticBlock = preferredBlock.kind == DimensionKind.Auto || (preferredBlock.relative() && !parentBlockDefinite)
   // CSS 2.1 §8.3.1 uses the computed height, not a max-size-clamped zero.
   // Sizing 4 §4.2.1 excludes a ratio-dependent automatic block size.
-  return resolveSize(preferredBlock, parentBlock, parentBlockDefinite, -1.0) == 0.0 || (automaticBlock && !(style.aspectRatio > 0.0 && inlineDefinite))
+  return resolveSize(preferredBlock, &style.bounds, parentBlock, parentBlockDefinite, -1.0) == 0.0 || (automaticBlock && !(style.aspectRatio > 0.0 && inlineDefinite))
 }

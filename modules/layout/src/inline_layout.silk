@@ -85,7 +85,7 @@ fn alignmentShift(style: &Style, lineHeight: f32, parent: &FontBox, mode: Writin
 fn atomicBaseline(style: &Style, layout: &Layout, axes: &Axes, margin: ResolvedEdges, parent: &Style) -> f32 {
   let size = axes.size(layout.size)
   let childAxes = Axes.make(style.writingMode)
-  let first = style.baselineSource == BaselineSource.First || (style.baselineSource == BaselineSource.Auto && (style.display.insideIs(DisplayInside.Flex) || style.display.insideIs(DisplayInside.Grid)))
+  let first = style.baselineSource == BaselineSource.First || (style.baselineSource == BaselineSource.Auto && (style.display.insideIs(DisplayInside.Flex) || style.display.isGrid()))
   let available = (first && layout.hasFirstBaseline) || (!first && layout.hasLastBaseline)
   if childAxes.vertical == axes.vertical && available {
     let mut baseline: f32 = 0.0
@@ -301,7 +301,7 @@ effect fn collect<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'sou
   let mut baselineFromMargin = false
   if item.kind == ItemKind.Atomic {
     baseline = atomicBaseline(style, &layout, &axes, resolved.margin, parentStyle)
-    let first = style.baselineSource == BaselineSource.First || (style.baselineSource == BaselineSource.Auto && (style.display.insideIs(DisplayInside.Flex) || style.display.insideIs(DisplayInside.Grid)))
+    let first = style.baselineSource == BaselineSource.First || (style.baselineSource == BaselineSource.Auto && (style.display.insideIs(DisplayInside.Flex) || style.display.isGrid()))
     baselineFromMargin = Axes.make(style.writingMode).vertical != axes.vertical || !((first && layout.hasFirstBaseline) || (!first && layout.hasLastBaseline))
   }
   item.leaf = atomics.length()

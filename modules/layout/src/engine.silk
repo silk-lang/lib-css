@@ -3,7 +3,7 @@ import silk.num.usize
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
 import style { SizeContainment, Style, Display, Dimension, SizeValue, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
-import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, absolutelyPositioned, containsAbsolute, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edgesIn, isFlex, isGrid, outOfFlow, absolutelyPositioned, containsAbsolute, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
 import flex { layoutFlex, emptyFlexSize, FlexScratch }
 import grid { layoutGrid, layoutEmptyGrid }
@@ -472,7 +472,7 @@ fn flowMarginIn(nodes: &BoxTree<'_>, parent: &FlowMargins, child: usize, layout:
   if parent.declared {
     // Optional block margins use declared lengths, with resolved auto margins.
     // CSS2's overconstraint correction is not an extra scrollable margin area.
-    let declared = edges(style.margin, parent.basis, parent.definite)
+    let declared = edgesIn(style.margin, &style.bounds, parent.basis, parent.definite)
     if style.margin.left.kind != DimensionKind.Auto { margin.left = declared.left }
     if style.margin.right.kind != DimensionKind.Auto { margin.right = declared.right }
     if style.margin.top.kind != DimensionKind.Auto { margin.top = declared.top }

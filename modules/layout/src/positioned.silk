@@ -7,7 +7,7 @@ import style { Style, Position, DimensionKind, Direction, WritingMode, Align, Fl
 import tree { NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, SettledRange }
-import context { Input, ResolvedBox, resolveBox, childrenInput, withGutter, resolve, resolves, outOfFlow, absolutelyPositioned, containsAbsolute, isFlex, isGrid, scrollable, usedOverflowForAxis, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, childrenInput, withGutter, resolveIn, resolves, outOfFlow, absolutelyPositioned, containsAbsolute, isFlex, isGrid, scrollable, usedOverflowForAxis, UNBOUNDED }
 import engine { layoutNode, layoutNodeInPlace, layoutInBfc, flowMarginRect, resolveFragmentBox, shapedBox }
 import layout_pass { LayoutPass, FullBoxGeometry, CacheKind, REUSE_INDEPENDENT }
 import layout_cache { FACT_ANCHORED, PositionedRun }
@@ -452,10 +452,10 @@ fn relativeOffset(style: &Style, containingStyle: &Style, containing: OptionalSi
   let top = resolves(style.inset.top, containing.heightDefinite)
   let bottom = resolves(style.inset.bottom, containing.heightDefinite)
   let mut result = Point { x: 0.0, y: 0.0 }
-  if left && (!right || !startReverse(containingStyle, true)) { result.x = resolve(style.inset.left, containing.width, containing.widthDefinite, 0.0) }
-  else if right { result.x = -resolve(style.inset.right, containing.width, containing.widthDefinite, 0.0) }
-  if top && (!bottom || !startReverse(containingStyle, false)) { result.y = resolve(style.inset.top, containing.height, containing.heightDefinite, 0.0) }
-  else if bottom { result.y = -resolve(style.inset.bottom, containing.height, containing.heightDefinite, 0.0) }
+  if left && (!right || !startReverse(containingStyle, true)) { result.x = resolveIn(style.inset.left, &style.bounds, containing.width, containing.widthDefinite, 0.0) }
+  else if right { result.x = -resolveIn(style.inset.right, &style.bounds, containing.width, containing.widthDefinite, 0.0) }
+  if top && (!bottom || !startReverse(containingStyle, false)) { result.y = resolveIn(style.inset.top, &style.bounds, containing.height, containing.heightDefinite, 0.0) }
+  else if bottom { result.y = -resolveIn(style.inset.bottom, &style.bounds, containing.height, containing.heightDefinite, 0.0) }
   return result
 }
 fn stickyAxis(style: &Style, containingStyle: &Style, horizontal: bool, position: f32, size: f32, containingLow: f32, containingSize: f32, marginLow: f32, marginHigh: f32, scrollLow: f32, scrollSize: f32, scrollDefinite: bool) -> f32 {
@@ -466,8 +466,8 @@ fn stickyAxis(style: &Style, containingStyle: &Style, horizontal: bool, position
   let hasLow = resolves(lowDimension, scrollDefinite)
   let hasHigh = resolves(highDimension, scrollDefinite)
   if !hasLow && !hasHigh { return 0.0 }
-  let mut low = resolve(lowDimension, scrollSize, scrollDefinite, 0.0)
-  let mut high = resolve(highDimension, scrollSize, scrollDefinite, 0.0)
+  let mut low = resolveIn(lowDimension, &style.bounds, scrollSize, scrollDefinite, 0.0)
+  let mut high = resolveIn(highDimension, &style.bounds, scrollSize, scrollDefinite, 0.0)
   // Position 3 §3.4: enlarge at the containing block's logical end,
   // even when that edge's original inset was auto.
   if scrollSize - low - high < size {
@@ -753,10 +753,10 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
   let hasRight = resolves(style.inset.right, containing.widthDefinite)
   let hasTop = resolves(style.inset.top, containing.heightDefinite)
   let hasBottom = resolves(style.inset.bottom, containing.heightDefinite)
-  let mut left = resolve(style.inset.left, containing.width, containing.widthDefinite, 0.0)
-  let mut right = resolve(style.inset.right, containing.width, containing.widthDefinite, 0.0)
-  let mut top = resolve(style.inset.top, containing.height, containing.heightDefinite, 0.0)
-  let mut bottom = resolve(style.inset.bottom, containing.height, containing.heightDefinite, 0.0)
+  let mut left = resolveIn(style.inset.left, &style.bounds, containing.width, containing.widthDefinite, 0.0)
+  let mut right = resolveIn(style.inset.right, &style.bounds, containing.width, containing.widthDefinite, 0.0)
+  let mut top = resolveIn(style.inset.top, &style.bounds, containing.height, containing.heightDefinite, 0.0)
+  let mut bottom = resolveIn(style.inset.bottom, &style.bounds, containing.height, containing.heightDefinite, 0.0)
   // Position 3 §3.5.2: an inverted inset rectangle reduces its weaker
   // (logical end) inset until the rectangle has zero extent.
   if hasLeft && hasRight && left + right > containing.width {
@@ -1305,8 +1305,8 @@ effect fn absoluteFrameInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, i
   if output.frames.writingMode == WritingMode.HorizontalTb {
     input.parent.width = containing.width
     input.parent.widthDefinite = true
-    let left = resolve(style.inset.left, containing.width, true, 0.0)
-    let right = resolve(style.inset.right, containing.width, true, 0.0)
+    let left = resolveIn(style.inset.left, &style.bounds, containing.width, true, 0.0)
+    let right = resolveIn(style.inset.right, &style.bounds, containing.width, true, 0.0)
     input.availableWidth = AvailableSpace.definite(max(0.0, containing.width - left - right))
     if original.known.widthDefinite && style.width.kind == DimensionKind.Auto {
       let box = resolveBox(style, &input)
@@ -1315,8 +1315,8 @@ effect fn absoluteFrameInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, i
   } else {
     input.parent.height = containing.height
     input.parent.heightDefinite = true
-    let top = resolve(style.inset.top, containing.height, true, 0.0)
-    let bottom = resolve(style.inset.bottom, containing.height, true, 0.0)
+    let top = resolveIn(style.inset.top, &style.bounds, containing.height, true, 0.0)
+    let bottom = resolveIn(style.inset.bottom, &style.bounds, containing.height, true, 0.0)
     input.availableHeight = AvailableSpace.definite(max(0.0, containing.height - top - bottom))
     if original.known.heightDefinite && style.height.kind == DimensionKind.Auto {
       let box = resolveBox(style, &input)
@@ -1343,8 +1343,8 @@ fn placedInline(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, cb:
     firstOrigin.y = firstOrigin.y + fragment.paddingRect.y
   }
   if output.frames.writingMode == WritingMode.HorizontalTb {
-    let left = resolve(style.inset.left, containing.width, true, 0.0)
-    let right = resolve(style.inset.right, containing.width, true, 0.0)
+    let left = resolveIn(style.inset.left, &style.bounds, containing.width, true, 0.0)
+    let right = resolveIn(style.inset.right, &style.bounds, containing.width, true, 0.0)
     let mut align = style.justifySelf
     let mut safety = style.justifySelfSafety
     if cbStyle.writingMode != WritingMode.HorizontalTb { align = style.alignSelf
@@ -1357,8 +1357,8 @@ fn placedInline(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, cb:
     }
     point.x = containing.x + insetPosition(left, right, resolves(style.inset.left, true), resolves(style.inset.right, true), size.width, containing.width, 0.0, containing.width, box.margin.left, box.margin.right, style.margin.left.kind == DimensionKind.Auto, style.margin.right.kind == DimensionKind.Auto, startReverse(cbStyle, true), cbStyle.writingMode == WritingMode.HorizontalTb, staticPosition, align, safety, startReverse(style, true), true)
   } else {
-    let top = resolve(style.inset.top, containing.height, true, 0.0)
-    let bottom = resolve(style.inset.bottom, containing.height, true, 0.0)
+    let top = resolveIn(style.inset.top, &style.bounds, containing.height, true, 0.0)
+    let bottom = resolveIn(style.inset.bottom, &style.bounds, containing.height, true, 0.0)
     let mut align = style.justifySelf
     let mut safety = style.justifySelfSafety
     if cbStyle.writingMode == WritingMode.HorizontalTb { align = style.alignSelf
@@ -1799,11 +1799,11 @@ fn fragmentFlowMargin(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, parentId
   // does in continuous layout. Keep the fragment's consumed block margins:
   // resolving those declarations again would restore discarded/sliced edges.
   if horizontal {
-    if style.margin.left.kind != DimensionKind.Auto { margin.left = resolve(style.margin.left, basis, definite, 0.0) }
-    if style.margin.right.kind != DimensionKind.Auto { margin.right = resolve(style.margin.right, basis, definite, 0.0) }
+    if style.margin.left.kind != DimensionKind.Auto { margin.left = resolveIn(style.margin.left, &style.bounds, basis, definite, 0.0) }
+    if style.margin.right.kind != DimensionKind.Auto { margin.right = resolveIn(style.margin.right, &style.bounds, basis, definite, 0.0) }
   } else {
-    if style.margin.top.kind != DimensionKind.Auto { margin.top = resolve(style.margin.top, basis, definite, 0.0) }
-    if style.margin.bottom.kind != DimensionKind.Auto { margin.bottom = resolve(style.margin.bottom, basis, definite, 0.0) }
+    if style.margin.top.kind != DimensionKind.Auto { margin.top = resolveIn(style.margin.top, &style.bounds, basis, definite, 0.0) }
+    if style.margin.bottom.kind != DimensionKind.Auto { margin.bottom = resolveIn(style.margin.bottom, &style.bounds, basis, definite, 0.0) }
   }
   return Rect { x: -max(0.0, margin.left), y: -max(0.0, margin.top), width: child.size.width + max(0.0, margin.left) + max(0.0, margin.right), height: child.size.height + max(0.0, margin.top) + max(0.0, margin.bottom) }
 }

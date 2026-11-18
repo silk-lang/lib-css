@@ -4,7 +4,7 @@ import silk.num.i32
 import silk.num.usize
 import axes { Axes }
 import box_tree { BoxTree }
-import context { Input, ResolvedBox, childrenInput, resolve }
+import context { Input, ResolvedBox, childrenInput, resolveGap }
 import geometry { OptionalSize, AvailableSpace, AvailableKind, Measure, Size, Point, ResolvedEdges, max }
 import style { Style, Direction, DimensionKind, Align }
 import text { TextMeasure, TextError }
@@ -61,8 +61,8 @@ fn sizing(columns: bool, count: usize, origin: i32, box: &ResolvedBox, style: &S
   return AxisSizing {
     columns: columns, origin: origin, count: count, definite: definite,
     baselineDefinite: definite, size: size, minimum: minimum, maximum: maximum,
-    available: available, gap: gap,
-    usedGap: max(0.0, resolve(gap, size, definite, gap.value)),
+    available: available, gap: gap, bounds: style.bounds,
+    usedGap: max(0.0, resolveGap(gap, &style.bounds, size, definite)),
     stretch: align == Align.Normal || align == Align.Stretch,
     resolveCyclic: false, resolvedCyclic: false, inherited: false,
   }

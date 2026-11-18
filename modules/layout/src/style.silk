@@ -4,6 +4,8 @@ pub import properties.computed {
   DimensionKind,
   Dimension,
   SizeValue,
+  Bound,
+  Bounds,
   Edges,
   DisplayOutside,
   DisplayInside,
@@ -122,6 +124,8 @@ pub struct Style {
   // Tree-managed handle of the `shape-outside` area, 0 for none; setStyle
   // preserves it and Tree.setShape replaces it, as with `grid`.
   pub shape: u32,
+  // The bounds of this style's `Bounded` sizes, edges and gaps.
+  pub bounds: Bounds,
 }
 // Plain data: every field is a value or a tree-managed handle.
 impl Copy for Style {}
@@ -199,6 +203,7 @@ impl Style {
       tableLayout: TableLayout.Auto, borderCollapse: BorderCollapse.Separate, captionSide: CaptionSide.Top,
       borderSpacingX: 0.0, borderSpacingY: 0.0, columnSpan: 1, rowSpan: 1,
       shape: 0,
+      bounds: Bounds.none(),
     }
   }
 }

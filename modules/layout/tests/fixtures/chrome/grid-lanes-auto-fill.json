@@ -1,0 +1,96 @@
+{
+  "name": "grid-lanes-auto-fill-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "repeat(auto-fill, minmax(90px, 1fr)) makes as many lanes as fit; items fill them shortest first.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "width": 400,
+          "gridTemplateColumns": [
+            {
+              "repeat": {
+                "count": "auto-fill",
+                "tracks": [
+                  {
+                    "minmax": [
+                      90,
+                      {
+                        "fr": 1
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "columnGap": 8,
+          "rowGap": 8,
+          "paddingLeft": 7,
+          "paddingTop": 3
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 50
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 30
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 80
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 20
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 40
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 60
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 25
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 70
+        }
+      }
+    ]
+  }
+}

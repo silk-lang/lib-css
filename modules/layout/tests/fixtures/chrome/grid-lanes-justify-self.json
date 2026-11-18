@@ -1,0 +1,53 @@
+{
+  "name": "grid-lanes-justify-self-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "Items keep their own width under justify-self in the grid axis.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "grid-lanes",
+          "width": 200,
+          "gridTemplateColumns": [
+            100,
+            100
+          ],
+          "justifyItems": "center"
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "width": 40,
+          "height": 20
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "height": 10
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "width": 30,
+          "height": 30,
+          "justifySelf": "end"
+        }
+      }
+    ]
+  }
+}
