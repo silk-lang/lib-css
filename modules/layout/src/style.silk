@@ -50,6 +50,8 @@ pub import properties.computed {
   BreakInside,
   ColumnFill,
   ColumnSpan,
+  WrapFlow,
+  WrapThrough,
 }
 import silk.core.ownership { Copy }
 import silk.core.equal { Equal }
@@ -75,6 +77,9 @@ pub struct Style {
   // formatting context, monolithic, and the containing block of its absolutely and fixed
   // positioned descendants.
   pub layoutContainment: bool,
+  // CSS Exclusions 1: a box with `wrapFlow` other than auto is an exclusion (absolutely
+  // positioned boxes only, see exclusions.silk). Here they fill padding before `grid`.
+  pub wrapFlow: WrapFlow, pub wrapThrough: WrapThrough,
   // Tree-managed handle, never a transferable template value. setStyle preserves
   // it; use Tree.setGrid to replace/reset owned grid data.
   pub grid: usize,
@@ -212,6 +217,7 @@ impl Style {
       overflowX: Overflow.Visible, overflowY: Overflow.Visible,
       scrollbarWidth: ScrollbarWidth.Auto, scrollbarGutter: ScrollbarGutter.Auto,
       position: Position.Static, float: Float.None, clear: Clear.None, visibility: Visibility.Visible,
+      wrapFlow: WrapFlow.Auto, wrapThrough: WrapThrough.Wrap,
       aspectRatio: 0.0, aspectRatioAuto: false, replaced: false,
       tableLayout: TableLayout.Auto, borderCollapse: BorderCollapse.Separate, captionSide: CaptionSide.Top, borderHidden: 0,
       borderSpacingX: 0.0, borderSpacingY: 0.0, columnSpan: 1, rowSpan: 1,

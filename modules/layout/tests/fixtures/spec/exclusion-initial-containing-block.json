@@ -1,0 +1,177 @@
+{
+  "name": "exclusion-initial-containing-block",
+  "kind": "spec",
+  "features": [
+    "source-text",
+    "positioned",
+    "exclusions",
+    "font-service"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-exclusions-1/#wrap-flow-property"
+  ],
+  "input": {
+    "viewport": {
+      "width": 240,
+      "height": 260
+    },
+    "fonts": [
+      {
+        "fontSize": 10,
+        "ascent": 8,
+        "descent": 2,
+        "lineGap": 0,
+        "xHeight": 5,
+        "capHeight": 7,
+        "subscriptOffset": 2,
+        "superscriptOffset": 3,
+        "baselines": {
+          "alphabetic": 8,
+          "ideographic": 10,
+          "central": 5,
+          "mathematical": 5
+        }
+      },
+      {
+        "fontSize": 6,
+        "ascent": 4,
+        "descent": 2,
+        "lineGap": 0,
+        "xHeight": 4,
+        "capHeight": 4,
+        "subscriptOffset": 1,
+        "superscriptOffset": 2,
+        "baselines": {
+          "alphabetic": 4,
+          "ideographic": 6,
+          "central": 3,
+          "mathematical": 3
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "width": 200,
+          "fontKey": 1,
+          "paddingLeft": 5,
+          "paddingTop": 5
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "fontKey": 1
+        }
+      },
+      {
+        "parent": 1,
+        "style": {
+          "position": "absolute",
+          "insetTop": 10,
+          "insetLeft": 70,
+          "width": 60,
+          "height": 30,
+          "wrapFlow": "both"
+        }
+      },
+      {
+        "parent": 1,
+        "text": "ab cd ef gh ij kl mn op qr st uv wx yz ab cd ef gh ij kl mn op qr st uv wx yz ab cd ef gh ij kl mn op qr st uv wx yz"
+      }
+    ]
+  },
+  "expected": {
+    "sources": [
+      {
+        "rects": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 205,
+            "height": 55
+          }
+        ]
+      },
+      {
+        "rects": [
+          {
+            "x": 5,
+            "y": 5,
+            "width": 200,
+            "height": 50
+          }
+        ]
+      },
+      {
+        "rects": [
+          {
+            "x": 70,
+            "y": 10,
+            "width": 60,
+            "height": 30
+          }
+        ]
+      },
+      {
+        "rects": [
+          {
+            "x": 5,
+            "y": 5,
+            "width": 55,
+            "height": 10
+          },
+          {
+            "x": 130,
+            "y": 5,
+            "width": 70,
+            "height": 10
+          },
+          {
+            "x": 5,
+            "y": 15,
+            "width": 55,
+            "height": 10
+          },
+          {
+            "x": 130,
+            "y": 15,
+            "width": 70,
+            "height": 10
+          },
+          {
+            "x": 5,
+            "y": 25,
+            "width": 55,
+            "height": 10
+          },
+          {
+            "x": 130,
+            "y": 25,
+            "width": 70,
+            "height": 10
+          },
+          {
+            "x": 5,
+            "y": 35,
+            "width": 55,
+            "height": 10
+          },
+          {
+            "x": 130,
+            "y": 35,
+            "width": 70,
+            "height": 10
+          },
+          {
+            "x": 5,
+            "y": 45,
+            "width": 40,
+            "height": 10
+          }
+        ]
+      }
+    ]
+  }
+}

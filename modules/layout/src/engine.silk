@@ -1,7 +1,7 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.usize
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
-import style { SizeContainment, Style, Display, Dimension, SizeValue, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
+import style { SizeContainment, Style, Display, Dimension, SizeValue, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility, WrapFlow, WrapThrough }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
 import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edgesIn, isFlex, isGrid, outOfFlow, absolutelyPositioned, containsAbsolute, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
@@ -10,8 +10,9 @@ import grid { layoutGrid, layoutEmptyGrid }
 import grid_subgrid as Subgrid
 import grid_style { GridTrack, GridTrackKind, GridBreadthKind }
 import grid_placement { GridBounds }
-import positioned { positionScroll, positionTree, positionVisits, reachableLimits, addOverflow, propagatedOverflow, subtreeOverflow, absoluteContainingBlock }
-import bfc { BfcState }
+import positioned { positionScroll, positionTree, positionVisits, reachableLimits, addOverflow, propagatedOverflow, subtreeOverflow, absoluteContainingBlock, gatherExclusions }
+import bfc { BfcState, ExclusionBox }
+import exclusions { ExclusionArea }
 import silk.core.option { Option }
 import layout_pass { LayoutPass, PassState, CacheKind, FullBoxGeometry, REUSE_INDEPENDENT, REUSE_IN_FLOW }
 import layout_cache { LayoutCache, BoxFacts, CachedProbe, FinalRange, AGES_NONE, AGES_OLDER, PLAIN_UNKNOWN, PLAIN_NEVER }
@@ -1816,6 +1817,40 @@ pub effect fn resolveFragmentBox<'pass, 'source, M: Measure + TextMeasure>(nodes
 }
 
 effect fn layoutBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  if output.exclusions.length() != 0 && incoming.performLayout && output.frame == NO_NODE { return run layoutExcludingBox(nodes, &mut output, &mut measurer, id, &incoming, &mut bfc) }
+  return run layoutPlainBox(nodes, &mut output, &mut measurer, id, &incoming, &mut bfc)
+}
+
+// layoutBox where exclusions exist: a box enters the wrapping context of the
+// exclusions it contains, or leaves those around it for `wrap-through: none`.
+@inlineNever
+effect fn layoutExcludingBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let mark = bfc.exclusionMark()
+  let floor = bfc.exclusionFloor()
+  let style = nodes.style(id)
+  if style.wrapThrough == WrapThrough.None { bfc.hideExclusions() }
+  if style.writingMode == WritingMode.HorizontalTb {
+    let rtl = style.direction == Direction.Rtl
+    let origin = incoming.bfcContentOrigin
+    let mut index: usize = 0
+    while index < output.exclusions.length() {
+      let area = output.exclusions.get(index)
+      if area.owner == id {
+        let mut flow = area.flow
+        if rtl && flow == WrapFlow.Start { flow = WrapFlow.End }
+        else if rtl && flow == WrapFlow.End { flow = WrapFlow.Start }
+        run bfc.exclude(ExclusionBox { left: origin.x + area.rect.x, right: origin.x + area.rect.x + area.rect.width, top: origin.y + area.rect.y, bottom: origin.y + area.rect.y + area.rect.height, flow: flow })
+      }
+      index = index + 1
+    }
+  }
+  let result = run layoutPlainBox(nodes, &mut output, &mut measurer, id, &incoming, &mut bfc)
+  bfc.leaveExclusions(mark, floor)
+  return result
+}
+
+@inlineAlways
+effect fn layoutPlainBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   // A box without in-flow children lays out as empty; positionTree then
   // places its absolutely positioned children, static positions included.
   if incoming.performLayout && output.frame == NO_NODE && keptEmptyBox(nodes, &output, id, &incoming) {
@@ -2923,7 +2958,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   if !sameBoxes { output.cutoffMisses.clear() }
   if sameBoxes {
     run output.cache.rotateFinals()
-    if logged { run cutoffCandidates(tree, since, &nodes, &output, changes.asSlice(), &mut alone, &mut aloneRanges, &mut aloneProbes, &mut aloneEnds, &mut alonePlains) }
+    if logged && output.exclusions.length() == 0 && !tree.exclusionStyles { run cutoffCandidates(tree, since, &nodes, &output, changes.asSlice(), &mut alone, &mut aloneRanges, &mut aloneProbes, &mut aloneEnds, &mut alonePlains) }
     Incremental.invalidateChanged(tree, &nodes, &mut output.cache, since, logged, changes.asSlice(), alone.asSlice())
     run output.cache.compact()
   } else if kept {
@@ -3020,6 +3055,19 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   let flexScratch = Intrinsic.replace(output.flexScratch, List<FlexScratch>.make())
   let inlineScratch = Intrinsic.replace(output.inlineScratch, List<InlineScratch>.make())
   let blockScratch = Intrinsic.replace(output.blockScratch, List<BlockScratch>.make())
+  // Results laid out beside the last compute's exclusions do not stand for a
+  // layout without them (see exclusions.silk).
+  let previousExclusions = Intrinsic.replace(output.exclusions, List<ExclusionArea>.make())
+  if previousExclusions.length() != 0 {
+    if sameBoxes {
+      let mut index: usize = 0
+      while index < previousExclusions.length() {
+        Incremental.invalidateBox(&nodes, &mut output.cache, previousExclusions.get(index).owner, true)
+        index = index + 1
+      }
+    } else { output.cache.clear() }
+  }
+  drop previousExclusions
   // A compute that fails part way leaves nothing to reuse.
   output.holdUnsettled(since)
   run output.prepareBoxes(nodes.boxes.length(), inPlace)
@@ -3051,6 +3099,15 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     let overflow = run positionTree(&nodes, &mut boxes, &mut measurer, viewport, tree.viewportScrollOffset, &mut output.normalOffsets)
     run boxes.fragments.finishInPlace()
     boxes.stats.passes = boxes.stats.passes + 1
+    if !boxes.needsRelayout && tree.exclusionStyles && boxes.exclusionPasses == 0 {
+      run gatherExclusions(&nodes, &mut boxes)
+      boxes.exclusionPasses = 1
+      if boxes.foundExclusions.length() != 0 {
+        let found = Intrinsic.replace(boxes.foundExclusions, List<ExclusionArea>.make())
+        boxes.exclusions = move found
+        boxes.needsRelayout = true
+      }
+    }
     if !boxes.needsRelayout {
       output.stats = boxes.stats
       output.relaidMost = sameBoxes && boxes.stats.fullLayouts * 2 > nodes.boxes.length()
@@ -3064,7 +3121,9 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       let keptScratch = Intrinsic.replace(boxes.flexScratch, List<FlexScratch>.make())
       let keptInline = Intrinsic.replace(boxes.inlineScratch, List<InlineScratch>.make())
       let keptBlock = Intrinsic.replace(boxes.blockScratch, List<BlockScratch>.make())
+      let keptExclusions = Intrinsic.replace(boxes.exclusions, List<ExclusionArea>.make())
       drop boxes
+      output.exclusions = move keptExclusions
       output.flexScratch = move keptScratch
       output.inlineScratch = move keptInline
       output.blockScratch = move keptBlock

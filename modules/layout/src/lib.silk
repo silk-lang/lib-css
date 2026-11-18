@@ -36,7 +36,7 @@ pub import style {
   BoxDecorationBreak
 }
 pub import style { WhiteSpaceCollapse, TabSize, TextJustify, TextIndent }
-pub import style { BreakBetween, BreakInside, MarginBreak, ColumnFill, ColumnSpan, TableLayout, BorderCollapse, CaptionSide }
+pub import style { BreakBetween, BreakInside, MarginBreak, ColumnFill, ColumnSpan, TableLayout, BorderCollapse, CaptionSide, WrapFlow, WrapThrough }
 pub import grid_style {
   MAX_GRID_TRACKS,
   GridError,

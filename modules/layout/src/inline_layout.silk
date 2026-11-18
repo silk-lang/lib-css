@@ -235,6 +235,17 @@ fn balancedWidth(tokens: &[TextToken<'_>], points: &[TextBreak], prefix: &[f32],
   return min(room, high + 1.0)
 }
 
+// Where a line goes when it does not fit `band`: the row's next segment, else the
+// next row, below the row's lines or the band's lowest float or exclusion.
+struct Row { segment: u32, cursor: f32 }
+impl Copy for Row {}
+fn nextRow(band: Band, segment: u32, rowHeight: f32, cursor: f32) -> Row {
+  if band.more { return Row { segment: segment + 1, cursor: cursor } }
+  if !band.occupied { return Row { segment: 0, cursor: cursor } }
+  if segment != 0 && rowHeight > 0.0 { return Row { segment: 0, cursor: cursor + rowHeight } }
+  return Row { segment: 0, cursor: max(cursor, band.nextBottom) }
+}
+
 fn indentBand(band: Band, indent: f32, rtl: bool) -> Band {
   let mut result = band
   if rtl {
@@ -1057,7 +1068,7 @@ effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
   if !offered { width = max(0.0, line.advance) }
   let axes = Axes.make(style.writingMode)
   let mut metrics = Size.zero()
-  let mut band = Band { left: 0.0, right: width, nextBottom: 0.0, occupied: false }
+  let mut band = Band { left: 0.0, right: width, nextBottom: 0.0, occupied: false, more: false }
   if plain {
     metrics = lineExtents(line.items.asSlice(), scopes, extents.asMutSlice(), 0, line.items.length(), true)
     band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, 0.0, metrics.height), 0.0, false)
@@ -1226,6 +1237,8 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   let mut cursor: f32 = 0.0
   let mut next: usize = 0
   let mut allPhantom = true
+  let mut segment: u32 = 0
+  let mut rowHeight: f32 = 0.0
   while next < chunks.length() {
     let indent = lineIndent(style, nodes.node(id).firstFormattedRun, allPhantom, false, width)
     let first = next
@@ -1236,19 +1249,22 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
     let mut advance: f32 = 0.0
     let mut real = false
     let mut end = start
-    let mut band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, 0.0), indent, rtl)
+    let mut band = indentBand(bfc.lineSegment(input.bfcContentOrigin, width, cursor, 0.0, segment, rtl), indent, rtl)
     while next < chunks.length() {
       let chunk = chunks.get(next)
       let candidate = leading + advance + chunk.advance + continuationEdges(nodes, items.asSlice(), scopes.asSlice(), chunk.end, false, rtl)
       let candidateReal = real || chunk.real
-      if bfc.count != 0 || hasFloats {
+      if bfc.count != 0 || hasFloats || bfc.excluding() {
         let metrics = lineExtents(items.asSlice(), scopes.asSlice(), extents.asMutSlice(), start, chunk.end, candidateReal)
         bfc.restore(checkpoint)
         if hasFloats { run placeFloats(nodes, &mut output, &mut measurer, items.asSlice(), &noVisual, atomics.asMutSlice(), start, chunk.end, &mut bfc, input.bfcContentOrigin, width, sourceY, metrics.height, axes, leading, &input, box.inset.top) }
-        band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, rtl)
-        while next == first && candidate > band.right - band.left && band.occupied && band.nextBottom > cursor {
-          cursor = band.nextBottom
-          band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, rtl)
+        band = indentBand(bfc.lineSegment(input.bfcContentOrigin, width, cursor, metrics.height, segment, rtl), indent, rtl)
+        while next == first && candidate > band.right - band.left && (band.more || segment != 0 || (band.occupied && band.nextBottom > cursor)) {
+          let row = nextRow(band, segment, rowHeight, cursor)
+          segment = row.segment
+          cursor = row.cursor
+          if segment == 0 { rowHeight = 0.0 }
+          band = indentBand(bfc.lineSegment(input.bfcContentOrigin, width, cursor, metrics.height, segment, rtl), indent, rtl)
         }
       }
       if next > first && chunk.breakBefore && candidate > band.right - band.left { break }
@@ -1260,12 +1276,20 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
     let metrics = lineExtents(items.asSlice(), scopes.asSlice(), extents.asMutSlice(), start, end, real)
     bfc.restore(checkpoint)
     if hasFloats { run placeFloats(nodes, &mut output, &mut measurer, items.asSlice(), &noVisual, atomics.asMutSlice(), start, end, &mut bfc, input.bfcContentOrigin, width, sourceY, metrics.height, axes, leading, &input, box.inset.top) }
-    band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, rtl)
+    band = indentBand(bfc.lineSegment(input.bfcContentOrigin, width, cursor, metrics.height, segment, rtl), indent, rtl)
     advance = leading + advance + continuationEdges(nodes, items.asSlice(), scopes.asSlice(), end, false, rtl)
     run lines.append(LineBox { start: start, end: end, y: cursor, left: band.left, width: band.right - band.left, advance: advance, hangingStart: 0.0, height: metrics.height, baseline: metrics.width, real: real, last: next == chunks.length(), direction: style.usedDirection(), visual: Line.make() })
-    cursor = cursor + metrics.height
+    if band.more {
+      rowHeight = max(rowHeight, metrics.height)
+      segment = segment + 1
+    } else {
+      cursor = cursor + max(rowHeight, metrics.height)
+      rowHeight = 0.0
+      segment = 0
+    }
     if real { allPhantom = false }
   }
+  if segment != 0 { cursor = cursor + rowHeight }
   let mut result = Layout.zero()
   let mut height = cursor + box.inset.vertical()
   if box.size.heightDefinite { height = box.size.height }
@@ -2480,6 +2504,10 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let mut sourceNextFloat = NO_NODE
   let mut sourceRequest = ForcedBreaks.none()
   if fragmented { sourceCut = output.resumes.get(id).inlineSourceCut }
+  // Lines beside a `wrap-flow: both` exclusion share a row: `segment` counts the
+  // row's lines so far, `rowHeight` is the tallest (see BfcState.lineSegment).
+  let mut segment: u32 = 0
+  let mut rowHeight: f32 = 0.0
   while next < points.length() {
     while sourceEvent < boundaries.events.length() {
       let event = boundaries.events.get(sourceEvent)
@@ -2519,7 +2547,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     let mut probedEnd = start
     let mut total: f32 = 0.0
     let mut lineClosed = false
-    let mut band = narrowed(indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, 0.0), indent, indentRtl), slack, rtl)
+    let mut band = narrowed(indentBand(bfc.lineSegment(input.bfcContentOrigin, width, cursor, 0.0, segment, indentRtl), indent, indentRtl), slack, rtl)
     if memoFirst != NO_NODE {
       let point = points.get(memo.ends.get(memoFirst + memoLine))
       let room = band.right - band.left
@@ -2623,10 +2651,13 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       }
       bfc.restore(checkpoint)
       if hasFloats { run placeFloats(nodes, &mut output, &mut measurer, candidate.items.asSlice(), &candidate.visual, atomics.asMutSlice(), 0, candidate.items.length(), &mut bfc, input.bfcContentOrigin, width, sourceY, metrics.height, axes, leading, &input, box.inset.top) }
-      band = narrowed(indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl), slack, rtl)
-      while next == first && proposed > band.right - band.left && band.occupied && band.nextBottom > cursor {
-        cursor = band.nextBottom
-        band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
+      band = narrowed(indentBand(bfc.lineSegment(input.bfcContentOrigin, width, cursor, metrics.height, segment, indentRtl), indent, indentRtl), slack, rtl)
+      while next == first && proposed > band.right - band.left && (band.more || segment != 0 || (band.occupied && band.nextBottom > cursor)) {
+        let row = nextRow(band, segment, rowHeight, cursor)
+        segment = row.segment
+        cursor = row.cursor
+        if segment == 0 { rowHeight = 0.0 }
+        band = indentBand(bfc.lineSegment(input.bfcContentOrigin, width, cursor, metrics.height, segment, indentRtl), indent, indentRtl)
       }
       if next > first && proposed > band.right - band.left { break }
       if next == first && !atSource && point.kind != TextBreakKind.Forced && proposed > band.right - band.left && wraps.length() != 0 {
@@ -2777,7 +2808,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
         floatIndex = floatIndex + 1
       }
     }
-    band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
+    band = indentBand(bfc.lineSegment(input.bfcContentOrigin, width, cursor, metrics.height, segment, indentRtl), indent, indentRtl)
     let mut ending = TextBreak { at: end, kind: TextBreakKind.Soft }
     if !floatBoundary && !sourceEnding && !wrapped { ending = points.get(next - 1) }
     if sourceEnding && next > first {
@@ -2858,7 +2889,14 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       }
       run lines.append(LineBox { start: lineStart, end: finalItems.length(), y: cursor, left: band.left, width: band.right - band.left, advance: total, hangingStart: hangingStart, height: metrics.height, baseline: metrics.width, real: accepted.real, last: last, direction: lineDirection, visual: Intrinsic.replace(accepted.visual, Line.make()) })
     }
-    cursor = cursor + metrics.height
+    if band.more {
+      rowHeight = max(rowHeight, metrics.height)
+      segment = segment + 1
+    } else {
+      cursor = cursor + max(rowHeight, metrics.height)
+      rowHeight = 0.0
+      segment = 0
+    }
     if !floatBoundary && (!sourceEnding || accepted.real) { afterForced = ending.kind == TextBreakKind.Forced }
     start = end
     if clamped { break }
@@ -2875,6 +2913,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       break
     }
   }
+  if segment != 0 { cursor = cursor + rowHeight }
   if hasAtomicMargins && lineBreak && !blocked && lines.length() > 0 {
     let lastIndex = lines.length() - 1
     let line = &lines.asSlice()[lastIndex]
