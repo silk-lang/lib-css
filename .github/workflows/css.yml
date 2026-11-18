@@ -27,7 +27,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          SILK_RELEASE: v0.1.0-dev.86+c9d19330761b
+          SILK_RELEASE: v0.1.0-dev.87+37fa5f8857de
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --location --retry 3 \
