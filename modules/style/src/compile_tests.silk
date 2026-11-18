@@ -5,7 +5,7 @@ import sheet_binary { DecodeError, DecodeReason }
 import resolver { ResolverError }
 import resolver_tests { Tree }
 import tokens { Limits, CssError, BufferView, equal }
-import element { MatchContext, PseudoTarget, NO_ELEMENT }
+import element { MatchContext, PseudoTarget, NO_ELEMENT, ElementTree, StateBits, AttributeText }
 import css_properties.catalog { Property }
 import css_properties.values { Value, Unit }
 import silk.collections.slice { Slice }
@@ -457,3 +457,67 @@ test effect fn compiledSelectorsKeepTheSignsOfTheirIndexFormulas() -> ()
   let bounds = sheet.resolver.sharing()
   run Testing.expect(bounds.period == 6 && bounds.lead == 3 && bounds.tail == 2 && bounds.fromEnd, "and the sheet's sharing bounds see every one")
 }
+
+// root(0) > card(1) > content(2) > img(3); card(1) > img(4).
+struct ScopeTree {}
+impl ElementTree for ScopeTree {
+  fn state(self: &Self, node: usize) -> StateBits { return StateBits { bits: 0 } }
+  fn parent(self: &Self, node: usize) -> usize {
+    return if node == 0 { NO_ELEMENT } else if node == 4 { 1 } else { node - 1 }
+  }
+  fn containingHost(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn firstChild(self: &Self, node: usize) -> usize { return if node < 3 { node + 1 } else { NO_ELEMENT } }
+  fn nextSibling(self: &Self, node: usize) -> usize { return if node == 2 { 4 } else { NO_ELEMENT } }
+  fn previousSibling(self: &Self, node: usize) -> usize { return if node == 4 { 2 } else { NO_ELEMENT } }
+  fn localName(self: &Self, node: usize) -> &[u8] { return b"div" }
+  fn namespaceUri(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn attributeCount(self: &Self, node: usize) -> usize { return 1 }
+  fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"class" }
+  fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return scopeClass(node) }
+  fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
+  fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
+    return AttributeText { namespace: b"", name: b"class", value: scopeClass(node) }
+  }
+  fn language(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn isRoot(self: &Self, node: usize) -> bool { return node == 0 }
+  fn isEmpty(self: &Self, node: usize) -> bool { return node == 3 || node == 4 }
+  fn isLink(self: &Self, node: usize) -> bool { return false }
+}
+
+fn scopeClass(node: usize) -> &'static [u8] {
+  return if node == 0 { b"root" } else if node == 1 { b"card" } else if node == 2 { b"content" } else { b"img" }
+}
+
+effect fn scopeMatches(sheet: &mut Sheet, node: usize) -> usize
+  ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run sheet.resolver.resolve(BufferView.of(sheet.buffers.asSlice()), &ScopeTree {}, node, &[], &mut context)
+  return sheet.resolver.matches().length
+}
+
+effect fn scopeSheet(css: &[u8]) -> Sheet
+  ! CompileError | DecodeError | CssError | OutOfMemoryError ? &mut Allocator {
+  let compiled = run compile.compile(css, &Options { strict: true, limits: Limits.make() })
+  let bytes = run compiled.encode()
+  return run Sheet.decode(bytes.asSlice(), &Limits.make())
+}
+
+// https://drafts.csswg.org/css-cascade-6/#scope-atrule
+test effect fn scopeRulesMatchBetweenTheirRootAndLimit() -> ()
+  ! AssertionError<'static> | CompileError | DecodeError | ResolverError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut sheet = run scopeSheet(b"@scope (.card) to (.content) { .img { width:1px } }") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect((run scopeMatches(&mut sheet, 4) |> Effect.provideMut<Allocator>(&mut allocator)) == 1, "a subject inside the scope matches")
+  run Testing.expect(sheet.resolver.matches()[0].specificity.classes == 1, "the scope root adds no specificity")
+  run Testing.expect((run scopeMatches(&mut sheet, 3) |> Effect.provideMut<Allocator>(&mut allocator)) == 0, "a subject past the limit does not match")
+  sheet = run scopeSheet(b"@scope (.card) { :scope { height:1px } color: red }") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect((run scopeMatches(&mut sheet, 1) |> Effect.provideMut<Allocator>(&mut allocator)) == 2, ":scope and bare declarations match the root")
+  run Testing.expect((run scopeMatches(&mut sheet, 0) |> Effect.provideMut<Allocator>(&mut allocator)) == 0, "nothing outside the root matches")
+  sheet = run scopeSheet(b"@scope (.card) to (.content) { .img::before { content: 'x' } }") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(sheet.diagnostics.length() == 0, "a limit goes before a pseudo-element")
+  sheet = run scopeSheet(b".root { @scope (.card) { & > .img { width: 2px } } }") |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect((run scopeMatches(&mut sheet, 4) |> Effect.provideMut<Allocator>(&mut allocator)) == 1, "a nested scope starts from its parent rule")
+  run Testing.expect((run scopeMatches(&mut sheet, 3) |> Effect.provideMut<Allocator>(&mut allocator)) == 0, "& is the scope root")
+}
+

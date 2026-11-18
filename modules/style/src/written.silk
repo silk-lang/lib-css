@@ -269,7 +269,8 @@ effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
       while end < css.length && wordByte(css[end]) { end = end + 1 }
       let word = Slice.view(css, i, end - i)
       let called = end < css.length && css[end] == 40
-      if called && (tokens.insensitive(word, b"url") || unshapedGradient(word)) {
+      if called && (tokens.insensitive(word, b"url") || tokens.insensitive(word, b"image-set")
+        || tokens.insensitive(word, b"-webkit-image-set") || unshapedGradient(word)) {
         if current.image.length() != 0 { return Option<Value>.None }
         let close = itemEnd(css, end)
         let mut stop = end + 1

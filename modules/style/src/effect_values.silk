@@ -10,6 +10,7 @@ import colors
 import transform_values { Position, PositionAxis, Edge }
 import transform_values
 import tokens { Kind }
+import tokens
 import svg_geometry.geometry { Path }
 import svg_geometry.svg
 import silk.collections.bytes { Bytes }
@@ -970,6 +971,118 @@ effect fn stops(
   return Option<List<GradientStop>>.some(move result)
 }
 
+// https://drafts.csswg.org/css-images-4/#image-set-notation
+// The tree draws one image per layer, so the choice is made here: the densest option up to
+// 2x (what most displays need), else the least dense one. `type()` is accepted and ignored.
+effect fn imageSet(
+  store: &mut dimensions.Store<'_>,
+  input: &Input<'_>,
+  cursor: &mut Cursor,
+) -> Option<Image>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut chosen = Option<Image>.None
+  let mut density: f64 = 0.0
+  while true {
+    cursor.skip(input)
+    let mut option = Option<Image>.None
+    if cursor.position < cursor.end {
+      match &input.at(cursor.position) {
+        Option<TokenView>.Some { value: view } => match &view.token.kind {
+          Kind.String { text } => {
+            option = Option<Image>.some(Image.Url { url: run copyBytes(view.text(text)) })
+            cursor.position = cursor.position + 1
+          }
+          _ => {}
+        }
+        _ => {}
+      }
+    }
+    let missing = match &option { Option<Image>.None => true _ => false }
+    if missing {
+      if cursor.function(input, b"image-set") || cursor.function(input, b"-webkit-image-set") {
+        return Option<Image>.None
+      }
+      option = run imageInner(&mut store.*, input, &mut cursor.*)
+    }
+    let image = match move option {
+      Option<Image>.Some { value } => move value
+      _ => {
+        return Option<Image>.None
+      }
+    }
+    let mut resolution: f64 = 1.0
+    let mut typed = false
+    let mut given = false
+    while true {
+      cursor.skip(input)
+      if !typed && cursor.function(input, b"type") {
+        cursor.skip(input)
+        let string = cursor.position < cursor.end && match &input.at(cursor.position) {
+          Option<TokenView>.Some { value: view } => match &view.token.kind { Kind.String { .. } => true _ => false }
+          _ => false
+        }
+        if !string {
+          return Option<Image>.None
+        }
+        cursor.position = cursor.position + 1
+        if !cursor.close(input) {
+          return Option<Image>.None
+        }
+        typed = true
+        continue
+      }
+      if !given && cursor.position < cursor.end {
+        let mut found = false
+        match &input.at(cursor.position) {
+          Option<TokenView>.Some { value: view } => match &view.token.kind {
+            Kind.Dimension { value, unit, .. } => {
+              let name = view.text(unit)
+              let scale = if tokens.insensitive(name, b"x") || tokens.insensitive(name, b"dppx") {
+                1.0
+              } else if tokens.insensitive(name, b"dpi") {
+                1.0 / 96.0
+              } else if tokens.insensitive(name, b"dpcm") {
+                2.54 / 96.0
+              } else {
+                0.0
+              }
+              if scale == 0.0 || value <= 0.0 {
+                return Option<Image>.None
+              }
+              resolution = value * scale
+              found = true
+            }
+            _ => {}
+          }
+          _ => {}
+        }
+        if found {
+          cursor.position = cursor.position + 1
+          given = true
+          continue
+        }
+      }
+      break
+    }
+    let better = match &chosen {
+      Option<Image>.None => true
+      _ => if density <= 2.0 { resolution > density && resolution <= 2.0 } else { resolution < density }
+    }
+    if better {
+      chosen = Option<Image>.some(move image)
+      density = resolution
+    }
+    if !cursor.comma(input) {
+      break
+    }
+  }
+  if !cursor.close(input) {
+    return Option<Image>.None
+  }
+  return move chosen
+}
+
 effect fn imageInner(
   store: &mut dimensions.Store<'_>,
   input: &Input<'_>,
@@ -986,6 +1099,9 @@ effect fn imageInner(
       return Option<Image>.some(Image.Url { url: move value })
     }
     _ => {}
+  }
+  if cursor.function(input, b"image-set") || cursor.function(input, b"-webkit-image-set") {
+    return run imageSet(&mut store.*, input, &mut cursor.*)
   }
   let mut repeating = false
   let mut radial = false

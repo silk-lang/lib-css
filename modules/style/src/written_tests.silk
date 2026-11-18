@@ -311,6 +311,9 @@ effect fn backgroundBody() -> () ! AssertionError<'static> | CssError | OutOfMem
   run Testing.expect(run projection(Property.Background, pictured, Property.BackgroundSize, b"cover, auto, auto"), "the sizes beside url images")
   run Testing.expect(run projection(Property.Background, pictured, Property.BackgroundColor, b"rgb(0, 0, 255)"), "the color beside a url image")
   run Testing.expect(run dropped(Property.Background, b"url(a.png) url(b.png)", Property.BackgroundImage), "one image a layer")
+  let set = b"image-set(url(a.png) 1x, 'b.png' 2x) center / cover, red"
+  run Testing.expect(run projection(Property.Background, set, Property.BackgroundImage, b"image-set(url(a.png) 1x, 'b.png' 2x), none"), "an image set is one layer's image")
+  run Testing.expect(run projection(Property.Background, set, Property.BackgroundSize, b"cover, auto"), "the size beside an image set")
   let worded = b"url(a.png) repeat-x local, url(\"local, repeat-y.png\") repeat-y fixed, red REPEAT-X"
   run Testing.expect(run projection(Property.Background, worded, Property.BackgroundRepeat, b"repeat no-repeat, no-repeat repeat, repeat no-repeat"), "repeat-x and repeat-y are two-value repeats")
   run Testing.expect(run projection(Property.Background, worded, Property.BackgroundAttachment, b"local, fixed, scroll"), "local stays in its layer")

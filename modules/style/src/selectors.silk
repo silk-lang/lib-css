@@ -1247,7 +1247,7 @@ effect fn parseArm(
     compounds[compound].hostEligible = hostEligible
     drop compounds
     previous = compound
-    let next = spaces(buffer, at, range.end)
+    let mut next = spaces(buffer, at, range.end)
     if next == range.end {
       at = next
       break
@@ -1259,6 +1259,11 @@ effect fn parseArm(
       return rejected()
     }
     relation = combinator(buffer, next, range.end)
+    // The legacy `>>` descendant combinator is two adjacent `>` delims.
+    if relation == Combinator.Child && delim(buffer, next + 1, range.end, 62) {
+      relation = Combinator.Descendant
+      next = next + 1
+    }
     if relation == Combinator.None {
       if next == at {
         return rejected()
