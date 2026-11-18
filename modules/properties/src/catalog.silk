@@ -4265,8 +4265,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 373
-    Property.All => 377
+    Property.All => 378
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5844,18 +5843,20 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 372 {
         return Property.Zoom
-        return Property.OffsetPath
       }
       if index == 373 {
-        return Property.OffsetDistance
+        return Property.OffsetPath
       }
       if index == 374 {
-        return Property.OffsetRotate
+        return Property.OffsetDistance
       }
       if index == 375 {
-        return Property.OffsetAnchor
+        return Property.OffsetRotate
       }
       if index == 376 {
+        return Property.OffsetAnchor
+      }
+      if index == 377 {
         return Property.OffsetPosition
       }
     }
