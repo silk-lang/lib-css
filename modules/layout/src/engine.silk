@@ -70,6 +70,7 @@ fn configureScrollbars<M: Measure>(style: &Style, output: &mut LayoutPass<'_, '_
   if available.widthDefinite { available.width = max(0.0, available.width - box.border.horizontal() - box.padding.horizontal()) }
   if available.heightDefinite { available.height = max(0.0, available.height - box.border.vertical() - box.padding.vertical()) }
   let metrics = Measure.scrollbars(&mut measurer, ScrollbarRequest { width: style.scrollbarWidth, gutter: style.scrollbarGutter, writingMode: style.writingMode, direction: style.usedDirection(), available: available })
+  output.gutterScrollbars = output.gutterScrollbars || ((x == Overflow.Auto || y == Overflow.Auto) && !metrics.overlay)
   let horizontal = x == Overflow.Scroll || output.selected(id, true)
   let vertical = y == Overflow.Scroll || output.selected(id, false)
   let mut result = withGutter(&box.*, scrollbarGutter(style, metrics, horizontal, vertical))
@@ -2986,8 +2987,10 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       if output.relaidMost && boxes.stats.reusedLayouts == 0 { output.reuseIdle = output.reuseIdle + 1 }
       else { output.reuseIdle = 0 }
       run boxes.keepTexts()
-      // Auto scrollbar selection is not part of a cache key.
-      let settled = !boxes.hasAutoScrollbars
+      // Auto scrollbar selection is not part of a cache key: results are kept
+      // only when no auto scrollbar takes room, so that showing one or not
+      // changes no geometry (an overlay scrollbar, as a window's by default).
+      let settled = !boxes.gutterScrollbars
       let keptScratch = Intrinsic.replace(boxes.flexScratch, List<FlexScratch>.make())
       let keptInline = Intrinsic.replace(boxes.inlineScratch, List<InlineScratch>.make())
       let keptBlock = Intrinsic.replace(boxes.blockScratch, List<BlockScratch>.make())
