@@ -542,6 +542,7 @@ fn runStyle(parent: &Style) -> Style {
   let mut inlineOverflow = parent.overflowX
   if parent.writingMode != WritingMode.HorizontalTb { inlineOverflow = parent.overflowY }
   style.textOverflowEllipsis = parent.textOverflowEllipsis && inlineOverflow != Overflow.Visible
+  style.textBoxTrim = parent.textBoxTrim
   // Column sets read these from the same style (see columnSet).
   style.columnCount = parent.columnCount
   style.columnWidth = parent.columnWidth
@@ -564,6 +565,7 @@ fn inherited(parent: &Style) -> Style {
   style.textAlignLast = parent.textAlignLast
   style.textJustify = parent.textJustify
   style.textIndent = parent.textIndent
+  style.textBoxEdge = parent.textBoxEdge
   style.textWrap = parent.textWrap
   style.textWrapStyle = parent.textWrapStyle
   style.whiteSpaceCollapse = parent.whiteSpaceCollapse

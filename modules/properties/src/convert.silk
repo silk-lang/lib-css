@@ -17,13 +17,18 @@ import computed {
   VerticalAlignKind,
   TabSize,
   TextIndent,
+  TextEdge,
+  TextBoxEdge,
+  TextBoxTrim,
   DecorationLine,
   BoxShadow,
   Fill,
 }
 import keywords { Keyword }
+import keywords
 import values { Value, Unit, MathOperator }
 import silk.collections.list { List }
+import silk.collections.slice { Slice }
 import silk.color.rgba { Rgba }
 import silk.core.option { Option }
 import silk.core.ownership { Copy }
@@ -1055,5 +1060,158 @@ pub fn pair(value: &Value, context: &Context) -> Option<Pair> {
   return match dimension(value, context) {
     Option.Some { value: found } => Option<Pair>.some(Pair { first: found, second: found })
     Option.None => Option<Pair>.None
+  }
+}
+
+/// The words of a `text-box*` value, as codes: 1 text, 2 cap, 3 ex, 4 alphabetic, 5 auto,
+/// 6 none, 7 normal, 8 trim-start, 9 trim-end, 10 trim-both; 0 for any other word.
+struct BoxWords { codes: [u8; 4], count: usize }
+impl Copy for BoxWords {}
+
+fn boxWord(word: &[u8]) -> u8 {
+  if equalsIgnoringCase(word, b"text") { return 1 }
+  if equalsIgnoringCase(word, b"cap") { return 2 }
+  if equalsIgnoringCase(word, b"ex") { return 3 }
+  if equalsIgnoringCase(word, b"alphabetic") { return 4 }
+  if equalsIgnoringCase(word, b"auto") { return 5 }
+  if equalsIgnoringCase(word, b"none") { return 6 }
+  if equalsIgnoringCase(word, b"normal") { return 7 }
+  if equalsIgnoringCase(word, b"trim-start") { return 8 }
+  if equalsIgnoringCase(word, b"trim-end") { return 9 }
+  if equalsIgnoringCase(word, b"trim-both") { return 10 }
+  return 0
+}
+
+fn equalsIgnoringCase(word: &[u8], name: &[u8]) -> bool {
+  if word.length != name.length { return false }
+  let mut i: usize = 0
+  while i < word.length {
+    let c = word[i]
+    let lower = if c >= 65 && c <= 90 { c + 32 } else { c }
+    if lower != name[i] { return false }
+    i = i + 1
+  }
+  return true
+}
+
+fn pushWord(words: &mut BoxWords, code: u8) {
+  if words.count < 4 { words.codes[words.count] = code }
+  words.count = words.count + 1
+}
+
+fn collectWords(value: &Value, words: &mut BoxWords) {
+  match &value.* {
+    Value.Keyword { value: word } => pushWord(&mut words.*, boxWord(keywords.name(word)))
+    Value.Sequence { separator: _, values } => {
+      let items = values.asSlice()
+      let mut i: usize = 0
+      while i < items.length {
+        collectWords(&items[i], &mut words.*)
+        i = i + 1
+      }
+    }
+    Value.Text { css } => {
+      let text = css.asSlice()
+      let mut at: usize = 0
+      while at < text.length {
+        while at < text.length && (text[at] == 32 || text[at] == 9 || text[at] == 10 || text[at] == 13 || text[at] == 12) { at = at + 1 }
+        if at == text.length { break }
+        let start = at
+        while at < text.length && text[at] != 32 && text[at] != 9 && text[at] != 10 && text[at] != 13 && text[at] != 12 { at = at + 1 }
+        pushWord(&mut words.*, boxWord(Slice.view(text, start, at - start)))
+      }
+    }
+    _ => pushWord(&mut words.*, 0)
+  }
+}
+
+fn wordsOf(value: &Value) -> BoxWords {
+  let mut words = BoxWords { codes: [0; 4], count: 0 }
+  collectWords(value, &mut words)
+  return words
+}
+
+fn trimOf(code: u8) -> Option<TextBoxTrim> {
+  return match code {
+    6 => Option<TextBoxTrim>.some(TextBoxTrim.None)
+    8 => Option<TextBoxTrim>.some(TextBoxTrim.Start)
+    9 => Option<TextBoxTrim>.some(TextBoxTrim.End)
+    10 => Option<TextBoxTrim>.some(TextBoxTrim.Both)
+    _ => Option<TextBoxTrim>.None
+  }
+}
+
+fn overOf(code: u8) -> Option<TextEdge> {
+  return match code {
+    1 => Option<TextEdge>.some(TextEdge.Text)
+    2 => Option<TextEdge>.some(TextEdge.Cap)
+    3 => Option<TextEdge>.some(TextEdge.Ex)
+    _ => Option<TextEdge>.None
+  }
+}
+
+/// `auto | [ text | cap | ex ] [ text | alphabetic ]?` from `codes[start..end)`; one value
+/// gives the under edge `text`.
+fn edgeOf(codes: &[u8]) -> Option<TextBoxEdge> {
+  if codes.length == 1 && codes[0] == 5 { return Option<TextBoxEdge>.some(TextBoxEdge.auto()) }
+  if codes.length == 0 || codes.length > 2 { return Option<TextBoxEdge>.None }
+  let over = match overOf(codes[0]) {
+    Option.Some { value } => value
+    Option.None => { return Option<TextBoxEdge>.None }
+  }
+  if codes.length == 1 { return Option<TextBoxEdge>.some(TextBoxEdge { over: over, under: TextEdge.Text }) }
+  let under = match codes[1] {
+    1 => TextEdge.Text
+    4 => TextEdge.Alphabetic
+    _ => { return Option<TextBoxEdge>.None }
+  }
+  return Option<TextBoxEdge>.some(TextBoxEdge { over: over, under: under })
+}
+
+/// `text-box-trim: none | trim-start | trim-end | trim-both`.
+pub fn textBoxTrim(value: &Value) -> Option<TextBoxTrim> {
+  let words = wordsOf(value)
+  if words.count != 1 { return Option<TextBoxTrim>.None }
+  return trimOf(words.codes[0])
+}
+
+/// `text-box-edge: auto | [ text | cap | ex ] [ text | alphabetic ]?`.
+pub fn textBoxEdge(value: &Value) -> Option<TextBoxEdge> {
+  let words = wordsOf(value)
+  if words.count > 2 { return Option<TextBoxEdge>.None }
+  return edgeOf(Slice.view(&words.codes, 0, words.count))
+}
+
+/// `text-box`, the shorthand: `normal | <'text-box-trim'> || <'text-box-edge'>`. An omitted
+/// trim is `trim-both`, an omitted edge `auto`.
+pub struct TextBox { pub trim: TextBoxTrim, pub edge: TextBoxEdge }
+impl Copy for TextBox {}
+
+pub fn textBox(value: &Value) -> Option<TextBox> {
+  let words = wordsOf(value)
+  if words.count == 0 || words.count > 3 { return Option<TextBox>.None }
+  let codes = Slice.view(&words.codes, 0, words.count)
+  if codes.length == 1 && codes[0] == 7 { return Option<TextBox>.some(TextBox { trim: TextBoxTrim.None, edge: TextBoxEdge.auto() }) }
+  // The trim comes first or last; whatever is left is the edge.
+  let mut trim = TextBoxTrim.Both
+  let mut start: usize = 0
+  let mut end = codes.length
+  match trimOf(codes[0]) {
+    Option.Some { value: found } => {
+      trim = found
+      start = 1
+    }
+    Option.None => match trimOf(codes[end - 1]) {
+      Option.Some { value: found } => {
+        trim = found
+        end = end - 1
+      }
+      Option.None => {}
+    }
+  }
+  if start == end { return Option<TextBox>.some(TextBox { trim: trim, edge: TextBoxEdge.auto() }) }
+  return match edgeOf(Slice.view(codes, start, end - start)) {
+    Option.Some { value: edge } => Option<TextBox>.some(TextBox { trim: trim, edge: edge })
+    Option.None => Option<TextBox>.None
   }
 }

@@ -13,9 +13,12 @@ import computed {
   LineHeight,
   Fill,
   ScrollbarGutter,
+  TextBoxTrim,
+  TextEdge,
 }
 import convert { Context, FontMetrics }
 import convert
+import computed
 import declare
 import keywords { Keyword }
 import keywords
@@ -328,4 +331,42 @@ test effect fn sizesCompareLengthsWithPercentages() ! AssertionError<'static> | 
 test effect fn clampResolvesBetweenItsBounds() ! AssertionError<'static> | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run clampCases() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn written(text: &[u8]) -> Value ! OutOfMemoryError ? &mut Allocator {
+  return Value.Text { css: run Bytes.copy(text) }
+}
+
+fn trimIs(found: Option<TextBoxTrim>, expected: TextBoxTrim) -> bool {
+  return match found { Option.Some { value } => value == expected _ => false }
+}
+
+fn edgeIs(found: Option<computed.TextBoxEdge>, over: TextEdge, under: TextEdge) -> bool {
+  return match found { Option.Some { value } => value.over == over && value.under == under _ => false }
+}
+
+fn boxIs(found: Option<convert.TextBox>, trim: TextBoxTrim, over: TextEdge, under: TextEdge) -> bool {
+  return match found { Option.Some { value } => value.trim == trim && value.edge.over == over && value.edge.under == under _ => false }
+}
+
+effect fn textBoxValues() -> () ! AssertionError<'static> | OutOfMemoryError ? &mut Allocator {
+  run Testing.expect(trimIs(convert.textBoxTrim(&values.none()), TextBoxTrim.None), "text-box-trim: none")
+  run Testing.expect(trimIs(convert.textBoxTrim(&run written(b"trim-start")), TextBoxTrim.Start), "trim-start")
+  run Testing.expect(trimIs(convert.textBoxTrim(&run written(b"TRIM-BOTH")), TextBoxTrim.Both), "keywords ignore case")
+  run Testing.expect(convert.textBoxTrim(&run written(b"trim-both trim-end")).isNone(), "one trim at most")
+  run Testing.expect(edgeIs(convert.textBoxEdge(&values.auto()), TextEdge.Auto, TextEdge.Auto), "text-box-edge: auto")
+  run Testing.expect(edgeIs(convert.textBoxEdge(&values.keyword(Keyword.Text)), TextEdge.Text, TextEdge.Text), "text alone is text text")
+  run Testing.expect(edgeIs(convert.textBoxEdge(&run written(b"cap")), TextEdge.Cap, TextEdge.Text), "cap alone keeps the under edge at text")
+  run Testing.expect(edgeIs(convert.textBoxEdge(&run written(b"ex alphabetic")), TextEdge.Ex, TextEdge.Alphabetic), "ex alphabetic")
+  run Testing.expect(convert.textBoxEdge(&run written(b"alphabetic cap")).isNone(), "alphabetic is no over edge")
+  run Testing.expect(boxIs(convert.textBox(&values.normal()), TextBoxTrim.None, TextEdge.Auto, TextEdge.Auto), "text-box: normal")
+  run Testing.expect(boxIs(convert.textBox(&run written(b"cap alphabetic")), TextBoxTrim.Both, TextEdge.Cap, TextEdge.Alphabetic), "an edge alone trims both")
+  run Testing.expect(boxIs(convert.textBox(&run written(b"trim-start")), TextBoxTrim.Start, TextEdge.Auto, TextEdge.Auto), "a trim alone keeps auto edges")
+  run Testing.expect(boxIs(convert.textBox(&run written(b"ex text trim-end")), TextBoxTrim.End, TextEdge.Ex, TextEdge.Text), "the trim may come last")
+  run Testing.expect(convert.textBox(&run written(b"cap trim-end text")).isNone(), "the edge keywords stay together")
+}
+
+test effect fn textBoxValuesConvert() -> () ! AssertionError<'static> | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run textBoxValues() |> Effect.provideMut<Allocator>(&mut allocator)
 }
