@@ -77,6 +77,11 @@ effect fn shapes() -> () ! AssertionError<'static> | CssError | OutOfMemoryError
     "a known function",
   )
   run shaped(b"blur(4px)", b"blur(4px)", "a filter function")
+  run unshaped(
+    b"linear-gradient(90deg, oklch(72% 0.21 305), red)",
+    b"linear-gradient(90deg, oklch(72% 0.21 305), red)",
+    "a gradient with a non-legacy stop keeps the stop as written",
+  )
 }
 
 effect fn math() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
@@ -98,7 +103,10 @@ effect fn math() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ?
   run shaped(b"abs(-3em)", b"3em", "an absolute value keeps its unit")
   run shaped(b"atan2(1px, 1px)", b"45deg", "an arc tangent is an angle")
   run unshaped(b"sin(1em)", b"sin(1em)", "a function of the wrong type stays text")
-  run unshaped(b"round(1em, 1px)", b"round(1em, 1px)", "arguments that need a font stay text")
+  run shaped(b"round(1em, 1px)", b"round(1em, 1px)", "lengths in different units step once a font is known")
+  run shaped(b"round(up, 1em + 3px, 4px)", b"round(up, calc(1em + 3px), 4px)", "a stepped sum keeps its strategy")
+  run shaped(b"hypot(1em, 3vw)", b"hypot(1em, 3vw)", "a hypotenuse over a font and a viewport")
+  run shaped(b"calc(sign(1em - 10px) * 2px)", b"calc(sign(calc(1em - 10px)) * 2px)", "a sign over lengths")
   run shaped(b"min(10px, 5%)", b"min(10px, 5%)", "min")
   run shaped(b"clamp(1px, 2% + 3px, 4px)", b"clamp(1px, calc(2% + 3px), 4px)", "clamp takes expressions")
   run shaped(b"calc(1px + max(2px, 3%))", b"calc(1px + max(2px, 3%))", "a nested math function")
@@ -306,6 +314,9 @@ effect fn backgroundBody() -> () ! AssertionError<'static> | CssError | OutOfMem
   run Testing.expect(run projection(Property.Background, pictured, Property.BackgroundSize, b"cover, auto, auto"), "the sizes beside url images")
   run Testing.expect(run projection(Property.Background, pictured, Property.BackgroundColor, b"rgb(0, 0, 255)"), "the color beside a url image")
   run Testing.expect(run dropped(Property.Background, b"url(a.png) url(b.png)", Property.BackgroundImage), "one image a layer")
+  let set = b"image-set(url(a.png) 1x, 'b.png' 2x) center / cover, red"
+  run Testing.expect(run projection(Property.Background, set, Property.BackgroundImage, b"image-set(url(a.png) 1x, 'b.png' 2x), none"), "an image set is one layer's image")
+  run Testing.expect(run projection(Property.Background, set, Property.BackgroundSize, b"cover, auto"), "the size beside an image set")
   let worded = b"url(a.png) repeat-x local, url(\"local, repeat-y.png\") repeat-y fixed, red REPEAT-X"
   run Testing.expect(run projection(Property.Background, worded, Property.BackgroundRepeat, b"repeat no-repeat, no-repeat repeat, repeat no-repeat"), "repeat-x and repeat-y are two-value repeats")
   run Testing.expect(run projection(Property.Background, worded, Property.BackgroundAttachment, b"local, fixed, scroll"), "local stays in its layer")

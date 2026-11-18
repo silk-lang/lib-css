@@ -3,18 +3,23 @@ import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import geometry { Point, max, min }
 import style { Float, Clear }
+import shapes { FloatShape, ResolvedShape, ShapeFrame, resolveShape }
 
 // CSS 2.2 §§9.5–9.5.2: exclusions belong to a formatting context, not
 // an individual block. Coordinates are logical line/block axes at its root.
-pub struct FloatBox { pub side: Float, pub left: f32, pub right: f32, pub top: f32, pub bottom: f32 }
+// `shape` is 0 for a float whose area is its margin box, else a digest of the
+// `shape-outside` area BfcState keeps beside it (see shapes.silk).
+pub struct FloatBox { pub side: Float, pub left: f32, pub right: f32, pub top: f32, pub bottom: f32, pub shape: u32 }
 impl Copy for FloatBox {}
 pub struct Band { pub left: f32, pub right: f32, pub nextBottom: f32, pub occupied: bool }
 impl Copy for Band {}
 pub struct Checkpoint { pub count: usize, pub sourceFloor: f32, leftDeferred: bool, rightDeferred: bool, pendingFloat: bool }
 impl Copy for Checkpoint {}
-pub struct BfcState { floats: List<FloatBox>, pub count: usize, pub sourceFloor: f32, leftDeferred: bool, rightDeferred: bool, pub pendingFloat: bool }
+// `areas` runs beside `floats` once a float has a shape (`shaped`), and `points`
+// holds the polygons' points.
+pub struct BfcState { floats: List<FloatBox>, pub count: usize, pub sourceFloor: f32, leftDeferred: bool, rightDeferred: bool, pub pendingFloat: bool, shaped: bool, areas: List<ResolvedShape>, points: List<Point> }
 impl BfcState {
-  pub fn make() -> BfcState { return BfcState { floats: List<FloatBox>.make(), count: 0, sourceFloor: 0.0, leftDeferred: false, rightDeferred: false, pendingFloat: false } }
+  pub fn make() -> BfcState { return BfcState { floats: List<FloatBox>.make(), count: 0, sourceFloor: 0.0, leftDeferred: false, rightDeferred: false, pendingFloat: false, shaped: false, areas: List<ResolvedShape>.make(), points: List<Point>.make() } }
   pub fn checkpoint(self: &Self) -> Checkpoint { return Checkpoint { count: self.count, sourceFloor: self.sourceFloor, leftDeferred: self.leftDeferred, rightDeferred: self.rightDeferred, pendingFloat: self.pendingFloat } }
   pub fn restore(self: &mut Self, checkpoint: Checkpoint) {
     self.count = checkpoint.count
@@ -33,7 +38,7 @@ impl BfcState {
     while index < self.count {
       let item = self.floats.get(index)
       if item.bottom > origin.y {
-        run output.append(FloatBox { side: item.side, left: item.left - origin.x, right: item.right - origin.x, top: item.top - origin.y, bottom: item.bottom - origin.y })
+        run output.append(FloatBox { side: item.side, left: item.left - origin.x, right: item.right - origin.x, top: item.top - origin.y, bottom: item.bottom - origin.y, shape: item.shape })
       }
       index = index + 1
     }
@@ -59,7 +64,41 @@ impl BfcState {
     // Retain capacity across speculative placement and min/max retries.
     if self.count < self.floats.length() { self.floats.set(self.count, item) }
     else { run self.floats.append(item) }
+    if self.shaped {
+      let end = self.pointEnd()
+      run self.setArea(ResolvedShape.none(end))
+    }
     self.count = self.count + 1
+  }
+  // Appends a float whose area is `shape` rather than its margin box (CSS Shapes 1).
+  pub effect fn appendShaped(self: &mut Self, item: FloatBox, shape: &FloatShape, frame: ShapeFrame) ! OutOfMemoryError ? &mut Allocator {
+    if shape.isNone() {
+      run self.append(item)
+      return
+    }
+    if !self.shaped {
+      self.shaped = true
+      self.areas.clear()
+      self.points.clear()
+      while self.areas.length() < self.count { run self.areas.append(ResolvedShape.none(0)) }
+    }
+    let end = self.pointEnd()
+    let area = run resolveShape(shape, frame, &mut self.points, end)
+    let mut placed = item
+    placed.shape = if area.shaped() { area.key(self.points.asSlice()) } else { 0 }
+    if self.count < self.floats.length() { self.floats.set(self.count, placed) }
+    else { run self.floats.append(placed) }
+    run self.setArea(area)
+    self.count = self.count + 1
+  }
+  fn pointEnd(self: &Self) -> u32 {
+    if self.count == 0 { return 0 }
+    let last = self.areas.get(self.count - 1)
+    return last.start + last.count
+  }
+  effect fn setArea(self: &mut Self, area: ResolvedShape) ! OutOfMemoryError ? &mut Allocator {
+    if self.count < self.areas.length() { self.areas.set(self.count, area) }
+    else { run self.areas.append(area) }
   }
   pub fn translate(self: &mut Self, checkpoint: Checkpoint, offset: Point) {
     let mut index = checkpoint.count
@@ -96,6 +135,40 @@ impl BfcState {
         if item.side == Float.Right { band.right = min(band.right, item.left - origin.x) }
         band.nextBottom = min(band.nextBottom, bottom)
         band.occupied = true
+      }
+      index = index + 1
+    }
+    return band
+  }
+  // The band a line box from `y` to `y + height` has beside the floats: a float with
+  // `shape-outside` narrows it only where its area reaches that far into the line,
+  // and leaves it alone where the area is empty (CSS Shapes 1 §3).
+  pub fn lineBand(self: &Self, origin: Point, width: f32, y: f32, height: f32) -> Band {
+    if !self.shaped { return self.band(origin, width, y, height) }
+    let mut band = Band { left: 0.0, right: width, nextBottom: 1.0e30, occupied: false }
+    let points = self.points.asSlice()
+    let mut index: usize = 0
+    while index < self.count {
+      let item = self.floats.get(index)
+      let top = item.top - origin.y
+      let bottom = item.bottom - origin.y
+      if bottom > y && (top < y + height || top <= y) {
+        if item.shape == 0 {
+          if item.side == Float.Left { band.left = max(band.left, item.right - origin.x) }
+          if item.side == Float.Right { band.right = min(band.right, item.left - origin.x) }
+          band.nextBottom = min(band.nextBottom, bottom)
+          band.occupied = true
+        } else {
+          let span = self.areas.get(index).span(points, y - top, y + height - top, item.right - item.left, item.bottom - item.top)
+          if !span.empty {
+            if item.side == Float.Left { band.left = max(band.left, item.left + span.high - origin.x) }
+            if item.side == Float.Right { band.right = min(band.right, item.left + span.low - origin.x) }
+            // The area changes along the curve, so a line that does not fit tries
+            // again one line lower.
+            band.nextBottom = min(band.nextBottom, min(bottom, y + max(height, 1.0)))
+            band.occupied = true
+          }
+        }
       }
       index = index + 1
     }

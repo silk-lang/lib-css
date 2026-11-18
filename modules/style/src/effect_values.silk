@@ -5,11 +5,12 @@ import value_cursor { Cursor }
 import properties { Property }
 import dimensions { Dimension, ExprId, Unit }
 import dimensions
-import colors { Color }
+import colors { Color, Interpolation }
 import colors
 import transform_values { Position, PositionAxis, Edge }
 import transform_values
 import tokens { Kind }
+import tokens
 import svg_geometry.geometry { Path }
 import svg_geometry.svg
 import silk.collections.bytes { Bytes }
@@ -114,17 +115,29 @@ impl Copy for GradientStop {}
 pub union Image {
   None,
   Url { pub url: Bytes },
-  Linear { pub repeating: bool, pub direction: Direction, pub stops: List<GradientStop> },
+  Linear {
+    pub repeating: bool,
+    pub direction: Direction,
+    pub stops: List<GradientStop>,
+    pub interpolation: colors.Interpolation,
+  },
   Radial {
     pub repeating: bool,
     pub circle: bool,
     pub size: RadialSize,
     pub position: Position,
-    pub stops: List<GradientStop>
+    pub stops: List<GradientStop>,
+    pub interpolation: colors.Interpolation,
   },
   /// `conic-gradient(from <angle> at <position>, ...)`: stop and hint positions are angles or
   /// percentages of a full turn.
-  Conic { pub repeating: bool, pub angle: ExprId, pub position: Position, pub stops: List<GradientStop> },
+  Conic {
+    pub repeating: bool,
+    pub angle: ExprId,
+    pub position: Position,
+    pub stops: List<GradientStop>,
+    pub interpolation: colors.Interpolation,
+  },
 }
 
 pub struct MaskLayer {
@@ -472,23 +485,26 @@ effect fn copyImage(image: &Image) -> Image
   return match &image.* {
     Image.None => Image.None
     Image.Url { url } => Image.Url { url: run copyBytes(Bytes.asSlice(&url)) }
-    Image.Linear { repeating, direction, stops } => Image.Linear {
+    Image.Linear { repeating, direction, stops, interpolation } => Image.Linear {
       repeating: repeating,
       direction: direction,
       stops: run copyStops(&stops),
+      interpolation: interpolation,
     }
-    Image.Radial { repeating, circle, size, position, stops } => Image.Radial {
+    Image.Radial { repeating, circle, size, position, stops, interpolation } => Image.Radial {
       repeating: repeating,
       circle: circle,
       size: size,
       position: position,
       stops: run copyStops(&stops),
+      interpolation: interpolation,
     }
-    Image.Conic { repeating, angle, position, stops } => Image.Conic {
+    Image.Conic { repeating, angle, position, stops, interpolation } => Image.Conic {
       repeating: repeating,
       angle: angle,
       position: position,
       stops: run copyStops(&stops),
+      interpolation: interpolation,
     }
   }
 }
@@ -955,6 +971,118 @@ effect fn stops(
   return Option<List<GradientStop>>.some(move result)
 }
 
+// https://drafts.csswg.org/css-images-4/#image-set-notation
+// The tree draws one image per layer, so the choice is made here: the densest option up to
+// 2x (what most displays need), else the least dense one. `type()` is accepted and ignored.
+effect fn imageSet(
+  store: &mut dimensions.Store<'_>,
+  input: &Input<'_>,
+  cursor: &mut Cursor,
+) -> Option<Image>
+  ! OutOfMemoryError
+  ? &mut Allocator {
+  let mut chosen = Option<Image>.None
+  let mut density: f64 = 0.0
+  while true {
+    cursor.skip(input)
+    let mut option = Option<Image>.None
+    if cursor.position < cursor.end {
+      match &input.at(cursor.position) {
+        Option<TokenView>.Some { value: view } => match &view.token.kind {
+          Kind.String { text } => {
+            option = Option<Image>.some(Image.Url { url: run copyBytes(view.text(text)) })
+            cursor.position = cursor.position + 1
+          }
+          _ => {}
+        }
+        _ => {}
+      }
+    }
+    let missing = match &option { Option<Image>.None => true _ => false }
+    if missing {
+      if cursor.function(input, b"image-set") || cursor.function(input, b"-webkit-image-set") {
+        return Option<Image>.None
+      }
+      option = run imageInner(&mut store.*, input, &mut cursor.*)
+    }
+    let image = match move option {
+      Option<Image>.Some { value } => move value
+      _ => {
+        return Option<Image>.None
+      }
+    }
+    let mut resolution: f64 = 1.0
+    let mut typed = false
+    let mut given = false
+    while true {
+      cursor.skip(input)
+      if !typed && cursor.function(input, b"type") {
+        cursor.skip(input)
+        let string = cursor.position < cursor.end && match &input.at(cursor.position) {
+          Option<TokenView>.Some { value: view } => match &view.token.kind { Kind.String { .. } => true _ => false }
+          _ => false
+        }
+        if !string {
+          return Option<Image>.None
+        }
+        cursor.position = cursor.position + 1
+        if !cursor.close(input) {
+          return Option<Image>.None
+        }
+        typed = true
+        continue
+      }
+      if !given && cursor.position < cursor.end {
+        let mut found = false
+        match &input.at(cursor.position) {
+          Option<TokenView>.Some { value: view } => match &view.token.kind {
+            Kind.Dimension { value, unit, .. } => {
+              let name = view.text(unit)
+              let scale = if tokens.insensitive(name, b"x") || tokens.insensitive(name, b"dppx") {
+                1.0
+              } else if tokens.insensitive(name, b"dpi") {
+                1.0 / 96.0
+              } else if tokens.insensitive(name, b"dpcm") {
+                2.54 / 96.0
+              } else {
+                0.0
+              }
+              if scale == 0.0 || value <= 0.0 {
+                return Option<Image>.None
+              }
+              resolution = value * scale
+              found = true
+            }
+            _ => {}
+          }
+          _ => {}
+        }
+        if found {
+          cursor.position = cursor.position + 1
+          given = true
+          continue
+        }
+      }
+      break
+    }
+    let better = match &chosen {
+      Option<Image>.None => true
+      _ => if density <= 2.0 { resolution > density && resolution <= 2.0 } else { resolution < density }
+    }
+    if better {
+      chosen = Option<Image>.some(move image)
+      density = resolution
+    }
+    if !cursor.comma(input) {
+      break
+    }
+  }
+  if !cursor.close(input) {
+    return Option<Image>.None
+  }
+  return move chosen
+}
+
 effect fn imageInner(
   store: &mut dimensions.Store<'_>,
   input: &Input<'_>,
@@ -971,6 +1099,9 @@ effect fn imageInner(
       return Option<Image>.some(Image.Url { url: move value })
     }
     _ => {}
+  }
+  if cursor.function(input, b"image-set") || cursor.function(input, b"-webkit-image-set") {
+    return run imageSet(&mut store.*, input, &mut cursor.*)
   }
   let mut repeating = false
   let mut radial = false
@@ -996,6 +1127,13 @@ effect fn imageInner(
   if !radial {
     let mut direction = Direction.Corner { x: Edge.Center, y: Edge.End }
     let mut header = false
+    let mut interpolation = Interpolation.absent()
+    let mut method = match colors.interpolationMethod(input, &mut cursor.*, &mut interpolation) {
+      Option<bool>.Some { value } => value
+      _ => {
+        return Option<Image>.None
+      }
+    }
     if cursor.ident(input, b"to") {
       header = true
       let mut x = Edge.Center
@@ -1028,7 +1166,15 @@ effect fn imageInner(
         _ => {}
       }
     }
-    if header && !cursor.comma(input) {
+    if !method {
+      method = match colors.interpolationMethod(input, &mut cursor.*, &mut interpolation) {
+        Option<bool>.Some { value } => value
+        _ => {
+          return Option<Image>.None
+        }
+      }
+    }
+    if (header || method) && !cursor.comma(input) {
       return Option<Image>.None
     }
     let list = match run stops(&mut store.*, input, &mut cursor.*, false) {
@@ -1038,7 +1184,12 @@ effect fn imageInner(
       }
     }
     return Option<Image>.some(
-      Image.Linear { repeating: repeating, direction: direction, stops: move list },
+      Image.Linear {
+        repeating: repeating,
+        direction: direction,
+        stops: move list,
+        interpolation: interpolation,
+      },
     )
   }
   let mut circle = false
@@ -1046,7 +1197,23 @@ effect fn imageInner(
   let mut hasSize = false
   let mut header = false
   let mut size = RadialSize.Extent { extent: Extent.FarthestCorner }
+  let mut method = false
+  let mut interpolation = Interpolation.absent()
   while true {
+    if !method {
+      match colors.interpolationMethod(input, &mut cursor.*, &mut interpolation) {
+        Option<bool>.Some { value } => {
+          if value {
+            method = true
+            header = true
+            continue
+          }
+        }
+        _ => {
+          return Option<Image>.None
+        }
+      }
+    }
     if !hasShape && cursor.ident(input, b"circle") {
       circle = true
       hasShape = true
@@ -1094,6 +1261,18 @@ effect fn imageInner(
     }
     header = true
   }
+  if !method {
+    match colors.interpolationMethod(input, &mut cursor.*, &mut interpolation) {
+      Option<bool>.Some { value } => {
+        if value {
+          header = true
+        }
+      }
+      _ => {
+        return Option<Image>.None
+      }
+    }
+  }
   if header && !cursor.comma(input) {
     return Option<Image>.None
   }
@@ -1110,6 +1289,7 @@ effect fn imageInner(
       size: size,
       position: position,
       stops: move list,
+      interpolation: interpolation,
     },
   )
 }
@@ -1123,7 +1303,14 @@ effect fn conic(
 ) -> Option<Image>
   ! OutOfMemoryError
   ? &mut Allocator {
-  let mut header = false
+  let mut interpolation = Interpolation.absent()
+  let mut method = match colors.interpolationMethod(input, &mut cursor.*, &mut interpolation) {
+    Option<bool>.Some { value } => value
+    _ => {
+      return Option<Image>.None
+    }
+  }
+  let mut header = method
   let mut angle = run dimensions.literal(&mut store.*, 0.0, Unit.Deg)
   if cursor.ident(input, b"from") {
     angle = match run angleWithZero(&mut store.*, input, &mut cursor.*, false) {
@@ -1144,6 +1331,17 @@ effect fn conic(
     }
     header = true
   }
+  if !method {
+    method = match colors.interpolationMethod(input, &mut cursor.*, &mut interpolation) {
+      Option<bool>.Some { value } => value
+      _ => {
+        return Option<Image>.None
+      }
+    }
+    if method {
+      header = true
+    }
+  }
   if header && !cursor.comma(input) {
     return Option<Image>.None
   }
@@ -1154,7 +1352,13 @@ effect fn conic(
     }
   }
   return Option<Image>.some(
-    Image.Conic { repeating: repeating, angle: angle, position: position, stops: move list },
+    Image.Conic {
+      repeating: repeating,
+      angle: angle,
+      position: position,
+      stops: move list,
+      interpolation: interpolation,
+    },
   )
 }
 
@@ -2710,7 +2914,7 @@ pub effect fn computeImage(
   return match &value.* {
     Image.None => Image.None
     Image.Url { url } => Image.Url { url: run copyBytes(url.asSlice()) }
-    Image.Linear { repeating, direction, stops: list } => {
+    Image.Linear { repeating, direction, stops: list, interpolation } => {
       let computedDirection = match &direction {
         Direction.Angle { angle } => Direction.Angle {
           angle: run dimensions.compute(&mut store.*, angle, context),
@@ -2721,20 +2925,23 @@ pub effect fn computeImage(
         repeating: repeating,
         direction: computedDirection,
         stops: run computeStops(&list, &mut store.*, context, colorContext),
+        interpolation: interpolation,
       }
     }
-    Image.Radial { repeating, circle, size, position, stops: list } => Image.Radial {
+    Image.Radial { repeating, circle, size, position, stops: list, interpolation } => Image.Radial {
       repeating: repeating,
       circle: circle,
       size: run computeRadial(&size, &mut store.*, context),
       position: run transform_values.computePosition(&position, &mut store.*, context),
       stops: run computeStops(&list, &mut store.*, context, colorContext),
+      interpolation: interpolation,
     }
-    Image.Conic { repeating, angle, position, stops: list } => Image.Conic {
+    Image.Conic { repeating, angle, position, stops: list, interpolation } => Image.Conic {
       repeating: repeating,
       angle: run dimensions.compute(&mut store.*, angle, context),
       position: run transform_values.computePosition(&position, &mut store.*, context),
       stops: run computeStops(&list, &mut store.*, context, colorContext),
+      interpolation: interpolation,
     }
   }
 }

@@ -1,0 +1,59 @@
+{
+  "name": "grid-lanes-in-flex-chrome",
+  "kind": "chrome",
+  "features": [
+    "grid",
+    "grid-lanes"
+  ],
+  "spec": [
+    "https://drafts.csswg.org/css-grid-3/#grid-lanes-layout-algorithm"
+  ],
+  "derivation": "A lanes container as a flex item gets its max-content width from its lanes.",
+  "input": {
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "nodes": [
+      {
+        "parent": null,
+        "style": {
+          "display": "flex",
+          "width": 500,
+          "alignItems": "flex-start"
+        }
+      },
+      {
+        "parent": 0,
+        "style": {
+          "display": "grid-lanes",
+          "gridTemplateColumns": [
+            "auto",
+            "auto"
+          ]
+        }
+      },
+      {
+        "parent": 1,
+        "style": {
+          "width": 50,
+          "height": 20
+        }
+      },
+      {
+        "parent": 1,
+        "style": {
+          "width": 70,
+          "height": 10
+        }
+      },
+      {
+        "parent": 1,
+        "style": {
+          "width": 20,
+          "height": 15
+        }
+      }
+    ]
+  }
+}

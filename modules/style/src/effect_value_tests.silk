@@ -212,11 +212,28 @@ effect fn gradientCases() -> ()
   run accepts(Property.MaskImage, b"linear-gradient(red 0% 20%, blue)", true)
   run accepts(Property.MaskImage, b"linear-gradient(red 0% 20% 30%, blue)", false)
   run accepts(Property.MaskImage, b"conic-gradient(red, blue)", true)
-  run accepts(Property.MaskImage, b"conic-gradient(from 45deg at 10px 20%, red 0 25%, blue 0.5turn)", true)
-  run accepts(Property.MaskImage, b"repeating-conic-gradient(at left, red 0deg 10deg, blue 10deg 20deg)", true)
+  run accepts(
+    Property.MaskImage,
+    b"conic-gradient(from 45deg at 10px 20%, red 0 25%, blue 0.5turn)",
+    true,
+  )
+  run accepts(
+    Property.MaskImage,
+    b"repeating-conic-gradient(at left, red 0deg 10deg, blue 10deg 20deg)",
+    true,
+  )
   run accepts(Property.MaskImage, b"conic-gradient(from 1px, red, blue)", false)
   run accepts(Property.MaskImage, b"conic-gradient(red 10px, blue)", false)
   run accepts(Property.MaskImage, b"conic-gradient(red)", false)
+  run accepts(Property.MaskImage, b"linear-gradient(to bottom right in oklab, red, blue)", true)
+  run accepts(Property.MaskImage, b"linear-gradient(in lab, red, red)", true)
+  run accepts(Property.MaskImage, b"linear-gradient(in oklch longer hue 45deg, red, blue)", true)
+  run accepts(Property.MaskImage, b"linear-gradient(in srgb longer hue, red, blue)", false)
+  run accepts(Property.MaskImage, b"linear-gradient(in nowhere, red, blue)", false)
+  run accepts(Property.MaskImage, b"linear-gradient(in oklab red, blue)", false)
+  run accepts(Property.MaskImage, b"radial-gradient(in oklab circle at top, red, blue)", true)
+  run accepts(Property.MaskImage, b"radial-gradient(circle at top in hsl, red, blue)", true)
+  run accepts(Property.MaskImage, b"conic-gradient(from 45deg in oklch, red, blue)", true)
 }
 
 // https://www.w3.org/TR/css-shapes-1/#supported-basic-shapes
@@ -442,6 +459,37 @@ effect fn urlAndAngleCases() -> ()
   run accepts(Property.MaskImage, b"linear-gradient(1, red, blue)", false)
   run accepts(Property.Filter, b"src(#f)", false)
   run accepts(Property.ClipPath, b"url('#c' unknown)", false)
+  run accepts(Property.MaskImage, b"image-set('a.png' 1x, url(b.png) 2x type('image/png'))", true)
+  run accepts(Property.MaskImage, b"-webkit-image-set(url(a.png) 1x, linear-gradient(red, blue) 192dpi)", true)
+  run accepts(Property.MaskImage, b"image-set('a.png')", true)
+  run accepts(Property.MaskImage, b"image-set()", false)
+  run accepts(Property.MaskImage, b"image-set('a.png' 2y)", false)
+  run accepts(Property.MaskImage, b"image-set('a.png' 1x 2x)", false)
+  run accepts(Property.MaskImage, b"image-set(image-set('a.png'))", false)
+  run picks(b"image-set('a.png' 1x, 'b.png' 2x, 'c.png' 3x)", b"b.png")
+  run picks(b"image-set('c.png' 3x, 'd.png' 4x, 'a.png' 1x)", b"a.png")
+  run picks(b"image-set('c.png' 3x, 'd.png' 4x)", b"c.png")
+  run picks(b"image-set('a.png' type('image/avif'), 'b.png' 1.5x)", b"b.png")
+}
+
+effect fn picks(text: &[u8], url: &[u8]) -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError
+  ? &mut Allocator {
+  let mut numerics = Store.make()
+  let parsed = run parseValue(&mut numerics, Property.MaskImage, text)
+  run Testing.expect(
+    match &parsed {
+      Option<EffectValue>.Some { value } => match &value {
+        EffectValue.Masks { layers, .. } => match &layers.asSlice()[0].image {
+          Image.Url { url: found } => equal(found.asSlice(), url)
+          _ => false
+        }
+        _ => false
+      }
+      _ => false
+    },
+    "image-set() picks the densest image up to 2x",
+  )
 }
 
 // https://www.w3.org/TR/css-values-4/#url-value

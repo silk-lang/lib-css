@@ -7,7 +7,7 @@ import style { Style, Position, DimensionKind, Direction, WritingMode, Align, Fl
 import tree { NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, SettledRange }
-import context { Input, ResolvedBox, resolveBox, childrenInput, withGutter, resolve, resolves, outOfFlow, absolutelyPositioned, isFlex, isGrid, scrollable, usedOverflowForAxis, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, childrenInput, withGutter, resolveIn, resolves, outOfFlow, absolutelyPositioned, containsAbsolute, isFlex, isGrid, scrollable, usedOverflowForAxis, UNBOUNDED }
 import engine { layoutNode, layoutNodeInPlace, layoutInBfc, flowMarginRect, resolveFragmentBox, shapedBox }
 import layout_pass { LayoutPass, FullBoxGeometry, CacheKind, REUSE_INDEPENDENT }
 import layout_cache { FACT_ANCHORED, PositionedRun }
@@ -71,22 +71,33 @@ fn generatedParent(nodes: &BoxTree<'_>, id: usize) -> usize {
   if parent == 0 { return NO_NODE }
   return parent
 }
+// NO_NODE for the viewport. A fixed box's is the nearest layout-contained
+// ancestor (CSS Containment 2 §3.2), else the viewport.
 pub fn absoluteContainingBlock(nodes: &BoxTree<'_>, id: usize) -> usize {
-  if nodes.style(id).position == Position.Fixed { return NO_NODE }
+  let fixed = nodes.style(id).position == Position.Fixed
   let source = nodes.node(id).source
   if source == NO_NODE { return NO_NODE }
   let mut parent = nodes.sources[source].parent
   while parent != NO_NODE {
     let box = nodes.firstBySource.get(parent)
-    if box != NO_NODE && nodes.styles[nodes.sources[parent].styleIndex].position != Position.Static { return box }
+    if box != NO_NODE {
+      let style = &nodes.styles[nodes.sources[parent].styleIndex]
+      if style.layoutContainment || !fixed && style.position != Position.Static { return box }
+    }
     parent = nodes.sources[parent].parent
   }
   return NO_NODE
 }
+// A fixed box placed against the viewport; one inside a layout-contained box
+// is placed like an absolute one.
+pub fn viewportFixed(nodes: &BoxTree<'_>, id: usize) -> bool {
+  return nodes.style(id).position == Position.Fixed && absoluteContainingBlock(nodes, id) == NO_NODE
+}
 fn fixedTree(nodes: &BoxTree<'_>, id: usize) -> bool {
   let mut source = nodes.node(id).source
   while source != NO_NODE {
-    if nodes.firstBySource.get(source) != NO_NODE && nodes.styles[nodes.sources[source].styleIndex].position == Position.Fixed { return true }
+    let box = nodes.firstBySource.get(source)
+    if box != NO_NODE && viewportFixed(nodes, box) { return true }
     source = nodes.sources[source].parent
   }
   return false
@@ -441,10 +452,10 @@ fn relativeOffset(style: &Style, containingStyle: &Style, containing: OptionalSi
   let top = resolves(style.inset.top, containing.heightDefinite)
   let bottom = resolves(style.inset.bottom, containing.heightDefinite)
   let mut result = Point { x: 0.0, y: 0.0 }
-  if left && (!right || !startReverse(containingStyle, true)) { result.x = resolve(style.inset.left, containing.width, containing.widthDefinite, 0.0) }
-  else if right { result.x = -resolve(style.inset.right, containing.width, containing.widthDefinite, 0.0) }
-  if top && (!bottom || !startReverse(containingStyle, false)) { result.y = resolve(style.inset.top, containing.height, containing.heightDefinite, 0.0) }
-  else if bottom { result.y = -resolve(style.inset.bottom, containing.height, containing.heightDefinite, 0.0) }
+  if left && (!right || !startReverse(containingStyle, true)) { result.x = resolveIn(style.inset.left, &style.bounds, containing.width, containing.widthDefinite, 0.0) }
+  else if right { result.x = -resolveIn(style.inset.right, &style.bounds, containing.width, containing.widthDefinite, 0.0) }
+  if top && (!bottom || !startReverse(containingStyle, false)) { result.y = resolveIn(style.inset.top, &style.bounds, containing.height, containing.heightDefinite, 0.0) }
+  else if bottom { result.y = -resolveIn(style.inset.bottom, &style.bounds, containing.height, containing.heightDefinite, 0.0) }
   return result
 }
 fn stickyAxis(style: &Style, containingStyle: &Style, horizontal: bool, position: f32, size: f32, containingLow: f32, containingSize: f32, marginLow: f32, marginHigh: f32, scrollLow: f32, scrollSize: f32, scrollDefinite: bool) -> f32 {
@@ -455,8 +466,8 @@ fn stickyAxis(style: &Style, containingStyle: &Style, horizontal: bool, position
   let hasLow = resolves(lowDimension, scrollDefinite)
   let hasHigh = resolves(highDimension, scrollDefinite)
   if !hasLow && !hasHigh { return 0.0 }
-  let mut low = resolve(lowDimension, scrollSize, scrollDefinite, 0.0)
-  let mut high = resolve(highDimension, scrollSize, scrollDefinite, 0.0)
+  let mut low = resolveIn(lowDimension, &style.bounds, scrollSize, scrollDefinite, 0.0)
+  let mut high = resolveIn(highDimension, &style.bounds, scrollSize, scrollDefinite, 0.0)
   // Position 3 §3.4: enlarge at the containing block's logical end,
   // even when that edge's original inset was auto.
   if scrollSize - low - high < size {
@@ -596,6 +607,7 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
   let style = nodes.style(id)
   let parent = generatedParent(nodes, id)
   let cb = absoluteContainingBlock(nodes, id)
+  let fixedToViewport = style.position == Position.Fixed && cb == NO_NODE
   let mut cbStyle = viewportStyle
   if cb != NO_NODE { cbStyle = nodes.style(cb) }
   // Unfragmented siblings with this containing block share its rectangle,
@@ -668,9 +680,9 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
     }
   }
   let mut limits = ResolvedEdges { left: originalRect.x, right: originalRect.x + originalRect.width, top: originalRect.y, bottom: originalRect.y + originalRect.height }
-  if style.position != Position.Fixed && shared && output.absoluteLimitsSet {
+  if !fixedToViewport && shared && output.absoluteLimitsSet {
     limits = output.absoluteLimits
-  } else if style.position != Position.Fixed {
+  } else if !fixedToViewport {
     // A scrollable original CB can expose abspos overflow in each reachable
     // direction. Fixed boxes without anchor positioning retain finite limits.
     let viewportContaining = cb == NO_NODE || cb == 0
@@ -741,10 +753,10 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
   let hasRight = resolves(style.inset.right, containing.widthDefinite)
   let hasTop = resolves(style.inset.top, containing.heightDefinite)
   let hasBottom = resolves(style.inset.bottom, containing.heightDefinite)
-  let mut left = resolve(style.inset.left, containing.width, containing.widthDefinite, 0.0)
-  let mut right = resolve(style.inset.right, containing.width, containing.widthDefinite, 0.0)
-  let mut top = resolve(style.inset.top, containing.height, containing.heightDefinite, 0.0)
-  let mut bottom = resolve(style.inset.bottom, containing.height, containing.heightDefinite, 0.0)
+  let mut left = resolveIn(style.inset.left, &style.bounds, containing.width, containing.widthDefinite, 0.0)
+  let mut right = resolveIn(style.inset.right, &style.bounds, containing.width, containing.widthDefinite, 0.0)
+  let mut top = resolveIn(style.inset.top, &style.bounds, containing.height, containing.heightDefinite, 0.0)
+  let mut bottom = resolveIn(style.inset.bottom, &style.bounds, containing.height, containing.heightDefinite, 0.0)
   // Position 3 §3.5.2: an inverted inset rectangle reduces its weaker
   // (logical end) inset until the rectangle has zero extent.
   if hasLeft && hasRight && left + right > containing.width {
@@ -913,7 +925,7 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
   else {
     let anchorPosition = flowPosition(&output, anchor.parentFragment)
     let mut rect = anchor.rect.translated(anchorPosition)
-    if attached && style.position == Position.Fixed {
+    if attached && fixedToViewport {
       let anchorFrame = output.fragments.values.get(anchor.parentFragment).fragmentainer
       let geometry = run output.requiredFrame(anchorFrame)
       let mut pageRect = geometry.rect
@@ -952,7 +964,7 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
       if reverseX { x = x + rect.width - result.size.width - box.margin.horizontal() }
     }
   }
-  if attached && style.position == Position.Fixed && !anchor.valid {
+  if attached && fixedToViewport && !anchor.valid {
     let geometry = run output.requiredFrame(staticFrame)
     let mut pageRect = geometry.rect
     match output.frames.page(staticFrame) {
@@ -1070,12 +1082,12 @@ effect fn containerShellAllocation<'pass, 'source, M: Measure + TextMeasure>(nod
 
 effect fn prepareGridGeometry<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, fragment: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if !GridPositioned.isContainer(nodes, id) || output.cache.gridGeometry.findFragment(id, fragment) != NO_NODE { return }
-  if nodes.style(id).position == Position.Static && !Subgrid.eligible(nodes, id) { return }
+  if !containsAbsolute(nodes.style(id)) && !Subgrid.eligible(nodes, id) { return }
   let metadata = match output.fragmentFullBox(fragment) {
     Option<FullBoxGeometry>.Some { value } => value
     Option<FullBoxGeometry>.None => { fail FragmentationError { frame: output.frame, message: "Grid continuation has no full containing-block geometry" } }
   }
-  if nodes.style(id).position == Position.Static && metadata.gridContext == 0 { return }
+  if !containsAbsolute(nodes.style(id)) && metadata.gridContext == 0 { return }
   let firstFrame = run output.requiredFrame(0)
   let mut input = usedInput(nodes, &output, id, OptionalSize.definite(firstFrame.rect.width, firstFrame.rect.height))
   input.parent = metadata.parent
@@ -1293,8 +1305,8 @@ effect fn absoluteFrameInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, i
   if output.frames.writingMode == WritingMode.HorizontalTb {
     input.parent.width = containing.width
     input.parent.widthDefinite = true
-    let left = resolve(style.inset.left, containing.width, true, 0.0)
-    let right = resolve(style.inset.right, containing.width, true, 0.0)
+    let left = resolveIn(style.inset.left, &style.bounds, containing.width, true, 0.0)
+    let right = resolveIn(style.inset.right, &style.bounds, containing.width, true, 0.0)
     input.availableWidth = AvailableSpace.definite(max(0.0, containing.width - left - right))
     if original.known.widthDefinite && style.width.kind == DimensionKind.Auto {
       let box = resolveBox(style, &input)
@@ -1303,8 +1315,8 @@ effect fn absoluteFrameInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, i
   } else {
     input.parent.height = containing.height
     input.parent.heightDefinite = true
-    let top = resolve(style.inset.top, containing.height, true, 0.0)
-    let bottom = resolve(style.inset.bottom, containing.height, true, 0.0)
+    let top = resolveIn(style.inset.top, &style.bounds, containing.height, true, 0.0)
+    let bottom = resolveIn(style.inset.bottom, &style.bounds, containing.height, true, 0.0)
     input.availableHeight = AvailableSpace.definite(max(0.0, containing.height - top - bottom))
     if original.known.heightDefinite && style.height.kind == DimensionKind.Auto {
       let box = resolveBox(style, &input)
@@ -1331,8 +1343,8 @@ fn placedInline(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, cb:
     firstOrigin.y = firstOrigin.y + fragment.paddingRect.y
   }
   if output.frames.writingMode == WritingMode.HorizontalTb {
-    let left = resolve(style.inset.left, containing.width, true, 0.0)
-    let right = resolve(style.inset.right, containing.width, true, 0.0)
+    let left = resolveIn(style.inset.left, &style.bounds, containing.width, true, 0.0)
+    let right = resolveIn(style.inset.right, &style.bounds, containing.width, true, 0.0)
     let mut align = style.justifySelf
     let mut safety = style.justifySelfSafety
     if cbStyle.writingMode != WritingMode.HorizontalTb { align = style.alignSelf
@@ -1345,8 +1357,8 @@ fn placedInline(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, cb:
     }
     point.x = containing.x + insetPosition(left, right, resolves(style.inset.left, true), resolves(style.inset.right, true), size.width, containing.width, 0.0, containing.width, box.margin.left, box.margin.right, style.margin.left.kind == DimensionKind.Auto, style.margin.right.kind == DimensionKind.Auto, startReverse(cbStyle, true), cbStyle.writingMode == WritingMode.HorizontalTb, staticPosition, align, safety, startReverse(style, true), true)
   } else {
-    let top = resolve(style.inset.top, containing.height, true, 0.0)
-    let bottom = resolve(style.inset.bottom, containing.height, true, 0.0)
+    let top = resolveIn(style.inset.top, &style.bounds, containing.height, true, 0.0)
+    let bottom = resolveIn(style.inset.bottom, &style.bounds, containing.height, true, 0.0)
     let mut align = style.justifySelf
     let mut safety = style.justifySelfSafety
     if cbStyle.writingMode == WritingMode.HorizontalTb { align = style.alignSelf
@@ -1787,11 +1799,11 @@ fn fragmentFlowMargin(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, parentId
   // does in continuous layout. Keep the fragment's consumed block margins:
   // resolving those declarations again would restore discarded/sliced edges.
   if horizontal {
-    if style.margin.left.kind != DimensionKind.Auto { margin.left = resolve(style.margin.left, basis, definite, 0.0) }
-    if style.margin.right.kind != DimensionKind.Auto { margin.right = resolve(style.margin.right, basis, definite, 0.0) }
+    if style.margin.left.kind != DimensionKind.Auto { margin.left = resolveIn(style.margin.left, &style.bounds, basis, definite, 0.0) }
+    if style.margin.right.kind != DimensionKind.Auto { margin.right = resolveIn(style.margin.right, &style.bounds, basis, definite, 0.0) }
   } else {
-    if style.margin.top.kind != DimensionKind.Auto { margin.top = resolve(style.margin.top, basis, definite, 0.0) }
-    if style.margin.bottom.kind != DimensionKind.Auto { margin.bottom = resolve(style.margin.bottom, basis, definite, 0.0) }
+    if style.margin.top.kind != DimensionKind.Auto { margin.top = resolveIn(style.margin.top, &style.bounds, basis, definite, 0.0) }
+    if style.margin.bottom.kind != DimensionKind.Auto { margin.bottom = resolveIn(style.margin.bottom, &style.bounds, basis, definite, 0.0) }
   }
   return Rect { x: -max(0.0, margin.left), y: -max(0.0, margin.top), width: child.size.width + max(0.0, margin.left) + max(0.0, margin.right), height: child.size.height + max(0.0, margin.top) + max(0.0, margin.bottom) }
 }
@@ -1964,7 +1976,7 @@ fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: 
     if id != NO_NODE {
       let style = nodes.style(id)
       positioned = absolutelyPositioned(style)
-      fixed = style.position == Position.Fixed && kind == FragmentKind.Box
+      fixed = viewportFixed(nodes, id) && kind == FragmentKind.Box
       if kind == FragmentKind.Box {
         // A single physical fragment has unambiguous scalar used metrics.
         // Multi-fragment boxes keep their per-fragment overflow authoritative.
@@ -2068,7 +2080,7 @@ fn sourceRelative(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, source: usiz
     let id = nodes.firstBySource.get(current)
     if id != NO_NODE {
       let style = nodes.style(id)
-      if style.position == Position.Fixed { return offset }
+      if viewportFixed(nodes, id) { return offset }
       if style.position == Position.Relative {
         let parent = generatedParent(nodes, id)
         let mut containing = viewport
@@ -2134,7 +2146,7 @@ effect fn relativeOffsets(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, 
     let id = nodes.firstBySource.get(source)
     if id != NO_NODE {
       let style = nodes.style(id)
-      if style.position == Position.Fixed { offset = Point { x: 0.0, y: 0.0 } }
+      if viewportFixed(nodes, id) { offset = Point { x: 0.0, y: 0.0 } }
       else if style.position == Position.Relative {
         let parent = generatedParent(nodes, id)
         let mut containing = viewport

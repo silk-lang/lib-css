@@ -3,6 +3,8 @@ pub import style {
   SizeContainment,
   Dimension,
   SizeValue,
+  Bound,
+  Bounds,
   DimensionKind,
   Edges,
   Display,
@@ -51,6 +53,7 @@ pub import grid_style {
   GridAxis,
   GridArea,
   GridAutoFlow,
+  GridMasonry,
   GridTemplate,
   validGridName,
   validGridAreaName
@@ -104,6 +107,7 @@ pub import tree {
   SourceContent
 }
 pub import box_tree { BoxKind, BoxNode }
+pub import shapes { FloatShape, ShapeKind, ShapeBox, ShapeRadius }
 pub import fragments {
   FragmentKind,
   FragmentId,

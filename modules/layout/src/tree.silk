@@ -15,6 +15,8 @@ import flex { FlexScratch }
 import inline_layout { InlineScratch }
 import block { BlockScratch }
 import grid_style { GridTemplate, GridError, validGridName, validGridAreaName }
+import shapes { FloatShape }
+import silk.num.u32
 
 pub const NO_NODE: usize = usize.MAX
 pub struct NodeId { pub index: usize }
@@ -109,11 +111,11 @@ fn sameOuter(a: &Style, b: &Style) -> bool {
 // The style properties box construction reads (see box_tree.silk); other
 // properties reach generated boxes only through their styles.
 fn sameGeneration(a: &Style, b: &Style) -> bool {
-  if a.sizeContainment != b.sizeContainment { return false }
+  if a.sizeContainment != b.sizeContainment || a.layoutContainment != b.layoutContainment { return false }
   if a.display.isNone() != b.display.isNone() || a.display.isContents() != b.display.isContents() { return false }
   if a.display.outsideIs(DisplayOutside.Block) != b.display.outsideIs(DisplayOutside.Block) || a.display.outsideIs(DisplayOutside.Inline) != b.display.outsideIs(DisplayOutside.Inline) { return false }
   if a.display.insideIs(DisplayInside.Flow) != b.display.insideIs(DisplayInside.Flow) || a.display.insideIs(DisplayInside.FlowRoot) != b.display.insideIs(DisplayInside.FlowRoot) || a.display.insideIs(DisplayInside.Flex) != b.display.insideIs(DisplayInside.Flex) { return false }
-  if a.display.insideIs(DisplayInside.Grid) != b.display.insideIs(DisplayInside.Grid) { return false }
+  if a.display.isGrid() != b.display.isGrid() || a.display.insideIs(DisplayInside.GridLanes) != b.display.insideIs(DisplayInside.GridLanes) { return false }
   if a.multicol() != b.multicol() || a.multicolSpan != b.multicolSpan { return false }
   if (tableDisplay(&a.display) || tableDisplay(&b.display)) && !(&a.display == &b.display) { return false }
   return a.replaced == b.replaced && a.position == b.position && a.float == b.float && a.writingMode == b.writingMode && a.alignContent == b.alignContent && a.overflowX == b.overflowX && a.overflowY == b.overflowY
@@ -173,6 +175,8 @@ pub struct Tree {
   // create takes the last freed one. Freed element style slots and grid
   // slots are reused the same way.
   live: List<bool>, freeNodes: List<usize>, freeStyles: List<usize>, freeGrids: List<usize>,
+  // `shape-outside` areas, owned like `grids`: slot zero is none.
+  pub shapes: List<FloatShape>, freeShapes: List<usize>,
 }
 const CHANGE_LOG: usize = 256
 const SCROLL_LOG: usize = 64
@@ -182,6 +186,9 @@ impl Tree {
     let mut styles = List<Style>.make()
     let mut value = move style
     value.grid = 0
+    value.shape = 0
+    let mut shapes = List<FloatShape>.make()
+    run shapes.append(FloatShape.make())
     let mut grids = List<GridTemplate>.make()
     run grids.append(GridTemplate.make())
     let mut gridRevisions = List<usize>.make()
@@ -209,7 +216,7 @@ impl Tree {
     run scrollNodes.appendRepeated(NO_NODE, SCROLL_LOG)
     let mut live = List<bool>.make()
     run live.append(true)
-    return Tree { nodes: move nodes, styles: move styles, grids: move grids, gridNames: move gridNames, gridRevisions: move gridRevisions, viewportScrollOffset: Point { x: 0.0, y: 0.0 }, stickyDeferred: false, marks: 0, current: 1, structure: 1, generated: 1, changed: move changed, outer: move outer, insets: move insets, placed: move placed, logNodes: move logNodes, logRevisions: move logRevisions, logged: 0, logLost: 0, scrolls: 0, scrollNodes: move scrollNodes, live: move live, freeNodes: List<usize>.make(), freeStyles: List<usize>.make(), freeGrids: List<usize>.make() }
+    return Tree { nodes: move nodes, styles: move styles, grids: move grids, gridNames: move gridNames, gridRevisions: move gridRevisions, viewportScrollOffset: Point { x: 0.0, y: 0.0 }, stickyDeferred: false, marks: 0, current: 1, structure: 1, generated: 1, changed: move changed, outer: move outer, insets: move insets, placed: move placed, logNodes: move logNodes, logRevisions: move logRevisions, logged: 0, logLost: 0, scrolls: 0, scrollNodes: move scrollNodes, live: move live, freeNodes: List<usize>.make(), freeStyles: List<usize>.make(), freeGrids: List<usize>.make(), shapes: move shapes, freeShapes: List<usize>.make() }
   }
   // The current revision; it advances on every change.
   pub fn revision(self: &Self) -> usize { return self.current }
@@ -348,6 +355,33 @@ impl Tree {
     if outer { self.touch(id.index) } else { self.touchInner(id.index) }
     if !same { self.gridRevisions.set(self.styles.asSlice()[styleIndex].grid, self.current) }
   }
+  // Replaces the `shape-outside` area of a float (CSS Shapes 1 §3.1). A float's
+  // area is what lines beside it wrap around, so a change is one its parent sees.
+  pub effect fn setShape(self: &mut Self, id: NodeId, shape: &FloatShape) ! InvalidNode | OutOfMemoryError ? &mut Allocator {
+    if !self.contains(id) || self.nodes.asSlice()[id.index].isText() { fail InvalidNode { index: id.index } }
+    let styleIndex = self.nodes.asSlice()[id.index].styleIndex
+    let handle = u32.toUsize(self.styles.asSlice()[styleIndex].shape)
+    if self.shapes.asSlice()[handle].same(shape) { return }
+    let value = run shape.copy()
+    if handle != 0 {
+      let shapes = self.shapes.asMutSlice()
+      shapes[handle] = move value
+    } else if self.freeShapes.length() != 0 {
+      let slot = self.freeShapes.get(self.freeShapes.length() - 1)
+      let remaining = self.freeShapes.length() - 1
+      self.freeShapes.truncate(remaining)
+      let shapes = self.shapes.asMutSlice()
+      shapes[slot] = move value
+      let styles = self.styles.asMutSlice()
+      styles[styleIndex].shape = usize.toU32(slot)
+    } else {
+      let slot = self.shapes.length()
+      run self.shapes.append(move value)
+      let styles = self.styles.asMutSlice()
+      styles[styleIndex].shape = usize.toU32(slot)
+    }
+    self.touch(id.index)
+  }
   pub fn root(self: &Self) -> NodeId { return NodeId { index: 0 } }
   // Whether `id` names a node: one in range that destroy has not freed.
   pub fn contains(self: &Self, id: NodeId) -> bool {
@@ -385,6 +419,7 @@ impl Tree {
   pub effect fn create(self: &mut Self, style: Style) -> NodeId ! OutOfMemoryError ? &mut Allocator {
     let mut value = move style
     value.grid = 0
+    value.shape = 0
     // Reserve every arena before publishing any entry.
     run self.reserveSlot()
     if self.freeStyles.length() == 0 { run self.styles.reserve(1) }
@@ -526,6 +561,7 @@ impl Tree {
     run self.freeNodes.reserve(count)
     run self.freeStyles.reserve(elements)
     run self.freeGrids.reserve(grids)
+    run self.freeShapes.reserve(elements)
     if self.nodes.asSlice()[id.index].parent != NO_NODE { self.unlink(id.index) }
     else { self.current = self.current + 1 }
     at = id.index
@@ -544,6 +580,12 @@ impl Tree {
           templates[handle] = GridTemplate.make()
           self.gridRevisions.set(handle, self.current)
           run self.freeGrids.append(handle)
+        }
+        let shape = u32.toUsize(self.styles.asSlice()[styleIndex].shape)
+        if shape != 0 {
+          let shapes = self.shapes.asMutSlice()
+          shapes[shape] = FloatShape.make()
+          run self.freeShapes.append(shape)
         }
         let styles = self.styles.asMutSlice()
         styles[styleIndex] = Style.make()
@@ -574,6 +616,7 @@ impl Tree {
     let styleIndex = self.nodes.asSlice()[id.index].styleIndex
     let mut value = move style
     value.grid = self.styles.asSlice()[styleIndex].grid
+    value.shape = self.styles.asSlice()[styleIndex].shape
     // Natural measurement implies a replaced element regardless of the new style.
     if self.nodes.asSlice()[id.index].measurement == Measurement.Natural { value.replaced = true }
     // An unchanged style leaves the node clean, so callers need no change detection of their own.
@@ -590,7 +633,7 @@ impl Tree {
     while generatedParent != NO_NODE {
       let display = &self.styles.asSlice()[self.nodes.asSlice()[generatedParent].styleIndex].display
       if !display.isContents() {
-        gridParent = display.insideIs(DisplayInside.Grid)
+        gridParent = display.isGrid()
         break
       }
       generatedParent = self.nodes.asSlice()[generatedParent].parent

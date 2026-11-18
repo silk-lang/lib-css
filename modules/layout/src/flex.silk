@@ -9,7 +9,7 @@ import geometry { Measure, Layout, BaselineSet, FontRequest, Size, Point, Option
 import style { Style, SizeValue, DimensionKind, Direction, WritingMode, TextOrientation, FlexDirection, FlexWrap, Align, OverflowAlignment, BoxSizing, Visibility, MarginBreak, BoxDecorationBreak }
 import tree { NO_NODE, Measurement }
 import box_tree { BoxTree }
-import context { Input, ResolvedBox, resolveBox, childrenInput, resolve, resolveSize, sizeResolves, outOfFlow, isFlex, scrollable, overflowForAxis, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, childrenInput, resolveGap, resolveSize, sizeResolves, outOfFlow, isFlex, scrollable, overflowForAxis, UNBOUNDED }
 import engine { plainWidth, widthIgnoresHeight, crossIgnoresMain, layoutNode, layoutNodeInPlace, layoutEmptyLeafInPlace, plainMeasuredBox, probeFresh, normalizeKey, constraintFreeProbe, sizeEmptyBox, emptyIntrinsicWidth, shapedBox, ITEM_OUT_OF_FLOW, ITEM_ORDERED }
 import layout_pass { LayoutPass, CacheKind }
 import layout_cache { LayoutCache }
@@ -332,7 +332,7 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
   let preferredDefinite = sizeResolves(preferred, parentDefinite)
   let mut add = item.inset
   if style.boxSizing == BoxSizing.BorderBox { add = 0.0 }
-  let preferredSize = resolveSize(preferred, parentMain, parentDefinite, 0.0) + add
+  let preferredSize = resolveSize(preferred, &style.bounds, parentMain, parentDefinite, 0.0) + add
   let mut basis = style.flexBasis
   if basis.kind == DimensionKind.Auto { basis = preferred }
   let basisDefinite = sizeResolves(basis, parentDefinite)
@@ -371,7 +371,7 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
   // base is at least that large, the minimum cannot change the hypothetical
   // size or a growing line; only a shrinking line reads it, so measure the
   // content suggestion then (deferredMinimum) instead of probing every item.
-  let base = resolveSize(basis, parentMain, parentDefinite, 0.0) + add
+  let base = resolveSize(basis, &style.bounds, parentMain, parentDefinite, 0.0) + add
   let lengthBase = preferredDefinite && basisDefinite && basis.kind == DimensionKind.Length && base >= max(item.inset, preferredSize)
   // A content-based flex base is the max-content size, which is at least the
   // min-content size the content suggestion measures.
@@ -448,7 +448,7 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
     item.minimum = max(item.inset, min(minimum, item.maximum))
   }
   item.base = maxContent
-  if basisDefinite { item.base = resolveSize(basis, parentMain, parentDefinite, 0.0) + add }
+  if basisDefinite { item.base = resolveSize(basis, &style.bounds, parentMain, parentDefinite, 0.0) + add }
   else if basis.kind == DimensionKind.MinContent { item.base = minContent }
   else if basis.kind == DimensionKind.FitContent && mainConstraint.kind == AvailableKind.Definite { item.base = clamp(mainConstraint.value - item.marginStart - item.marginEnd, minContent, maxContent) }
   else if ratio > 0.0 && crossDefinite && basis.kind != DimensionKind.MaxContent {
@@ -1388,8 +1388,8 @@ effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
     crossGapDimension = style.rowGap }
   // Gaps §2.3 resolves cyclic percentages against zero, not the entire
   // length-percentage expression: a calc() gap retains its length term.
-  let mainGap = max(0.0, resolve(mainGapDimension, main, mainDefinite, mainGapDimension.value))
-  let crossGap = max(0.0, resolve(crossGapDimension, cross, crossDefinite && !(resolvedIntrinsicInline && !axis.row), crossGapDimension.value))
+  let mainGap = max(0.0, resolveGap(mainGapDimension, &style.bounds, main, mainDefinite))
+  let crossGap = max(0.0, resolveGap(crossGapDimension, &style.bounds, cross, crossDefinite && !(resolvedIntrinsicInline && !axis.row)))
   scratch.items.clear()
   let ordered = run collect(nodes, output.facts.itemFlags.asSlice(), id, &mut scratch.items)
   let count = scratch.items.length()

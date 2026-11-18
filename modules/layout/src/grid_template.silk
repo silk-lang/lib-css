@@ -3,7 +3,7 @@ import silk.num.f32
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.num.usize
-import context { UNBOUNDED, resolve }
+import context { UNBOUNDED, resolveGap }
 import geometry { max }
 import grid_style {
   GridAxis,
@@ -15,7 +15,7 @@ import grid_style {
   GridTrack,
   MAX_GRID_TRACKS
 }
-import style { Dimension }
+import style { Dimension, Bounds }
 
 pub struct ExpandedAxis {
   pub tracks: List<GridTrack>,
@@ -46,7 +46,9 @@ pub struct RepeatSizing {
   pub minimum: f32,
   pub maximum: f32,
   pub definite: bool,
-  pub gap: Dimension
+  pub gap: Dimension,
+  // The container's, for a `Bounded` gap.
+  pub bounds: Bounds,
 }
 
 impl Copy for RepeatSizing {}
@@ -130,7 +132,7 @@ pub fn repeatCount(axis: &GridAxis, sizing: &RepeatSizing) -> usize {
   if !f32.isFinite(basis) || basis <= 0.0 {
     return 1
   }
-  let gap = max(0.0, resolve(sizing.gap, basis, sizing.definite, sizing.gap.value))
+  let gap = max(0.0, resolveGap(sizing.gap, &sizing.bounds, basis, sizing.definite))
   let tracks = axis.tracks.asSlice()
   let repeats = axis.repeats.asSlice()
   let mut fixedSize: f32 = 0.0

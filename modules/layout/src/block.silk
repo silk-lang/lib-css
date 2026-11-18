@@ -10,6 +10,7 @@ import axes { Axes }
 import context { Input, ResolvedBox, resolveBox, childrenInput, outOfFlow, establishesContext, selfCollapsingSize, blockContentOffset, blockInlineOffset, blockJustification, blockJustificationSafety, selfStartReversed, alignmentOffset }
 import engine { layoutNode, layoutNodeInPlace, probeRead, layoutInFlow, probeNode, blockSizeFree }
 import bfc { BfcState, FloatBox, Checkpoint }
+import shapes { ShapeFrame }
 import layout_pass { LayoutPass, PassCheckpoint, REUSE_INDEPENDENT }
 import layout_cache { BASE_CHANGED, BASE_BLOCK_SIZE, BASE_UNKNOWN }
 import text { TextMeasure, TextError }
@@ -816,7 +817,12 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &
         }
         x = band.left
         if childStyle.float == Float.Right { x = band.right - outerWidth }
-        run bfc.append(FloatBox { side: childStyle.float, left: origin.x + x, right: origin.x + x + outerWidth, top: origin.y + y, bottom: origin.y + y + outerHeight })
+        let placed = FloatBox { side: childStyle.float, left: origin.x + x, right: origin.x + x + outerWidth, top: origin.y + y, bottom: origin.y + y + outerHeight, shape: 0 }
+        if let Option.Some { value: shape } = nodes.shape(item.id) {
+          run bfc.appendShaped(placed, shape, ShapeFrame.of(&output.boxes[item.id], childLayout.size, item.margin, axes, contentWidth))
+        } else {
+          run bfc.append(placed)
+        }
         bfc.sourceFloor = max(bfc.sourceFloor, origin.y + y)
         x = x + item.margin.left
         y = y + item.margin.top

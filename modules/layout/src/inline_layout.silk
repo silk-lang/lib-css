@@ -5,14 +5,15 @@ import silk.core.option { Option }
 import silk.mem.box { Box }
 import silk.text.string { String }
 import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min }
-import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, Position }
+import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind }
 import tree { Node, NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, TextFragment, TextFragmentKind }
 import axes { Axes }
-import context { Input, ResolvedBox, resolveBox, resolve, outOfFlow }
+import context { Input, ResolvedBox, resolveBox, resolve, outOfFlow, containsAbsolute }
 import engine { layoutNode, layoutNodeInPlace }
 import bfc { BfcState, FloatBox, Band }
+import shapes { ShapeFrame }
 import layout_pass { LayoutPass, FullBoxGeometry }
 import text { TextMeasure, TextError, TextToken, TextTokenKind, TextContext, TextCursor, TextRange, TextBreak, TextBreakKind, TextAnalysis, TextShapeRequest, TextRun }
 import inline_text as TextFlow
@@ -84,7 +85,7 @@ fn alignmentShift(style: &Style, lineHeight: f32, parent: &FontBox, mode: Writin
 fn atomicBaseline(style: &Style, layout: &Layout, axes: &Axes, margin: ResolvedEdges, parent: &Style) -> f32 {
   let size = axes.size(layout.size)
   let childAxes = Axes.make(style.writingMode)
-  let first = style.baselineSource == BaselineSource.First || (style.baselineSource == BaselineSource.Auto && (style.display.insideIs(DisplayInside.Flex) || style.display.insideIs(DisplayInside.Grid)))
+  let first = style.baselineSource == BaselineSource.First || (style.baselineSource == BaselineSource.Auto && (style.display.insideIs(DisplayInside.Flex) || style.display.isGrid()))
   let available = (first && layout.hasFirstBaseline) || (!first && layout.hasLastBaseline)
   if childAxes.vertical == axes.vertical && available {
     let mut baseline: f32 = 0.0
@@ -300,7 +301,7 @@ effect fn collect<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'sou
   let mut baselineFromMargin = false
   if item.kind == ItemKind.Atomic {
     baseline = atomicBaseline(style, &layout, &axes, resolved.margin, parentStyle)
-    let first = style.baselineSource == BaselineSource.First || (style.baselineSource == BaselineSource.Auto && (style.display.insideIs(DisplayInside.Flex) || style.display.insideIs(DisplayInside.Grid)))
+    let first = style.baselineSource == BaselineSource.First || (style.baselineSource == BaselineSource.Auto && (style.display.insideIs(DisplayInside.Flex) || style.display.isGrid()))
     baselineFromMargin = Axes.make(style.writingMode).vertical != axes.vertical || !((first && layout.hasFirstBaseline) || (!first && layout.hasLastBaseline))
   }
   item.leaf = atomics.length()
@@ -713,7 +714,15 @@ effect fn placeFloats<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<
         let mut x = band.left
         if style.float == Float.Right { x = band.right - item.advance }
         atomics[item.leaf].location = Point { x: x + margin.left, y: y + margin.top }
-        run bfc.append(FloatBox { side: style.float, left: origin.x + x, right: origin.x + x + item.advance, top: origin.y + y, bottom: origin.y + y + outerHeight })
+        let placed = FloatBox { side: style.float, left: origin.x + x, right: origin.x + x + item.advance, top: origin.y + y, bottom: origin.y + y + outerHeight, shape: 0 }
+        if let Option.Some { value: shape } = nodes.shape(item.id) {
+          let mut used = margin
+          used.bottom = max(0.0, outerHeight - size.height - margin.top)
+          let frameSize = Size { width: item.advance - margin.left - margin.right, height: size.height }
+          run bfc.appendShaped(placed, shape, ShapeFrame.of(&output.boxes[item.id], frameSize, used, axes, width))
+        } else {
+          run bfc.append(placed)
+        }
         bfc.sourceFloor = max(bfc.sourceFloor, origin.y + y)
       }
     } else if item.kind != ItemKind.Anchor {
@@ -1037,7 +1046,7 @@ effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
   let mut band = Band { left: 0.0, right: width, nextBottom: 0.0, occupied: false }
   if plain {
     metrics = lineExtents(line.items.asSlice(), scopes, extents.asMutSlice(), 0, line.items.length(), true)
-    band = indentBand(bfc.band(input.bfcContentOrigin, width, 0.0, metrics.height), 0.0, false)
+    band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, 0.0, metrics.height), 0.0, false)
     plain = line.advance <= band.right - band.left
   }
   if !plain {
@@ -1182,7 +1191,7 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
     let mut advance: f32 = 0.0
     let mut real = false
     let mut end = start
-    let mut band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, 0.0), indent, rtl)
+    let mut band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, 0.0), indent, rtl)
     while next < chunks.length() {
       let chunk = chunks.get(next)
       let candidate = leading + advance + chunk.advance + continuationEdges(nodes, items.asSlice(), scopes.asSlice(), chunk.end, false, rtl)
@@ -1191,10 +1200,10 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
         let metrics = lineExtents(items.asSlice(), scopes.asSlice(), extents.asMutSlice(), start, chunk.end, candidateReal)
         bfc.restore(checkpoint)
         if hasFloats { run placeFloats(nodes, &mut output, &mut measurer, items.asSlice(), &noVisual, atomics.asMutSlice(), start, chunk.end, &mut bfc, input.bfcContentOrigin, width, sourceY, metrics.height, axes, leading, &input, box.inset.top) }
-        band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, rtl)
+        band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, rtl)
         while next == first && candidate > band.right - band.left && band.occupied && band.nextBottom > cursor {
           cursor = band.nextBottom
-          band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, rtl)
+          band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, rtl)
         }
       }
       if next > first && chunk.breakBefore && candidate > band.right - band.left { break }
@@ -1206,7 +1215,7 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
     let metrics = lineExtents(items.asSlice(), scopes.asSlice(), extents.asMutSlice(), start, end, real)
     bfc.restore(checkpoint)
     if hasFloats { run placeFloats(nodes, &mut output, &mut measurer, items.asSlice(), &noVisual, atomics.asMutSlice(), start, end, &mut bfc, input.bfcContentOrigin, width, sourceY, metrics.height, axes, leading, &input, box.inset.top) }
-    band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, rtl)
+    band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, rtl)
     advance = leading + advance + continuationEdges(nodes, items.asSlice(), scopes.asSlice(), end, false, rtl)
     run lines.append(LineBox { start: start, end: end, y: cursor, left: band.left, width: band.right - band.left, advance: advance, hangingStart: 0.0, height: metrics.height, baseline: metrics.width, real: real, last: next == chunks.length(), direction: style.usedDirection(), visual: Line.make() })
     cursor = cursor + metrics.height
@@ -1437,7 +1446,7 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
         value.hasLastBaseline = false
       }
       let emitted = run output.fragments.append(value)
-      if output.frame != NO_NODE && nodes.style(scope.id).position != Position.Static {
+      if output.frame != NO_NODE && containsAbsolute(nodes.style(scope.id)) {
         run output.rememberFragmentBox(scope.id, emitted.index, FullBoxGeometry { parent: input.parent, known: OptionalSize.none(), minimum: Size { width: 0.0, height: 0.0 }, content: OptionalSize.none(), gridContext: 0 })
       }
       let values = spans.values.asMutSlice()
@@ -2463,7 +2472,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     let mut probedEnd = start
     let mut total: f32 = 0.0
     let mut lineClosed = false
-    let mut band = narrowed(indentBand(bfc.band(input.bfcContentOrigin, width, cursor, 0.0), indent, indentRtl), slack, rtl)
+    let mut band = narrowed(indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, 0.0), indent, indentRtl), slack, rtl)
     if memoFirst != NO_NODE {
       let point = points.get(memo.ends.get(memoFirst + memoLine))
       let room = band.right - band.left
@@ -2567,10 +2576,10 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       }
       bfc.restore(checkpoint)
       if hasFloats { run placeFloats(nodes, &mut output, &mut measurer, candidate.items.asSlice(), &candidate.visual, atomics.asMutSlice(), 0, candidate.items.length(), &mut bfc, input.bfcContentOrigin, width, sourceY, metrics.height, axes, leading, &input, box.inset.top) }
-      band = narrowed(indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl), slack, rtl)
+      band = narrowed(indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl), slack, rtl)
       while next == first && proposed > band.right - band.left && band.occupied && band.nextBottom > cursor {
         cursor = band.nextBottom
-        band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
+        band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
       }
       if next > first && proposed > band.right - band.left { break }
       if next == first && !atSource && point.kind != TextBreakKind.Forced && proposed > band.right - band.left && wraps.length() != 0 {
@@ -2721,7 +2730,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
         floatIndex = floatIndex + 1
       }
     }
-    band = indentBand(bfc.band(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
+    band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, cursor, metrics.height), indent, indentRtl)
     let mut ending = TextBreak { at: end, kind: TextBreakKind.Soft }
     if !floatBoundary && !sourceEnding && !wrapped { ending = points.get(next - 1) }
     if sourceEnding && next > first {

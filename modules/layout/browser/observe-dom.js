@@ -6,7 +6,7 @@ async function observeDOM(input, fontAssets, columns) {
     document.write('<!doctype html><html><head></head><body></body></html>');
     document.close();
   }
-  const dimensions = new Set(['width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'flexBasis', 'rowGap', 'columnGap']);
+  const dimensions = new Set(['width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'flexBasis', 'rowGap', 'columnGap', 'shapeMargin']);
   const sides = ['top', 'right', 'bottom', 'left'];
   const defaults = { display: 'block', boxSizing: 'content-box', direction: 'ltr', unicodeBidi: 'normal', writingMode: 'horizontal-tb', textOrientation: 'mixed',
     flexDirection: 'row', flexWrap: 'nowrap', flexGrow: 0, flexShrink: 1, flexBasis: 'auto', order: 0,
@@ -249,6 +249,10 @@ async function observeDOM(input, fontAssets, columns) {
       set(element, 'fontKerning', 'none');
       set(element, 'fontVariantLigatures', 'none');
     }
+    // The native tolerance is 1em of the element's font even without font assets.
+    if (String(node.style.display ?? '').includes('grid-lanes')) {
+      element.style.setProperty('flow-tolerance', `${fontMetrics(node.style.fontKey ?? 0).fontSize}px`);
+    }
     // Individual sides override shorthands regardless of JSON property order.
     const edges = new Set(['padding', 'margin', 'border', 'inset']);
     const entries = Object.entries(node.style).sort(([a], [b]) => Number(edges.has(b)) - Number(edges.has(a)));
@@ -258,6 +262,26 @@ async function observeDOM(input, fontAssets, columns) {
         // Keep support and computed-value evidence even when Chrome rejects a
         // declaration. The native adapter validates the structured input.
         element.style.setProperty(cssName(name), gridValue(name, value));
+        continue;
+      }
+      if (name === 'shapeOutside') {
+        // Mirrors the native FloatShape: kind, reference box, radius keywords, values.
+        const v = value.values ?? [], d = dimension;
+        const radius = (kind, x) => kind === 'closest-side' || kind === 'farthest-side' ? kind : d(x);
+        let css = value.kind === 'none' ? 'none' : '';
+        if (value.kind === 'circle') css = `circle(${radius(value.radiusX, v[0])} at ${d(v[1])} ${d(v[2])})`;
+        if (value.kind === 'ellipse') css = `ellipse(${radius(value.radiusX, v[0])} ${radius(value.radiusY, v[1])} at ${d(v[2])} ${d(v[3])})`;
+        if (value.kind === 'inset') css = `inset(${v.slice(0, 4).map(d).join(' ')} round ${v.slice(4, 8).map(d).join(' ')} / ${v.slice(8, 12).map(d).join(' ')})`;
+        if (value.kind === 'polygon') {
+          const points = [];
+          for (let k = 0; k + 1 < v.length; k += 2) points.push(`${d(v[k])} ${d(v[k + 1])}`);
+          css = `polygon(${points.join(', ')})`;
+        }
+        if (value.kind === 'box') {
+          css = value.box ?? 'margin-box';
+          if (v.length === 8) element.style.setProperty('border-radius', `${v.slice(0, 4).map(d).join(' ')} / ${v.slice(4, 8).map(d).join(' ')}`);
+        } else if (value.box) css += ` ${value.box}`;
+        element.style.setProperty('shape-outside', css);
         continue;
       }
       if (name === 'textJustify') {
@@ -413,9 +437,11 @@ async function observeDOM(input, fontAssets, columns) {
         const evidence = { node: i, property, requested, specified: element.style.getPropertyValue(property),
           computed: style.getPropertyValue(property), cssSupported: CSS.supports(property, requested) };
         gridEvidence.push(evidence);
+        // Grid lanes compute no value for the stacking axis's template.
+        const stackingNone = style.display.includes('grid-lanes') && requested === 'none' && property.startsWith('grid-template-');
         // Track lists expose used pixel sizes through getComputedStyle; those
         // cannot be compared textually with authored fr/minmax/repeat values.
-        if (!evidence.cssSupported || !evidence.specified || !evidence.computed) {
+        if (!evidence.cssSupported || !evidence.specified || !evidence.computed && !stackingNone) {
           unsupported.push({ node: i, feature: property,
             reason: 'Chrome does not support or did not retain the requested grid declaration.', evidence });
         }

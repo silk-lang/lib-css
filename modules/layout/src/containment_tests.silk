@@ -8,7 +8,7 @@ import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize, AvailableSpace, AvailableKind, max }
 import style { SizeContainment, Edges, Style, Display, DisplayOutside, DisplayInside, Dimension, SizeValue, DimensionKind, Direction, WritingMode, Position, Float }
-import tree { Tree, LayoutTree, InvalidNode }
+import tree { Tree, LayoutTree, NodeId, InvalidNode }
 import context { Input }
 import engine { compute, layoutNode }
 import layout_pass { LayoutPass, PassState }
@@ -331,4 +331,93 @@ effect fn containmentSubgrids() ! GridError | OutOfMemoryError | TextError | Fra
 test effect fn sizeContainmentDisablesSubgridInheritance() ! GridError | OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run containmentSubgrids() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// Layout and paint containment (CSS Containment 2 §3.2, §3.4): the box is the
+// containing block of absolutely and fixed positioned descendants, and an
+// independent formatting context, so a child's margin stays inside it.
+test effect fn layoutContainmentContainsPositionedDescendants() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run containedPositioning(true) |> Effect.provideMut<Allocator>(&mut allocator)
+  run containedPositioning(false) |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn containedPositioning(contained: bool) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut box = sized(100.0, 60.0)
+  box.margin.left = Dimension.px(30.0)
+  box.margin.top = Dimension.px(20.0)
+  box.layoutContainment = contained
+  let id = run tree.append(root, box)
+  let mut flowStyle = sized(10.0, 10.0)
+  flowStyle.margin.top = Dimension.px(7.0)
+  let flow = run tree.append(id, flowStyle)
+  let mut absoluteStyle = sized(10.0, 10.0)
+  absoluteStyle.position = Position.Absolute
+  absoluteStyle.inset.right = Dimension.px(0.0)
+  absoluteStyle.inset.bottom = Dimension.px(0.0)
+  let absolute = run tree.append(id, absoluteStyle)
+  let mut fixedStyle = absoluteStyle
+  fixedStyle.position = Position.Fixed
+  let fixed = run tree.append(id, fixedStyle)
+  let mut output = LayoutTree.make()
+  let mut measure = FixedMeasure {}
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(400.0, 300.0))
+  let place = output.boxes.get(output.firstBySource.get(id.index))
+  let child = output.boxes.get(output.firstBySource.get(flow.index))
+  let a = output.boxes.get(output.firstBySource.get(absolute.index))
+  let f = output.boxes.get(output.firstBySource.get(fixed.index))
+  if contained {
+    run Testing.expect(place.location.y == 20.0 && child.location.y == 7.0, "a contained box keeps its child's margin")
+    run Testing.expect(a.location.x == 90.0 && a.location.y == 50.0, "an absolute box is placed in its layout-contained ancestor")
+    run Testing.expect(f.location.x == 90.0 && f.location.y == 50.0, "so is a fixed box")
+  } else {
+    run Testing.expect(place.location.y == 20.0 && child.location.y == 0.0, "an uncontained box's child margin collapses with its own")
+    run Testing.expect(a.location.x == 360.0 && a.location.y == 270.0, "an absolute box is placed in the initial containing block")
+    run Testing.expect(f.location.x == 360.0 && f.location.y == 270.0, "a fixed box in the viewport")
+  }
+}
+
+// A changed box deep inside a large layout- and size-contained card is laid
+// out with its card alone: the card's siblings and ancestors keep their
+// results. Without containment the card has too many boxes for the early
+// cutoff, and its ancestors lay out again.
+test effect fn layoutContainmentBoundsRelayout() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let contained = run cardRelayout(true) |> Effect.provideMut<Allocator>(&mut allocator)
+  let open = run cardRelayout(false) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(contained * 4 < open, "containment keeps a deep change inside its card")
+}
+
+effect fn cardRelayout(contained: bool) -> usize ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut list = Style.make()
+  list.width = SizeValue.px(300.0)
+  let parent = run tree.append(root, list)
+  let mut card = Style.make()
+  card.height = SizeValue.px(40.0)
+  card.layoutContainment = contained
+  if contained { card.sizeContainment = SizeContainment.Size }
+  let mut leaf = NodeId { index: 0 }
+  let mut at: usize = 0
+  while at < 50 {
+    let id = run tree.append(parent, card)
+    let mut row: usize = 0
+    while row < 80 {
+      let item = run tree.append(id, sized(20.0, 1.0))
+      if at == 25 && row == 40 { leaf = item }
+      row = row + 1
+    }
+    at = at + 1
+  }
+  let mut output = LayoutTree.make()
+  let mut measure = FixedMeasure {}
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(400.0, 300.0))
+  run tree.setStyle(leaf, sized(30.0, 2.0))
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(400.0, 300.0))
+  run Testing.expect(output.boxes.get(output.firstBySource.get(leaf.index)).size.width == 30.0, "the changed box lays out again")
+  let stats = output.stats
+  return stats.fullLayouts + stats.cacheHits + stats.sizeProbes
 }

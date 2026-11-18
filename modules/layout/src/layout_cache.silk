@@ -594,7 +594,7 @@ impl LayoutCache {
     while index < floats.length {
       let a = &recorded[kept.floats + index]
       let b = &floats[index]
-      if a.side != b.side || a.left != b.left || a.right != b.right || a.top != b.top || a.bottom != b.bottom { return false }
+      if a.side != b.side || a.left != b.left || a.right != b.right || a.top != b.top || a.bottom != b.bottom || a.shape != b.shape { return false }
       index = index + 1
     }
     return true
@@ -966,6 +966,12 @@ impl LayoutCache {
       return
     }
     self.plainLines.set(slot, move line)
+  }
+  // Drops every box's PlainLine and its storage: the next probe of each
+  // shapes its line again.
+  pub fn dropPlains(self: &mut Self) {
+    self.plainSlots.clearAndFree()
+    self.plainLines.clearAndFree()
   }
   pub fn takeText(self: &mut Self, id: usize) -> Option<KeptText> {
     if id >= self.texts.length() { return Option<KeptText>.None }

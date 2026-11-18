@@ -1,6 +1,10 @@
 //! Computed CSS values: what layout and paint read after the cascade and unit resolution.
 //! Lengths are pixels and percentages are fractions (0.5 is 50%).
 import silk.color.rgba { Rgba }
+import silk.num.f32
+import silk.num.u32
+import silk.num.u8
+import silk.core.option { Option }
 import silk.core.equal { Equal }
 import silk.core.ownership { Copy }
 import silk.geometry.corners { Corners }
@@ -8,51 +12,118 @@ import silk.geometry.insets { Insets }
 
 // Values have already passed CSS parsing and cascade. Percentages are fractions.
 // Keeping a percentage coefficient distinguishes 0% from 0px in indefinite axes.
-/// `Least`, `Most` and `Clamp` need a third number and only a `SizeValue` has them.
-pub enum DimensionKind { Auto, Length, Percent, Calc, Least, Most, Clamp, MinContent, MaxContent, FitContent, Content, None, Normal }
-pub struct Dimension { pub kind: DimensionKind, pub value: f32, pub percent: f32 }
+/// `Least`, `Most` and `Clamp` need a third number and only a `SizeValue` has them. `Bounded`
+/// is `clamp(lower, value + percent * basis, upper)` with the bounds in the style's `Bounds`,
+/// at `slot`.
+pub enum DimensionKind { Auto, Length, Percent, Calc, Least, Most, Clamp, Bounded, MinContent, MaxContent, FitContent, Content, None, Normal }
+pub struct Dimension { pub kind: DimensionKind, pub slot: u8, pub value: f32, pub percent: f32 }
 impl Copy for Dimension {}
 impl Equal for Dimension {
   fn equals(left: &Dimension, right: &Dimension) -> bool {
-    return left.kind == right.kind && left.value == right.value && left.percent == right.percent
+    return left.kind == right.kind && left.slot == right.slot && left.value == right.value && left.percent == right.percent
   }
 }
 impl Dimension {
-  pub fn auto() -> Dimension { return Dimension { kind: DimensionKind.Auto, value: 0.0, percent: 0.0 } }
-  pub fn px(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Length, value: value, percent: 0.0 } }
-  pub fn pct(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Percent, value: 0.0, percent: value } }
-  pub fn calc(length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Calc, value: length, percent: percent } }
-  pub fn keyword(kind: DimensionKind) -> Dimension { return Dimension { kind: kind, value: 0.0, percent: 0.0 } }
+  pub fn auto() -> Dimension { return Dimension { kind: DimensionKind.Auto, slot: 0, value: 0.0, percent: 0.0 } }
+  pub fn px(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Length, slot: 0, value: value, percent: 0.0 } }
+  pub fn pct(value: f32) -> Dimension { return Dimension { kind: DimensionKind.Percent, slot: 0, value: 0.0, percent: value } }
+  pub fn calc(length: f32, percent: f32) -> Dimension { return Dimension { kind: DimensionKind.Calc, slot: 0, value: length, percent: percent } }
+  pub fn keyword(kind: DimensionKind) -> Dimension { return Dimension { kind: kind, slot: 0, value: 0.0, percent: 0.0 } }
+  pub fn bounded(length: f32, percent: f32, slot: u8) -> Dimension { return Dimension { kind: DimensionKind.Bounded, slot: slot, value: length, percent: percent } }
+  /// The value with its lengths multiplied by `ratio`, for a change of `zoom`. Percentages and
+  /// keywords stay.
+  pub fn zoomed(self: Dimension, ratio: f32) -> Dimension {
+    return Dimension { kind: self.kind, slot: self.slot, value: self.value * ratio, percent: self.percent }
+  }
   /// Whether the value depends on a percentage basis.
   pub fn relative(self: Dimension) -> bool {
-    return self.kind == DimensionKind.Percent || self.kind == DimensionKind.Calc
+    return self.kind == DimensionKind.Percent || self.kind == DimensionKind.Calc || self.kind == DimensionKind.Bounded
+  }
+}
+/// A length plus a percentage held between two lengths: `clamp(lower, value + percent * basis,
+/// upper)`, where `min()` has no lower bound and `max()` no upper one (infinite).
+pub struct Bound { pub lower: f32, pub value: f32, pub percent: f32, pub upper: f32 }
+impl Copy for Bound {}
+impl Bound {
+  pub fn line(value: f32, percent: f32) -> Bound { return Bound { lower: 0.0 - f32.INFINITY, value: value, percent: percent, upper: f32.INFINITY } }
+  pub fn bounded(self: Bound) -> bool { return self.lower > 0.0 - f32.INFINITY || self.upper < f32.INFINITY }
+}
+/// How many distinct pairs of bounds one style holds.
+pub const BOUND_SLOTS: u8 = 3
+/// The bounds of a style's `Bounded` values. Values with the same bounds share a slot, as the
+/// four sides of `padding: clamp(1rem, 5%, 3rem)` do; few elements hold any.
+pub struct Bounds { pub lower: [f32; 3], pub upper: [f32; 3], pub count: u8 }
+impl Copy for Bounds {}
+impl Equal for Bounds {
+  fn equals(left: &Bounds, right: &Bounds) -> bool {
+    if left.count != right.count { return false }
+    let mut i: usize = 0
+    while i < u8.toUsize(left.count) {
+      if left.lower[i] != right.lower[i] || left.upper[i] != right.upper[i] { return false }
+      i = i + 1
+    }
+    return true
+  }
+}
+impl Bounds {
+  pub fn none() -> Bounds { return Bounds { lower: [0.0, 0.0, 0.0], upper: [0.0, 0.0, 0.0], count: 0 } }
+  /// The slot holding `lower` and `upper`, taken when no slot has them; none when all are taken.
+  pub fn slotOf(self: &mut Self, lower: f32, upper: f32) -> Option<u8> {
+    let mut i: u8 = 0
+    while i < self.count {
+      if self.lower[u8.toUsize(i)] == lower && self.upper[u8.toUsize(i)] == upper { return Option<u8>.some(i) }
+      i = i + 1
+    }
+    if self.count == BOUND_SLOTS { return Option<u8>.None }
+    self.lower[u8.toUsize(i)] = lower
+    self.upper[u8.toUsize(i)] = upper
+    self.count = i + 1
+    return Option<u8>.some(i)
+  }
+  /// `line`, the value's length plus its percentage of the basis, held between the value's
+  /// bounds when it is `Bounded`.
+  @inlineAlways
+  pub fn hold(self: &Self, kind: DimensionKind, slot: u8, line: f32) -> f32 {
+    if kind != DimensionKind.Bounded { return line }
+    let at = u8.toUsize(slot)
+    return f32.max(self.lower[at], f32.min(line, self.upper[at]))
+  }
+  /// The bound held at `slot`, with the value's length and percentage.
+  pub fn bound(self: &Self, slot: u8, value: f32, percent: f32) -> Bound {
+    let at = u8.toUsize(slot)
+    return Bound { lower: self.lower[at], value: value, percent: percent, upper: self.upper[at] }
   }
 }
 /// A width, height, minimum, maximum or flex basis. Besides every `Dimension` it holds a length
 /// against a length plus a percentage: `Least` is `min(bound, value + percent)` and `Most` is
 /// `max(bound, value + percent)`. `Clamp` is `clamp(value, percent, bound)`. Only these seven
 /// fields pay for the third number; edges and gaps stay a `Dimension`.
-pub struct SizeValue { pub kind: DimensionKind, pub value: f32, pub percent: f32, pub bound: f32 }
+pub struct SizeValue { pub kind: DimensionKind, pub slot: u8, pub value: f32, pub percent: f32, pub bound: f32 }
 impl Copy for SizeValue {}
 impl Equal for SizeValue {
   fn equals(left: &SizeValue, right: &SizeValue) -> bool {
-    return left.kind == right.kind && left.value == right.value && left.percent == right.percent && left.bound == right.bound
+    return left.kind == right.kind && left.slot == right.slot && left.value == right.value && left.percent == right.percent && left.bound == right.bound
   }
 }
 impl SizeValue {
-  pub fn of(value: Dimension) -> SizeValue { return SizeValue { kind: value.kind, value: value.value, percent: value.percent, bound: 0.0 } }
-  pub fn auto() -> SizeValue { return SizeValue { kind: DimensionKind.Auto, value: 0.0, percent: 0.0, bound: 0.0 } }
-  pub fn px(value: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Length, value: value, percent: 0.0, bound: 0.0 } }
-  pub fn pct(value: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Percent, value: 0.0, percent: value, bound: 0.0 } }
-  pub fn calc(length: f32, percent: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Calc, value: length, percent: percent, bound: 0.0 } }
-  pub fn keyword(kind: DimensionKind) -> SizeValue { return SizeValue { kind: kind, value: 0.0, percent: 0.0, bound: 0.0 } }
-  pub fn least(bound: f32, length: f32, percent: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Least, value: length, percent: percent, bound: bound } }
-  pub fn most(bound: f32, length: f32, percent: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Most, value: length, percent: percent, bound: bound } }
-  pub fn clamp(lower: f32, percent: f32, upper: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Clamp, value: lower, percent: percent, bound: upper } }
+  pub fn of(value: Dimension) -> SizeValue { return SizeValue { kind: value.kind, slot: value.slot, value: value.value, percent: value.percent, bound: 0.0 } }
+  pub fn auto() -> SizeValue { return SizeValue { kind: DimensionKind.Auto, slot: 0, value: 0.0, percent: 0.0, bound: 0.0 } }
+  pub fn px(value: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Length, slot: 0, value: value, percent: 0.0, bound: 0.0 } }
+  pub fn pct(value: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Percent, slot: 0, value: 0.0, percent: value, bound: 0.0 } }
+  pub fn calc(length: f32, percent: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Calc, slot: 0, value: length, percent: percent, bound: 0.0 } }
+  pub fn keyword(kind: DimensionKind) -> SizeValue { return SizeValue { kind: kind, slot: 0, value: 0.0, percent: 0.0, bound: 0.0 } }
+  pub fn least(bound: f32, length: f32, percent: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Least, slot: 0, value: length, percent: percent, bound: bound } }
+  pub fn most(bound: f32, length: f32, percent: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Most, slot: 0, value: length, percent: percent, bound: bound } }
+  pub fn clamp(lower: f32, percent: f32, upper: f32) -> SizeValue { return SizeValue { kind: DimensionKind.Clamp, slot: 0, value: lower, percent: percent, bound: upper } }
+  pub fn bounded(length: f32, percent: f32, slot: u8) -> SizeValue { return SizeValue { kind: DimensionKind.Bounded, slot: slot, value: length, percent: percent, bound: 0.0 } }
+  /// The value with its lengths multiplied by `ratio`, for a change of `zoom`.
+  pub fn zoomed(self: SizeValue, ratio: f32) -> SizeValue {
+    return SizeValue { kind: self.kind, slot: self.slot, value: self.value * ratio, percent: self.percent, bound: self.bound * ratio }
+  }
   /// Whether the value depends on a percentage basis.
   pub fn relative(self: SizeValue) -> bool {
     return self.kind == DimensionKind.Percent || self.kind == DimensionKind.Calc || self.kind == DimensionKind.Least
-      || self.kind == DimensionKind.Most || self.kind == DimensionKind.Clamp
+      || self.kind == DimensionKind.Most || self.kind == DimensionKind.Clamp || self.kind == DimensionKind.Bounded
   }
 }
 pub struct Edges { pub top: Dimension, pub right: Dimension, pub bottom: Dimension, pub left: Dimension }
@@ -70,7 +141,7 @@ impl Edges {
 pub enum DisplayOutside { Block, Inline }
 // CSS Display 3 §2.4: the layout-internal table values are kept as inner display types of
 // block-level boxes, so `outsideIs(Block)` holds for them.
-pub enum DisplayInside { Flow, FlowRoot, Flex, Grid, Table, TableRowGroup, TableHeaderGroup, TableFooterGroup, TableRow, TableColumnGroup, TableColumn, TableCell, TableCaption }
+pub enum DisplayInside { Flow, FlowRoot, Flex, Grid, Table, TableRowGroup, TableHeaderGroup, TableFooterGroup, TableRow, TableColumnGroup, TableColumn, TableCell, TableCaption, GridLanes }
 pub union Display {
   Box { pub outside: DisplayOutside, pub inside: DisplayInside },
   None,
@@ -111,10 +182,17 @@ impl Display {
       _ => false
     }
   }
+  // A grid container, including a grid lanes (masonry) one.
+  pub fn isGrid(self: &Self) -> bool {
+    return match self.* {
+      Display.Box { outside: _, inside } => inside == DisplayInside.Grid || inside == DisplayInside.GridLanes
+      _ => false
+    }
+  }
   // A layout-internal table box: a row group, row, column (group), cell or caption.
   pub fn isTablePart(self: &Self) -> bool {
     return match self.* {
-      Display.Box { outside: _, inside } => inside != DisplayInside.Flow && inside != DisplayInside.FlowRoot && inside != DisplayInside.Flex && inside != DisplayInside.Grid && inside != DisplayInside.Table
+      Display.Box { outside: _, inside } => inside != DisplayInside.Flow && inside != DisplayInside.FlowRoot && inside != DisplayInside.Flex && inside != DisplayInside.Grid && inside != DisplayInside.Table && inside != DisplayInside.GridLanes
       _ => false
     }
   }
@@ -444,8 +522,14 @@ pub struct Text {
   pub features: FontFeatures,
   /// `font-width` as a percentage; `normal` is 100.
   pub width: f32,
-  pub orphans: usize,
-  pub widows: usize,
+  /// `-webkit-text-fill-color` as RGBA8 (red in the low byte), 0 for `currentcolor`. One
+  /// word, so `Text` keeps its size: `packFill` never returns 0.
+  pub fillColor: u32,
+  /// The effective `zoom`: the product of the element's and its ancestors' `zoom`. Lengths in
+  /// computed values, `size` included, are already multiplied by it.
+  pub zoom: f32,
+  pub orphans: u32,
+  pub widows: u32,
   pub visibility: Visibility,
   /// The font family list, as a handle the host defines.
   pub family: u32,
@@ -500,6 +584,7 @@ impl Text {
       family: 0,
       size: 16.0,
       weight: 400.0,
+      zoom: 1.0,
       style: FontStyle.Normal,
       lineHeight: LineHeight.Normal,
       color: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
@@ -516,7 +601,48 @@ impl Text {
       selectionColor: Rgba<f32> { r: 0.706, g: 0.835, b: 0.996, a: 1.0 },
       placeholderColor: Rgba<f32> { r: 0.0, g: 0.0, b: 0.0, a: 0.5 },
       hasPlaceholderColor: false,
+      fillColor: 0,
     }
+  }
+
+  /// Moves the inherited text to an effective zoom of `zoom`: its lengths are multiplied by
+  /// `zoom` over the zoom they were computed at.
+  pub fn rezoom(self: &mut Self, zoom: f32) -> () {
+    if zoom == self.zoom || self.zoom <= 0.0 { return () }
+    let ratio = zoom / self.zoom
+    self.zoom = zoom
+    self.size = self.size * ratio
+    self.letterSpacing = self.letterSpacing * ratio
+    self.wordSpacing = self.wordSpacing * ratio
+    self.textIndent.value = self.textIndent.value.zoomed(ratio)
+    self.lineHeight = match self.lineHeight {
+      LineHeight.Length { value } => LineHeight.Length { value: value * ratio }
+      _ => self.lineHeight
+    }
+    self.tabSize = match self.tabSize {
+      TabSize.Length { value } => TabSize.Length { value: value * ratio }
+      _ => self.tabSize
+    }
+  }
+
+  /// The color glyphs are filled with: `-webkit-text-fill-color`, else `color`.
+  pub fn fill(self: &Self) -> Rgba<f32> {
+    if self.fillColor == 0 {
+      return self.color
+    }
+    let word = self.fillColor
+    return Rgba<f32> {
+      r: u32.toF32(word & 255) / 255.0,
+      g: u32.toF32((word / 256) & 255) / 255.0,
+      b: u32.toF32((word / 65536) & 255) / 255.0,
+      a: u32.toF32(word / 16777216) / 255.0,
+    }
+  }
+
+  /// Packs `color` for `fillColor`; fully transparent black keeps a red bit, still invisible.
+  pub fn packFill(color: Rgba<f32>) -> u32 {
+    let word = channel(color.r) + channel(color.g) * 256 + channel(color.b) * 65536 + channel(color.a) * 16777216
+    return if word == 0 { 1 } else { word }
   }
 
   /// The color decorations are drawn in.
@@ -542,6 +668,10 @@ impl Text {
     }
     return Rgba<f32> { r: self.color.r, g: self.color.g, b: self.color.b, a: self.color.a * 0.5 }
   }
+}
+
+fn channel(value: f32) -> u32 {
+  return f32.toU32(f32.floor(f32.min(f32.max(value, 0.0), 1.0) * 255.0 + 0.5))
 }
 
 // Plain keyword enums compare by variant.

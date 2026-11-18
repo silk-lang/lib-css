@@ -3,7 +3,7 @@ import silk.num.usize
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
 import style { SizeContainment, Style, Display, Dimension, SizeValue, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
-import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edges, isFlex, isGrid, outOfFlow, absolutelyPositioned, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
+import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edgesIn, isFlex, isGrid, outOfFlow, absolutelyPositioned, containsAbsolute, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
 import flex { layoutFlex, emptyFlexSize, FlexScratch }
 import grid { layoutGrid, layoutEmptyGrid }
@@ -70,6 +70,7 @@ fn configureScrollbars<M: Measure>(style: &Style, output: &mut LayoutPass<'_, '_
   if available.widthDefinite { available.width = max(0.0, available.width - box.border.horizontal() - box.padding.horizontal()) }
   if available.heightDefinite { available.height = max(0.0, available.height - box.border.vertical() - box.padding.vertical()) }
   let metrics = Measure.scrollbars(&mut measurer, ScrollbarRequest { width: style.scrollbarWidth, gutter: style.scrollbarGutter, writingMode: style.writingMode, direction: style.usedDirection(), available: available })
+  output.gutterScrollbars = output.gutterScrollbars || ((x == Overflow.Auto || y == Overflow.Auto) && !metrics.overlay)
   let horizontal = x == Overflow.Scroll || output.selected(id, true)
   let vertical = y == Overflow.Scroll || output.selected(id, false)
   let mut result = withGutter(&box.*, scrollbarGutter(style, metrics, horizontal, vertical))
@@ -242,7 +243,7 @@ effect fn contentAlgorithm<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   if nodes.style(id).replaced { return replacedContents(nodes.style(id), &request, &resolved, natural) }
   if isFlex(nodes.style(id)) { return run layoutFlex(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if isGrid(nodes.style(id)) { return run layoutGrid(nodes, &mut output, &mut measurer, id, &request, &resolved) }
-  if nodes.node(id).columnSet && output.frame == NO_NODE { return run layoutColumnSet(nodes, &mut output, &mut measurer, id, &request, &resolved) }
+  if nodes.node(id).columnSet { return run layoutColumnSet(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if nodes.node(id).kind == BoxKind.Table { return run layoutTable(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if nodes.node(id).kind == BoxKind.TablePart { return run layoutTablePart(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   let result = run layoutBlock(nodes, &mut output, &mut measurer, id, nodes.style(id), &request, &resolved, &mut bfc)
@@ -471,7 +472,7 @@ fn flowMarginIn(nodes: &BoxTree<'_>, parent: &FlowMargins, child: usize, layout:
   if parent.declared {
     // Optional block margins use declared lengths, with resolved auto margins.
     // CSS2's overconstraint correction is not an extra scrollable margin area.
-    let declared = edges(style.margin, parent.basis, parent.definite)
+    let declared = edgesIn(style.margin, &style.bounds, parent.basis, parent.definite)
     if style.margin.left.kind != DimensionKind.Auto { margin.left = declared.left }
     if style.margin.right.kind != DimensionKind.Auto { margin.right = declared.right }
     if style.margin.top.kind != DimensionKind.Auto { margin.top = declared.top }
@@ -685,6 +686,10 @@ fn zeroEdges(value: &Edges) -> bool {
 @inlineAlways
 pub fn shapedBox(output: &LayoutPass<'_, '_>, style: &Style, id: usize, input: &Input) -> ResolvedBox {
   let mut box = resolveBoxEdges(style, input, output.keyShape(id) & KEY_ZERO_EDGES != 0)
+  if id < output.facts.itemFlags.length() {
+    let split = output.facts.itemFlags.get(id) & (ITEM_CONTINUES_BEFORE | ITEM_CONTINUES_AFTER)
+    if split != 0 && style.boxDecorationBreak == BoxDecorationBreak.Slice { sliceSplit(style, split, &mut box) }
+  }
   if input.gridContext != 0 {
     let inherited = output.cache.subgrids.physicalMask(input.gridContext, style.writingMode)
     if inherited & 1 != 0 {
@@ -701,6 +706,51 @@ pub fn shapedBox(output: &LayoutPass<'_, '_>, style: &Style, id: usize, input: &
     }
   }
   return box
+}
+
+// Box-decoration-break: slice for the pieces of a split block: the
+// block-start edges only on the first, the block-end edges only on the last.
+@inlineNever
+fn sliceSplit(style: &Style, split: u8, box: &mut ResolvedBox) {
+  let horizontal = style.writingMode == WritingMode.HorizontalTb
+  let lr = style.writingMode == WritingMode.VerticalLr || style.writingMode == WritingMode.SidewaysLr
+  let before = split & ITEM_CONTINUES_BEFORE != 0
+  let after = split & ITEM_CONTINUES_AFTER != 0
+  let mut removed: f32 = 0.0
+  if horizontal {
+    if before { removed = removed + box.inset.top
+      box.padding.top = 0.0
+      box.border.top = 0.0
+      box.margin.top = 0.0
+      box.inset.top = 0.0 }
+    if after { removed = removed + box.inset.bottom
+      box.padding.bottom = 0.0
+      box.border.bottom = 0.0
+      box.margin.bottom = 0.0
+      box.inset.bottom = 0.0 }
+  } else {
+    let right = (before && !lr) || (after && lr)
+    let left = (before && lr) || (after && !lr)
+    if right { removed = removed + box.inset.right
+      box.padding.right = 0.0
+      box.border.right = 0.0
+      box.margin.right = 0.0
+      box.inset.right = 0.0 }
+    if left { removed = removed + box.inset.left
+      box.padding.left = 0.0
+      box.border.left = 0.0
+      box.margin.left = 0.0
+      box.inset.left = 0.0 }
+  }
+  if horizontal {
+    box.min.height = max(box.inset.vertical(), box.min.height - removed)
+    box.max.height = max(box.inset.vertical(), box.max.height - removed)
+    if box.size.heightDefinite { box.size.height = max(box.inset.vertical(), box.size.height - removed) }
+  } else {
+    box.min.width = max(box.inset.horizontal(), box.min.width - removed)
+    box.max.width = max(box.inset.horizontal(), box.max.width - removed)
+    if box.size.widthDefinite { box.size.width = max(box.inset.horizontal(), box.size.width - removed) }
+  }
 }
 
 // Sets KEY_WIDTH_FREE_TREE and KEY_CONTENT_FREE_TREE on boxes whose whole
@@ -780,6 +830,10 @@ pub const ITEM_SUBGRID: u8 = 8
 pub const ITEM_MEASURED_WIDTH: u8 = 16
 // textLeafShape, which layoutBox reads of every box.
 pub const ITEM_TEXT_LEAF: u8 = 32
+// A block a column spanner split (see BoxTree.columnChildren): a piece after
+// the first, and a piece before the last. shapedBox slices their edges.
+const ITEM_CONTINUES_BEFORE: u8 = 64
+const ITEM_CONTINUES_AFTER: u8 = 128
 pub fn baselineValue(value: Align) -> bool { return value == Align.Baseline || value == Align.LastBaseline }
 fn itemFlags(nodes: &BoxTree<'_>, id: usize) -> u8 {
   let style = nodes.style(id)
@@ -790,6 +844,11 @@ fn itemFlags(nodes: &BoxTree<'_>, id: usize) -> u8 {
   if Subgrid.eligible(nodes, id) { flags = flags | ITEM_SUBGRID }
   if measuredWidthLeaf(nodes, id) { flags = flags | ITEM_MEASURED_WIDTH }
   if textLeafShape(nodes, id) { flags = flags | ITEM_TEXT_LEAF }
+  let node = nodes.node(id)
+  if node.kind == BoxKind.Block && node.source != NO_NODE {
+    if !node.firstForSource { flags = flags | ITEM_CONTINUES_BEFORE }
+    if !node.lastForSource { flags = flags | ITEM_CONTINUES_AFTER }
+  }
   return flags
 }
 
@@ -2067,12 +2126,14 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
       if wasNormalComplete && id != 0 { fragments[own].decorationEdges = 0 }
       else if style.boxDecorationBreak == BoxDecorationBreak.Slice && id != 0 {
         let mut edges: u8 = 15
-        if wasStarted {
+        // A block a spanner split continues in another box (see sliceSplit).
+        let split = node.source != NO_NODE && node.kind == BoxKind.Block
+        if wasStarted || (split && !node.firstForSource) {
           if !frameAxes.vertical { edges = edges - 1 }
           else if frameAxes.reverseBlock { edges = edges - 2 }
           else { edges = edges - 8 }
         }
-        if !state.endDecorationDone {
+        if !state.endDecorationDone || (split && !node.lastForSource) {
           if !frameAxes.vertical { edges = edges - 4 }
           else if frameAxes.reverseBlock { edges = edges - 8 }
           else { edges = edges - 2 }
@@ -2133,7 +2194,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
   exportScrollBaselines(style, node.kind, &mut result)
   if input.performLayout {
     overflowGeometry(nodes, &output, id, &sizing.box, &mut result)
-    if node.kind == BoxKind.Grid && node.measurement != Measurement.Content && !style.replaced && style.position != Position.Static {
+    if node.kind == BoxKind.Grid && node.measurement != Measurement.Content && !style.replaced && containsAbsolute(style) {
       output.cache.gridGeometry.finish(id, result.contentRect(), result.paddingRect(), result.scrollableOverflow)
     }
   }
@@ -2148,7 +2209,11 @@ fn sameViewport(a: &OptionalSize, b: &OptionalSize) -> bool {
 }
 
 effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since: usize, restoring: bool) -> BoxTree<'source> ! OutOfMemoryError ? &mut Allocator {
-  if !restoring { return run Boxes.build(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), WritingMode.HorizontalTb, Direction.Ltr) }
+  if !restoring {
+    let mut built = run Boxes.build(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), WritingMode.HorizontalTb, Direction.Ltr)
+    built.shapes = tree.shapes.asSlice()
+    return move built
+  }
   let boxes = Intrinsic.replace(output.boxNodes, List<BoxNode>.make())
   let styles = Intrinsic.replace(output.anonymousStyles, List<Style>.make())
   let origins = Intrinsic.replace(output.anonymousOrigins, List<usize>.make())
@@ -2160,6 +2225,7 @@ effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since:
   let logged = run tree.scrolledNodes(output.keptScrolls, &mut scrolled)
   let mut nodes = BoxTree.restore(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), move boxes, move styles, move origins, move texts, move first, move last, !logged)
   nodes.columnSets = output.keptColumnSets
+  nodes.shapes = tree.shapes.asSlice()
   let mut at: usize = 0
   while at < scrolled.length() {
     nodes.refreshScroll(scrolled.get(at))
@@ -2181,19 +2247,27 @@ effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since:
 // previous output and its ancestors keep their results, so the compute
 // reuses them whole; otherwise its ancestors are cleared as usual.
 const CUTOFF_BOXES: usize = 64
+// A layout-contained box is a relayout boundary its author asked for (CSS
+// Containment 2 §3.2): nothing inside reaches out, so its cutoff seldom fails.
+const CONTAINED_CUTOFF_BOXES: usize = 4096
 
-// Whether the subtree has at most CUTOFF_BOXES boxes, all static, unscrolled,
+fn cutoffLimit(style: &Style) -> usize { return if style.layoutContainment { CONTAINED_CUTOFF_BOXES } else { CUTOFF_BOXES } }
+
+// Whether the subtree has at most cutoffLimit boxes, all static, unscrolled,
 // unfloated and in one piece, adding their count to `seen`.
 fn staticSubtree(nodes: &BoxTree<'_>, id: usize, seen: &mut usize) -> bool {
+  return staticWithin(nodes, id, &mut seen, cutoffLimit(nodes.style(id)))
+}
+fn staticWithin(nodes: &BoxTree<'_>, id: usize, seen: &mut usize, limit: usize) -> bool {
   seen.* = seen.* + 1
-  if seen.* > CUTOFF_BOXES { return false }
+  if seen.* > limit { return false }
   let node = nodes.node(id)
   let style = nodes.style(id)
   if style.position != Position.Static || style.float != Float.None || style.overflowX != Overflow.Visible || style.overflowY != Overflow.Visible { return false }
   if node.nextContinuation != NO_NODE || node.previousContinuation != NO_NODE || node.interruptionFirst != NO_NODE { return false }
   let mut child = node.firstChild
   while child != NO_NODE {
-    if !staticSubtree(nodes, child, &mut seen) { return false }
+    if !staticWithin(nodes, child, &mut seen, limit) { return false }
     child = nodes.node(child).nextSibling
   }
   return true
@@ -2240,9 +2314,10 @@ fn staticBelow(nodes: &BoxTree<'_>, id: usize, seen: &mut usize) -> bool {
   let node = nodes.node(id)
   let style = nodes.style(id)
   if style.float != Float.None || style.overflowX != Overflow.Visible || style.overflowY != Overflow.Visible || node.interruptionFirst != NO_NODE { return false }
+  let limit = cutoffLimit(style)
   let mut child = node.firstChild
   while child != NO_NODE {
-    if !staticSubtree(nodes, child, &mut seen) { return false }
+    if !staticWithin(nodes, child, &mut seen, limit) { return false }
     child = nodes.node(child).nextSibling
   }
   return true
@@ -2433,6 +2508,7 @@ fn cutoffAncestor(nodes: &BoxTree<'_>, changes: &[usize], boxes: &[usize], id: u
 }
 // Whether the width and height take no part of the box's content.
 fn fixedSize(style: &Style) -> bool {
+  if style.sizeContainment == SizeContainment.Size { return true }
   return (style.width.kind == DimensionKind.Length || style.width.kind == DimensionKind.Percent)
     && (style.height.kind == DimensionKind.Length || style.height.kind == DimensionKind.Percent)
 }
@@ -2981,8 +3057,10 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       if output.relaidMost && boxes.stats.reusedLayouts == 0 { output.reuseIdle = output.reuseIdle + 1 }
       else { output.reuseIdle = 0 }
       run boxes.keepTexts()
-      // Auto scrollbar selection is not part of a cache key.
-      let settled = !boxes.hasAutoScrollbars
+      // Auto scrollbar selection is not part of a cache key: results are kept
+      // only when no auto scrollbar takes room, so that showing one or not
+      // changes no geometry (an overlay scrollbar, as a window's by default).
+      let settled = !boxes.gutterScrollbars
       let keptScratch = Intrinsic.replace(boxes.flexScratch, List<FlexScratch>.make())
       let keptInline = Intrinsic.replace(boxes.inlineScratch, List<InlineScratch>.make())
       let keptBlock = Intrinsic.replace(boxes.blockScratch, List<BlockScratch>.make())
