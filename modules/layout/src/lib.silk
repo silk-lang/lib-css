@@ -53,6 +53,7 @@ pub import grid_style {
   GridAxis,
   GridArea,
   GridAutoFlow,
+  GridMasonry,
   GridTemplate,
   validGridName,
   validGridAreaName
