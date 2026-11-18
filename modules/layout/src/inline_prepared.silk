@@ -91,6 +91,10 @@ pub struct PreparedCore {
   // The tokens' origins; between computes their storage alone, which the
   // next normalization fills.
   pub origins: List<usize>,
+  // The box's inline items as the memo's items were last built from them,
+  // and what that pass over the items found (see layoutText).
+  pub raw: List<Item>,
+  pub hasText: bool, pub hasFloats: bool, pub floatMaximum: f32, pub floatMinimum: f32,
 }
 impl PreparedCore {
   pub fn make() -> PreparedCore {
@@ -98,6 +102,7 @@ impl PreparedCore {
       ready: false,
       analysis: TextAnalysis.uniform(0, 0, 0, false),
       offered: List<TextBreak>.make(), visual: Plan.make(), barriers: List<bool>.make(), memo: TextMemo.make(), origins: List<usize>.make(),
+      raw: List<Item>.make(), hasText: false, hasFloats: false, floatMaximum: 0.0, floatMinimum: 0.0,
     }
   }
 }
@@ -189,11 +194,15 @@ impl TextMemo {
       fonts: List<TextFont>.make(), segments: List<Segment>.make(), heads: List<usize>.make(), fitted: FittedLines.make(), spare: List<TextCandidate>.make(), valid: false,
     }
   }
+  // Whether the results stand for `items` (see prepare).
+  pub fn holds(self: &Self) -> bool { return self.valid }
   // Keeps the results when they were computed from the same items and
-  // scopes; otherwise starts over from these.
-  pub effect fn prepare(self: &mut Self, items: &[Item], scopes: &[Scope]) ! OutOfMemoryError ? &mut Allocator {
+  // scopes; otherwise starts over from these. `known` tells that the items
+  // are a copy of `items` here, so only the scopes are compared.
+  pub effect fn prepare(self: &mut Self, items: &[Item], scopes: &[Scope], known: bool) ! OutOfMemoryError ? &mut Allocator {
     let mut same = self.valid && self.items.length() == items.length && self.scopes.length() == scopes.length
     let mut index: usize = 0
+    if known { index = items.length }
     while same && index < items.length {
       same = sameItem(&self.items.asSlice()[index], &items[index])
       index = index + 1
@@ -299,7 +308,7 @@ pub struct Segment { pub start: TextCursor, pub end: TextCursor, pub next: usize
 fn sameEdges(a: &ResolvedEdges, b: &ResolvedEdges) -> bool {
   return a.top == b.top && a.right == b.right && a.bottom == b.bottom && a.left == b.left
 }
-fn sameItem(a: &Item, b: &Item) -> bool {
+pub fn sameItem(a: &Item, b: &Item) -> bool {
   return a.kind == b.kind && a.level == b.level && a.id == b.id && a.scope == b.scope && a.group == b.group && a.leaf == b.leaf
     && a.advance == b.advance && a.before == b.before && a.after == b.after && a.offset == b.offset
     && a.lineLeftSpacing == b.lineLeftSpacing && a.start.equal(b.start)

@@ -22,7 +22,7 @@ import inline_bidi as Bidi
 import inline_items { FontBox, Scope, ItemKind, Item }
 import inline_visual as Visual
 import inline_visual { Line, Plan }
-import inline_prepared { PreparedInline, PreparedCore, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText, LineBox, PlainLine }
+import inline_prepared { sameItem, PreparedInline, PreparedCore, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText, LineBox, PlainLine }
 import fragmentation { FlowCursor, FragmentationError, BoundaryProbe }
 import breaks { BreakBoundary, BreakRelaxation, ForcedBreaks, allowsLineBreak }
 import fragment_box as FragmentBox
@@ -2231,21 +2231,44 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let mut hasAtomicMargins = false
   let mut floatMaximum: f32 = 0.0
   let mut floatMinimum: f32 = 0.0
-  while index < normalized.origins.length() {
-    let mut item = raw[normalized.origins.get(index)]
-    item.start = TextCursor { unit: index, offset: 0 }
-    if item.kind == ItemKind.Text { hasText = true }
-    if fragmented && item.kind == ItemKind.Atomic && FragmentBox.applies(nodes.style(item.id), style.writingMode) {
-      let margin = atomics.asSlice()[item.leaf].margin
-      hasAtomicMargins = hasAtomicMargins || margin.top != 0.0 || margin.bottom != 0.0
-    }
-    run original.append(item)
-    if item.kind == ItemKind.Float { hasFloats = true
-      floatMaximum = floatMaximum + item.advance
-      floatMinimum = max(floatMinimum, item.advance) }
+  // The same tokens of the same inline items give the items the memo holds
+  // from the box's last layout in this pass: most layouts of a paragraph are
+  // such, and copy them instead of building and comparing them.
+  let mut known = reuse && haveTokens && !fragmented && memo.holds() && memo.items.length() == normalized.origins.length() && core.raw.length() == raw.length
+  while known && index < raw.length {
+    known = sameItem(&core.raw.asSlice()[index], &raw[index])
     index = index + 1
   }
-  run memo.prepare(original.asSlice(), scopes)
+  if known {
+    run original.appendSlice(memo.items.asSlice())
+    hasText = core.hasText
+    hasFloats = core.hasFloats
+    floatMaximum = core.floatMaximum
+    floatMinimum = core.floatMinimum
+  } else {
+    index = 0
+    while index < normalized.origins.length() {
+      let mut item = raw[normalized.origins.get(index)]
+      item.start = TextCursor { unit: index, offset: 0 }
+      if item.kind == ItemKind.Text { hasText = true }
+      if fragmented && item.kind == ItemKind.Atomic && FragmentBox.applies(nodes.style(item.id), style.writingMode) {
+        let margin = atomics.asSlice()[item.leaf].margin
+        hasAtomicMargins = hasAtomicMargins || margin.top != 0.0 || margin.bottom != 0.0
+      }
+      run original.append(item)
+      if item.kind == ItemKind.Float { hasFloats = true
+        floatMaximum = floatMaximum + item.advance
+        floatMinimum = max(floatMinimum, item.advance) }
+      index = index + 1
+    }
+    core.raw.clear()
+    run core.raw.appendSlice(raw)
+    core.hasText = hasText
+    core.hasFloats = hasFloats
+    core.floatMaximum = floatMaximum
+    core.floatMinimum = floatMinimum
+  }
+  run memo.prepare(original.asSlice(), scopes, known)
   // Plain text fitted before for this request (see FittedLines) keeps its
   // lines: only their fragments are still to emit.
   if reuse && memo.fitted.valid && !input.fragmentation.active && bfc.clearBelow(input.bfcContentOrigin.y) {
