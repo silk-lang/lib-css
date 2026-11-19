@@ -2128,6 +2128,31 @@ test effect fn rowUsesFinalItemsForCrossSize() ! OutOfMemoryError | TextError | 
   run Testing.expect(stretched.height == bounds.height && output.fragments.values.get(middle).nextSibling == end, "an item that needs the line height and its following sibling stay in paint order")
 }
 
+test effect fn wrappedPlainParagraphSharesWholeShape() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut row = Style.make()
+  row.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  row.width = SizeValue.px(45.0)
+  let mut tree = run Tree.make(row) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  row.flexDirection = FlexDirection.Column
+  let column = run tree.append(root, row) |> Effect.provideMut<Allocator>(&mut allocator)
+  let label = run tree.append(column, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let value = run String.copy("alpha beta gamma delta epsilon zeta eta theta") |> Effect.provideMut<Allocator>(&mut allocator)
+  let text = run tree.appendText(label, move value) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut fast = LayoutTree.make()
+  let mut slow = LayoutTree.make()
+  let mut plain = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: true, analyses: 0, shapedUnits: 0 }
+  let mut analyzed = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: false, analyses: 0, shapedUnits: 0 }
+  let viewport = OptionalSize.definite(80.0, 100.0)
+  run compute(&tree, &mut fast, &mut plain, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  run compute(&tree, &mut slow, &mut analyzed, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  let actual = run fast.sourceBounds(text)
+  let expected = run slow.sourceBounds(text)
+  run Testing.expect(actual.height > 10.0 && actual.height == expected.height && actual.width == expected.width, "the same lines wrap inside the stretched flex column")
+  run Testing.expect(plain.shapedUnits <= analyzed.shapedUnits, "trying a plain line must not shape the whole wrapped paragraph twice")
+}
+
 test effect fn plainLinesMatchAnalyzedParagraphs()
   ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
