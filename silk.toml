@@ -4,8 +4,7 @@ version = "0.1.0"
 kind = "executable"
 source = "src"
 main = "tasks.silk"
-silk-version = "0.1.0-dev.87+37fa5f8857de"
 
 [workspace]
 members = ["modules/layout", "modules/layout/bench/first-layout", "modules/properties", "modules/style", "layout-test-harness"]
-silk-version = "0.1.0-dev.87+37fa5f8857de"
+silk-version = "0.1.0-dev.88+17d1a1b4d501"
