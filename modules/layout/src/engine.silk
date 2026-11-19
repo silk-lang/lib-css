@@ -14,7 +14,7 @@ import positioned { positionScroll, positionTree, positionVisits, reachableLimit
 import bfc { BfcState, ExclusionBox }
 import exclusions { ExclusionArea }
 import silk.core.option { Option }
-import layout_pass { LayoutPass, PassState, CacheKind, FullBoxGeometry, REUSE_INDEPENDENT, REUSE_IN_FLOW }
+import layout_pass { LayoutPass, PassState, CacheKind, FullBoxGeometry, PreparedSlot, REUSE_INDEPENDENT, REUSE_IN_FLOW }
 import layout_cache { LayoutCache, BoxFacts, CachedProbe, FinalRange, AGES_NONE, AGES_OLDER, PLAIN_UNKNOWN, PLAIN_NEVER }
 import incremental as Incremental
 import replaced { layoutReplaced, preferredRatio, borderRatio }
@@ -2844,6 +2844,9 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>,
   let mut pass = run LayoutPass.make(scratchBoxes.asMutSlice(), &mut scratchFragments, nodes.sources, &mut state)
   pass.flexScratch = Intrinsic.replace(output.flexScratch, List<FlexScratch>.make())
   pass.inlineScratch = Intrinsic.replace(output.inlineScratch, List<InlineScratch>.make())
+  output.preparedGeneration = output.preparedGeneration + 1
+  pass.preparedSlots = Intrinsic.replace(output.preparedSlots, List<PreparedSlot>.make())
+  pass.preparedGeneration = output.preparedGeneration
   pass.blockScratch = Intrinsic.replace(output.blockScratch, List<BlockScratch>.make())
   let baselines = baselinesMatter(nodes, &pass.cache, &output.fragments, id, range.start)
   let mut moved = Point { x: 0.0, y: 0.0 }
@@ -2895,6 +2898,7 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>,
   if same { run pass.keepTexts() }
   output.flexScratch = Intrinsic.replace(pass.flexScratch, List<FlexScratch>.make())
   output.inlineScratch = Intrinsic.replace(pass.inlineScratch, List<InlineScratch>.make())
+  output.preparedSlots = Intrinsic.replace(pass.preparedSlots, List<PreparedSlot>.make())
   output.blockScratch = Intrinsic.replace(pass.blockScratch, List<BlockScratch>.make())
   drop pass
   output.cache = Intrinsic.replace(state.cache, LayoutCache.make())
@@ -3097,6 +3101,8 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   output.relaidMost = false
   let flexScratch = Intrinsic.replace(output.flexScratch, List<FlexScratch>.make())
   let inlineScratch = Intrinsic.replace(output.inlineScratch, List<InlineScratch>.make())
+  output.preparedGeneration = output.preparedGeneration + 1
+  let preparedSlots = Intrinsic.replace(output.preparedSlots, List<PreparedSlot>.make())
   let blockScratch = Intrinsic.replace(output.blockScratch, List<BlockScratch>.make())
   // Results laid out beside the last compute's exclusions do not stand for a
   // layout without them (see exclusions.silk).
@@ -3125,6 +3131,8 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   run boxes.cache.reserveBoxes(nodes.boxes.length())
   boxes.flexScratch = move flexScratch
   boxes.inlineScratch = move inlineScratch
+  boxes.preparedSlots = move preparedSlots
+  boxes.preparedGeneration = output.preparedGeneration
   boxes.blockScratch = move blockScratch
   boxes.inPlace = inPlace
   boxes.deferSticky = tree.stickyDeferred
@@ -3167,12 +3175,14 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       let settled = !boxes.gutterScrollbars
       let keptScratch = Intrinsic.replace(boxes.flexScratch, List<FlexScratch>.make())
       let keptInline = Intrinsic.replace(boxes.inlineScratch, List<InlineScratch>.make())
+      let keptSlots = Intrinsic.replace(boxes.preparedSlots, List<PreparedSlot>.make())
       let keptBlock = Intrinsic.replace(boxes.blockScratch, List<BlockScratch>.make())
       let keptExclusions = Intrinsic.replace(boxes.exclusions, List<ExclusionArea>.make())
       drop boxes
       output.exclusions = move keptExclusions
       output.flexScratch = move keptScratch
       output.inlineScratch = move keptInline
+      output.preparedSlots = move keptSlots
       output.blockScratch = move keptBlock
       output.facts = move facts
       output.keep(tree.revision(), settled)

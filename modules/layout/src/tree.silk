@@ -16,6 +16,7 @@ import layout_cache { LayoutCache, Snapshot, BoxFacts, BoxWrites }
 import flex { FlexScratch }
 import inline_layout { InlineScratch }
 import block { BlockScratch }
+import layout_pass { PreparedSlot }
 import grid_style { GridTemplate, GridError, validGridName, validGridAreaName }
 import shapes { FloatShape }
 import silk.num.u32
@@ -793,6 +794,10 @@ pub struct LayoutTree {
   pub blockScratch: List<BlockScratch>,
   // The exclusion areas the last compute ended with (see exclusions.silk).
   pub exclusions: List<ExclusionArea>,
+  // Where each box's prepared paragraph is in a compute (LayoutPass.preparedSlots),
+  // kept so that a compute does not allocate a slot a box, and the generation of
+  // the last compute that had them.
+  pub preparedSlots: List<PreparedSlot>, pub preparedGeneration: usize,
 }
 impl LayoutTree {
   pub fn make() -> LayoutTree {
@@ -805,6 +810,7 @@ impl LayoutTree {
       firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), keptColumnSets: false,
       fragments: FragmentArena.make(), viewportOverflow: Rect.zero(),
       scratchBoxes: ScratchBoxes.make(), scratchFragments: FragmentArena.make(), cutoffMisses: List<CutoffMiss>.make(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), exclusions: List<ExclusionArea>.make(),
+      preparedSlots: List<PreparedSlot>.make(), preparedGeneration: 0,
     }
   }
   pub effect fn prepare(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {
