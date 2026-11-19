@@ -3091,7 +3091,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   // When the previous compute of these boxes laid out most of them again,
   // this one likely will too: then saving what each write in place
   // overwrites costs more than writing afresh after the previous output.
-  let inPlace = sameBoxes && !output.relaidMost
+  let inPlace = sameBoxes && !output.relaidMost && !output.inPlaceOff
   output.lastMode = if inPlace { 2 } else if sameBoxes { 3 } else { 4 }
   if sameBoxes && !inPlace { output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, false) }
   output.relaidMost = false

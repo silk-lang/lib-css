@@ -19,7 +19,7 @@ import task_json { J }
 import task_update_common { U }
 import task_sources_common { sort }
 
-pub struct FixtureUpdatesOptions { pub cli: String }
+pub struct FixtureUpdatesOptions { pub cli: String, pub keep: String }
 struct Scenario { name: String, cycle: Value }
 
 effect fn add(list: &mut List<Scenario>, name: string, cycle: Value) -> () ! OutOfMemoryError ? &mut Allocator {
@@ -252,6 +252,13 @@ pub effect fn fixtureUpdates(options: &FixtureUpdatesOptions) -> ()
           let mut line = run String.copy(unsafe String.fromUtf8Unchecked(Slice.view<u8>(raw, start, raw.length - start - 5)))
           run String.append(&mut line, " ")
           run String.append(&mut line, name)
+          if String.byteLength(String.view(&options.keep)) != 0 {
+            let mut kept = run String.copy(unsafe String.fromUtf8Unchecked(Slice.view<u8>(raw, start, raw.length - start - 5)))
+            run String.append(&mut kept, ".")
+            run String.append(&mut kept, name)
+            run U.keep(String.view(&options.keep), String.view(&kept), "fresh", &final)
+            run U.keep(String.view(&options.keep), String.view(&kept), "updates", &(run U.updated(document, &scenario.cycle, J.length(&scenario.cycle))))
+          }
           if freshFailure {
             run String.append(&mut line, ": fresh layout failed, exit ")
             let mut buffer: [u8; 20] = [0; 20]

@@ -854,7 +854,19 @@ effect fn execute(document: &Value)
   // The final output is the geometry after the last step.
   if P.has(document, "updates") {
     let updates = run P.required(document, "updates")
-    run P.fields(updates, &["iterations", "cycle"])
+    run P.fields(updates, &["iterations", "cycle", "retain"])
+    // How each step's layout may use the one before it: "in-place" (the
+    // default) as an application's does; "copy" reusing results but writing
+    // the output afresh; "fresh" with nothing kept, a new LayoutTree a step.
+    // The last two are for finding where a retained layout departs from a
+    // fresh one (see the update tasks' --keep).
+    let mut retainFresh = false
+    if P.has(updates, "retain") {
+      let retain = run P.text(run P.required(updates, "retain"))
+      if retain != "in-place" && retain != "copy" && retain != "fresh" { fail P.invalid("updates.retain must be in-place, copy or fresh") }
+      output.inPlaceOff = retain == "copy"
+      retainFresh = retain == "fresh"
+    }
     let iterations = run P.integer(run P.required(updates, "iterations"))
     if iterations < 1 {
       fail P.invalid("updates.iterations must be positive")
@@ -882,6 +894,7 @@ effect fn execute(document: &Value)
         viewport,
         fixtures.fonts.length(),
       )
+      if retainFresh { output = LayoutTree.make() }
       let start = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
       run Engine.compute<Fixtures>(&tree, &mut output, &mut fixtures, viewport)
       let end = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)

@@ -762,6 +762,10 @@ pub struct LayoutTree {
   // Whether the last compute of the same boxes as the one before laid out
   // most of them again.
   pub relaidMost: bool,
+  // Set to make every compute write its output afresh, copying what it
+  // reuses from the previous one, instead of working in place over it: for
+  // telling a fault of the in-place path from one of reuse itself.
+  pub inPlaceOff: bool,
   // How the last compute ran, for diagnostics: 0 nothing changed, 1 every change laid out
   // alone and spliced in, 2 in place over the previous output, 3 the same boxes written
   // afresh, 4 other boxes.
@@ -794,7 +798,7 @@ impl LayoutTree {
   pub fn make() -> LayoutTree {
     return LayoutTree {
       stats: LayoutStats.zero(),
-      cache: LayoutCache.make(), snapshot: Snapshot.make(), facts: BoxFacts.make(), writes: BoxWrites.make(), keptRevision: 0, keptReusable: false, normalOffsets: List<Point>.make(), normalOffsetsZero: true, scrollReady: false, keptViewport: OptionalSize.none(), keptScroll: Point { x: 0.0, y: 0.0 }, keptScrolls: 0, keptMarks: 0, relaidMost: false, lastMode: 0, reuseIdle: 0,
+      cache: LayoutCache.make(), snapshot: Snapshot.make(), facts: BoxFacts.make(), writes: BoxWrites.make(), keptRevision: 0, keptReusable: false, normalOffsets: List<Point>.make(), normalOffsetsZero: true, scrollReady: false, keptViewport: OptionalSize.none(), keptScroll: Point { x: 0.0, y: 0.0 }, keptScrolls: 0, keptMarks: 0, relaidMost: false, inPlaceOff: false, lastMode: 0, reuseIdle: 0,
       boxes: List<Layout>.make(), boxNodes: List<BoxNode>.make(),
       anonymousStyles: List<Style>.make(),
       anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),

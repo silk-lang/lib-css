@@ -1,6 +1,7 @@
 import silk.cli.task { Task, TaskError }
 import silk.collections.bytes { Bytes }
 import silk.collections.list { List }
+import silk.collections.slice { Slice }
 import silk.core.effect { Effect }
 import silk.core.ownership { Copy }
 import silk.core.option { Option }
@@ -19,7 +20,7 @@ import task_json { J }
 import task_update_common { U }
 import task_update_random { Random }
 
-pub struct FuzzUpdatesOptions { pub cli: String, pub seeds: i64, pub first: i64, pub mode: String }
+pub struct FuzzUpdatesOptions { pub cli: String, pub seeds: i64, pub first: i64, pub mode: String, pub keep: String }
 struct Mode { relative: f64, text: f64, inlineChance: f64, typo: bool, kind: string<'static>, repeat: usize, subgrid: bool, structure: bool }
 impl Copy for Mode {}
 const WORDS: [string; 5] = ["ab", "word", "x", "longer", "q"]
@@ -559,6 +560,14 @@ effect fn structureMatches(kept: &[u8], fresh: &[u8], order: &List<usize>) -> bo
   return true
 }
 
+effect fn caseName(mode: string, seed: i64) -> String ! OutOfMemoryError ? &mut Allocator {
+  let mut label = run String.copy(mode)
+  run String.append(&mut label, "-")
+  let mut buffer: [u8; 20] = [0; 20]
+  let size = Format.writeI64Display(seed, &mut buffer, 0)
+  run String.append(&mut label, unsafe String.fromUtf8Unchecked(Slice.view<u8>(&buffer, 0, size)))
+  return move label
+}
 pub effect fn fuzzUpdates(options: &FuzzUpdatesOptions) -> ()
   ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
   ? &mut HostInput | &mut Allocator | &mut ChildProcess | &mut FileSystem {
@@ -581,6 +590,15 @@ pub effect fn fuzzUpdates(options: &FuzzUpdatesOptions) -> ()
         if fresh.code != 0 || kept.code != 0 || !(run structureMatches(Bytes.asSlice(&kept.output), Bytes.asSlice(&fresh.output), &case.order)) {
           failures = failures + 1
           run Format.format("differs from a fresh layout: mode {} seed {} (exit {}, fresh {})\n", &(name, seed, kept.code, fresh.code)) |> Effect.provideMut<Writer>(&mut err)
+          let label = run caseName(name, seed)
+          run U.keep(String.view(&options.keep), String.view(&label), "fresh", &case.fresh)
+          run U.keep(String.view(&options.keep), String.view(&label), "updates", &updates)
+          // The fresh layout numbers its nodes in tree order: fresh node i is retained node order[i].
+          let mut order = J.array()
+          let mut at: usize = 0
+          while at < case.order.length() { run J.push(&mut order, J.int(usize.toI64(case.order.asSlice()[at])))
+          at = at + 1 }
+          run U.keep(String.view(&options.keep), String.view(&label), "order", &order)
         }
       } else {
         let case = run makeCase(seed, m)
@@ -599,6 +617,9 @@ pub effect fn fuzzUpdates(options: &FuzzUpdatesOptions) -> ()
           if failed {
             failures = failures + 1
             run Format.format("differs from a fresh layout: mode {} seed {}\n", &(name, seed)) |> Effect.provideMut<Writer>(&mut err)
+            let label = run caseName(name, seed)
+            run U.keep(String.view(&options.keep), String.view(&label), "fresh", &final)
+            run U.keep(String.view(&options.keep), String.view(&label), "updates", &updates)
           }
         }
       }

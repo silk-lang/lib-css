@@ -44,8 +44,8 @@ union Tasks {
   FetchLayoutSpecs { pub update: bool, pub only: List<String> },
   GenerateEncodings { pub fetch: bool, pub revision: String },
   Smoke { pub cli: String },
-  FixtureUpdates { pub cli: String },
-  FuzzUpdates { pub cli: String, pub seeds: i64, pub first: i64, pub mode: String },
+  FixtureUpdates { pub cli: String, pub keep: String },
+  FuzzUpdates { pub cli: String, pub seeds: i64, pub first: i64, pub mode: String, pub keep: String },
   FixtureFont,
   ChromeDiff { pub browser: BrowserOptions },
   Bench { pub cli: String, pub runs: i32, pub record: bool },
@@ -137,6 +137,11 @@ impl CommandLine for Tasks {
         Opt.about("Comma-separated update fuzz families")
           |> Opt.default("mixed,inner,insets,text,grid,subgrid,structure,gridstructure"),
       )
+      |> Command.option(
+        "keep",
+        Opt.about("Directory that receives the requests of failing update scenarios")
+          |> Opt.default(""),
+      )
       |> Command.option("runs", Opt.about("Wall-time repetitions") |> Opt.default("7"))
       |> Command.option(
         "iterations",
@@ -199,13 +204,14 @@ static if Intrinsic.targetOperatingSystem() != "windows" {
       String.make(),
       true,
     )
-    run fixtureUpdates(&FixtureUpdatesOptions { cli: run String.copy(String.view(&cli)) })
+    run fixtureUpdates(&FixtureUpdatesOptions { cli: run String.copy(String.view(&cli)), keep: String.make() })
     run fuzzUpdates(
       &FuzzUpdatesOptions {
         cli: run String.copy(String.view(&cli)),
         seeds: 15,
         first: 0,
         mode: run String.copy("mixed,inner,insets,text,grid,subgrid,structure,gridstructure"),
+        keep: String.make(),
       },
     )
     run Browser.perform(
@@ -298,9 +304,9 @@ impl TaskSet for Tasks {
         Tasks.FetchLayoutSpecs { update, only } => run Specs.layout(update, &only)
         Tasks.GenerateEncodings { fetch, revision } => run Encodings.generate(fetch, &revision)
         Tasks.Smoke { cli } => run smoke(&SmokeOptions { cli: move cli })
-        Tasks.FixtureUpdates { cli } => run fixtureUpdates(&FixtureUpdatesOptions { cli: move cli })
-        Tasks.FuzzUpdates { cli, seeds, first, mode } => run fuzzUpdates(
-          &FuzzUpdatesOptions { cli: move cli, seeds: seeds, first: first, mode: move mode },
+        Tasks.FixtureUpdates { cli, keep } => run fixtureUpdates(&FixtureUpdatesOptions { cli: move cli, keep: move keep })
+        Tasks.FuzzUpdates { cli, seeds, first, mode, keep } => run fuzzUpdates(
+          &FuzzUpdatesOptions { cli: move cli, seeds: seeds, first: first, mode: move mode, keep: move keep },
         )
         Tasks.FixtureFont => run font()
         Tasks.ChromeDiff { browser } => run Browser.perform(move browser)

@@ -6,7 +6,7 @@ import silk.io.writer_native { StderrWriter }
 import silk.json.value { Value }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.system.child_process { ChildProcess, ProcessError }
-import silk.system.filesystem { FileError, FileSystem }
+import silk.system.filesystem { FileError, FileSystem, Path }
 import silk.system.host_input { HostInput, HostInputError }
 import silk.text.format { Format }
 import silk.text.string { String }
@@ -78,6 +78,23 @@ impl U {
     run J.set(&mut updates, "cycle", run J.copy(cycle))
     run J.set(&mut result, "updates", move updates)
     return move result
+  }
+  // Writes a failing scenario's request to `directory` (--keep), as
+  // `<name>.<part>.json`, so it can be given to the harness again by hand:
+  // `updates` is the retained run, `fresh` the layout it must equal.
+  pub effect fn keep(directory: string, name: string, part: string, document: &Value) -> ()
+    ! TaskError | FileError | HostInputError | OutOfMemoryError | WriterError
+    ? &mut HostInput | &mut Allocator | &mut FileSystem {
+    if String.byteLength(directory) == 0 { return }
+    let mut file = run String.copy(name)
+    run String.append(&mut file, ".")
+    run String.append(&mut file, part)
+    run String.append(&mut file, ".json")
+    let mut base = run Task.root()
+    if String.startsWith(directory, "/") { base = run Path.make(directory) } else { base = run Path.join(&base, directory) }
+    let path = run Path.join(&base, String.view(&file))
+    let bytes = run J.encode(document)
+    run FileSystem.writeFileWithParents(&path, Bytes.asSlice(&bytes))
   }
   pub effect fn invoke(cli: string, document: &Value, timeout: i32) -> Captured
     ! TaskError | ProcessError | FileError | HostInputError | OutOfMemoryError | WriterError
