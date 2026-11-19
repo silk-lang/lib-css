@@ -2519,6 +2519,11 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   run builder.close(&mut runs)
   output.cache.runs = move runs
   output.cache.spareRuns = move known
+  // Every fragment is placed: what is left of the previous output past the
+  // write position (after-flow fragments no box wrote again, which an
+  // endFlow shift may have moved with links into the rewritten flow) is
+  // no longer part of the output, so the passes below must not read it.
+  run output.fragments.finishInPlace()
   let mut moved = false
   if relative { moved = run positionRelative(nodes, &mut output, viewport) }
   if moved || visual { output.fragments.offsetting() }
