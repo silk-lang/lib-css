@@ -1196,6 +1196,8 @@ effect fn layoutFragment<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
       index = index + 1
     }
     let mut y = frame.top
+    // Cells going on from a split row have no top border to make room for.
+    if startConsumed > 0.0 && frame.collapse && !state.cloneStart { y = 0.0 }
     if !started { y = y + above }
     let gridTop = y
     y = y + frame.spacingY
