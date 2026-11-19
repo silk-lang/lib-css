@@ -91,7 +91,7 @@ effect fn expectBox(output: &LayoutTree, id: NodeId, x: f32, y: f32, width: f32,
 }
 effect fn lay(tree: &Tree, output: &mut LayoutTree, width: f32) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut host = WordHost {}
-  run compute(&tree, &mut output, &mut host, OptionalSize.definite(width, 600.0))
+  run compute(tree, &mut output, &mut host, OptionalSize.definite(width, 600.0))
 }
 
 // Two rows of two cells: columns take their widest cells, the table shrinks to fit,
@@ -594,7 +594,7 @@ effect fn expectRect(rect: Rect, x: f32, y: f32, width: f32, height: f32, messag
 }
 effect fn paged(tree: &Tree, output: &mut LayoutTree, rects: &[Rect]) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut host = WordHost {}
-  run computeFragmented(&tree, &mut output, &mut host, OptionalSize.definite(200.0, 100.0), pages(rects))
+  run computeFragmented(tree, &mut output, &mut host, OptionalSize.definite(200.0, 100.0), pages(rects))
 }
 effect fn rowOf(tree: &mut Tree, parent: NodeId, word: usize) -> NodeId ! OutOfMemoryError | InvalidNode ? &mut Allocator {
   let row = run tree.append(parent, styled(DisplayInside.TableRow))

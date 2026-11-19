@@ -1,8 +1,9 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
 import context { outOfFlow, absolutelyPositioned }
 import style { Float, Dimension, SizeValue, DimensionKind, Edges, Position, Style, WritingMode }
-import tree { Tree, NO_NODE }
+import tree { NO_NODE }
 import box_tree { BoxTree, BoxNode, BoxKind }
 import grid_subgrid as Subgrid
 import layout_cache { LayoutCache, BoxFacts, REUSE_NONE, REUSE_INDEPENDENT, REUSE_IN_FLOW, REUSE_LEVEL, FACT_FREE, FACT_ANCHORED }
@@ -32,7 +33,7 @@ pub fn sameBoxes(previous: &[BoxNode], next: &[BoxNode]) -> bool {
   return true
 }
 
-fn clearSubtree(nodes: &BoxTree<'_>, cache: &mut LayoutCache, root: usize) {
+fn clearSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, root: usize) {
   cache.clearBox(root)
   let mut child = nodes.node(root).firstChild
   while child != NO_NODE {
@@ -53,7 +54,7 @@ fn clearSubtree(nodes: &BoxTree<'_>, cache: &mut LayoutCache, root: usize) {
 // An independent formatting context below the root keeps its children's
 // results as one that changed itself does (see invalidateSource): it is
 // cleared alone.
-fn clearInFlow(nodes: &BoxTree<'_>, cache: &mut LayoutCache, root: usize) {
+fn clearInFlow<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, root: usize) {
   cache.clearBox(root)
   let mut child = nodes.node(root).firstChild
   while child != NO_NODE {
@@ -65,8 +66,8 @@ fn clearInFlow(nodes: &BoxTree<'_>, cache: &mut LayoutCache, root: usize) {
   }
 }
 
-fn clearChanged(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut LayoutCache, source: usize, root: usize) {
-  if tree.gridChangedAt(source) <= since && !Subgrid.eligible(nodes, root) { cache.clearPlaced(root) }
+fn clearChanged<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, source: usize, root: usize) {
+  if !tree.changes().gridChangedSince(source, since) && !Subgrid.eligible(nodes, root) { cache.clearPlaced(root) }
   else { cache.clearBox(root) }
   let styleIndex = nodes.node(root).styleIndex
   let mut child = nodes.node(root).firstChild
@@ -88,7 +89,7 @@ fn clearChanged(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut Layo
 // The boxes in `alone` are laid out again by themselves first (see the
 // early cutoff in compute), which clears their ancestors only if needed;
 // changes inside them clear ancestors only up to them.
-pub fn invalidateChanged(tree: &Tree, nodes: &BoxTree<'_>, cache: &mut LayoutCache, since: usize, logged: bool, sources: &[usize], alone: &[usize]) {
+pub fn invalidateChanged<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, since: usize, logged: bool, sources: &[usize], alone: &[usize]) {
   if logged {
     let mut at: usize = 0
     while at < sources.length {
@@ -98,12 +99,12 @@ pub fn invalidateChanged(tree: &Tree, nodes: &BoxTree<'_>, cache: &mut LayoutCac
     return
   }
   let mut source: usize = 0
-  while source < tree.nodes.length() {
-    if tree.changedAt(source) > since { invalidateSource(tree, since, nodes, &mut cache, source, alone) }
+  while source < tree.nodeCount() {
+    if tree.changes().changedAt(source) > since { invalidateSource(tree, since, nodes, &mut cache, source, alone) }
     source = source + 1
   }
 }
-fn invalidateSource(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut LayoutCache, source: usize, alone: &[usize]) {
+fn invalidateSource<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, source: usize, alone: &[usize]) {
   let mut box = nodes.firstBySource.get(source)
   while box != NO_NODE {
     // Ancestors up to the first box laid out alone, which reads the change.
@@ -113,7 +114,7 @@ fn invalidateSource(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut 
     // its children when it resizes or moves: they are relative to it, and
     // their requests are compared. Others clear their subtree but for its
     // out-of-flow boxes, which are independent too.
-    if (tree.outerChangedAt(source) > since || tree.placedChangedAt(source) > since) && !keepsChildren(nodes, box) { clearInFlow(nodes, &mut cache, box) }
+    if (tree.changes().outerChangedAt(source) > since || tree.changes().placedChangedAt(source) > since) && !keepsChildren(nodes, box) { clearInFlow(nodes, &mut cache, box) }
     else { clearChanged(tree, since, nodes, &mut cache, source, box) }
     let mut ancestor = box
     // Whether a subgrid lies between the changed box and the ancestor, which
@@ -121,7 +122,7 @@ fn invalidateSource(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut 
     let mut nested = false
     // A grid places its children by what Tree.setStyle and setGrid count as
     // placing them: a change to anything else keeps its placement.
-    let placed = tree.placedChangedAt(source) <= since
+    let placed = tree.changes().placedChangedAt(source) <= since
     while ancestor != NO_NODE && !contains(alone, ancestor) {
       let below = ancestor
       ancestor = nodes.node(ancestor).parent
@@ -132,7 +133,7 @@ fn invalidateSource(tree: &Tree, since: usize, nodes: &BoxTree<'_>, cache: &mut 
     box = nodes.node(box).nextContinuation
   }
 }
-fn keepsChildren(nodes: &BoxTree<'_>, box: usize) -> bool {
+fn keepsChildren<S: LayoutSource>(nodes: &BoxTree<'_, S>, box: usize) -> bool {
   let node = nodes.node(box)
   if !node.independentRoot || node.kind == BoxKind.Grid || Subgrid.eligible(nodes, box) { return false }
   if node.nextContinuation != NO_NODE || node.previousContinuation != NO_NODE { return false }
@@ -147,7 +148,7 @@ fn contains(values: &[usize], value: usize) -> bool {
   return false
 }
 // Clears a box's subtree and, with `ancestors`, every ancestor.
-pub fn invalidateBox(nodes: &BoxTree<'_>, cache: &mut LayoutCache, box: usize, ancestors: bool) {
+pub fn invalidateBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, box: usize, ancestors: bool) {
   clearSubtree(nodes, &mut cache, box)
   if !ancestors { return }
   let mut ancestor = nodes.node(box).parent
@@ -180,7 +181,7 @@ fn mapped(map: &[usize], id: usize) -> usize {
   return map[id]
 }
 
-pub effect fn matchBoxes(previous: &[BoxNode], previousFirst: &[usize], next: &BoxTree<'_>) -> BoxMatch ! OutOfMemoryError ? &mut Allocator {
+pub effect fn matchBoxes<S: LayoutSource>(previous: &[BoxNode], previousFirst: &[usize], next: &BoxTree<'_, S>) -> BoxMatch ! OutOfMemoryError ? &mut Allocator {
   let count = next.boxes.length()
   let mut toOld = List<usize>.make()
   let mut toNew = List<usize>.make()
@@ -275,7 +276,7 @@ pub effect fn matchBoxes(previous: &[BoxNode], previousFirst: &[usize], next: &B
 }
 
 // Clears every changed box and its ancestors in the remapped cache.
-pub fn invalidateUnmatched(nodes: &BoxTree<'_>, cache: &mut LayoutCache, changed: &[bool]) {
+pub fn invalidateUnmatched<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, changed: &[bool]) {
   let mut id: usize = 0
   while id < changed.length {
     if changed[id] {
@@ -303,7 +304,7 @@ pub fn invalidateUnmatched(nodes: &BoxTree<'_>, cache: &mut LayoutCache, changed
 // initial containing block or the scrollport limits passed down for
 // orthogonal flows: no box in it is replaced, fixed, or orthogonal to its
 // parent.
-pub effect fn markSubtrees(nodes: &BoxTree<'_>, facts: &mut BoxFacts) ! OutOfMemoryError ? &mut Allocator {
+pub effect fn markSubtrees<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut BoxFacts) ! OutOfMemoryError ? &mut Allocator {
   let count = nodes.boxes.length()
   facts.own.clear()
   facts.reusable.clear()
@@ -350,13 +351,13 @@ pub effect fn markSubtrees(nodes: &BoxTree<'_>, facts: &mut BoxFacts) ! OutOfMem
 // independent, since its float joins exclusions it shares with its siblings.
 // An out-of-flow box may reuse its own layout, but positioning, not its
 // parent's layout, places it: a parent holding one is never copied.
-fn passedUp(nodes: &BoxTree<'_>, id: usize, level: u8) -> u8 {
+fn passedUp<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, level: u8) -> u8 {
   if absolutelyPositioned(nodes.style(id)) { return REUSE_NONE }
   if nodes.style(id).float != Float.None && level > REUSE_INDEPENDENT { return REUSE_INDEPENDENT }
   return level
 }
 
-fn ownFacts(nodes: &BoxTree<'_>, index: usize) -> u8 {
+fn ownFacts<S: LayoutSource>(nodes: &BoxTree<'_, S>, index: usize) -> u8 {
   let node = nodes.node(index)
   let style = nodes.style(index)
   let mut facts = REUSE_IN_FLOW
@@ -388,22 +389,22 @@ pub fn insetAnchored(style: &Style) -> bool {
 }
 
 // The tree node whose style a box takes: text shares its parent's.
-fn styleSource(tree: &Tree, nodes: &BoxTree<'_>, id: usize) -> usize {
+fn styleSource<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, id: usize) -> usize {
   let node = nodes.node(id)
   if node.anonymousStyle != NO_NODE { return nodes.anonymousOrigins.get(node.anonymousStyle) }
   let owner = node.styleOwner
-  if owner != NO_NODE && tree.nodes.asSlice()[owner].isText() { return tree.nodes.asSlice()[owner].parent }
+  if owner != NO_NODE && tree.isText(owner) { return tree.parent(owner) }
   return owner
 }
 
-fn changedSince(tree: &Tree, source: usize, since: usize) -> bool {
-  return source != NO_NODE && source < tree.nodes.length() && tree.changedAt(source) > since
+fn changedSince<S: LayoutSource>(tree: &S, source: usize, since: usize) -> bool {
+  return source != NO_NODE && source < tree.nodeCount() && tree.changes().changedAt(source) > since
 }
 
 // Indexes boxes by the tree node whose style they take: those of node n are
 // boxes[offsets[n]..offsets[n + 1]].
-pub effect fn indexStyleSources(tree: &Tree, nodes: &BoxTree<'_>, offsets: &mut List<usize>, boxes: &mut List<usize>) ! OutOfMemoryError ? &mut Allocator {
-  let sources = tree.nodes.length()
+pub effect fn indexStyleSources<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, offsets: &mut List<usize>, boxes: &mut List<usize>) ! OutOfMemoryError ? &mut Allocator {
+  let sources = tree.nodeCount()
   let count = nodes.boxes.length()
   offsets.clear()
   boxes.clear()
@@ -444,7 +445,7 @@ pub effect fn indexStyleSources(tree: &Tree, nodes: &BoxTree<'_>, offsets: &mut 
 // parents, then reusability and viewport freedom again, children before
 // parents, for them and for each ancestor whose values change. Every child
 // of a touched box is touched or kept with its facts.
-pub effect fn markPatched(nodes: &BoxTree<'_>, facts: &mut BoxFacts, ids: &[usize]) ! OutOfMemoryError ? &mut Allocator {
+pub effect fn markPatched<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut BoxFacts, ids: &[usize]) ! OutOfMemoryError ? &mut Allocator {
   let count = nodes.boxes.length()
   if facts.own.length() < count {
     let added = count - facts.own.length()
@@ -474,7 +475,7 @@ pub effect fn markPatched(nodes: &BoxTree<'_>, facts: &mut BoxFacts, ids: &[usiz
 // Reusability and viewport freedom of the boxes in `pending`, ascending,
 // from their children, and of each ancestor whose values that changes; see
 // remarkSubtrees.
-effect fn settleLevels(nodes: &BoxTree<'_>, facts: &mut BoxFacts, pending: &mut List<usize>, mark: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn settleLevels<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut BoxFacts, pending: &mut List<usize>, mark: usize) ! OutOfMemoryError ? &mut Allocator {
   let marked = facts.marks.asMutSlice()
   let own = facts.own.asSlice()
   let levels = facts.reusable.asMutSlice()
@@ -517,7 +518,7 @@ effect fn settleLevels(nodes: &BoxTree<'_>, facts: &mut BoxFacts, pending: &mut 
 // When `logged`, `sources` lists the changed tree nodes, which with the
 // style source index in `facts` finds those boxes without visiting the
 // others. Returns the boxes whose own facts were refreshed.
-pub effect fn remarkSubtrees(tree: &Tree, nodes: &BoxTree<'_>, since: usize, logged: bool, sources: &[usize], facts: &mut BoxFacts) -> List<usize> ! OutOfMemoryError ? &mut Allocator {
+pub effect fn remarkSubtrees<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, since: usize, logged: bool, sources: &[usize], facts: &mut BoxFacts) -> List<usize> ! OutOfMemoryError ? &mut Allocator {
   let count = nodes.boxes.length()
   let mut changed = List<usize>.make()
   if facts.marks.length() != count {

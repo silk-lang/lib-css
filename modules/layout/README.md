@@ -58,6 +58,11 @@ shaping of text. Dependents import the package as `layout`.
   it and writes boxes and fragments into a reusable `LayoutTree`. Elements, generated boxes and
   physical fragments have separate identities, so one element can produce several boxes (for
   example an inline split across lines) or none.
+- **Bring your own tree.** `compute` reads the source only through the `LayoutSource`
+  interface (structure, a shared style table, text, measurement, scroll offsets, grid and shape
+  data, and a `Changes` log of revisions). `Tree` is the bundled implementation; an embedder
+  that already keeps its own nodes implements the interface over them instead of mirroring them
+  into a `Tree`. Calls are resolved at compile time.
 - **Incremental by default.** Calling `compute` again after `setStyle`, `setText`,
   `setMeasurement` or a structural edit (`insertBefore`, `remove`, `destroy`) lays out only what
   the change can affect. Size results are cached per box

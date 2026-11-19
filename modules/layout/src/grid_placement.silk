@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.num.i32
@@ -101,7 +102,7 @@ impl PlacementScratch {
 }
 
 // Match flex's stable insertion sort, including its already-ordered fast path.
-fn sort(items: &mut [GridItem], nodes: &BoxTree<'_>) {
+fn sort<S: LayoutSource>(items: &mut [GridItem], nodes: &BoxTree<'_, S>) {
   let mut index: usize = 1
   while index < items.length {
     if nodes.style(items[index - 1].id).order <= nodes.style(items[index].id).order {
@@ -210,8 +211,8 @@ fn itemSpan(
 
 // Grid 2 §8.5. Internally row/column mean logical major/minor; column flow
 // transposes at the boundary rather than maintaining a second algorithm.
-pub effect fn collectItems<'source>(
-  nodes: &BoxTree<'source>,
+pub effect fn collectItems<'source, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   id: usize,
   explicitRows: usize,
   explicitColumns: usize,
@@ -230,8 +231,8 @@ pub effect fn collectItems<'source>(
 
 // Inherited axes cannot create implicit tracks. Bounds refer to the parent's
 // logical rows/columns, independently of its auto-flow direction.
-pub effect fn collectSubgridItems<'source>(
-  nodes: &BoxTree<'source>,
+pub effect fn collectSubgridItems<'source, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   id: usize,
   explicitRows: usize,
   explicitColumns: usize,

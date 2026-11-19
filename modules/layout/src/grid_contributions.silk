@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.core.ownership { Copy }
 import silk.num.usize
 import geometry {
@@ -228,8 +229,8 @@ pub fn contributionBaselineInput(
 }
 
 @inlineAlways
-effect fn probe<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+effect fn probe<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   id: usize,
@@ -290,8 +291,8 @@ fn plainLimit(value: SizeValue) -> bool {
 // The caller supplies physical-axis requests and fixed-only track caps. Neither
 // known stretch sizes nor an estimated area establishes a specified suggestion.
 // Masks omit unused intrinsic contributions, not the minimum needed by §12.5.
-pub effect fn measureContributionEdges<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn measureContributionEdges<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   id: usize,
@@ -620,8 +621,8 @@ pub fn plainContribution(style: &Style, box: &ResolvedBox, horizontal: bool, aut
   return ItemContribution { minimum: minimumContribution, minContent: minContribution, maxContent: maxContribution, usedMinimum: usedMinimum }
 }
 
-pub effect fn measureContribution<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn measureContribution<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   id: usize,

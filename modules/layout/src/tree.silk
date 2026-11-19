@@ -5,7 +5,7 @@ import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.num.usize
 import silk.text.string { String }
-import style { Style, DisplayOutside, DisplayInside, Display, Dimension, SizeValue, DimensionKind, Edges, BoxSizing, WrapFlow }
+import style { Style, WrapFlow }
 import geometry { Layout, Point, Rect, Size, OptionalSize }
 import exclusions { ExclusionArea }
 import silk.core.option { Option }
@@ -20,6 +20,8 @@ import layout_pass { PreparedSlot }
 import grid_style { GridTemplate, GridError, validGridName, validGridAreaName }
 import shapes { FloatShape }
 import silk.num.u32
+import source as Source
+import source { LayoutSource, Changes }
 
 pub const NO_NODE: usize = usize.MAX
 pub struct NodeId { pub index: usize }
@@ -76,89 +78,16 @@ impl Node {
     }
   }
 }
-fn sameDimension(a: Dimension, b: Dimension) -> bool { return a.kind == b.kind && a.value == b.value && a.percent == b.percent }
-fn sameSize(a: SizeValue, b: SizeValue) -> bool { return a.kind == b.kind && a.value == b.value && a.percent == b.percent && a.bound == b.bound }
-fn sameEdges(a: &Edges, b: &Edges) -> bool {
-  return sameDimension(a.top, b.top) && sameDimension(a.right, b.right) && sameDimension(a.bottom, b.bottom) && sameDimension(a.left, b.left)
-}
-fn lengthEdges(a: &Edges) -> bool {
-  return a.top.kind == DimensionKind.Length && a.right.kind == DimensionKind.Length && a.bottom.kind == DimensionKind.Length && a.left.kind == DimensionKind.Length
-}
-// Whether padding and border fit inside a fixed border-box size: changing
-// them then moves nothing a parent computes for the box.
-fn insetFits(style: &Style) -> bool {
-  if !lengthEdges(&style.padding) || !lengthEdges(&style.border) { return false }
-  let horizontal = style.padding.left.value + style.padding.right.value + style.border.left.value + style.border.right.value
-  let vertical = style.padding.top.value + style.padding.bottom.value + style.border.top.value + style.border.bottom.value
-  return horizontal <= style.width.value && vertical <= style.height.value
-}
-// Whether a style change reaches only what the box lays out inside itself:
-// every property its parent reads is the same. Padding and border count as
-// inside only on a border-box with fixed width and height they fit in, and,
-// in flex, when it never shrinks. Grid contributions always read item insets.
-fn innerChange(a: &Style, b: &Style, flexParent: bool, gridParent: bool) -> bool {
-  if !sameOuter(a, b) { return false }
-  if sameEdges(&a.padding, &b.padding) && sameEdges(&a.border, &b.border) { return true }
-  if a.boxSizing != BoxSizing.BorderBox || a.width.kind != DimensionKind.Length || a.height.kind != DimensionKind.Length { return false }
-  if gridParent || flexParent && a.flexShrink != 0.0 { return false }
-  return insetFits(a) && insetFits(b)
-}
-// A change to padding or border alone, which a block parent reads only to
-// place the box and its content's float origin (see the cutoff in engine.silk).
-fn insetChange(a: &Style, b: &Style) -> bool {
-  return sameOuter(a, b) && a.display.outsideIs(DisplayOutside.Block) && !a.replaced
-}
-// Every inline property but padding and border that a parent may read.
-// Grid placement lives in the owned table and is compared by setGrid instead.
-fn sameOuter(a: &Style, b: &Style) -> bool {
-  if !sameGeneration(a, b) { return false }
-  if !sameSize(a.width, b.width) || !sameSize(a.height, b.height) || !sameSize(a.minWidth, b.minWidth) || !sameSize(a.minHeight, b.minHeight)
-    || !sameSize(a.maxWidth, b.maxWidth) || !sameSize(a.maxHeight, b.maxHeight) || !sameEdges(&a.margin, &b.margin) || !sameEdges(&a.inset, &b.inset) { return false }
-  if a.boxSizing != b.boxSizing || a.direction != b.direction || a.unicodeBidi != b.unicodeBidi || a.textOrientation != b.textOrientation { return false }
-  if a.verticalAlign.kind != b.verticalAlign.kind || !sameDimension(a.verticalAlign.shift, b.verticalAlign.shift) || a.baselineSource != b.baselineSource { return false }
-  if a.boxDecorationBreak != b.boxDecorationBreak || a.marginBreak != b.marginBreak || a.breakBefore != b.breakBefore || a.breakAfter != b.breakAfter || a.breakInside != b.breakInside || a.orphans != b.orphans || a.widows != b.widows { return false }
-  if a.flexGrow != b.flexGrow || a.flexShrink != b.flexShrink || !sameSize(a.flexBasis, b.flexBasis) || a.order != b.order { return false }
-  if a.alignSelf != b.alignSelf || a.justifySelf != b.justifySelf || a.alignSelfSafety != b.alignSelfSafety || a.justifySelfSafety != b.justifySelfSafety { return false }
-  if a.scrollbarWidth != b.scrollbarWidth || a.scrollbarGutter != b.scrollbarGutter || a.clear != b.clear || a.visibility != b.visibility { return false }
-  if a.aspectRatio != b.aspectRatio || a.aspectRatioAuto != b.aspectRatioAuto { return false }
-  if a.columnSpan != b.columnSpan || a.rowSpan != b.rowSpan { return false }
-  return true
-}
-
-// The style properties box construction reads (see box_tree.silk); other
-// properties reach generated boxes only through their styles.
-fn sameGeneration(a: &Style, b: &Style) -> bool {
-  if a.sizeContainment != b.sizeContainment || a.layoutContainment != b.layoutContainment { return false }
-  if a.display.isNone() != b.display.isNone() || a.display.isContents() != b.display.isContents() { return false }
-  if a.display.outsideIs(DisplayOutside.Block) != b.display.outsideIs(DisplayOutside.Block) || a.display.outsideIs(DisplayOutside.Inline) != b.display.outsideIs(DisplayOutside.Inline) { return false }
-  if a.display.insideIs(DisplayInside.Flow) != b.display.insideIs(DisplayInside.Flow) || a.display.insideIs(DisplayInside.FlowRoot) != b.display.insideIs(DisplayInside.FlowRoot) || a.display.insideIs(DisplayInside.Flex) != b.display.insideIs(DisplayInside.Flex) { return false }
-  if a.display.isGrid() != b.display.isGrid() || a.display.insideIs(DisplayInside.GridLanes) != b.display.insideIs(DisplayInside.GridLanes) { return false }
-  if a.multicol() != b.multicol() || a.multicolSpan != b.multicolSpan { return false }
-  if (tableDisplay(&a.display) || tableDisplay(&b.display)) && !(&a.display == &b.display) { return false }
-  return a.replaced == b.replaced && a.position == b.position && a.float == b.float && a.writingMode == b.writingMode && a.alignContent == b.alignContent && a.overflowX == b.overflowX && a.overflowY == b.overflowY
-}
-fn tableDisplay(display: &Display) -> bool { return display.insideIs(DisplayInside.Table) || display.isTablePart() }
-// Box construction drops whitespace-only text between flex and grid items.
-fn whitespace(value: string) -> bool {
-  let bytes = String.utf8Bytes(value)
-  let mut index: usize = 0
-  while index < bytes.length {
-    let byte = bytes[index]
-    if byte != 9 && byte != 10 && byte != 13 && byte != 32 { return false }
-    index = index + 1
-  }
-  return true
-}
-
 // A box whose early cutoff failed `failures` times in a row; it is not
 // laid out alone again for the next `skip` computes.
 pub struct CutoffMiss { pub box: usize, pub failures: usize, pub skip: usize }
 impl Copy for CutoffMiss {}
 
-// Every change made through Tree's methods advances `revision` and records it
-// on the node, so a LayoutTree can find what changed since it last computed.
-// Code that edits `nodes`, `styles`, or owned grid data directly must call
-// `markDirty`. Handles and interned name IDs remain local to this tree.
+// css-layout's own source tree (see source.silk). Every change made through
+// Tree's methods is recorded in `changes`, so a LayoutTree can find what
+// changed since it last computed. Code that edits `nodes`, `styles`, or owned
+// grid data directly must call `markDirty`. Handles and interned name IDs
+// remain local to this tree.
 pub struct Tree {
   pub nodes: List<Node>, pub styles: List<Style>, pub viewportScrollOffset: Point,
   // Whether sticky boxes stay at their normal position, for an embedder that applies scroll
@@ -167,32 +96,7 @@ pub struct Tree {
   // Slot zero is the default. Each nonzero slot belongs to one element and is
   // replaced in place; styles cannot transfer ownership by copying a handle.
   pub grids: List<GridTemplate>, pub gridNames: List<String>,
-  // The revision at which setGrid last replaced each slot of `grids`.
-  gridRevisions: List<usize>,
-  current: usize, structure: usize, generated: usize, changed: List<usize>,
-  // The revision of each node's last change its parent may see: any change
-  // but one of style that innerChange allows.
-  outer: List<usize>,
-  // The revision of each node's last style change to padding or border that
-  // innerChange or insetChange allowed.
-  insets: List<usize>,
-  // The revision of each node's last change its parent may see besides one
-  // of style to padding or border alone.
-  placed: List<usize>,
-  // The last CHANGE_LOG touches, oldest overwritten first: `logNodes[slot]`
-  // was touched at revision `logRevisions[slot]`. `logLost` is the latest
-  // revision overwritten.
-  logNodes: List<usize>, logRevisions: List<usize>, logged: usize, logLost: usize,
-  // The last GENERATION_LOG nodes whose children generate boxes anew: the
-  // parent of an inserted or removed node, or of one whose style, text or
-  // measurement changed how its boxes are generated. `genLost` is the latest
-  // revision overwritten, or one whose change the log cannot name.
-  genNodes: List<usize>, genRevisions: List<usize>, genLogged: usize, genLost: usize,
-  // Scroll offset changes, which move fragments without a revision: the
-  // count so far and the last SCROLL_LOG nodes changed.
-  scrolls: usize, scrollNodes: List<usize>,
-  // The number of markDirty calls so far.
-  marks: usize,
+  pub changes: Changes,
   // Whether each slot of `nodes` holds a node; destroy frees a slot and
   // create takes the last freed one. Freed element style slots and grid
   // slots are reused the same way.
@@ -203,9 +107,41 @@ pub struct Tree {
   // compute look for exclusions (see exclusions.silk).
   pub exclusionStyles: bool,
 }
-const CHANGE_LOG: usize = 256
-const GENERATION_LOG: usize = 64
-const SCROLL_LOG: usize = 64
+impl LayoutSource for Tree {
+  @inlineAlways
+  fn nodeCount(self: &Self) -> usize { return self.nodes.length() }
+  @inlineAlways
+  fn exists(self: &Self, node: usize) -> bool { return node < self.nodes.length() && self.live.get(node) }
+  @inlineAlways
+  fn parent(self: &Self, node: usize) -> usize { return self.nodes.asSlice()[node].parent }
+  @inlineAlways
+  fn firstChild(self: &Self, node: usize) -> usize { return self.nodes.asSlice()[node].firstChild }
+  @inlineAlways
+  fn nextSibling(self: &Self, node: usize) -> usize { return self.nodes.asSlice()[node].nextSibling }
+  @inlineAlways
+  fn styles<'a>(self: &'a Self) -> &'a [Style] { return self.styles.asSlice() }
+  @inlineAlways
+  fn styleIndex(self: &Self, node: usize) -> usize { return self.nodes.asSlice()[node].styleIndex }
+  @inlineAlways
+  fn isText(self: &Self, node: usize) -> bool { return self.nodes.asSlice()[node].isText() }
+  fn text<'a>(self: &'a Self, node: usize) -> Option<string<'a>> { return self.nodes.asSlice()[node].text() }
+  @inlineAlways
+  fn textStart(self: &Self, node: usize) -> usize { return self.nodes.asSlice()[node].textStart }
+  @inlineAlways
+  fn measurement(self: &Self, node: usize) -> Measurement { return self.nodes.asSlice()[node].measurement }
+  @inlineAlways
+  fn measureKey(self: &Self, node: usize) -> usize { return self.nodes.asSlice()[node].measureKey }
+  @inlineAlways
+  fn scrollOffset(self: &Self, node: usize) -> Point { return self.nodes.asSlice()[node].scrollOffset }
+  fn viewportScrollOffset(self: &Self) -> Point { return self.viewportScrollOffset }
+  fn stickyDeferred(self: &Self) -> bool { return self.stickyDeferred }
+  fn exclusionStyles(self: &Self) -> bool { return self.exclusionStyles }
+  fn grids<'a>(self: &'a Self) -> &'a [GridTemplate] { return self.grids.asSlice() }
+  fn gridNames<'a>(self: &'a Self) -> &'a [String] { return self.gridNames.asSlice() }
+  fn shapes<'a>(self: &'a Self) -> &'a [FloatShape] { return self.shapes.asSlice() }
+  @inlineAlways
+  fn changes<'a>(self: &'a Self) -> &'a Changes { return &self.changes }
+}
 impl Tree {
   pub effect fn make(style: Style) -> Tree ! OutOfMemoryError ? &mut Allocator {
     let mut nodes = List<Node>.make()
@@ -218,173 +154,46 @@ impl Tree {
     run shapes.append(FloatShape.make())
     let mut grids = List<GridTemplate>.make()
     run grids.append(GridTemplate.make())
-    let mut gridRevisions = List<usize>.make()
-    run gridRevisions.append(0)
     let mut gridNames = List<String>.make()
     run gridNames.append(run String.copy(""))
     run nodes.reserve(1)
     run styles.reserve(1)
     run styles.append(move value)
-    let mut changed = List<usize>.make()
-    run changed.reserve(1)
     run nodes.append(Node { styleIndex: 0, content: SourceContent.Element, parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE, previousSibling: NO_NODE, measureKey: 0, measurement: Measurement.None, scrollOffset: Point { x: 0.0, y: 0.0 }, textStart: 0 })
-    run changed.append(1)
-    let mut outer = List<usize>.make()
-    run outer.append(1)
-    let mut insets = List<usize>.make()
-    run insets.append(0)
-    let mut placed = List<usize>.make()
-    run placed.append(1)
-    let mut logNodes = List<usize>.make()
-    let mut logRevisions = List<usize>.make()
-    run logNodes.appendRepeated(NO_NODE, CHANGE_LOG)
-    run logRevisions.appendRepeated(0, CHANGE_LOG)
-    let mut genNodes = List<usize>.make()
-    let mut genRevisions = List<usize>.make()
-    run genNodes.appendRepeated(NO_NODE, GENERATION_LOG)
-    run genRevisions.appendRepeated(0, GENERATION_LOG)
-    let mut scrollNodes = List<usize>.make()
-    run scrollNodes.appendRepeated(NO_NODE, SCROLL_LOG)
+    let changes = run Changes.make()
     let mut live = List<bool>.make()
     run live.append(true)
-    return Tree { nodes: move nodes, styles: move styles, grids: move grids, gridNames: move gridNames, gridRevisions: move gridRevisions, viewportScrollOffset: Point { x: 0.0, y: 0.0 }, stickyDeferred: false, marks: 0, current: 1, structure: 1, generated: 1, changed: move changed, outer: move outer, insets: move insets, placed: move placed, logNodes: move logNodes, logRevisions: move logRevisions, logged: 0, logLost: 0, genNodes: move genNodes, genRevisions: move genRevisions, genLogged: 0, genLost: 0, scrolls: 0, scrollNodes: move scrollNodes, live: move live, freeNodes: List<usize>.make(), freeStyles: List<usize>.make(), freeGrids: List<usize>.make(), shapes: move shapes, freeShapes: List<usize>.make(), exclusionStyles: exclusionStyles }
+    return Tree { nodes: move nodes, styles: move styles, grids: move grids, gridNames: move gridNames, viewportScrollOffset: Point { x: 0.0, y: 0.0 }, stickyDeferred: false, changes: move changes, live: move live, freeNodes: List<usize>.make(), freeStyles: List<usize>.make(), freeGrids: List<usize>.make(), shapes: move shapes, freeShapes: List<usize>.make(), exclusionStyles: exclusionStyles }
   }
-  // The current revision; it advances on every change.
-  pub fn revision(self: &Self) -> usize { return self.current }
-  // The revision of the last node insertion.
-  pub fn structureRevision(self: &Self) -> usize { return self.structure }
-  // The revision of the last change that can change generated boxes: an
-  // insertion, a measurement, a style change to how boxes are generated, or
-  // a flex text node becoming or ceasing to be whitespace.
-  pub fn boxRevision(self: &Self) -> usize { return self.generated }
-  // The revision of the last change to this node's style, text or measurement.
-  pub fn changedAt(self: &Self, id: usize) -> usize { return self.changed.get(id) }
-  // The revision of the last change to this node that its parent may see.
-  pub fn outerChangedAt(self: &Self, id: usize) -> usize { return self.outer.get(id) }
-  // The revision of the last change to this node's padding or border its
-  // parent was allowed not to see; a block parent sees it all the same.
-  pub fn insetsChangedAt(self: &Self, id: usize) -> usize { return self.insets.get(id) }
-  // The revision of the last change to this node that its parent may see,
-  // but for one of style to padding or border alone.
-  pub fn placedChangedAt(self: &Self, id: usize) -> usize { return self.placed.get(id) }
-  // The revision of the last setGrid on this node that replaced its template,
-  // which is all of its own style a grid places its items by.
-  pub fn gridChangedAt(self: &Self, id: usize) -> usize {
-    return self.gridRevisions.get(self.styles.asSlice()[self.nodes.asSlice()[id].styleIndex].grid)
-  }
-  fn touch(self: &mut Self, id: usize) {
-    self.touchInner(id)
-    self.outer.set(id, self.current)
-    self.placed.set(id, self.current)
-  }
-  fn touchInner(self: &mut Self, id: usize) {
-    self.current = self.current + 1
-    self.changed.set(id, self.current)
-    let slot = self.logged % CHANGE_LOG
-    if self.logged >= CHANGE_LOG { self.logLost = self.logRevisions.get(slot) }
-    self.logNodes.set(slot, id)
-    self.logRevisions.set(slot, self.current)
-    self.logged = self.logged + 1
-  }
-  // Appends each node whose style, text or measurement changed after
-  // revision `since`, once, and returns true; or returns false, appending
-  // nothing, when the tree no longer knows them all without a scan: nodes
-  // were inserted since, or too many changes were made.
+  // The current revision; it advances on every change (see Changes).
+  pub fn revision(self: &Self) -> usize { return self.changes.revision() }
+  pub fn structureRevision(self: &Self) -> usize { return self.changes.structureRevision() }
+  pub fn boxRevision(self: &Self) -> usize { return self.changes.boxRevision() }
+  pub fn changedAt(self: &Self, id: usize) -> usize { return self.changes.changedAt(id) }
+  pub fn outerChangedAt(self: &Self, id: usize) -> usize { return self.changes.outerChangedAt(id) }
+  pub fn insetsChangedAt(self: &Self, id: usize) -> usize { return self.changes.insetsChangedAt(id) }
+  pub fn placedChangedAt(self: &Self, id: usize) -> usize { return self.changes.placedChangedAt(id) }
+  pub fn scrollRevision(self: &Self) -> usize { return self.changes.scrollRevision() }
+  pub fn markRevision(self: &Self) -> usize { return self.changes.markRevision() }
   pub effect fn changedNodes(self: &Self, since: usize, result: &mut List<usize>) -> bool ! OutOfMemoryError ? &mut Allocator {
-    if self.structure > since || self.logLost > since { return false }
-    let mut back: usize = 0
-    while back < self.logged && back < CHANGE_LOG {
-      let slot = (self.logged - 1 - back) % CHANGE_LOG
-      let revision = self.logRevisions.get(slot)
-      if revision <= since { return true }
-      let node = self.logNodes.get(slot)
-      // A node's latest touch stands for all of its touches.
-      if self.changed.get(node) == revision { run result.append(node) }
-      back = back + 1
-    }
-    return true
+    return run self.changes.changedNodes(since, &mut result)
   }
-  // Like changedNodes, but also after insertions: for a compute that finds
-  // the boxes of new nodes itself (see generationChanges).
   pub effect fn touchedNodes(self: &Self, since: usize, result: &mut List<usize>) -> bool ! OutOfMemoryError ? &mut Allocator {
-    if self.logLost > since { return false }
-    let mut back: usize = 0
-    while back < self.logged && back < CHANGE_LOG {
-      let slot = (self.logged - 1 - back) % CHANGE_LOG
-      let revision = self.logRevisions.get(slot)
-      if revision <= since { return true }
-      let node = self.logNodes.get(slot)
-      if node < self.changed.length() && self.changed.get(node) == revision { run result.append(node) }
-      back = back + 1
-    }
-    return true
+    return run self.changes.touchedNodes(since, &mut result)
   }
-  // Records that the children of `id` generate boxes anew.
-  fn generates(self: &mut Self, id: usize) {
-    if id == NO_NODE { return }
-    let slot = self.genLogged % GENERATION_LOG
-    if self.genLogged >= GENERATION_LOG && self.genRevisions.get(slot) > self.genLost { self.genLost = self.genRevisions.get(slot) }
-    self.genNodes.set(slot, id)
-    self.genRevisions.set(slot, self.current)
-    self.genLogged = self.genLogged + 1
-  }
-  // Records that how node `id` generates boxes changed: its parent's
-  // children generate boxes anew.
-  fn generatesAround(self: &mut Self, id: usize) {
-    let parent = self.nodes.asSlice()[id].parent
-    if parent != NO_NODE { self.generates(parent) }
-    else if id == 0 { self.generatesAll() }
-  }
-  // Records a change to generated boxes the log cannot name.
-  fn generatesAll(self: &mut Self) { self.genLost = self.current }
-  // Appends, once each, the nodes whose children generate boxes anew after
-  // revision `since` (see `genNodes`), and returns true; or returns false,
-  // appending nothing, when the log no longer holds them all. Every change
-  // since that can change generated boxes is under one of them.
   pub effect fn generationChanges(self: &Self, since: usize, result: &mut List<usize>) -> bool ! OutOfMemoryError ? &mut Allocator {
-    if self.genLost > since { return false }
-    let mut back: usize = 0
-    while back < self.genLogged && back < GENERATION_LOG {
-      let slot = (self.genLogged - 1 - back) % GENERATION_LOG
-      if self.genRevisions.get(slot) <= since { return true }
-      let node = self.genNodes.get(slot)
-      let mut seen = false
-      let mut at: usize = 0
-      while at < result.length() && !seen {
-        seen = result.get(at) == node
-        at = at + 1
-      }
-      if !seen { run result.append(node) }
-      back = back + 1
-    }
-    return true
+    return run self.changes.generationChanges(since, &mut result)
   }
-  // The number of scroll offset changes so far.
-  pub fn scrollRevision(self: &Self) -> usize { return self.scrolls }
-  // Appends each node whose scroll offset changed after `since` scroll
-  // changes and returns true, or returns false when there were too many.
   pub effect fn scrolledNodes(self: &Self, since: usize, result: &mut List<usize>) -> bool ! OutOfMemoryError ? &mut Allocator {
-    if since > self.scrolls || self.scrolls - since > SCROLL_LOG { return false }
-    let mut at = since
-    while at < self.scrolls {
-      run result.append(self.scrollNodes.get(at % SCROLL_LOG))
-      at = at + 1
-    }
-    return true
+    return run self.changes.scrolledNodes(since, &mut result)
   }
   // Records a change the tree cannot see: a direct edit of `nodes` or
   // `styles`, or new content behind a node's measurement key. Layout results
   // that depend on the node are recomputed by the next compute.
   pub effect fn markDirty(self: &mut Self, id: NodeId) ! InvalidNode {
     if !self.contains(id) { fail InvalidNode { index: id.index } }
-    self.touch(id.index)
-    self.generated = self.current
-    self.generatesAll()
-    self.marks = self.marks + 1
+    self.changes.marked(id.index)
   }
-  // The number of markDirty calls so far: revisions that changed no style,
-  // text or structure.
-  pub fn markRevision(self: &Self) -> usize { return self.marks }
   pub effect fn internGridName(self: &mut Self, name: string) -> usize ! GridError | OutOfMemoryError ? &mut Allocator {
     if !validGridName(name) { fail GridError {} }
     return run self.internName(name)
@@ -410,7 +219,7 @@ impl Tree {
     let styleIndex = self.nodes.asSlice()[id.index].styleIndex
     let handle = self.styles.asSlice()[styleIndex].grid
     if handle == 0 && template.isInitial() {
-      self.touchInner(id.index)
+      self.changes.innerChanged(id.index)
       return
     }
     let old = &self.grids.asSlice()[handle]
@@ -432,17 +241,14 @@ impl Tree {
       styles[styleIndex].grid = slot
     } else if handle == 0 {
       let slot = self.grids.length()
-      run self.gridRevisions.reserve(1)
       run self.grids.append(move template)
-      run self.gridRevisions.append(0)
       let styles = self.styles.asMutSlice()
       styles[styleIndex].grid = slot
     } else {
       let grids = self.grids.asMutSlice()
       grids[handle] = move template
     }
-    if outer { self.touch(id.index) } else { self.touchInner(id.index) }
-    if !same { self.gridRevisions.set(self.styles.asSlice()[styleIndex].grid, self.current) }
+    self.changes.gridChanged(id.index, !same, outer)
   }
   // Replaces the `shape-outside` area of a float (CSS Shapes 1 §3.1). A float's
   // area is what lines beside it wrap around, so a change is one its parent sees.
@@ -469,7 +275,7 @@ impl Tree {
       let styles = self.styles.asMutSlice()
       styles[styleIndex].shape = usize.toU32(slot)
     }
-    self.touch(id.index)
+    self.changes.shapeChanged(id.index)
   }
   pub fn root(self: &Self) -> NodeId { return NodeId { index: 0 } }
   // Whether `id` names a node: one in range that destroy has not freed.
@@ -537,18 +343,12 @@ impl Tree {
     if self.freeNodes.length() != 0 { return }
     run self.nodes.reserve(1)
     run self.live.reserve(1)
-    run self.changed.reserve(1)
-    run self.outer.reserve(1)
-    run self.insets.reserve(1)
-    run self.placed.reserve(1)
+    run self.changes.reserve(1)
   }
   // Stores a node in the last freed slot or a new one; reserveSlot made room.
   // A new node, even outside the tree, changes which nodes generated boxes
   // and kept per-source lists cover.
   effect fn publish(self: &mut Self, node: Node) -> usize ! OutOfMemoryError ? &mut Allocator {
-    self.current = self.current + 1
-    self.structure = self.current
-    self.generated = self.current
     if self.freeNodes.length() != 0 {
       let index = self.freeNodes.get(self.freeNodes.length() - 1)
       let remaining = self.freeNodes.length() - 1
@@ -556,19 +356,13 @@ impl Tree {
       let nodes = self.nodes.asMutSlice()
       nodes[index] = move node
       self.live.set(index, true)
-      self.changed.set(index, self.current)
-      self.outer.set(index, self.current)
-      self.insets.set(index, 0)
-      self.placed.set(index, self.current)
+      run self.changes.created(index)
       return index
     }
     let index = self.nodes.length()
     run self.nodes.append(move node)
     run self.live.append(true)
-    run self.changed.append(self.current)
-    run self.outer.append(self.current)
-    run self.insets.append(0)
-    run self.placed.append(self.current)
+    run self.changes.created(index)
     return index
   }
   // Inserts `child` among `parent`'s children before `before`, or last
@@ -603,24 +397,25 @@ impl Tree {
     if previous == NO_NODE { nodes[parent.index].firstChild = child.index } else { nodes[previous].nextSibling = child.index }
     if next == NO_NODE { nodes[parent.index].lastChild = child.index } else { nodes[next].previousSibling = child.index }
     if nodes[child.index].isText() { nodes[child.index].styleIndex = styleIndex }
-    self.touchInner(parent.index)
-    self.touch(child.index)
-    self.structure = self.current
-    self.generated = self.current
-    self.generates(parent.index)
+    self.changes.inserted(parent.index, child.index)
   }
   // Takes a node and its subtree out of the tree, keeping them for a later
   // insertBefore. A node outside the tree stays as it is.
   pub effect fn remove(self: &mut Self, id: NodeId) ! InvalidNode {
     if !self.contains(id) || id.index == 0 { fail InvalidNode { index: id.index } }
-    if self.nodes.asSlice()[id.index].parent == NO_NODE { return }
-    self.unlink(id.index)
-    self.touch(id.index)
-    self.structure = self.current
-    self.generated = self.current
+    let parent = self.nodes.asSlice()[id.index].parent
+    if parent == NO_NODE { return }
+    self.detach(id.index)
+    self.changes.removed(id.index, parent)
   }
   // Unlinks a node from its parent's children, recording the parent's change.
   fn unlink(self: &mut Self, id: usize) {
+    let parent = self.nodes.asSlice()[id].parent
+    self.detach(id)
+    self.changes.unlinked(parent)
+  }
+  // Unlinks a node from its parent's children.
+  fn detach(self: &mut Self, id: usize) {
     let nodes = self.nodes.asMutSlice()
     let parent = nodes[id].parent
     let previous = nodes[id].previousSibling
@@ -630,8 +425,6 @@ impl Tree {
     nodes[id].parent = NO_NODE
     nodes[id].previousSibling = NO_NODE
     nodes[id].nextSibling = NO_NODE
-    self.touchInner(parent)
-    self.generates(parent)
   }
   // Removes a node and frees it and its subtree. Their ids, element style
   // slots and grid slots go to later creates, last freed first; nodes are
@@ -655,22 +448,19 @@ impl Tree {
     run self.freeGrids.reserve(grids)
     run self.freeShapes.reserve(elements)
     if self.nodes.asSlice()[id.index].parent != NO_NODE { self.unlink(id.index) }
-    else { self.current = self.current + 1 }
+    else { self.changes.destroying() }
     at = id.index
     while at != NO_NODE {
       let next = self.following(id.index, at)
       run self.freeNodes.append(at)
       self.live.set(at, false)
-      self.changed.set(at, self.current)
-      self.outer.set(at, self.current)
-      self.placed.set(at, self.current)
+      self.changes.freed(at)
       if !self.nodes.asSlice()[at].isText() {
         let styleIndex = self.nodes.asSlice()[at].styleIndex
         let handle = self.styles.asSlice()[styleIndex].grid
         if handle != 0 {
           let templates = self.grids.asMutSlice()
           templates[handle] = GridTemplate.make()
-          self.gridRevisions.set(handle, self.current)
           run self.freeGrids.append(handle)
         }
         let shape = u32.toUsize(self.styles.asSlice()[styleIndex].shape)
@@ -688,8 +478,7 @@ impl Tree {
       at = next
     }
     // Freed slots keep their links until reused; following walks them above.
-    self.structure = self.current
-    self.generated = self.current
+    self.changes.structureChanged()
   }
   // The node after `at` in tree order within `root`'s subtree, or NO_NODE.
   fn following(self: &Self, root: usize, at: usize) -> usize {
@@ -712,74 +501,39 @@ impl Tree {
     // Natural measurement implies a replaced element regardless of the new style.
     if self.nodes.asSlice()[id.index].measurement == Measurement.Natural { value.replaced = true }
     // An unchanged style leaves the node clean, so callers need no change detection of their own.
-    if &self.styles.asSlice()[styleIndex] == &value { return }
+    let change = Source.classifyIn<Tree>(&self, id.index, &value)
+    if change.same { return }
     if value.wrapFlow != WrapFlow.Auto { self.exclusionStyles = true }
-    let generates = !sameGeneration(&self.styles.asSlice()[styleIndex], &value)
     let parent = self.nodes.asSlice()[id.index].parent
-    let mut flexParent = false
-    let mut gridParent = false
-    if parent != NO_NODE {
-      let display = &self.styles.asSlice()[self.nodes.asSlice()[parent].styleIndex].display
-      flexParent = display.insideIs(DisplayInside.Flex)
-    }
-    let mut generatedParent = parent
-    while generatedParent != NO_NODE {
-      let display = &self.styles.asSlice()[self.nodes.asSlice()[generatedParent].styleIndex].display
-      if !display.isContents() {
-        gridParent = display.isGrid()
-        break
-      }
-      generatedParent = self.nodes.asSlice()[generatedParent].parent
-    }
-    let previous = &self.styles.asSlice()[styleIndex]
-    let inner = innerChange(previous, &value, flexParent, gridParent) || !flexParent && !gridParent && insetChange(previous, &value)
-    let insets = !sameEdges(&previous.padding, &value.padding) || !sameEdges(&previous.border, &value.border)
-    let beyond = !sameOuter(previous, &value)
     let styles = self.styles.asMutSlice()
     styles[styleIndex] = move value
-    if inner { self.touchInner(id.index) }
-    else if beyond { self.touch(id.index) }
-    else {
-      self.touchInner(id.index)
-      self.outer.set(id.index, self.current)
-    }
-    if inner && insets { self.insets.set(id.index, self.current) }
-    if generates {
-      self.generated = self.current
-      self.generatesAround(id.index)
-    }
+    self.changes.styleChanged(id.index, parent, change)
   }
   pub effect fn setText(self: &mut Self, id: NodeId, value: String) ! InvalidNode {
     if !self.contains(id) || !self.nodes.asSlice()[id.index].isText() { fail InvalidNode { index: id.index } }
-    let blank = whitespace(String.view(&value))
+    let blank = Source.blank(String.view(&value))
     let mut wasBlank = false
     match self.nodes.asSlice()[id.index].text() {
-      Option<string>.Some { value: previous } => { wasBlank = whitespace(previous) }
+      Option<string>.Some { value: previous } => { wasBlank = Source.blank(previous) }
       Option<string>.None => {}
     }
     let nodes = self.nodes.asMutSlice()
     nodes[id.index].content = SourceContent.Text { value: move value }
     nodes[id.index].textStart = 0
-    self.touch(id.index)
-    if blank != wasBlank {
-      self.generated = self.current
-      self.generatesAround(id.index)
-    }
+    let parent = nodes[id.index].parent
+    self.changes.textChanged(id.index, parent, blank != wasBlank)
   }
   /// Leaves the first `start` bytes of text node `id` to another box: layout reads the rest,
   /// at the same offsets. A host's ::first-letter box lays out the letter it takes.
   pub effect fn setTextStart(self: &mut Self, id: NodeId, start: usize) ! InvalidNode {
     if !self.contains(id) || !self.nodes.asSlice()[id.index].isText() { fail InvalidNode { index: id.index } }
     if self.nodes.asSlice()[id.index].textStart == start { return }
-    let wasBlank = match self.nodes.asSlice()[id.index].laidText() { Option<string>.Some { value } => whitespace(value) Option<string>.None => true }
+    let wasBlank = match self.nodes.asSlice()[id.index].laidText() { Option<string>.Some { value } => Source.blank(value) Option<string>.None => true }
     let nodes = self.nodes.asMutSlice()
     nodes[id.index].textStart = start
-    let blank = match self.nodes.asSlice()[id.index].laidText() { Option<string>.Some { value } => whitespace(value) Option<string>.None => true }
-    self.touch(id.index)
-    if blank != wasBlank {
-      self.generated = self.current
-      self.generatesAround(id.index)
-    }
+    let blank = match self.nodes.asSlice()[id.index].laidText() { Option<string>.Some { value } => Source.blank(value) Option<string>.None => true }
+    let parent = self.nodes.asSlice()[id.index].parent
+    self.changes.textChanged(id.index, parent, blank != wasBlank)
   }
   pub effect fn setScrollOffset(self: &mut Self, id: NodeId, offset: Point) ! InvalidNode {
     if !self.contains(id) { fail InvalidNode { index: id.index } }
@@ -787,8 +541,7 @@ impl Tree {
     if nodes[id.index].isText() { fail InvalidNode { index: id.index } }
     if nodes[id.index].scrollOffset.x == offset.x && nodes[id.index].scrollOffset.y == offset.y { return }
     nodes[id.index].scrollOffset = offset
-    self.scrollNodes.set(self.scrolls % SCROLL_LOG, id.index)
-    self.scrolls = self.scrolls + 1
+    self.changes.scrolled(id.index)
   }
   pub effect fn setMeasurement(self: &mut Self, id: NodeId, key: usize) ! InvalidNode {
     if !self.contains(id) { fail InvalidNode { index: id.index } }
@@ -796,9 +549,8 @@ impl Tree {
     if nodes[id.index].isText() || nodes[id.index].firstChild != NO_NODE { fail InvalidNode { index: id.index } }
     nodes[id.index].measureKey = key
     nodes[id.index].measurement = Measurement.Content
-    self.touch(id.index)
-    self.generated = self.current
-    self.generatesAround(id.index)
+    let parent = nodes[id.index].parent
+    self.changes.measured(id.index, parent)
   }
   pub effect fn setNaturalMeasurement(self: &mut Self, id: NodeId, key: usize) ! InvalidNode {
     if !self.contains(id) { fail InvalidNode { index: id.index } }
@@ -807,11 +559,10 @@ impl Tree {
     nodes[id.index].measureKey = key
     nodes[id.index].measurement = Measurement.Natural
     let styleIndex = nodes[id.index].styleIndex
+    let parent = nodes[id.index].parent
     let styles = self.styles.asMutSlice()
     styles[styleIndex].replaced = true
-    self.touch(id.index)
-    self.generated = self.current
-    self.generatesAround(id.index)
+    self.changes.measured(id.index, parent)
   }
 }
 // Work counters for the most recent compute, summed over its passes.
@@ -952,7 +703,7 @@ impl LayoutTree {
     self.keptRevision = revision
     self.keptReusable = false
   }
-  pub fn adopt<'a>(self: &mut Self, constructed: BoxTree<'a>) {
+  pub fn adopt<'a, S: LayoutSource>(self: &mut Self, constructed: BoxTree<'a, S>) {
     self.boxNodes = move constructed.boxes
     self.anonymousStyles = move constructed.anonymousStyles
     self.anonymousOrigins = move constructed.anonymousOrigins

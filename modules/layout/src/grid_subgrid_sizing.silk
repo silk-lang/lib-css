@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
 import silk.num.i32
 import silk.num.usize
@@ -94,8 +95,8 @@ fn mappedItem(id: usize, columns: bool, start: usize, end: usize) -> GridItem {
 
 // Traverse only the connected inherited physical axis. The cross axis is
 // initialized at the caller's stage, not laid out by a recursive two-axis probe.
-pub effect fn collect<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M,
+pub effect fn collect<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M,
   item: &GridItem, base: &Input, parent: &Style, source: &GridSource<'_>,
   columns: &[TrackState], rows: &[TrackState], columnGap: f32, rowGap: f32,
   root: &Style, rootTracks: &[TrackState], rootSizing: &AxisSizing,
@@ -362,7 +363,7 @@ pub effect fn collect<'pass, 'source, M: Measure + TextMeasure>(
   return changed
 }
 
-fn ownerOffset(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, owner: usize, id: usize) -> Point {
+fn ownerOffset<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, owner: usize, id: usize) -> Point {
   let mut result = Point { x: 0.0, y: 0.0 }
   let mut at = id
   while at != owner && at != NO_NODE {
@@ -379,8 +380,8 @@ fn currentFragment(output: &LayoutPass<'_, '_>, id: usize) -> bool {
   return state.fragmentainer == output.frame && state.fragment != NO_NODE && !state.skipped
 }
 
-pub fn captureFinal(
-  nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, owner: usize, inset: ResolvedEdges,
+pub fn captureFinal<S: LayoutSource>(
+  nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, owner: usize, inset: ResolvedEdges,
   members: &[GridItem], directCount: usize, tracks: &[TrackState], columns: bool,
   baselines: &mut GridBaselines,
 ) {
@@ -406,8 +407,8 @@ pub fn captureFinal(
   }
 }
 
-pub effect fn placeFinal(
-  nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, owner: usize, size: Size, inset: ResolvedEdges,
+pub effect fn placeFinal<S: LayoutSource>(
+  nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, owner: usize, size: Size, inset: ResolvedEdges,
   members: &[GridItem], directCount: usize, tracks: &[TrackState], columns: bool,
   baselines: &GridBaselines, performLayout: bool,
 ) ! OutOfMemoryError ? &mut Allocator {

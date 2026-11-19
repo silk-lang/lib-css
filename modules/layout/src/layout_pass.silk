@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
 import silk.mem.box { Box }
@@ -9,7 +10,7 @@ import silk.num.u64
 import context { Input, ResolvedBox, overflowForAxis, scrollbarGutter }
 import geometry { Layout, Point, Rect, OptionalSize, ScrollbarMetrics, ResolvedEdges, Size, max, sameEdges }
 import style { Overflow, ScrollbarWidth }
-import tree { Node, NO_NODE, LayoutStats }
+import tree { NO_NODE, LayoutStats }
 import bfc { FloatBox }
 import exclusions { ExclusionArea }
 import box_tree { BoxTree }
@@ -169,14 +170,14 @@ pub struct LayoutPass<'a, 'source> {
   pub tableSplits: List<FragmentInput>,
 }
 impl<'a, 'source> LayoutPass<'a, 'source> {
-  pub effect fn make(boxes: &'a mut [Layout], fragments: &'a mut FragmentArena, sources: &'source [Node], state: &'a mut PassState) -> LayoutPass<'a, 'source> ! OutOfMemoryError ? &mut Allocator {
-    return run LayoutPass.over(move boxes, move fragments, sources, &mut state.cache, &mut state.previous, &mut state.writes, &mut state.facts)
+  pub effect fn make<S: LayoutSource>(boxes: &'a mut [Layout], fragments: &'a mut FragmentArena, source: &'source S, state: &'a mut PassState) -> LayoutPass<'a, 'source> ! OutOfMemoryError ? &mut Allocator {
+    return run LayoutPass.over(move boxes, move fragments, source, &mut state.cache, &mut state.previous, &mut state.writes, &mut state.facts)
   }
   // A pass over state that outlives it: compute lends the LayoutTree's own
   // and its box facts, so none of it moves.
-  pub effect fn over(boxes: &'a mut [Layout], fragments: &'a mut FragmentArena, sources: &'source [Node], cache: &'a mut LayoutCache, previous: &'a mut Snapshot, writes: &'a mut BoxWrites, facts: &'a mut BoxFacts) -> LayoutPass<'a, 'source> ! OutOfMemoryError ? &mut Allocator {
+  pub effect fn over<S: LayoutSource>(boxes: &'a mut [Layout], fragments: &'a mut FragmentArena, source: &'source S, cache: &'a mut LayoutCache, previous: &'a mut Snapshot, writes: &'a mut BoxWrites, facts: &'a mut BoxFacts) -> LayoutPass<'a, 'source> ! OutOfMemoryError ? &mut Allocator {
     // The paragraph cache may borrow text from these source nodes.
-    drop sources
+    drop source
     return LayoutPass { boxes: move boxes, fragments: move fragments, fragmentParent: NO_NODE, frame: NO_NODE, resumes: ResumeStore.make(), frames: Fragmentainers.empty(), frameRoots: List<usize>.make(), frameOffsets: List<f32>.make(), fullBoxes: List<FullBoxGeometry>.make(), fullIndices: List<usize>.make(), heldPrepared: List<PreparedInline<'source>>.make(), heldIds: List<usize>.make(), preparedSlots: List<PreparedSlot>.make(), preparedGeneration: 1, preparedOrder: List<usize>.make(), preparedHead: 0, preparedHeld: 0, spareCores: List<Box<PreparedCore>>.make(), rawTokens: List<TextToken<'source>>.make(), normalTokens: List<TextToken<'source>>.make(), lineLimits: List<LineLimit>.make(), cache: move cache, previous: move previous, facts: move facts, floatContext: List<FloatBox>.make(), outOfFlowBoxes: List<u64>.make(), overflowEscapes: List<usize>.make(), overflowMarks: List<u64>.make(), overflowRuns: 0, relativeOffsets: List<Point>.make(), absoluteInputOwner: NO_NODE, absoluteInput: Input.make(OptionalSize.definite(0.0, 0.0)), absoluteBox: ResolvedBox { padding: ResolvedEdges.zero(), border: ResolvedEdges.zero(), margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), gutter: ResolvedEdges.zero(), scrollbarMetrics: ScrollbarMetrics.zero(), min: Size.zero(), max: Size.zero(), size: OptionalSize.none() }, absoluteRect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }, absoluteLimits: ResolvedEdges.zero(), absoluteLimitsSet: false, absoluteScrollParent: NO_NODE, absoluteScrolled: false, absoluteScrollport: Size.zero(), inPlace: false, writes: move writes, tracking: true, deferSticky: false, anchors: List<StaticAnchor>.make(), selections: List<ScrollbarSelection>.make(), frameSelections: List<List<FrameScrollbarSelection>>.make(), scrollbarSnapshots: List<ScrollbarSnapshot>.make(), hasAutoScrollbars: false, gutterScrollbars: false, needsRelayout: false, exclusions: List<ExclusionArea>.make(), foundExclusions: List<ExclusionArea>.make(), exclusionPasses: 0, stats: LayoutStats.zero(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), tableSlots: List<Rect>.make(), lineRuns: List<LineText>.make(), lineItems: List<usize>.make(), lineBounds: List<Rect>.make(), tablePlans: List<u64>.make(), tableSplits: List<FragmentInput>.make() }
   }
   // Fragmentation state for the column flows of a continuous pass.
@@ -590,7 +591,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
     let fragment = self.publication(id)
     run self.scrollbarSnapshots.append(ScrollbarSnapshot { id: id, frame: self.frame, fragment: fragment, metrics: metrics, gutter: gutter })
   }
-  effect fn selectFrameScrollbars(self: &mut Self, nodes: &BoxTree<'_>) ! OutOfMemoryError ? &mut Allocator {
+  effect fn selectFrameScrollbars<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>) ! OutOfMemoryError ? &mut Allocator {
     if self.frameSelections.length() == 0 {
       run self.frameSelections.reserveExact(self.boxes.length)
       let mut id: usize = 0
@@ -637,7 +638,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   // Called after full unscrolled overflow, including absolute descendants.
   // Selection only adds bars within a compute, so convergence is bounded by
   // two additions per generated box, not an arbitrary retry count.
-  pub effect fn selectScrollbars(self: &mut Self, nodes: &BoxTree<'_>) ! OutOfMemoryError ? &mut Allocator {
+  pub effect fn selectScrollbars<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>) ! OutOfMemoryError ? &mut Allocator {
     if !self.hasAutoScrollbars { return }
     if self.frame != NO_NODE {
       run self.selectFrameScrollbars(nodes)
@@ -802,7 +803,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   // wrote, and the whole subtrees it laid out again.
   // `top` is the reused box itself, whose layout the caller stores anew:
   // only its location, which store reads, is restored.
-  effect fn restoreBoxes(self: &mut Self, nodes: &BoxTree<'_>, id: usize, from: FinalRange, base: usize, kept: bool, top: bool) ! OutOfMemoryError ? &mut Allocator {
+  effect fn restoreBoxes<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>, id: usize, from: FinalRange, base: usize, kept: bool, top: bool) ! OutOfMemoryError ? &mut Allocator {
     if kept && id < self.writes.marks.length() && self.writes.marks.asSlice()[id].relaid != self.writes.generation {
       let generation = self.writes.generation
       if self.writes.marks.asSlice()[id].written == generation {
@@ -847,12 +848,12 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   // of subtree the caller can take (see Incremental.markSubtrees). Returns
   // whether it did; the reused layout is then in boxes[id].
   @inlineAlways
-  pub effect fn reuseFinal(self: &mut Self, nodes: &BoxTree<'_>, id: usize, input: &Input, level: u8, beside: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
+  pub effect fn reuseFinal<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>, id: usize, input: &Input, level: u8, beside: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
     // Without tracking, the compute follows a cache clear: nothing is kept.
     if !self.tracking || self.frame != NO_NODE { return false }
     return run self.reuseKept(nodes, id, input, level, beside)
   }
-  effect fn reuseKept(self: &mut Self, nodes: &BoxTree<'_>, id: usize, input: &Input, level: u8, beside: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
+  effect fn reuseKept<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>, id: usize, input: &Input, level: u8, beside: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
     if id >= self.facts.reusable.length() || (self.facts.reusable.get(id) & REUSE_LEVEL) < level { return false }
     let slot = self.cache.keptRange(id)
     if !slot.valid || !LayoutCache.sameRequest(&self.cache.result(id).input, input) { return false }
@@ -868,7 +869,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   }
   // reuseFinal for a box its parent knows to request what it last requested.
   @inlineAlways
-  pub effect fn reuseFinalAsBefore(self: &mut Self, nodes: &BoxTree<'_>, id: usize, level: u8) -> bool ! OutOfMemoryError ? &mut Allocator {
+  pub effect fn reuseFinalAsBefore<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>, id: usize, level: u8) -> bool ! OutOfMemoryError ? &mut Allocator {
     if !self.tracking || self.frame != NO_NODE { return false }
     if id >= self.facts.reusable.length() || (self.facts.reusable.get(id) & REUSE_LEVEL) < level { return false }
     let slot = self.cache.keptRange(id)
@@ -905,7 +906,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
     self.stats.reusedLayouts = self.stats.reusedLayouts + 1
     return true
   }
-  effect fn reuseRange(self: &mut Self, nodes: &BoxTree<'_>, id: usize, kept: FinalRange, beside: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
+  effect fn reuseRange<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>, id: usize, kept: FinalRange, beside: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
     let mut slot = kept
     if beside && !self.cache.sameFloats(slot, self.floatContext.asSlice()) { return false }
     if !self.inPlace && id >= self.previous.boxes.length() { return false }

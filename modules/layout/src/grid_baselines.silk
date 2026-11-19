@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.num.i32
@@ -308,8 +309,8 @@ fn autoMargins(style: &Style, horizontal: bool) -> bool {
 
 // Registration uses the immediate grid's alignment defaults, but the owning
 // track collection determines cyclic eligibility and baseline coordinates.
-effect fn registerMember<M: Measure>(
-  nodes: &BoxTree<'_>,
+effect fn registerMember<M: Measure, S: LayoutSource>(
+  nodes: &BoxTree<'_, S>,
   measurer: &mut M,
   state: &mut BaselineAxis,
   index: usize,
@@ -391,8 +392,8 @@ effect fn registerMember<M: Measure>(
 
 // Call exactly once with the initially initialized tracks. Eligibility is retained
 // across cyclic-percentage reruns, even when their used track sizes become definite.
-effect fn prepareAxis<M: Measure>(
-  nodes: &BoxTree<'_>,
+effect fn prepareAxis<M: Measure, S: LayoutSource>(
+  nodes: &BoxTree<'_, S>,
   measurer: &mut M,
   items: &[GridItem],
   parent: &Style,
@@ -420,8 +421,8 @@ effect fn prepareAxis<M: Measure>(
   }
 }
 
-pub effect fn appendMember<M: Measure>(
-  nodes: &BoxTree<'_>,
+pub effect fn appendMember<M: Measure, S: LayoutSource>(
+  nodes: &BoxTree<'_, S>,
   measurer: &mut M,
   scratch: &mut GridBaselines,
   index: usize,
@@ -458,8 +459,8 @@ pub fn truncateMembers(scratch: &mut GridBaselines, columns: bool, count: usize)
   }
 }
 
-pub effect fn prepare<M: Measure>(
-  nodes: &BoxTree<'_>,
+pub effect fn prepare<M: Measure, S: LayoutSource>(
+  nodes: &BoxTree<'_, S>,
   measurer: &mut M,
   items: &[GridItem],
   parent: &Style,
@@ -585,8 +586,8 @@ fn capture(
 
 // Reuses each contribution's original request and the normal independent-box
 // cache without copying Layout. Scalar caps never become known layout sizes.
-pub effect fn captureContribution<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn captureContribution<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   scratch: &mut GridBaselines,
@@ -604,8 +605,8 @@ pub effect fn captureContribution<'pass, 'source, M: Measure + TextMeasure>(
 }
 
 // Ancestor edge contributions act as additional margins, not probe constraints.
-pub effect fn captureContributionEdges<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn captureContributionEdges<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   scratch: &mut GridBaselines,
@@ -856,7 +857,7 @@ impl BaselinePick {
   }
 
   // consider for an item on edge track `track`, or sharing a baseline.
-  fn considerEdge(self: &mut Self, nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[GridItem], scratch: &GridBaselines,
+  fn considerEdge<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, items: &[GridItem], scratch: &GridBaselines,
     index: usize, track: i32, last: bool, sharing: bool, horizontal: bool) {
     let item = &items[index]
     let layout = &output.boxes[item.id]
@@ -888,7 +889,7 @@ impl BaselinePick {
 // last track's those ending on it, found scanning backward, so in the usual
 // row order each scan ranks the items of one row. Synthesis for the last
 // baselines takes the last item in grid order.
-fn quickPicks(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[GridItem], scratch: &GridBaselines, horizontal: bool,
+fn quickPicks<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, items: &[GridItem], scratch: &GridBaselines, horizontal: bool,
   first: &mut BaselinePick, final: &mut BaselinePick) {
   let mut firstTrack = items[0].row.start
   let mut index: usize = 0
@@ -925,8 +926,8 @@ fn quickPicks(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[GridIte
   }
 }
 
-pub fn containerBaselines<M: Measure>(
-  nodes: &BoxTree<'_>,
+pub fn containerBaselines<M: Measure, S: LayoutSource>(
+  nodes: &BoxTree<'_, S>,
   output: &LayoutPass<'_, '_>,
   measurer: &mut M,
   items: &[GridItem],

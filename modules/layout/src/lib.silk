@@ -117,6 +117,7 @@ pub import tree {
   Measurement,
   SourceContent
 }
+pub import source { LayoutSource, Changes, StyleChange, classify, classifyIn, blank, laidText }
 pub import box_tree { BoxKind, BoxNode }
 pub import shapes { FloatShape, ShapeKind, ShapeBox, ShapeRadius }
 pub import fragments {

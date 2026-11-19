@@ -1,6 +1,7 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
-import tree { Tree, NodeId, Measurement, NO_NODE }
+import tree { Measurement, NO_NODE }
 import box_tree { BoxTree, BoxKind, anonymous, sortedContains, lowerBound }
 
 // Incremental box construction. A change to which boxes a tree generates (an
@@ -37,18 +38,17 @@ const MAX_ROOTS: usize = 32
 // Whether source `s` heads its generated subtree in one block, flex or grid
 // box whose children construct generates from its children alone, as
 // BoxTree.reconstruct does; returns that box or NO_NODE.
-fn rootBox(tree: &Tree, nodes: &BoxTree<'_>, s: usize, since: usize) -> usize {
-  if s >= nodes.firstBySource.length() || !tree.contains(NodeId { index: s }) { return NO_NODE }
-  let source = &nodes.sources[s]
-  if source.isText() || source.measurement != Measurement.None { return NO_NODE }
+fn rootBox<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, s: usize, since: usize) -> usize {
+  if s >= nodes.firstBySource.length() || !tree.exists(s) { return NO_NODE }
+  if tree.isText(s) || tree.measurement(s) != Measurement.None { return NO_NODE }
   // A node made in a slot freed since holds another node's boxes.
-  if tree.outerChangedAt(s) > since { return NO_NODE }
+  if tree.changes().outerChangedAt(s) > since { return NO_NODE }
   let id = nodes.firstBySource.get(s)
   if id == NO_NODE || id != nodes.lastBySource.get(s) || id >= nodes.boxes.length() { return NO_NODE }
   let node = nodes.node(id)
   if node.source != s || node.nextContinuation != NO_NODE || node.previousContinuation != NO_NODE || node.measurement != Measurement.None || node.columnSet || node.columnFlow { return NO_NODE }
   if node.kind != BoxKind.Block && node.kind != BoxKind.Flex && node.kind != BoxKind.Grid { return NO_NODE }
-  let style = &nodes.styles[source.styleIndex]
+  let style = &nodes.styles[tree.styleIndex(s)]
   if style.replaced || style.multicol() || style.display.isNone() || style.display.isContents() { return NO_NODE }
   return id
 }
@@ -58,14 +58,14 @@ fn rootBox(tree: &Tree, nodes: &BoxTree<'_>, s: usize, since: usize) -> usize {
 // and has not changed since in a way its parent sees; `unkept` lists (root,
 // child source) pairs with a change below them that has no root of its own
 // below the root.
-fn keepable(tree: &Tree, nodes: &BoxTree<'_>, since: usize, root: usize, s: usize, id: usize, unkept: &[usize]) -> bool {
+fn keepable<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, since: usize, root: usize, s: usize, id: usize, unkept: &[usize]) -> bool {
   let node = nodes.node(id)
   let source = node.source
   if source == NO_NODE || node.kind == BoxKind.Text || !node.firstForSource || !node.lastForSource { return false }
   // A change to the node its parent may see covers every change to how it
   // generates its own box; changes below it are patched at roots of their own.
-  if !tree.contains(NodeId { index: source }) || tree.outerChangedAt(source) > since { return false }
-  if nodes.sources[source].isText() || nodes.sources[source].parent != s { return false }
+  if !tree.exists(source) || tree.changes().outerChangedAt(source) > since { return false }
+  if nodes.source.isText(source) || nodes.source.parent(source) != s { return false }
   if source >= nodes.firstBySource.length() || nodes.firstBySource.get(source) != id { return false }
   let mut at: usize = 0
   while at + 1 < unkept.length {
@@ -80,14 +80,14 @@ fn keepable(tree: &Tree, nodes: &BoxTree<'_>, since: usize, root: usize, s: usiz
 // when the change cannot be patched: the tree lost track of it, it reaches
 // a box that cannot be a root, or it is too large, so that generating every
 // box afresh costs no more.
-pub effect fn patch(tree: &Tree, nodes: &mut BoxTree<'_>, since: usize, result: &mut BoxPatch) -> bool ! OutOfMemoryError ? &mut Allocator {
+pub effect fn patch<S: LayoutSource>(tree: &S, nodes: &mut BoxTree<'_, S>, since: usize, result: &mut BoxPatch) -> bool ! OutOfMemoryError ? &mut Allocator {
   result.before = nodes.boxes.length()
   let count = nodes.boxes.length()
   // Free ids pile up as subtrees shrink: past a share of the tree, a full
   // generation packs them.
   if nodes.freeBoxes.length() > 256 && nodes.freeBoxes.length() * 8 > count { return false }
   let mut parents = List<usize>.make()
-  let known = run tree.generationChanges(since, &mut parents)
+  let known = run tree.changes().generationChanges(since, &mut parents)
   if !known { return false }
   // Each change's root, and the child of the root on its way up.
   let mut roots = List<usize>.make()
@@ -96,7 +96,7 @@ pub effect fn patch(tree: &Tree, nodes: &mut BoxTree<'_>, since: usize, result: 
   while at < parents.length() {
     let start = parents.get(at)
     at = at + 1
-    if !tree.contains(NodeId { index: start }) { continue }
+    if !tree.exists(start) { continue }
     let mut s = start
     let mut below = NO_NODE
     let mut root = NO_NODE
@@ -111,7 +111,7 @@ pub effect fn patch(tree: &Tree, nodes: &mut BoxTree<'_>, since: usize, result: 
         below = s
       }
       last = s
-      s = nodes.sources[s].parent
+      s = nodes.source.parent(s)
     }
     // A change outside the tree generates nothing; one at the top with no
     // root below it cannot be patched.
@@ -162,7 +162,7 @@ pub effect fn patch(tree: &Tree, nodes: &mut BoxTree<'_>, since: usize, result: 
   }
   run kept.sort()
   // The lost boxes give up their sources and styles, and their ids.
-  let sources = nodes.sources.length
+  let sources = nodes.source.nodeCount()
   while nodes.firstBySource.length() < sources {
     run nodes.firstBySource.append(NO_NODE)
     run nodes.lastBySource.append(NO_NODE)
