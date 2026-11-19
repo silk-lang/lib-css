@@ -2977,13 +2977,9 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   nodes.prepareColumns()
   let restoring = restoringKept
   let sameBoxes = restoring || (kept && Incremental.sameBoxes(output.boxNodes.asSlice(), nodes.boxes.asSlice()))
-  // Other boxes, most of them the previous ones under other numbers (a node
-  // came or went): the previous output stays in place too, renumbered, so
-  // the subtrees that stand are kept where they are instead of copied.
-  let renumbered = kept && !sameBoxes && output.fragments.complete()
   // The previous output becomes the snapshot reused subtrees are copied from,
   // except that of the same boxes, which stays in place (see below).
-  output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, sameBoxes || renumbered)
+  output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, sameBoxes)
   let mut facts = Intrinsic.replace(output.facts, BoxFacts.make())
   // The nodes changed since, when the tree still knows them and so do the
   // kept facts' style source index.
@@ -3007,21 +3003,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     let matched = run Incremental.matchBoxes(output.boxNodes.asSlice(), output.firstBySource.asSlice(), &nodes)
     run output.cache.rotateFinals()
     run output.cache.remap(matched.toOld.asSlice(), matched.toNew.asSlice())
-    if renumbered {
-      // As Snapshot.remap renumbers a snapshot.
-      let toOld = matched.toOld.asSlice()
-      let mut moved = List<Layout>.make()
-      run moved.reserveExact(toOld.length)
-      let mut id: usize = 0
-      while id < toOld.length {
-        let from = toOld[id]
-        if from != NO_NODE && from < output.boxes.length() { run moved.append(output.boxes.asSlice()[from]) }
-        else { run moved.append(Layout.zero()) }
-        id = id + 1
-      }
-      output.boxes = move moved
-      run output.fragments.remapBoxes(toOld, matched.toNew.asSlice())
-    } else { run output.snapshot.remap(matched.toOld.asSlice(), matched.toNew.asSlice()) }
+    run output.snapshot.remap(matched.toOld.asSlice(), matched.toNew.asSlice())
     Incremental.invalidateUnmatched(&nodes, &mut output.cache, matched.changed.asSlice())
     Incremental.invalidateChanged(tree, &nodes, &mut output.cache, since, logged, changes.asSlice(), &[])
     run output.cache.compact()
@@ -3109,9 +3091,9 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   // When the previous compute of these boxes laid out most of them again,
   // this one likely will too: then saving what each write in place
   // overwrites costs more than writing afresh after the previous output.
-  let inPlace = (sameBoxes || renumbered) && !output.relaidMost
-  output.lastMode = if inPlace && sameBoxes { 2 } else if inPlace { 5 } else if sameBoxes { 3 } else { 4 }
-  if (sameBoxes || renumbered) && !inPlace { output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, false) }
+  let inPlace = sameBoxes && !output.relaidMost
+  output.lastMode = if inPlace { 2 } else if sameBoxes { 3 } else { 4 }
+  if sameBoxes && !inPlace { output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, false) }
   output.relaidMost = false
   let flexScratch = Intrinsic.replace(output.flexScratch, List<FlexScratch>.make())
   let inlineScratch = Intrinsic.replace(output.inlineScratch, List<InlineScratch>.make())
