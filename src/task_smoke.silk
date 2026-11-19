@@ -38,7 +38,7 @@ pub effect fn smoke(options: &SmokeOptions) -> ()
   let gridStyle = run U.json("{\"display\":\"grid\",\"gridTemplateColumns\":[{\"names\":[\"edge\"]},{\"repeat\":{\"count\":2,\"tracks\":[{\"minmax\":[10,{\"fr\":1}]},{\"names\":[\"inner\"]}]}},{\"fitContent\":{\"percent\":0.5}},{\"length\":-10,\"percent\":0.5},{\"length\":20,\"percent\":-0.1}],\"gridTemplateRows\":[{\"repeat\":{\"count\":\"auto-fit\",\"tracks\":[10]}}],\"gridTemplateAreas\":[[\"auto\",\"auto\"],[\"1a\",\"right\"]],\"gridAutoRows\":[\"auto\",\"min-content\",\"max-content\"],\"gridAutoColumns\":{\"fr\":0},\"gridAutoFlow\":\"column dense\",\"gridRowStart\":{\"line\":-1,\"name\":\"none\"},\"gridRowEnd\":{\"span\":2,\"name\":\"inner\"},\"gridColumnStart\":\"head\",\"gridColumnEnd\":\"auto\"}")
   let fragmentation = run U.json("{\"kind\":\"column\",\"frames\":[{\"x\":0,\"y\":0,\"width\":100,\"height\":50}]}")
   let output = run U.checked(cli, &request, 10)
-  run U.require(J.integer(J.get(&output, "schemaVersion")) == 3 && J.length(J.get(&output, "texts")) == 0, "basic output schema/texts mismatch")
+  run U.require(J.integer(J.get(&output, "schemaVersion")) == 4 && J.length(J.get(&output, "texts")) == 0, "basic output schema/texts mismatch")
   run U.require(J.length(J.get(&output, "sources")) == 1, "basic source count mismatch")
   let source = J.at(J.get(&output, "sources"), 0)
   run U.require(J.str(J.get(source, "kind")) == "element" && !J.has(source, "text"), "basic source kind mismatch")
@@ -105,7 +105,7 @@ pub effect fn smoke(options: &SmokeOptions) -> ()
     run J.set(&mut textRequest, "nodes", run U.json("[{\"parent\":null,\"style\":{}},{\"parent\":0,\"text\":\"Ab12\"}]"))
     run J.set(J.getMut(J.atMut(J.getMut(&mut textRequest, "nodes"), 0), "style"), "fontKey", J.int(fontKey))
     let textOutput = run U.checked(cli, &textRequest, 10)
-    run U.require(J.integer(J.get(&textOutput, "schemaVersion")) == 3, "text schema mismatch")
+    run U.require(J.integer(J.get(&textOutput, "schemaVersion")) == 4, "text schema mismatch")
     let textSource = J.at(J.get(&textOutput, "sources"), 1)
     run U.require(J.str(J.get(textSource, "kind")) == "text" && J.str(J.get(textSource, "text")) == "Ab12", "text source mismatch")
     run U.require(J.length(J.get(textSource, "rects")) != 0, "text rects missing")
@@ -119,14 +119,24 @@ pub effect fn smoke(options: &SmokeOptions) -> ()
       let fragment = &all[i]
       if J.str(J.get(fragment, "kind")) == "text" {
         count = count + 1
-        width = width + J.num(J.get(J.get(fragment, "size"), "width"))
-        let record = J.at(J.get(&textOutput, "texts"), i64.toUsize(J.integer(J.get(fragment, "textData"))))
-        let a = J.integer(J.get(record, "sourceStart"))
-        let b = J.integer(J.get(record, "sourceEnd"))
-        if a < start { start = a }
-        if b > end { end = b }
-        run U.require(J.integer(J.get(record, "fontKey")) == fontKey, "fragment font key mismatch")
-        run U.require(J.integer(J.get(fragment, "source")) == 1 && J.str(J.get(J.at(J.get(&textOutput, "boxes"), i64.toUsize(J.integer(J.get(fragment, "box")))), "kind")) == "text", "text fragment source/box mismatch")
+        // A text fragment's records: its runs (part 0), and the boxes of the lines it carries.
+        let firstRecord = i64.toUsize(J.integer(J.get(fragment, "textData")))
+        let records = i64.toUsize(J.integer(J.get(fragment, "textCount")))
+        let mut at: usize = 0
+        while at < records {
+          let record = J.at(J.get(&textOutput, "texts"), firstRecord + at)
+          at = at + 1
+          if J.integer(J.get(record, "part")) != 0 { continue }
+          width = width + J.num(J.get(J.get(record, "size"), "width"))
+          let a = J.integer(J.get(record, "sourceStart"))
+          let b = J.integer(J.get(record, "sourceEnd"))
+          if a < start { start = a }
+          if b > end { end = b }
+        }
+        run U.require(J.integer(J.get(fragment, "fontKey")) == fontKey, "fragment font key mismatch")
+        // Text on lines of its own is a fragment of its inline formatting box.
+        let boxKind = J.str(J.get(J.at(J.get(&textOutput, "boxes"), i64.toUsize(J.integer(J.get(fragment, "box")))), "kind"))
+        run U.require(J.integer(J.get(fragment, "source")) == 1 && (boxKind == "text" || boxKind == "inline-formatting"), "text fragment source/box mismatch")
       } else { run U.require(J.isNull(J.get(fragment, "textData")), "nontext fragment owns textData") }
       i = i + 1
     }

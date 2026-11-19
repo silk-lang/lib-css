@@ -27,7 +27,7 @@ import breaks {
   allowsLineBreak,
   nextRelaxation
 }
-import fragments { FragmentArena, FragmentKind, TextFragment, TextFragmentKind }
+import fragments { FragmentArena, FragmentKind, LineText, TextFragmentKind }
 import layout_pass { LayoutPass, PassState }
 import tree { Node, NO_NODE }
 
@@ -516,18 +516,7 @@ test effect fn fragmentPublicationAndRejectedLookaheadPreserveEarlierGeometry()
     |> Effect.provideMut<Allocator>(&mut allocator)
   let mut text = pass.fragment(3, 3, FragmentKind.Text)
   text.parent = firstLine.index
-  let firstText = run pass.fragments.appendText(
-    text,
-    TextFragment {
-      sourceStart: 0,
-      sourceEnd: 1,
-      fontKey: 0,
-      shapeKey: 0,
-      bidiLevel: 0,
-      kind: TextFragmentKind.Glyphs,
-    },
-  )
-    |> Effect.provideMut<Allocator>(&mut allocator)
+  let firstText = run pass.fragments.appendText(text, LineText.make(Point { x: 0.0, y: 0.0 }, Size.zero(), 0, 1, 0, 0, TextFragmentKind.Glyphs), 0) |> Effect.provideMut<Allocator>(&mut allocator)
   pass.resumes.acceptFrame()
   let checkpoint = pass.checkpoint()
   run pass.beginFrame(1) |> Effect.provideMut<Allocator>(&mut allocator)
@@ -551,22 +540,9 @@ test effect fn fragmentPublicationAndRejectedLookaheadPreserveEarlierGeometry()
   run pass.firstLine(1, secondLine.index) |> Effect.provideMut<Allocator>(&mut allocator)
   lineLayout.location.y = 20.0
   run pass.store(1, &lineLayout, true) |> Effect.provideMut<Allocator>(&mut allocator)
-  run pass.setStaticAnchor(2, secondLine.index, Rect.zero(), false)
-    |> Effect.provideMut<Allocator>(&mut allocator)
-  text = pass.fragment(3, 3, FragmentKind.Text)
-  text.parent = secondLine.index
-  drop run pass.fragments.appendText(
-    text,
-    TextFragment {
-      sourceStart: 1,
-      sourceEnd: 2,
-      fontKey: 0,
-      shapeKey: 0,
-      bidiLevel: 0,
-      kind: TextFragmentKind.Glyphs,
-    },
-  )
-    |> Effect.provideMut<Allocator>(&mut allocator)
+  run pass.setStaticAnchor(2, secondLine.index, Rect.zero(), false) |> Effect.provideMut<Allocator>(&mut allocator)
+  let continued = run pass.fragments.appendTextBox(3, 3, secondLine.index, pass.frame, LineText.make(Point { x: 0.0, y: 0.0 }, Size.zero(), 1, 2, 0, 0, TextFragmentKind.Glyphs), 0) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(pass.fragments.textsBefore(continued.index) == 1 && pass.fragments.get(continued).textData == 1, "a continuation's splice mark must precede its own text")
   pass.fragments.resolveLocations()
   run Testing.expect(
     pass.fragments.values.asSlice()[firstBox.index].size.width == 10.0

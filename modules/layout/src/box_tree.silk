@@ -65,12 +65,20 @@ pub struct BoxTree<'a> {
   // the source path a split resumes along, with the next entry to take.
   spanRoot: usize, spanHit: usize,
   resumePath: List<usize>, resumeDepth: usize, resumeAfter: usize,
+  // Box ids no box holds, ascending, and anonymous style slots no box
+  // holds, which a patch of the tree (see box_patch.silk) leaves and takes.
+  pub freeBoxes: List<usize>, pub freeStyles: List<usize>,
+  // While a patch constructs boxes: the ids its new boxes take before any
+  // appended, ascending, and how many it took; and the text styles it made,
+  // as style index and slot pairs (`textStyles` is empty then).
+  pub slots: List<usize>, pub slotsTaken: usize,
+  patchTexts: List<usize>,
 }
 impl<'tree> BoxTree<'tree> {
   // A box tree built from these sources at an earlier revision, when no
   // change since could alter which boxes are generated.
   pub fn restore<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [GridTemplate], gridNames: &'a [String], boxes: List<BoxNode>, anonymousStyles: List<Style>, anonymousOrigins: List<usize>, anonymousText: List<bool>, firstBySource: List<usize>, lastBySource: List<usize>, copyScrolls: bool) -> BoxTree<'a> {
-    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, sources: sources, styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false, spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE }
+    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, sources: sources, styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false, spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE, freeBoxes: List<usize>.make(), freeStyles: List<usize>.make(), slots: List<usize>.make(), slotsTaken: 0, patchTexts: List<usize>.make() }
     if !copyScrolls { return move result }
     let values = result.boxes.asMutSlice()
     let mut index: usize = 0
@@ -199,11 +207,20 @@ impl<'tree> BoxTree<'tree> {
   }
 
   effect fn append(self: &mut Self, node: BoxNode, parent: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
-    let id = self.boxes.length()
+    let mut id = self.boxes.length()
     let mut value = move node
     value.parent = parent
     let source = value.source
-    run self.boxes.append(move value)
+    // A patch takes free ids first, in ascending order, so that a box still
+    // follows its parent and every box made before it.
+    if self.slotsTaken < self.slots.length() {
+      id = self.slots.get(self.slotsTaken)
+      self.slotsTaken = self.slotsTaken + 1
+      let boxes = self.boxes.asMutSlice()
+      boxes[id] = value
+    } else {
+      run self.boxes.append(move value)
+    }
     if parent != NO_NODE {
       let last = self.node(parent).lastChild
       let boxes = self.boxes.asMutSlice()
@@ -226,16 +243,42 @@ impl<'tree> BoxTree<'tree> {
     return id
   }
 
+  // Stores an anonymous style in a free slot or a new one.
+  effect fn newStyle(self: &mut Self, style: Style, origin: usize, text: bool) -> usize ! OutOfMemoryError ? &mut Allocator {
+    let free = self.freeStyles.length()
+    if free != 0 {
+      let slot = self.freeStyles.get(free - 1)
+      self.freeStyles.truncate(free - 1)
+      let styles = self.anonymousStyles.asMutSlice()
+      styles[slot] = move style
+      self.anonymousOrigins.set(slot, origin)
+      self.anonymousText.set(slot, text)
+      return slot
+    }
+    let slot = self.anonymousStyles.length()
+    run self.anonymousStyles.append(move style)
+    run self.anonymousOrigins.append(origin)
+    run self.anonymousText.append(text)
+    return slot
+  }
+  // The text style slot of element style `styleIndex` made by this
+  // construction, or NO_NODE.
+  fn textSlot(self: &Self, styleIndex: usize) -> usize {
+    if styleIndex < self.textStyles.length() { return self.textStyles.get(styleIndex) }
+    let mut at: usize = 0
+    while at + 1 < self.patchTexts.length() {
+      if self.patchTexts.get(at) == styleIndex { return self.patchTexts.get(at + 1) }
+      at = at + 2
+    }
+    return NO_NODE
+  }
+
   // Anonymous boxes inherit text properties, never element geometry or layout.
   effect fn ensureAnonymousStyle(self: &mut Self, flow: &mut Flow) -> usize ! OutOfMemoryError ? &mut Allocator {
     if flow.anonymousStyle == NO_NODE {
       let style = runStyle(self.style(flow.container))
       let origin = self.node(flow.container).styleOwner
-      let slot = self.anonymousStyles.length()
-      run self.anonymousStyles.append(move style)
-      run self.anonymousOrigins.append(origin)
-      run self.anonymousText.append(false)
-      flow.anonymousStyle = slot
+      flow.anonymousStyle = run self.newStyle(move style, origin, false)
     }
     return flow.anonymousStyle
   }
@@ -256,15 +299,17 @@ impl<'tree> BoxTree<'tree> {
 
   effect fn appendText(self: &mut Self, source: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
     let styleIndex = self.sources[source].styleIndex
-    let mut slot = self.textStyles.get(styleIndex)
+    let mut slot = self.textSlot(styleIndex)
     if slot == NO_NODE {
       let mut style = inherited(&self.styles[styleIndex])
       style.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flow }
-      slot = self.anonymousStyles.length()
-      run self.anonymousStyles.append(move style)
-      run self.anonymousOrigins.append(self.sources[source].parent)
-      run self.anonymousText.append(true)
-      self.textStyles.set(styleIndex, slot)
+      let origin = self.sources[source].parent
+      slot = run self.newStyle(move style, origin, true)
+      if styleIndex < self.textStyles.length() { self.textStyles.set(styleIndex, slot) }
+      else {
+        run self.patchTexts.append(styleIndex)
+        run self.patchTexts.append(slot)
+      }
     }
     let mut node = anonymous(BoxKind.Text, source, slot)
     node.source = source
@@ -558,11 +603,8 @@ impl<'tree> BoxTree<'tree> {
   // Appends a column set and its column flow to `container`; returns the flow.
   effect fn columnSet(self: &mut Self, container: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
     let owner = self.node(container).styleOwner
-    let slot = self.anonymousStyles.length()
     let style = runStyle(self.style(container))
-    run self.anonymousStyles.append(move style)
-    run self.anonymousOrigins.append(owner)
-    run self.anonymousText.append(false)
+    let slot = run self.newStyle(move style, owner, false)
     self.columnSets = true
     let mut set = anonymous(BoxKind.Block, owner, slot)
     set.columnSet = true
@@ -572,6 +614,40 @@ impl<'tree> BoxTree<'tree> {
     flow.columnFlow = true
     flow.independentRoot = true
     return run self.append(flow, setId)
+  }
+
+  // Generates the children of box `root`, a block, flex or grid box of one
+  // source in one piece, again from its source's children, as construct
+  // does: `root` keeps its id, and its new boxes take `slots` first. A child
+  // whose box is in `kept` (ascending) keeps that box and its subtree as
+  // they are; only the children of flex and grid boxes, which are
+  // independent items, may be kept.
+  pub effect fn reconstruct(self: &mut Self, root: usize, kept: &[usize]) ! OutOfMemoryError ? &mut Allocator {
+    let source = self.node(root).source
+    let writingMode = self.style(root).writingMode
+    let boxes = self.boxes.asMutSlice()
+    boxes[root].firstChild = NO_NODE
+    boxes[root].lastChild = NO_NODE
+    let mut flow = Flow.make(root)
+    let mut child = self.sources[source].firstChild
+    while child != NO_NODE {
+      let next = self.sources[child].nextSibling
+      let mut keep = NO_NODE
+      if child < self.firstBySource.length() { keep = self.firstBySource.get(child) }
+      if keep != NO_NODE && sortedContains(kept, keep) {
+        run self.flushFlexText(&mut flow)
+        let values = self.boxes.asMutSlice()
+        values[keep].nextSibling = NO_NODE
+        values[keep].parent = root
+        let last = values[root].lastChild
+        if last == NO_NODE { values[root].firstChild = keep } else { values[last].nextSibling = keep }
+        values[root].lastChild = keep
+      } else {
+        run self.construct(child, &mut flow, NO_NODE, writingMode)
+      }
+      child = next
+    }
+    run self.finishFlow(&mut flow)
   }
 
   effect fn finishFlow(self: &mut Self, flow: &mut Flow) ! OutOfMemoryError ? &mut Allocator {
@@ -597,6 +673,22 @@ impl Flow {
   fn make(container: usize) -> Flow {
     return Flow { container: container, inlineRun: NO_NODE, anonymousStyle: NO_NODE, hasBlock: false, flexText: List<usize>.make(), flexTextVisible: false }
   }
+}
+
+// Whether ascending `values` holds `value`.
+pub fn sortedContains(values: &[usize], value: usize) -> bool {
+  let at = lowerBound(values, value)
+  return at < values.length && values[at] == value
+}
+// The first index of ascending `values` whose value is at least `value`.
+pub fn lowerBound(values: &[usize], value: usize) -> usize {
+  let mut low: usize = 0
+  let mut high = values.length
+  while low < high {
+    let middle = low + (high - low) / 2
+    if values[middle] < value { low = middle + 1 } else { high = middle }
+  }
+  return low
 }
 
 fn textStyle(parent: &Style) -> Style {
@@ -675,7 +767,7 @@ fn tablePartOf(display: &Display, parentKind: BoxKind, parent: &Display) -> bool
   if parent.insideIs(DisplayInside.TableRow) { return display.insideIs(DisplayInside.TableCell) }
   return display.insideIs(DisplayInside.TableRow) || display.insideIs(DisplayInside.TableCell)
 }
-fn anonymous(kind: BoxKind, owner: usize, slot: usize) -> BoxNode {
+pub fn anonymous(kind: BoxKind, owner: usize, slot: usize) -> BoxNode {
   return BoxNode {
     source: NO_NODE, styleOwner: owner, anonymousStyle: slot, styleIndex: NO_NODE, kind: kind,
     parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE,
@@ -701,6 +793,7 @@ pub effect fn build<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [Gr
     firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), sources: sources,
     styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false,
     spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE,
+    freeBoxes: List<usize>.make(), freeStyles: List<usize>.make(), slots: List<usize>.make(), slotsTaken: 0, patchTexts: List<usize>.make(),
   }
   run result.boxes.reserveExact(sources.length + 1)
   run result.firstBySource.reserveExact(sources.length)

@@ -259,7 +259,7 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
   let fragments = output.fragments.values.asSlice()
   let nodes = output.boxNodes.asSlice()
   let boxes = output.boxes.asSlice()
-  run Writer.writeString("{\"schemaVersion\":3,\"sources\":[")
+  run Writer.writeString("{\"schemaVersion\":4,\"sources\":[")
   let mut source: usize = 0
   while source < tree.nodes.length() {
     if source != 0 {
@@ -426,6 +426,8 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
     run field("overflowOnly", &fragment.overflowOnly)
     run field("positioningShell", &fragment.positioningShell)
     run indexField("textData", fragment.textData)
+    run field("textCount", &fragment.textCount)
+    run field("fontKey", &fragment.fontKey)
     run Writer.writeString("}")
     index = index + 1
   }
@@ -439,7 +441,6 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
     run Writer.writeString("{\"sourceStart\":")
     run Json.serialize(&text.sourceStart, &options)
     run field("sourceEnd", &text.sourceEnd)
-    run field("fontKey", &text.fontKey)
     run field("shapeKey", &text.shapeKey)
     run field("bidiLevel", &text.bidiLevel)
     let kind = match text.kind {
@@ -448,6 +449,10 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
       TextFragmentKind.SegmentBreak => "segment-break"
     }
     run field("kind", &kind)
+    // 0 a run of text; 1 a line box, 2 one an earlier fragment began, 3 a line's overflow.
+    run field("part", &text.part)
+    run pointField("location", text.location)
+    run sizeField("size", text.size)
     run Writer.writeString("}")
     index = index + 1
   }
@@ -476,12 +481,9 @@ fn elapsed(start: &Instant, end: &Instant) -> i64 {
 
 // Work summed over the timed computes of a benchmark run.
 struct Work {
-  computes: usize,
-  passes: usize,
-  fullLayouts: usize,
-  sizeProbes: usize,
-  cacheHits: usize,
-  reused: usize,
+  computes: usize, passes: usize, fullLayouts: usize, sizeProbes: usize, cacheHits: usize, reused: usize,
+  // Computes that patched the kept boxes and that could not, so far.
+  patches: usize, patchFallbacks: usize,
 }
 
 fn addWork(work: &mut Work, output: &LayoutTree) {
@@ -491,6 +493,8 @@ fn addWork(work: &mut Work, output: &LayoutTree) {
   work.sizeProbes = work.sizeProbes + output.stats.sizeProbes
   work.cacheHits = work.cacheHits + output.stats.cacheHits
   work.reused = work.reused + output.stats.reusedLayouts
+  work.patches = output.patches
+  work.patchFallbacks = output.patchFallbacks
 }
 
 // Benchmark mode: one line on stderr with every compute duration in
@@ -522,6 +526,8 @@ effect fn writeSamples(samples: &List<i64>, work: &Work, fixtures: &Fixtures)
   run field("measureCalls", &measures)
   run field("analyzeCalls", &analyses)
   run field("shapeCalls", &shapes)
+  run field("patches", &work.patches)
+  run field("patchFallbacks", &work.patchFallbacks)
   run Writer.writeString(",\"layoutNs\":[")
   let mut index: usize = 0
   while index < samples.length() {
@@ -821,14 +827,7 @@ effect fn execute(document: &Value)
       fail P.invalid("benchmark.iterations must be positive")
     }
     let mut samples = List<i64>.make()
-    let mut work = Work {
-      computes: 0,
-      passes: 0,
-      fullLayouts: 0,
-      sizeProbes: 0,
-      cacheHits: 0,
-      reused: 0,
-    }
+    let mut work = Work { computes: 0, passes: 0, fullLayouts: 0, sizeProbes: 0, cacheHits: 0, reused: 0, patches: 0, patchFallbacks: 0 }
     resetCounters(&mut fixtures)
     let mut clock = OsMonotonicClock.make()
     let mut iteration: i32 = 0
@@ -849,7 +848,19 @@ effect fn execute(document: &Value)
   // The final output is the geometry after the last step.
   if P.has(document, "updates") {
     let updates = run P.required(document, "updates")
-    run P.fields(updates, &["iterations", "cycle"])
+    run P.fields(updates, &["iterations", "cycle", "retain"])
+    // How each step's layout may use the one before it: "in-place" (the
+    // default) as an application's does; "copy" reusing results but writing
+    // the output afresh; "fresh" with nothing kept, a new LayoutTree a step.
+    // The last two are for finding where a retained layout departs from a
+    // fresh one (see the update tasks' --keep).
+    let mut retainFresh = false
+    if P.has(updates, "retain") {
+      let retain = run P.text(run P.required(updates, "retain"))
+      if retain != "in-place" && retain != "copy" && retain != "fresh" { fail P.invalid("updates.retain must be in-place, copy or fresh") }
+      output.inPlaceOff = retain == "copy"
+      retainFresh = retain == "fresh"
+    }
     let iterations = run P.integer(run P.required(updates, "iterations"))
     if iterations < 1 {
       fail P.invalid("updates.iterations must be positive")
@@ -859,14 +870,7 @@ effect fn execute(document: &Value)
       fail P.invalid("updates.cycle must not be empty")
     }
     let mut samples = List<i64>.make()
-    let mut work = Work {
-      computes: 0,
-      passes: 0,
-      fullLayouts: 0,
-      sizeProbes: 0,
-      cacheHits: 0,
-      reused: 0,
-    }
+    let mut work = Work { computes: 0, passes: 0, fullLayouts: 0, sizeProbes: 0, cacheHits: 0, reused: 0, patches: 0, patchFallbacks: 0 }
     resetCounters(&mut fixtures)
     let mut clock = OsMonotonicClock.make()
     let mut iteration: usize = 0
@@ -877,6 +881,7 @@ effect fn execute(document: &Value)
         viewport,
         fixtures.fonts.length(),
       )
+      if retainFresh { output = LayoutTree.make() }
       let start = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
       run Engine.compute<Fixtures>(&tree, &mut output, &mut fixtures, viewport)
       let end = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)

@@ -126,8 +126,15 @@ pub import fragments {
   FragmentArena,
   Carry,
   ArenaStorage,
-  TextFragment,
-  TextFragmentKind
+  LineText,
+  PlacedText,
+  TextRuns,
+  TextFragmentKind,
+  TEXT_RUN,
+  TEXT_LINE,
+  TEXT_LINE_CONTINUED,
+  TEXT_LINE_OVERFLOW,
+  LINE_RECORD
 }
 pub import engine { repositionScroll, compute }
 pub import digest { fragmentDigest }

@@ -10,6 +10,7 @@ import silk.json.value { Json, JsonEntry, JsonNumber, Value }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.text.string { String }
 import silk.num.f64
+import silk.num.i64
 import silk.num.usize
 
 const NULL: Value = Value.Null
@@ -180,4 +181,93 @@ impl Writer for JsonBytes {
     }
   }
   effect fn flush(self: &mut Self) -> () ! WriterError { return () }
+}
+
+// Renumbers a harness output's boxes in preorder from the viewport box, with
+// anonymous style slots in order of first use, dropping boxes in no tree:
+// box ids and slots are the engine's to choose (an incremental compute keeps
+// them where a fresh one counts them afresh), the boxes themselves are not.
+pub struct CanonicalBoxes {}
+impl CanonicalBoxes {
+  fn id(value: &Value, map: &List<i64>) -> Value {
+    if J.isNull(value) { return Value.Null }
+    let at = J.integer(value)
+    if at < 0 || i64.toUsize(at) >= map.length() { return J.int(-1) }
+    return J.int(map.get(i64.toUsize(at)))
+  }
+  effect fn remap(box: &mut Value, key: string, map: &List<i64>) -> () ! OutOfMemoryError ? &mut Allocator {
+    if !J.has(&box, key) { return () }
+    let value = CanonicalBoxes.id(J.get(&box, key), map)
+    run J.set(&mut box, key, move value)
+  }
+  pub effect fn apply(output: &mut Value) -> () ! OutOfMemoryError ? &mut Allocator {
+    if !J.has(&output, "boxes") { return () }
+    let count = J.length(J.get(&output, "boxes"))
+    if count == 0 { return () }
+    let mut map = List<i64>.make()
+    while map.length() < count { run map.append(-1) }
+    let mut order = List<usize>.make()
+    let mut stack = List<usize>.make()
+    run stack.append(0)
+    while stack.length() != 0 {
+      let top = stack.length() - 1
+      let id = stack.get(top)
+      stack.truncate(top)
+      if map.get(id) >= 0 { continue }
+      map.set(id, usize.toI64(order.length()))
+      run order.append(id)
+      // Children pushed last first, so the first is visited next.
+      let mut children = List<usize>.make()
+      let mut child = J.get(J.at(J.get(&output, "boxes"), id), "firstChild")
+      while !J.isNull(child) {
+        let next = i64.toUsize(J.integer(child))
+        if next >= count || map.get(next) >= 0 { break }
+        run children.append(next)
+        child = J.get(J.at(J.get(&output, "boxes"), next), "nextSibling")
+      }
+      let mut at = children.length()
+      while at > 0 {
+        at = at - 1
+        run stack.append(children.get(at))
+      }
+    }
+    let mut slots = List<i64>.make()
+    let mut boxes = J.array()
+    let mut at: usize = 0
+    while at < order.length() {
+      let mut box = run J.copy(J.at(J.get(&output, "boxes"), order.get(at)))
+      let keys = ["parent", "firstChild", "lastChild", "nextSibling", "previousContinuation", "nextContinuation"]
+      let mut k: usize = 0
+      while k < keys.length {
+        run CanonicalBoxes.remap(&mut box, keys[k], &map)
+        k = k + 1
+      }
+      if J.has(&box, "anonymousStyle") && !J.isNull(J.get(&box, "anonymousStyle")) {
+        let slot = J.integer(J.get(&box, "anonymousStyle"))
+        let mut index: usize = 0
+        while index < slots.length() && slots.get(index) != slot { index = index + 1 }
+        if index == slots.length() { run slots.append(slot) }
+        run J.set(&mut box, "anonymousStyle", J.int(usize.toI64(index)))
+      }
+      run J.push(&mut boxes, move box)
+      at = at + 1
+    }
+    run J.set(&mut output, "boxes", move boxes)
+    if J.has(&output, "sources") {
+      let sources = J.getMut(&mut output, "sources")
+      let mut s: usize = 0
+      while s < J.length(&sources) {
+        run CanonicalBoxes.remap(J.atMut(&mut sources, s), "firstBox", &map)
+        s = s + 1
+      }
+    }
+    if J.has(&output, "fragments") {
+      let fragments = J.getMut(&mut output, "fragments")
+      let mut f: usize = 0
+      while f < J.length(&fragments) {
+        run CanonicalBoxes.remap(J.atMut(&mut fragments, f), "box", &map)
+        f = f + 1
+      }
+    }
+  }
 }

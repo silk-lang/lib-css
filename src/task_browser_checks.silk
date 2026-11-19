@@ -435,7 +435,7 @@ pub effect fn native(input: &Value, output: &Value) -> () ! TaskError | OutOfMem
   let fragments = J.get(output, "fragments")
   let texts = J.get(output, "texts")
   if !array(sources) || J.length(sources) != J.length(nodes) { run Task.abort("Native CLI returned the wrong source count") }
-  if !finite(J.get(output, "schemaVersion")) || J.num(J.get(output, "schemaVersion")) != 3.0 || !array(boxes) || !array(fragments) || !array(texts) { run Task.abort("Native CLI requires schema v3 generated boxes, fragments, and texts") }
+  if !finite(J.get(output, "schemaVersion")) || J.num(J.get(output, "schemaVersion")) != 4.0 || !array(boxes) || !array(fragments) || !array(texts) { run Task.abort("Native CLI requires schema v3 generated boxes, fragments, and texts") }
   let mut i: usize = 0
   while i < J.length(boxes) {
     let box = J.at(boxes, i)
@@ -485,15 +485,30 @@ pub effect fn native(input: &Value, output: &Value) -> () ! TaskError | OutOfMem
     let fragmentation = J.get(input, "fragmentation")
     if truth(fragmentation) && !truth(J.get(fragmentation, "repeatStep")) && J.num(frame) >= usize.toF64(J.length(J.get(fragmentation, "frames"))) { run invalid("Native ", String.view(&path), " exceeds the finite frame sequence") }
     if J.str(J.get(fragment, "kind")) == "text" {
-      let text = indexed(texts, J.get(fragment, "textData"))
+      // A text fragment's records: its runs (part 0), and the boxes of the lines it carries.
+      // Text on lines of its own is a fragment of its inline formatting box.
       let source = indexed(nodes, J.get(fragment, "source"))
       let box = indexed(boxes, J.get(fragment, "box"))
-      let start = J.get(text, "sourceStart")
-      let end = J.get(text, "sourceEnd")
-      let font = J.get(text, "fontKey")
-      let bidi = J.get(text, "bidiLevel")
-      let shape = J.get(text, "shapeKey")
-      if !truth(text) || !stringValue(J.get(source, "text")) || J.str(J.get(box, "kind")) != "text" || !integer(start) || J.num(start) < 0.0 || !integer(end) || J.num(end) <= J.num(start) || J.num(end) > usize.toF64(String.byteLength(J.str(J.get(source, "text")))) || !integer(font) || J.num(font) < 0.0 || J.num(font) > usize.toF64(J.length(J.get(input, "fonts"))) || !integer(bidi) || J.num(bidi) < 0.0 || J.num(bidi) > 126.0 || !integer(shape) || J.num(shape) < 0.0 { run invalid("Invalid native ", String.view(&path), " text data") }
+      let font = J.get(fragment, "fontKey")
+      let first = J.get(fragment, "textData")
+      let count = J.get(fragment, "textCount")
+      let boxKind = J.str(J.get(box, "kind"))
+      let mut valid = integer(first) && integer(count) && J.num(count) >= 1.0 && J.num(first) + J.num(count) <= usize.toF64(J.length(texts)) && stringValue(J.get(source, "text")) && (boxKind == "text" || boxKind == "inline-formatting") && integer(font) && J.num(font) >= 0.0 && J.num(font) <= usize.toF64(J.length(J.get(input, "fonts")))
+      let mut record: usize = 0
+      while valid && record < f64.toUsize(J.num(count)) {
+        let text = J.at(texts, f64.toUsize(J.num(first)) + record)
+        let part = J.get(text, "part")
+        valid = integer(part) && J.num(part) >= 0.0 && J.num(part) <= 3.0
+        if valid && J.num(part) == 0.0 {
+          let start = J.get(text, "sourceStart")
+          let end = J.get(text, "sourceEnd")
+          let bidi = J.get(text, "bidiLevel")
+          let shape = J.get(text, "shapeKey")
+          valid = integer(start) && J.num(start) >= 0.0 && integer(end) && J.num(end) > J.num(start) && J.num(end) <= usize.toF64(String.byteLength(J.str(J.get(source, "text")))) && integer(bidi) && J.num(bidi) >= 0.0 && J.num(bidi) <= 126.0 && integer(shape) && J.num(shape) >= 0.0
+        }
+        record = record + 1
+      }
+      if !valid { run invalid("Invalid native ", String.view(&path), " text data") }
     } else if !null(J.get(fragment, "textData")) { run invalid("Non-text native ", String.view(&path), " owns text data") }
     let mut flags = String.split("hasFirstBaseline|hasLastBaseline|first|last|phantom|nonpainting|repeated|overflowOnly", "|")
     while true {

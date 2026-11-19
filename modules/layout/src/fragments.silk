@@ -4,20 +4,131 @@ import silk.collections.slice { Slice }
 import silk.core.ownership { Copy }
 import silk.mem.pointer { Pointer }
 import silk.num.usize
+import silk.num.u32
 import geometry { Point, Size, Rect, ResolvedEdges, BaselineSet, sameSize, sameRect, sameEdges, sameBaselines, sameOverflow }
 import tree { NO_NODE }
 
+// Box: a box's border box. Inline: an inline box on a line. Text: runs of
+// text of one text node, with the boxes of the lines they are on when those
+// lines hold nothing else (see LineText). Line: a line box that holds more
+// than text of its inline formatting box: an inline box, an atomic inline, a
+// float or an anchor; or a phantom or fragmented line.
 pub enum FragmentKind { Box, Inline, Text, Line }
 pub struct FragmentId { pub index: usize }
 impl Copy for FragmentId {}
 
 pub enum TextFragmentKind { Glyphs, Tab, SegmentBreak }
-pub struct TextFragment {
-  pub sourceStart: usize, pub sourceEnd: usize,
-  pub fontKey: usize, pub shapeKey: usize, pub bidiLevel: u8,
+
+// What a LineText is: a run of text, or one of the records that describe the
+// line box the runs after it sit on.
+pub const TEXT_RUN: u8 = 0
+// A line box: `location` is where it is in the fragment's parent, `size` its size.
+pub const TEXT_LINE: u8 = 1
+// A line box an earlier text fragment began (several text nodes share the
+// line): the same box again, for readers; `sourceStart` is how many records
+// back that fragment's TEXT_LINE record is.
+pub const TEXT_LINE_CONTINUED: u8 = 2
+// Follows a TEXT_LINE whose runs reach outside it: `location` and `size` are
+// the line's scrollable overflow, relative to the line box.
+pub const TEXT_LINE_OVERFLOW: u8 = 3
+
+// One record of a text fragment, 32 bytes: a run of text on a line (a word,
+// a space, a tab, a preserved break), or a line box (see TEXT_LINE). A text
+// fragment holds the runs of one text node that follow one another under one
+// parent, in one font: `textCount` records from `textData`, which is why a
+// paragraph of a thousand words costs a thousand of these and one Fragment.
+//
+// A run's `location` is relative to its line box when the fragment carries
+// its lines (its first record is a TEXT_LINE: the lines of an inline
+// formatting context that hold nothing but text have no fragments of their
+// own), else to the fragment's parent, a line or an inline box. The font is
+// the fragment's (`Fragment.fontKey`), as are the baselines.
+pub struct LineText {
+  pub location: Point, pub size: Size,
+  pub sourceStart: u32, pub sourceEnd: u32,
+  pub shapeKey: u32,
+  pub bidiLevel: u8,
   pub kind: TextFragmentKind,
+  pub part: u8,
 }
-impl Copy for TextFragment {}
+impl Copy for LineText {}
+impl LineText {
+  pub fn make(location: Point, size: Size, sourceStart: usize, sourceEnd: usize, shapeKey: usize, bidiLevel: u8, kind: TextFragmentKind) -> LineText {
+    return LineText { location: location, size: size, sourceStart: usize.toU32(sourceStart), sourceEnd: usize.toU32(sourceEnd), shapeKey: usize.toU32(shapeKey), bidiLevel: bidiLevel, kind: kind, part: TEXT_RUN }
+  }
+  pub fn box(location: Point, size: Size, part: u8, back: usize) -> LineText {
+    return LineText { location: location, size: size, sourceStart: usize.toU32(back), sourceEnd: 0, shapeKey: 0, bidiLevel: 0, kind: TextFragmentKind.Glyphs, part: part }
+  }
+}
+
+// Set in PlacedText.line when the line box has no fragment: the rest is the
+// index of its TEXT_LINE record.
+pub const LINE_RECORD: usize = usize.MAX / 2 + 1
+
+// A run of text as placed, read through FragmentArena.textRuns: its box and
+// its line box are relative to the initial containing block.
+pub struct PlacedText {
+  pub sourceStart: usize, pub sourceEnd: usize,
+  pub shapeKey: usize, pub fontKey: usize, pub bidiLevel: u8, pub kind: TextFragmentKind,
+  pub location: Point, pub size: Size,
+  // The line box the run sits on (its own box when it is on none), and what
+  // tells that line from every other of the output: the line's fragment, or
+  // LINE_RECORD and its record. Equal for all the runs of a line, whichever
+  // fragments hold them.
+  pub lineLocation: Point, pub lineSize: Size, pub line: usize,
+  // The run's record in FragmentArena.texts.
+  pub record: usize,
+}
+impl Copy for PlacedText {}
+
+// The runs of a text fragment in order (see FragmentArena.textRuns): `next`
+// moves to the next one, which is then in `current`.
+pub struct TextRuns<'a> {
+  texts: &'a [LineText], at: usize, end: usize,
+  // The fragment's parent, and what the runs' locations are relative to: the
+  // parent, or the line box of the last line record passed.
+  origin: Point, base: Point,
+  lineLocation: Point, lineSize: Size, line: usize,
+  pub current: PlacedText,
+}
+impl<'a> TextRuns<'a> {
+  pub fn next(self: &mut Self) -> bool {
+    while self.at < self.end {
+      let index = self.at
+      let record = &self.texts[index]
+      self.at = index + 1
+      if record.part == TEXT_RUN {
+        let location = Point { x: self.base.x + record.location.x, y: self.base.y + record.location.y }
+        if self.line == NO_NODE {
+          // On no line: the run's own box stands for one.
+          self.current.lineLocation = location
+          self.current.lineSize = record.size
+        } else {
+          self.current.lineLocation = self.lineLocation
+          self.current.lineSize = self.lineSize
+        }
+        self.current.line = self.line
+        self.current.sourceStart = u32.toUsize(record.sourceStart)
+        self.current.sourceEnd = u32.toUsize(record.sourceEnd)
+        self.current.shapeKey = u32.toUsize(record.shapeKey)
+        self.current.bidiLevel = record.bidiLevel
+        self.current.kind = record.kind
+        self.current.location = location
+        self.current.size = record.size
+        self.current.record = index
+        return true
+      }
+      if record.part == TEXT_LINE || record.part == TEXT_LINE_CONTINUED {
+        self.base = Point { x: self.origin.x + record.location.x, y: self.origin.y + record.location.y }
+        self.lineLocation = self.base
+        self.lineSize = record.size
+        self.line = LINE_RECORD + index
+        if record.part == TEXT_LINE_CONTINUED { self.line = LINE_RECORD + (index - u32.toUsize(record.sourceStart)) }
+      }
+    }
+    return false
+  }
+}
 
 // `value` as a one-element slice, for List.appendSlice: it copies straight
 // from `value`, where List.append of a large value built in place copies it
@@ -48,7 +159,10 @@ pub struct Fragment {
   pub firstChild: usize, pub lastChild: usize,
   pub previousSibling: usize, pub nextSibling: usize,
   pub previousForBox: usize, pub nextForBox: usize,
+  // A text fragment's records in FragmentArena.texts (see LineText): the
+  // first, and how many; and the font its runs were shaped in.
   pub textData: usize,
+  pub textCount: u32, pub fontKey: u32,
   pub size: Size,
   pub contentRect: Rect, pub paddingRect: Rect,
   pub layoutBounds: Rect, pub scrollableOverflow: Rect,
@@ -95,7 +209,7 @@ impl Fragment {
       usedMargin: ResolvedEdges.zero(), decorationEdges: 15,
       first: true, last: true, phantom: false, repeated: false, overflowOnly: false,
       nonpainting: false, positioningShell: false,
-      textData: NO_NODE,
+      textData: NO_NODE, textCount: 0, fontKey: 0,
     }
   }
 }
@@ -123,7 +237,7 @@ impl Copy for Carry {}
 
 // Bytes of storage a FragmentArena holds, by part, used or spare (see
 // FragmentArena.storage): `values` the fragments, `valuesUsed` the part of
-// it in use, `texts` the text fragments, `byBox` the box chains, `marks`
+// it in use, `texts` the text fragments' records, `byBox` the box chains, `marks`
 // the per-fragment and per-text bookkeeping, `saved` and `tail` what an
 // in-place compute keeps of the previous output, `settled` the settled ranges.
 pub struct ArenaStorage { pub values: usize, pub valuesUsed: usize, pub texts: usize, pub byBox: usize, pub marks: usize, pub saved: usize, pub tail: usize, pub settled: usize }
@@ -254,7 +368,7 @@ const RANGE_CHUNK: usize = 64
 // for ranges that must be copied instead (copyPrevious).
 pub struct FragmentArena {
   pub values: List<Fragment>,
-  pub texts: List<TextFragment>,
+  pub texts: List<LineText>,
   firstByBox: List<usize>, lastByBox: List<usize>,
   // Ascending and disjoint.
   pub settled: List<SettledRange>,
@@ -271,11 +385,11 @@ pub struct FragmentArena {
   written: usize, textsWritten: usize,
   generation: usize,
   fragmentStamps: List<usize>, fragmentSlots: List<usize>, savedFragments: List<Fragment>, savedPositions: List<FragmentPosition>,
-  textStamps: List<usize>, textSlots: List<usize>, savedTexts: List<TextFragment>,
+  textStamps: List<usize>, textSlots: List<usize>, savedTexts: List<LineText>,
   // A box whose stamp is current has chains of this compute; the others
   // keep their previous chains, in kept ranges, or none (see first).
   boxStamps: List<usize>, boxSlots: List<usize>, savedFirst: List<usize>, savedLast: List<usize>,
-  tailFragments: List<Fragment>, tailTexts: List<TextFragment>,
+  tailFragments: List<Fragment>, tailTexts: List<LineText>,
   // Whether positioning may have given fragments visual offsets, and the
   // normal-flow fragments it linked to fragments after the normal flow, in
   // this and the previous compute; kept ranges must not contain the latter.
@@ -341,7 +455,7 @@ impl FragmentArena {
   pub fn make() -> FragmentArena {
     return FragmentArena {
       values: List<Fragment>.make(),
-      texts: List<TextFragment>.make(),
+      texts: List<LineText>.make(),
       firstByBox: List<usize>.make(), lastByBox: List<usize>.make(),
       settled: List<SettledRange>.make(),
       textMarks: List<usize>.make(),
@@ -351,9 +465,9 @@ impl FragmentArena {
       written: 0, textsWritten: 0,
       generation: 0,
       fragmentStamps: List<usize>.make(), fragmentSlots: List<usize>.make(), savedFragments: List<Fragment>.make(), savedPositions: List<FragmentPosition>.make(),
-      textStamps: List<usize>.make(), textSlots: List<usize>.make(), savedTexts: List<TextFragment>.make(),
+      textStamps: List<usize>.make(), textSlots: List<usize>.make(), savedTexts: List<LineText>.make(),
       boxStamps: List<usize>.make(), boxSlots: List<usize>.make(), savedFirst: List<usize>.make(), savedLast: List<usize>.make(),
-      tailFragments: List<Fragment>.make(), tailTexts: List<TextFragment>.make(),
+      tailFragments: List<Fragment>.make(), tailTexts: List<LineText>.make(),
       offsets: false,
       resolveAll: true, edited: List<usize>.make(), editedLow: usize.MAX, editedHigh: 0,
       stale: false,
@@ -368,7 +482,7 @@ impl FragmentArena {
   // Bytes of storage each part of the arena holds, used or spare.
   pub fn storage(self: &Self) -> ArenaStorage {
     let f = Intrinsic.layoutOf<Fragment>().bytes
-    let t = Intrinsic.layoutOf<TextFragment>().bytes
+    let t = Intrinsic.layoutOf<LineText>().bytes
     let u = Intrinsic.layoutOf<usize>().bytes
     return ArenaStorage {
       values: self.values.capacity() * f, valuesUsed: self.values.length() * f,
@@ -407,7 +521,7 @@ impl FragmentArena {
     let f = Intrinsic.layoutOf<Fragment>().bytes
     if large(self.values.length(), self.values.capacity(), f) { run self.values.shrinkToFit() }
     if large(self.textMarks.length(), self.textMarks.capacity(), Intrinsic.layoutOf<usize>().bytes) { run self.textMarks.shrinkToFit() }
-    if large(self.texts.length(), self.texts.capacity(), Intrinsic.layoutOf<TextFragment>().bytes) { run self.texts.shrinkToFit() }
+    if large(self.texts.length(), self.texts.capacity(), Intrinsic.layoutOf<LineText>().bytes) { run self.texts.shrinkToFit() }
   }
 
   // A full reset invalidates every fragment ID and checkpoint, retaining capacity.
@@ -636,7 +750,7 @@ impl FragmentArena {
     if !self.inPlace && index >= self.closedAt { return self.tailFragments.get(index - self.closedAt) }
     return self.values.get(index)
   }
-  fn previousText(self: &Self, index: usize) -> TextFragment {
+  fn previousText(self: &Self, index: usize) -> LineText {
     if index < self.textStamps.length() && self.textStamps.get(index) == self.generation { return self.savedTexts.get(self.textSlots.get(index)) }
     if !self.inPlace && index >= self.closedTexts { return self.tailTexts.get(index - self.closedTexts) }
     return self.texts.get(index)
@@ -680,7 +794,7 @@ impl FragmentArena {
   }
   effect fn saveText(self: &mut Self, index: usize) ! OutOfMemoryError ? &mut Allocator {
     if !self.inPlace || index >= self.previousTexts || self.textStamps.get(index) == self.generation { return }
-    run self.savedTexts.appendSlice(one<TextFragment>(&self.texts.asSlice()[index]))
+    run self.savedTexts.appendSlice(one<LineText>(&self.texts.asSlice()[index]))
     self.textStamps.set(index, self.generation)
     self.textSlots.set(index, self.savedTexts.length() - 1)
   }
@@ -855,7 +969,7 @@ impl FragmentArena {
     if self.inPlace && self.count > self.written { self.written = self.count }
     return index
   }
-  effect fn putText(self: &mut Self, value: TextFragment) -> usize ! OutOfMemoryError ? &mut Allocator {
+  effect fn putText(self: &mut Self, value: LineText) -> usize ! OutOfMemoryError ? &mut Allocator {
     let index = self.textCount
     run self.saveText(index)
     if index < self.texts.length() { self.texts.set(index, value) }
@@ -947,29 +1061,127 @@ impl FragmentArena {
     self.adopted.clear()
   }
 
-  pub effect fn appendText(self: &mut Self, fragment: Fragment, text: TextFragment) -> FragmentId ! OutOfMemoryError ? &mut Allocator {
+  effect fn beginText(self: &mut Self, text: LineText) -> usize ! OutOfMemoryError ? &mut Allocator {
     // Reserve both arenas before publishing either half of the association.
     run self.room()
     run self.textRoom()
     run self.textMarks.reserve(1)
+    return run self.putText(text)
+  }
+
+  // Appends a text fragment holding the one record `text`, shaped in font `fontKey`.
+  pub effect fn appendText(self: &mut Self, fragment: Fragment, text: LineText, fontKey: usize) -> FragmentId ! OutOfMemoryError ? &mut Allocator {
     let mut value = fragment
-    value.textData = run self.putText(text)
+    value.textData = run self.beginText(text)
+    value.textCount = 1
+    value.fontKey = usize.toU32(fontKey)
     return run self.append(value)
   }
 
-  // appendText of a text fragment made in its slot, whose index is returned:
-  // the caller writes its geometry there instead of building a fragment to
-  // move in.
-  pub effect fn appendTextMade(self: &mut Self, box: usize, source: usize, parent: usize, fragmentainer: usize, text: TextFragment) -> usize ! OutOfMemoryError ? &mut Allocator {
-    run self.room()
-    run self.textRoom()
-    run self.textMarks.reserve(1)
-    // The fragment's text mark counts the texts before its own.
+  pub effect fn appendTextBox(self: &mut Self, box: usize, source: usize, parent: usize, fragmentainer: usize, text: LineText, fontKey: usize) -> FragmentId ! OutOfMemoryError ? &mut Allocator {
+    let key = run self.beginText(text)
     let id = run self.appendBox(box, source, FragmentKind.Text, parent, fragmentainer, true, true)
-    let data = run self.putText(text)
+    self.textMarks.set(id.index, key)
     let values = self.values.asMutSlice()
-    values[id.index].textData = data
-    return id.index
+    values[id.index].textData = key
+    values[id.index].textCount = 1
+    values[id.index].fontKey = usize.toU32(fontKey)
+    return id
+  }
+
+  // Whether text fragment `index` can take one more record (see extendText):
+  // it is the last fragment written, by this compute, and its records the last.
+  pub fn extendsText(self: &Self, index: usize) -> bool {
+    if index == NO_NODE || index + 1 != self.count { return false }
+    let value = &self.values.asSlice()[index]
+    return value.kind == FragmentKind.Text && value.textData != NO_NODE && value.textData + u32.toUsize(value.textCount) == self.textCount
+  }
+  // Appends a record to text fragment `index` (see extendsText). Returns the record's index.
+  pub effect fn extendText(self: &mut Self, index: usize, text: LineText) -> usize ! OutOfMemoryError ? &mut Allocator {
+    run self.texts.reserve(1)
+    let at = run self.putText(text)
+    let values = self.values.asMutSlice()
+    values[index].textCount = values[index].textCount + 1
+    return at
+  }
+  // Whether text fragment `index` carries its line boxes (see LineText): its
+  // first record is one.
+  pub fn ownsLines(self: &Self, index: usize) -> bool {
+    let value = &self.values.asSlice()[index]
+    return value.kind == FragmentKind.Text && value.textData != NO_NODE && self.texts.asSlice()[value.textData].part != TEXT_RUN
+  }
+  // Moves the line boxes of text fragment `index` by `delta`, when it carries
+  // them: its inline formatting box was placed.
+  pub effect fn shiftLines(self: &mut Self, index: usize, delta: Point) ! OutOfMemoryError ? &mut Allocator {
+    if !self.ownsLines(index) { return }
+    run self.edit(index)
+    let start = self.values.asSlice()[index].textData
+    let end = start + u32.toUsize(self.values.asSlice()[index].textCount)
+    let mut at = start
+    while at < end {
+      let part = self.texts.asSlice()[at].part
+      if part == TEXT_LINE || part == TEXT_LINE_CONTINUED {
+        run self.saveText(at)
+        let texts = self.texts.asMutSlice()
+        texts[at].location.x = texts[at].location.x + delta.x
+        texts[at].location.y = texts[at].location.y + delta.y
+      }
+      at = at + 1
+    }
+  }
+  // How many text records the fragments before `index` and fragment `index` hold.
+  @inlineAlways
+  fn textsThrough(self: &Self, index: usize) -> usize {
+    let value = &self.values.asSlice()[index]
+    if value.textData != NO_NODE { return value.textData + u32.toUsize(value.textCount) }
+    return self.textMarks.get(index)
+  }
+
+  // No runs: a TextRuns to hold until there is a fragment to read.
+  pub fn noTextRuns(self: &Self) -> TextRuns<'_> {
+    let origin = Point { x: 0.0, y: 0.0 }
+    return TextRuns {
+      texts: self.texts.asSlice(), at: 0, end: 0, origin: origin, base: origin, lineLocation: origin, lineSize: Size.zero(), line: NO_NODE,
+      current: PlacedText {
+        sourceStart: 0, sourceEnd: 0, shapeKey: 0, fontKey: 0, bidiLevel: 0, kind: TextFragmentKind.Glyphs,
+        location: origin, size: Size.zero(), lineLocation: origin, lineSize: Size.zero(), line: NO_NODE, record: NO_NODE,
+      },
+    }
+  }
+  // The runs of text fragment `index`, placed; none for any other fragment.
+  // Read after resolveLocations, or with locations deferred (see worldLocation).
+  pub fn textRuns(self: &Self, index: usize) -> TextRuns<'_> {
+    let value = &self.values.asSlice()[index]
+    let texts = self.texts.asSlice()
+    let mut start: usize = 0
+    let mut end: usize = 0
+    if value.textData != NO_NODE {
+      start = value.textData
+      end = start + u32.toUsize(value.textCount)
+    }
+    let mut origin = Point { x: 0.0, y: 0.0 }
+    if value.parent != NO_NODE { origin = self.worldLocation(value.parent) }
+    let mut lineLocation = origin
+    let mut lineSize = Size.zero()
+    let mut line = NO_NODE
+    if start < end && texts[start].part == TEXT_RUN {
+      // The line box above, if the fragment is on one.
+      let values = self.values.asSlice()
+      let mut at = value.parent
+      while at != NO_NODE && values[at].kind != FragmentKind.Line { at = values[at].parent }
+      if at != NO_NODE {
+        line = at
+        lineLocation = self.worldLocation(at)
+        lineSize = values[at].size
+      }
+    }
+    return TextRuns {
+      texts: texts, at: start, end: end, origin: origin, base: origin, lineLocation: lineLocation, lineSize: lineSize, line: line,
+      current: PlacedText {
+        sourceStart: 0, sourceEnd: 0, shapeKey: 0, fontKey: u32.toUsize(value.fontKey), bidiLevel: 0, kind: TextFragmentKind.Glyphs,
+        location: origin, size: Size.zero(), lineLocation: origin, lineSize: Size.zero(), line: NO_NODE, record: NO_NODE,
+      },
+    }
   }
 
   pub fn checkpoint(self: &Self) -> usize { return self.count }
@@ -1011,6 +1223,19 @@ impl FragmentArena {
     let mut kept = self.settled.length()
     while kept > 0 && self.settled.get(kept - 1).end > checkpoint { kept = kept - 1 }
     self.settled.truncate(kept)
+  }
+  // After rollback(checkpoint): takes back the records extendText added,
+  // since the checkpoint counted `texts` of them (see textCheckpoint), to the
+  // text fragment the checkpoint left last. rollback undoes whole fragments;
+  // a text fragment grows only while it is the last.
+  pub fn rollbackTexts(self: &mut Self, texts: usize) {
+    if self.textCount <= texts || self.count == 0 { return }
+    let last = self.count - 1
+    let values = self.values.asMutSlice()
+    if values[last].textData == NO_NODE || values[last].textData >= texts { return }
+    values[last].textCount = usize.toU32(texts - values[last].textData)
+    self.textCount = texts
+    if !self.inPlace { self.texts.truncate(texts) }
   }
   // Records that positioning may have given fragments visual offsets.
   pub fn offsetting(self: &mut Self) {
@@ -1071,7 +1296,9 @@ impl FragmentArena {
     while index < values.length {
       visited = visited + 1
       // Text ownership is finalized from accepted links. Speculative emission
-      // must not clear a surviving earlier fragment's last flag.
+      // must not clear a surviving earlier fragment's last flag. For a text
+      // fragment that carries its lines, the links are its inline formatting
+      // box's: first and last among that box's fragments.
       if values[index].kind == FragmentKind.Text && values[index].box != NO_NODE {
         values[index].first = values[index].previousForBox == NO_NODE
         values[index].last = values[index].nextForBox == NO_NODE
@@ -1290,7 +1517,7 @@ impl FragmentArena {
     index = self.count
     while index < newTotal {
       self.textMarks.set(index, mark)
-      if self.values.asSlice()[index].textData != NO_NODE { mark = mark + 1 }
+      if self.values.asSlice()[index].textData != NO_NODE { mark = mark + u32.toUsize(self.values.asSlice()[index].textCount) }
       index = index + 1
     }
     // Box chains that still name previous fragments.
@@ -1372,7 +1599,7 @@ impl FragmentArena {
       index = index - 1
       let value = self.previous(index)
       if value.textData == NO_NODE { continue }
-      if value.textData + 1 <= self.textCount { return false }
+      if value.textData + u32.toUsize(value.textCount) <= self.textCount { return false }
       if value.box >= stamps.length || stamps[value.box] != generation { return true }
     }
     return false
@@ -1408,8 +1635,7 @@ impl FragmentArena {
     run self.settled.reserve(1)
     run self.reserveCarried()
     let overflow = self.values.asSlice()[start].scrollableOverflow
-    let mut texts = self.textMarks.get(end - 1)
-    if self.values.asSlice()[end - 1].textData != NO_NODE { texts = texts + 1 }
+    let texts = self.textsThrough(end - 1)
     self.count = end
     self.textCount = texts
     run self.editPosition(parent)
@@ -1430,8 +1656,7 @@ impl FragmentArena {
     run self.settled.reserve(1)
     run self.reserveCarried()
     let overflow = self.values.asSlice()[start].scrollableOverflow
-    let mut texts = self.textMarks.get(end - 1)
-    if self.values.asSlice()[end - 1].textData != NO_NODE { texts = texts + 1 }
+    let texts = self.textsThrough(end - 1)
     self.count = end
     self.textCount = texts
     // A range kept after the sibling it followed before keeps its own links:
@@ -1487,8 +1712,15 @@ impl FragmentArena {
         return false
       }
       if value.textData != NO_NODE {
-        let text = self.previousText(value.textData)
-        value.textData = run self.putText(text)
+        let from = value.textData
+        let records = u32.toUsize(value.textCount)
+        value.textData = self.textCount
+        let mut record: usize = 0
+        while record < records {
+          let text = self.previousText(from + record)
+          drop run self.putText(text)
+          record = record + 1
+        }
       }
       value.visualOffset = Point { x: 0.0, y: 0.0 }
       value.worldLocation = Point { x: 0.0, y: 0.0 }
@@ -1553,10 +1785,11 @@ impl FragmentArena {
         }
         let text = from.textData
         if text != NO_NODE {
+          let records = u32.toUsize(from.textCount)
           if firstText == NO_NODE { firstText = text }
           else if text != lastText + 1 { ordered = false }
-          lastText = text
-          texts = texts + 1
+          lastText = text + records - 1
+          texts = texts + records
         }
         index = index + 1
       }
@@ -1574,15 +1807,16 @@ impl FragmentArena {
         values[at].visualOffset = Point { x: 0.0, y: 0.0 }
         if !stands { values[at].worldLocation = Point { x: 0.0, y: 0.0 } }
         if values[at].textData != NO_NODE {
+          let records = u32.toUsize(values[at].textCount)
           if bulk {
             run self.textMarks.append(textBase + seen)
             values[at].textData = textBase + (values[at].textData - firstText)
-            seen = seen + 1
+            seen = seen + records
           } else {
-            let text = sourceTexts[values[at].textData]
+            let from = values[at].textData
             run self.textMarks.append(self.texts.length())
             values[at].textData = self.texts.length()
-            run self.texts.append(text)
+            run self.texts.appendSlice(Slice.view(sourceTexts, from, records))
           }
         } else if bulk { run self.textMarks.append(textBase + seen) }
         else { run self.textMarks.append(self.texts.length()) }
@@ -1688,6 +1922,30 @@ impl FragmentArena {
     }
     self.firstByBox = move first
     self.lastByBox = move last
+  }
+
+  // remapBoxes for a patch of the box tree that kept every box's id but
+  // those of `ids`, whose fragments now belong to no box, over `count` boxes.
+  pub effect fn forgetBoxes(self: &mut Self, ids: &[usize], count: usize) ! OutOfMemoryError ? &mut Allocator {
+    let mut at: usize = 0
+    while at < ids.length {
+      let id = ids[at]
+      at = at + 1
+      if id >= self.firstByBox.length() { continue }
+      let mut index = self.firstByBox.get(id)
+      let values = self.values.asMutSlice()
+      while index != NO_NODE && index < values.length && values[index].box == id {
+        values[index].box = NO_NODE
+        index = values[index].nextForBox
+      }
+      self.firstByBox.set(id, NO_NODE)
+      self.lastByBox.set(id, NO_NODE)
+    }
+    if self.firstByBox.length() < count {
+      let added = count - self.firstByBox.length()
+      run self.firstByBox.appendRepeated(NO_NODE, added)
+      run self.lastByBox.appendRepeated(NO_NODE, added)
+    }
   }
 
   pub fn boxCount(self: &Self) -> usize { return self.firstByBox.length() }

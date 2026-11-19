@@ -4,13 +4,15 @@ import silk.core.ownership { Copy }
 import silk.core.option { Option }
 import silk.mem.box { Box }
 import silk.text.string { String }
+import silk.num.u32
 import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min, TRACE_TEXT_PROBE, TRACE_TEXT_LAYOUT, TRACE_EMIT }
 import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, TextBoxTrim, TextEdge, EmphasisSide }
 import tree { Node, NO_NODE }
 import box_tree { BoxTree, BoxKind }
-import fragments { FragmentKind, TextFragment, TextFragmentKind }
+import fragments { FragmentKind, LineText, TextFragmentKind, TEXT_LINE, TEXT_LINE_CONTINUED, TEXT_LINE_OVERFLOW }
 import axes { Axes }
-import context { Input, ResolvedBox, resolveBox, resolve, outOfFlow, containsAbsolute }
+import context { Input, ResolvedBox, resolveBox, resolve, outOfFlow, containsAbsolute, UNBOUNDED }
+import positioned { addOverflow }
 import engine { layoutNode, layoutNodeInPlace }
 import bfc { BfcState, FloatBox, Band }
 import shapes { ShapeFrame }
@@ -1339,9 +1341,178 @@ fn startClones(nodes: &BoxTree<'_>, scopes: &[Scope], spans: &mut Spans, current
   cover(&mut spans, scopes, current, start, end)
   return end
 }
+// Whether a line holds nothing but runs of text of the inline formatting box
+// itself: no inline box opens, closes or continues on it, nothing on it is
+// atomic, floated or anchored, it is not a phantom line, and nothing is
+// fragmented. Such a line gets no fragment (see emitTextLine).
+fn textOnlyLine(output: &LayoutPass<'_, '_>, items: &[Item], scopes: &[Scope], line: &LineBox, input: &Input) -> bool {
+  if output.frame != NO_NODE || input.fragmentation.active || !line.real || line.start == line.end { return false }
+  if boundaryScope(items, scopes, line.start) != 0 || boundaryScope(items, scopes, line.end) != 0 { return false }
+  let mut index = line.start
+  while index < line.end {
+    if items[index].kind != ItemKind.Text || items[index].scope != 0 { return false }
+    index = index + 1
+  }
+  if line.visual.active {
+    if line.visual.spans.length() > 1 || line.visual.order.length() != line.end - line.start { return false }
+    let positions = line.visual.positions.asSlice()
+    index = 0
+    while index < positions.length {
+      if positions[index].span != 0 { return false }
+      index = index + 1
+    }
+  }
+  return true
+}
+
+// Emits a line of text alone (see textOnlyLine) as records, not fragments:
+// its line box is a TEXT_LINE record and each of its runs a record after it,
+// in the text fragments that hold the runs (see fragments.LineText). A text
+// fragment takes the runs of one text node in one font that follow one
+// another, across the lines of the inline formatting box `id`, whose
+// fragment it is: a paragraph of one text node is one fragment under the
+// block that holds it, however many lines and words it has. A line several
+// text nodes share has its box again (TEXT_LINE_CONTINUED) in each of their
+// fragments after the first.
+//
+// The runs' boxes, and the line's scrollable overflow, are exactly what the
+// fragments of emitLine would have held: the line's overflow is folded from
+// its runs here, last to first, as treeOverflow folds text fragments into
+// their line, and kept in a TEXT_LINE_OVERFLOW record when it is not the
+// line box.
+effect fn emitTextLine<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, items: &[Item], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, line: &LineBox) ! OutOfMemoryError ? &mut Allocator {
+  let parent = output.fragmentParent
+  let physicalSize = axes.size(Size { width: line.width, height: line.height })
+  let lineLocation = axes.physicalPoint(Point { x: box.inset.left + line.left, y: box.inset.top + line.y }, physicalSize, container)
+  drop lineExtents(items, scopes, extents.asMutSlice(), line.start, line.end, line.real)
+  let rtl = style.usedDirection() == Direction.Rtl
+  let offset = lineOffset(style, line.direction, line.width - line.advance, line.last) - line.hangingStart
+  let plainScalarRun = !line.visual.active && !output.inPlace
+  let mut placed = Intrinsic.replace(output.lineRuns, List<LineText>.make())
+  let mut owners = Intrinsic.replace(output.lineItems, List<usize>.make())
+  let mut bounds = Intrinsic.replace(output.lineBounds, List<Rect>.make())
+  placed.clear()
+  owners.clear()
+  bounds.clear()
+  // Where each run is, in visual order.
+  let mut cursor: f32 = 0.0
+  let mut index = line.start
+  let mut limit = line.end
+  if line.visual.active { limit = line.start + line.visual.order.length() }
+  while index < limit {
+    let mut logical = index
+    if line.visual.active { logical = line.start + line.visual.order.get(index - line.start) }
+    let item = items[logical]
+    let mut x = cursor
+    if line.visual.active { x = line.visual.positions.asSlice()[logical - line.start].x }
+    else if rtl { x = line.advance - cursor - item.advance }
+    let text = texts[item.leaf]
+    let font = &fonts[text.box].font
+    let size = axes.size(Size { width: max(0.0, item.advance), height: font.height })
+    let baseline = extents.get(item.group).baseline + item.offset
+    let point = axes.physicalPoint(Point { x: offset + x, y: baseline - font.baseline }, size, physicalSize)
+    // Relative to the line box, whose origin is its own.
+    let location = Point { x: point.x - 0.0, y: point.y - 0.0 }
+    let content = Rect { x: 0.0, y: 0.0, width: size.width, height: size.height }
+    let layoutSize = axes.size(Size { width: max(0.0, item.advance), height: font.lineHeight })
+    let layoutPoint = axes.physicalPoint(Point { x: 0.0, y: font.baseline - font.before }, layoutSize, size)
+    let layoutBounds = Rect { x: layoutPoint.x, y: layoutPoint.y, width: layoutSize.width, height: layoutSize.height }
+    run placed.append(LineText.make(location, size, text.start, text.end, text.key, item.level, text.kind))
+    run owners.append(logical)
+    run bounds.append(layoutBounds)
+    let nextOwnsScalar = plainScalarRun && index + 1 < limit && items[index + 1].id == item.id
+    if !nextOwnsScalar {
+      let mut scalar = Layout.zero()
+      scalar.location = location
+      scalar.size = size
+      scalar.contentSize = size
+      scalar.setOverflowGeometry(content, content, layoutBounds)
+      scalar.scrollableOverflow = content
+      run output.store(item.id, &scalar, false)
+    }
+    cursor = cursor + item.advance
+    index = index + 1
+  }
+  // The line's scrollable overflow: its box, and the runs that reach outside
+  // what it holds by then, last to first (see treeOverflow).
+  let unlimited = ResolvedEdges { left: -UNBOUNDED, right: UNBOUNDED, top: -UNBOUNDED, bottom: UNBOUNDED }
+  let lineRect = Rect { x: 0.0, y: 0.0, width: physicalSize.width, height: physicalSize.height }
+  let mut overflow = lineRect
+  let mut at = placed.length()
+  while at > 0 {
+    at = at - 1
+    let record = placed.asSlice()[at]
+    let own = bounds.asSlice()[at]
+    let position = Point { x: record.location.x + 0.0, y: record.location.y + 0.0 }
+    let border = Rect { x: position.x, y: position.y, width: record.size.width, height: record.size.height }
+    let right = overflow.x + overflow.width
+    let bottom = overflow.y + overflow.height
+    if border.x >= overflow.x && border.y >= overflow.y && border.x + border.width <= right && border.y + border.height <= bottom
+      && position.x + own.x >= overflow.x && position.y + own.y >= overflow.y && position.x + own.x + own.width <= right && position.y + own.y + own.height <= bottom { continue }
+    overflow = addOverflow(overflow, border, unlimited)
+    overflow = addOverflow(overflow, own.translated(position), unlimited)
+    let content = Rect { x: 0.0, y: 0.0, width: record.size.width, height: record.size.height }
+    overflow = addOverflow(overflow, content.translated(position), unlimited)
+  }
+  let overflows = overflow.x != lineRect.x || overflow.y != lineRect.y || overflow.width != lineRect.width || overflow.height != lineRect.height
+  // The records. `header` is this line's TEXT_LINE record once written, and
+  // `group` the text fragment the run before went to.
+  let mut header = NO_NODE
+  let mut group = NO_NODE
+  at = 0
+  while at < placed.length() {
+    let item = items[owners.asSlice()[at]]
+    let text = texts[item.leaf]
+    let source = nodes.node(item.id).source
+    let fontKey = fonts[text.font].key
+    let count = output.fragments.checkpoint()
+    // The fragment that takes the run: the one the run before went to, or
+    // the one the line before ended in, when it is this text's in this font.
+    let mut target = NO_NODE
+    let mut opened = false
+    if count > 0 && output.fragments.extendsText(count - 1) && output.fragments.ownsLines(count - 1) {
+      let before = &output.fragments.values.asSlice()[count - 1]
+      if before.box == id && before.source == source && before.parent == parent && u32.toUsize(before.fontKey) == fontKey {
+        target = count - 1
+        opened = target == group
+      }
+    }
+    if !opened {
+      let mut lineRecord = LineText.box(lineLocation, physicalSize, TEXT_LINE, 0)
+      if header != NO_NODE { lineRecord = LineText.box(lineLocation, physicalSize, TEXT_LINE_CONTINUED, output.fragments.textCheckpoint() - header) }
+      if target == NO_NODE {
+        let emitted = run output.fragments.appendTextBox(id, source, parent, 0, lineRecord, fontKey)
+        target = emitted.index
+        let font = &fonts[text.box].font
+        let value = &mut output.fragments.values.asMutSlice()[target]
+        value.firstBaselines = fontBaselines(font, style.writingMode)
+        value.lastBaselines = value.firstBaselines
+        value.hasFirstBaseline = true
+        value.hasLastBaseline = true
+        value.decorationEdges = 0
+      } else {
+        drop run output.fragments.extendText(target, lineRecord)
+      }
+      if header == NO_NODE {
+        header = output.fragments.textCheckpoint() - 1
+        if overflows { drop run output.fragments.extendText(target, LineText.box(Point { x: overflow.x, y: overflow.y }, Size { width: overflow.width, height: overflow.height }, TEXT_LINE_OVERFLOW, 0)) }
+      }
+    }
+    drop run output.fragments.extendText(target, placed.asSlice()[at])
+    group = target
+    at = at + 1
+  }
+  output.lineRuns = move placed
+  output.lineItems = move owners
+  output.lineBounds = move bounds
+}
 effect fn emitLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &[Item], atomics: &[AtomicData], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, spans: &mut Spans, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, line: &LineBox, lineBaselines: BaselineSet, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let previousParent = output.fragmentParent
   let physicalSize = axes.size(Size { width: line.width, height: line.height })
+  if textOnlyLine(&output, items, scopes, line, input) {
+    run emitTextLine(nodes, &mut output, items, texts, fonts, scopes, &mut extents, id, style, axes, box, container, line)
+    return
+  }
   let mut fragment = output.fragment(id, NO_NODE, FragmentKind.Line)
   fragment.parent = previousParent
   fragment.location = axes.physicalPoint(Point { x: box.inset.left + line.left, y: box.inset.top + line.y }, physicalSize, container)
@@ -1538,6 +1709,9 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
   }
   cursor = leading
   let mut precedingReal = false
+  let mut textFrame: usize = 0
+  if output.frame != NO_NODE { textFrame = output.frame }
+  let plainScalarRun = !line.visual.active && output.frame == NO_NODE && !input.fragmentation.active && !output.inPlace
   index = line.start
   let mut limit = line.end
   if line.visual.active { limit = line.start + line.visual.order.length() }
@@ -1584,35 +1758,50 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
       let baseline = extents.get(item.group).baseline + item.offset
       let point = axes.physicalPoint(Point { x: offset + x, y: baseline - font.baseline }, size, physicalSize)
       let location = Point { x: point.x - parent.origin.x, y: point.y - parent.origin.y }
-      let contentRect = Rect { x: 0.0, y: 0.0, width: size.width, height: size.height }
+      let content = Rect { x: 0.0, y: 0.0, width: size.width, height: size.height }
       let layoutSize = axes.size(Size { width: max(0.0, item.advance), height: font.lineHeight })
       let layoutPoint = axes.physicalPoint(Point { x: 0.0, y: font.baseline - font.before }, layoutSize, size)
-      let layoutBounds = Rect { x: layoutPoint.x, y: layoutPoint.y, width: layoutSize.width, height: layoutSize.height }
-      let mut fragmentainer: usize = 0
-      if output.frame != NO_NODE { fragmentainer = output.frame }
-      let slot = run output.fragments.appendTextMade(item.id, nodes.node(item.id).source, parent.fragment, fragmentainer, TextFragment { sourceStart: text.start, sourceEnd: text.end, fontKey: fonts[text.font].key, shapeKey: text.key, bidiLevel: item.level, kind: text.kind })
-      let value = &mut output.fragments.values.asMutSlice()[slot]
-      value.location = location
-      value.size = size
-      value.contentRect = contentRect
-      value.paddingRect = contentRect
-      value.layoutBounds = layoutBounds
-      value.scrollableOverflow = contentRect
-      value.firstBaselines = fontBaselines(font, style.writingMode)
-      value.lastBaselines = value.firstBaselines
-      value.hasFirstBaseline = true
-      value.hasLastBaseline = true
-      value.decorationEdges = 0
+      let bounds = Rect { x: layoutPoint.x, y: layoutPoint.y, width: layoutSize.width, height: layoutSize.height }
+      let record = LineText.make(location, size, text.start, text.end, text.key, item.level, text.kind)
+      let source = nodes.node(item.id).source
+      let fontKey = fonts[text.font].key
+      // A run joins the text fragment before it when that holds the runs of
+      // the same text box in the same font under the same parent, and nothing
+      // was emitted since. Fragmented text keeps a fragment a run.
+      let count = output.fragments.checkpoint()
+      let mut joins = false
+      if count > 0 && output.frame == NO_NODE && !input.fragmentation.active && output.fragments.extendsText(count - 1) && !output.fragments.ownsLines(count - 1) {
+        let before = &output.fragments.values.asSlice()[count - 1]
+        joins = before.box == item.id && before.source == source && before.parent == parent.fragment && u32.toUsize(before.fontKey) == fontKey
+      }
+      if joins {
+        drop run output.fragments.extendText(count - 1, record)
+      } else {
+        let emitted = run output.fragments.appendTextBox(item.id, source, parent.fragment, textFrame, record, fontKey)
+        // The fragment's own box is its first run's: its runs say where each is.
+        let value = &mut output.fragments.values.asMutSlice()[emitted.index]
+        value.location = location
+        value.size = size
+        value.contentRect = content
+        value.paddingRect = content
+        value.layoutBounds = bounds
+        value.scrollableOverflow = content
+        value.firstBaselines = fontBaselines(font, style.writingMode)
+        value.lastBaselines = value.firstBaselines
+        value.hasFirstBaseline = true
+        value.hasLastBaseline = true
+        value.decorationEdges = 0
+      }
       // The box keeps its last fragment's geometry: when the next item is
       // the same box's next run, that one's store replaces this one's.
-      let replaced = !line.visual.active && output.frame == NO_NODE && index + 1 < limit && items[index + 1].kind == ItemKind.Text && items[index + 1].id == item.id
-      if !replaced {
+      let nextOwnsScalar = plainScalarRun && index + 1 < limit && items[index + 1].kind == ItemKind.Text && items[index + 1].id == item.id
+      if !nextOwnsScalar {
         let mut scalar = Layout.zero()
         scalar.location = location
         scalar.size = size
         scalar.contentSize = size
-        scalar.setOverflowGeometry(contentRect, contentRect, layoutBounds)
-        scalar.scrollableOverflow = contentRect
+        scalar.setOverflowGeometry(content, content, bounds)
+        scalar.scrollableOverflow = content
         run output.store(item.id, &scalar, false)
       }
     } else if item.kind == ItemKind.Anchor {

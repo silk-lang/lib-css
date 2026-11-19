@@ -7,7 +7,7 @@ import style { Style, Position, DimensionKind, Direction, WritingMode, Align, Fl
 import exclusions { ExclusionArea }
 import tree { NO_NODE }
 import box_tree { BoxTree, BoxKind }
-import fragments { FragmentKind, SettledRange }
+import fragments { FragmentKind, SettledRange, TEXT_RUN, TEXT_LINE, TEXT_LINE_OVERFLOW }
 import context { Input, ResolvedBox, resolveBox, childrenInput, withGutter, resolveIn, resolves, outOfFlow, absolutelyPositioned, containsAbsolute, isFlex, isGrid, scrollable, usedOverflowForAxis, UNBOUNDED }
 import engine { layoutNode, layoutNodeInPlace, layoutInBfc, flowMarginRect, resolveFragmentBox, shapedBox }
 import layout_pass { LayoutPass, FullBoxGeometry, CacheKind, REUSE_INDEPENDENT }
@@ -1912,6 +1912,86 @@ fn runOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, range: &Set
     marks[parentId / 64] = u64.bitOr(marks[parentId / 64], u64.shiftLeft(1, usize.toU64(parentId % 64)))
   }
 }
+// Adds to fragment `parentId`'s scrollable overflow what a line, a run of
+// text or an inline box under it adds (see treeOverflow): its border box, its
+// layout bounds `margin` and its own overflow, both already where it is in
+// the parent, within the parent's reachable `limits`. Nothing when all of it
+// lies inside what the parent holds by now and its overflow `inside` its box.
+fn addInlineOverflow(output: &mut LayoutPass<'_, '_>, parentId: usize, limits: ResolvedEdges, border: Rect, margin: Rect, overflow: Rect, inside: bool) {
+  let holds = output.fragments.values.asSlice()[parentId].scrollableOverflow
+  if inside {
+    let right = holds.x + holds.width
+    let bottom = holds.y + holds.height
+    if border.x >= holds.x && border.y >= holds.y && border.x + border.width <= right && border.y + border.height <= bottom
+      && margin.x >= holds.x && margin.y >= holds.y && margin.x + margin.width <= right && margin.y + margin.height <= bottom { return }
+  }
+  let mut combined = addOverflow(holds, border, limits)
+  combined = addOverflow(combined, margin, limits)
+  let grown = addOverflow(combined, overflow, limits)
+  let fragments = output.fragments.values.asMutSlice()
+  fragments[parentId].scrollableOverflow = grown
+}
+// treeOverflow for text fragment `index`: what its records add to its
+// parent's scrollable overflow, last to first, each as the fragment it stands
+// for would. A run on a line or in an inline box adds its box and its layout
+// bounds. A line box the fragment carries (see LineText) adds its box and its
+// overflow, which the layout folded from its runs: the records of a line
+// several text fragments share add it once, where it begins.
+fn textOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, index: usize) {
+  let fragment = output.fragments.values.asSlice()[index]
+  let parentId = fragment.parent
+  if parentId == NO_NODE || fragment.textData == NO_NODE { return }
+  let start = fragment.textData
+  let end = start + u32.toUsize(fragment.textCount)
+  let unlimited = ResolvedEdges { left: -UNBOUNDED, right: UNBOUNDED, top: -UNBOUNDED, bottom: UNBOUNDED }
+  let mut limits = unlimited
+  let parent = output.fragments.values.asSlice()[parentId]
+  let cb = parent.box
+  if cb != NO_NODE && parent.kind == FragmentKind.Box {
+    let mut normal = parent.contentRect
+    if output.frame == NO_NODE { normal = output.boxes[cb].normalFlowOverflow() }
+    limits = reachableLimits(nodes.style(cb), parent.paddingRect, normal, cb == 0)
+  }
+  if output.fragments.texts.asSlice()[start].part == TEXT_RUN {
+    // The fragment's layout bounds are its first run's: every run's but for
+    // the inline extent, which is the run's.
+    let vertical = fragment.box != NO_NODE && nodes.style(fragment.box).writingMode != WritingMode.HorizontalTb
+    let mut at = end
+    while at > start {
+      at = at - 1
+      let record = output.fragments.texts.asSlice()[at]
+      if record.part != TEXT_RUN { continue }
+      let position = Point { x: record.location.x + 0.0, y: record.location.y + 0.0 }
+      let border = Rect { x: position.x, y: position.y, width: record.size.width, height: record.size.height }
+      let mut bounds = fragment.layoutBounds
+      if vertical { bounds.height = record.size.height } else { bounds.width = record.size.width }
+      let content = Rect { x: 0.0, y: 0.0, width: record.size.width, height: record.size.height }
+      addInlineOverflow(&mut output, parentId, limits, border, bounds.translated(position), content.translated(position), true)
+    }
+    return
+  }
+  let mut reach = Rect.zero()
+  let mut reaches = false
+  let mut at = end
+  while at > start {
+    at = at - 1
+    let record = output.fragments.texts.asSlice()[at]
+    if record.part == TEXT_LINE_OVERFLOW {
+      reach = Rect { x: record.location.x, y: record.location.y, width: record.size.width, height: record.size.height }
+      reaches = true
+      continue
+    }
+    if record.part != TEXT_LINE { continue }
+    let position = Point { x: record.location.x + 0.0, y: record.location.y + 0.0 }
+    let border = Rect { x: position.x, y: position.y, width: record.size.width, height: record.size.height }
+    let content = Rect { x: 0.0, y: 0.0, width: record.size.width, height: record.size.height }
+    let mut overflow = content
+    if reaches { overflow = reach }
+    reaches = false
+    let inside = overflow.x >= 0.0 && overflow.y >= 0.0 && overflow.x + overflow.width <= record.size.width && overflow.y + overflow.height <= record.size.height
+    addInlineOverflow(&mut output, parentId, limits, border, content.translated(position), overflow.translated(position), inside)
+  }
+}
 fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: Rect, normalViewport: Rect, marked: bool, plain: bool) -> Rect {
   let mut result = normalViewport
   let viewportStyle = Style.make()
@@ -1964,6 +2044,11 @@ fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: 
       }
       let values = output.fragments.values.asMutSlice()
       values[index].scrollableOverflow = range.overflow
+    }
+    // A text fragment adds what its runs or the line boxes it carries add.
+    if output.fragments.values.asSlice()[index].kind == FragmentKind.Text {
+      textOverflow(nodes, &mut output, index)
+      continue
     }
     let fragment = &output.fragments.values.asSlice()[index]
     // Nonpainting scopes contribute no own rectangle, but CB-owned absolute

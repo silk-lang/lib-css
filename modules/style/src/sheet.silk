@@ -94,6 +94,22 @@ pub struct Sheet {
   pub layers: Layers,
   pub resolver: Resolver,
   pub diagnostics: List<Diagnostic>,
+  /// What the last condition update found (see sheet_conditions.update).
+  pub conditionMemo: ConditionMemo,
+}
+
+/// The condition results an update applied, and how many rules, registrations, keyframes
+/// and font faces it applied them to: an update that finds the same need not apply them again.
+pub struct ConditionMemo {
+  pub valid: bool, pub starting: bool,
+  pub results: List<bool>, pub starts: List<bool>,
+  pub rules: usize, pub registrations: usize, pub keyframes: usize, pub fontFaces: usize,
+}
+
+impl ConditionMemo {
+  pub fn make() -> ConditionMemo {
+    return ConditionMemo { valid: false, starting: false, results: List<bool>.make(), starts: List<bool>.make(), rules: 0, registrations: 0, keyframes: 0, fontFaces: 0 }
+  }
 }
 
 pub fn catalogFingerprint() -> u64 {
@@ -145,7 +161,7 @@ impl Sheet {
       buffers: List<TokenBuffer>.make(), declarations: List<Declaration>.make(),
       conditions: List<Condition>.make(), containerPrograms: List<Queries>.make(), ruleConditions: List<usize>.make(),
       metadata: List<AtRule>.make(), fontFaces: List<Face>.make(), keyframes: List<Keyframes>.make(), registrations: List<RegisteredProperty>.make(), layers: Layers.make(), resolver: Resolver.make(),
-      diagnostics: List<Diagnostic>.make(),
+      diagnostics: List<Diagnostic>.make(), conditionMemo: ConditionMemo.make(),
     }
   }
 
