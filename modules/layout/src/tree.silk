@@ -764,7 +764,7 @@ pub struct LayoutTree {
   pub relaidMost: bool,
   // How the last compute ran, for diagnostics: 0 nothing changed, 1 every change laid out
   // alone and spliced in, 2 in place over the previous output, 3 the same boxes written
-  // afresh, 4 other boxes, 5 other boxes in place over the previous output renumbered.
+  // afresh, 4 other boxes.
   pub lastMode: u8,
   // How many computes in a row laid out most boxes again and copied none
   // (see compute).
