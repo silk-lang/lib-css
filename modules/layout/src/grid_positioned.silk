@@ -1,4 +1,5 @@
 import style { Style, Align, OverflowAlignment, WritingMode }
+import source { LayoutSource }
 import box_tree { BoxTree, BoxKind }
 import context { scrollable, usedOverflowForAxis }
 import geometry { Rect, Point, max }
@@ -13,15 +14,15 @@ import context { Input }
 import engine { layoutInBfc }
 import bfc { BfcState }
 
-pub fn isContainer(nodes: &BoxTree<'_>, id: usize) -> bool {
+pub fn isContainer<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   return nodes.node(id).kind == BoxKind.Grid && nodes.node(id).measurement != Measurement.Content
     && !nodes.style(id).replaced
 }
 
 // Fresh inline allocation for a positioning-only continuation. Keep only the
 // pooled Grid geometry; the checkpoint owns every speculative layout/publication.
-pub effect fn captureShell<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn captureShell<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   id: usize,
@@ -48,8 +49,8 @@ pub effect fn captureShell<'pass, 'source, M: Measure + TextMeasure>(
 
 // The supplied padding rectangle selects the physical containing-block instance.
 // Track geometry remains content-relative, including for repeated fixed grids.
-pub fn containingRect(
-  nodes: &BoxTree<'_>,
+pub fn containingRect<S: LayoutSource>(
+  nodes: &BoxTree<'_, S>,
   output: &LayoutPass<'_, '_>,
   container: usize,
   child: usize,

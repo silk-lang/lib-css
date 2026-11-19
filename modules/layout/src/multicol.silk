@@ -7,6 +7,7 @@
 // fragmentation context is monolithic there: its columns stay in one outer
 // fragmentainer, numbered from 0 while the outer frame is set aside.
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.num.usize
 import silk.num.u32
 import silk.num.f32
@@ -67,7 +68,7 @@ fn blockOf(style: &Style, size: Size) -> f32 {
 }
 
 // The column flow's request for one column of `columns`.
-fn flowInput(nodes: &BoxTree<'_>, set: usize, input: &Input, box: &ResolvedBox, width: f32) -> Input {
+fn flowInput<S: LayoutSource>(nodes: &BoxTree<'_, S>, set: usize, input: &Input, box: &ResolvedBox, width: f32) -> Input {
   let style = nodes.style(set)
   let mut parent = OptionalSize { width: width, height: 0.0, widthDefinite: true, heightDefinite: false }
   if vertical(style) { parent = OptionalSize { width: 0.0, height: width, widthDefinite: false, heightDefinite: true } }
@@ -89,7 +90,7 @@ fn flowInput(nodes: &BoxTree<'_>, set: usize, input: &Input, box: &ResolvedBox, 
   return request
 }
 
-fn subtreeEnd(nodes: &BoxTree<'_>, id: usize) -> usize {
+fn subtreeEnd<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
   let mut end = id + 1
   let mut at = id
   while true {
@@ -106,7 +107,7 @@ fn subtreeEnd(nodes: &BoxTree<'_>, id: usize) -> usize {
 
 // The size of a column set's contents, and with performLayout its columns.
 // A size probe lays the columns out and takes them back.
-pub effect fn layoutColumnSet<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutColumnSet<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let flow = nodes.node(id).firstChild
   let mut result = Layout.zero()
@@ -157,7 +158,7 @@ pub effect fn layoutColumnSet<'pass, 'source, M: Measure + TextMeasure>(nodes: &
 }
 
 // layoutColumnSet in a vertical writing mode: the same with the axes swapped.
-effect fn layoutVerticalSet<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, flow: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutVerticalSet<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, flow: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let mut result = Layout.zero()
   if !box.size.heightDefinite {
@@ -197,7 +198,7 @@ effect fn layoutVerticalSet<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
 
 // Lays the flow out in columns at a balanced height, at most `limit`;
 // returns the column height used.
-effect fn columnsLayout<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, set: usize, flow: usize, input: &Input, box: &ResolvedBox, columns: Columns, limit: f32) -> f32 ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn columnsLayout<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, set: usize, flow: usize, input: &Input, box: &ResolvedBox, columns: Columns, limit: f32) -> f32 ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let base = flowInput(nodes, set, input, box, columns.width)
   // The flow in one column: its height, to balance from.
   let mut probe = base
@@ -257,7 +258,7 @@ struct Placed { complete: bool, used: f32, tallest: f32, reach: f32 }
 impl Copy for Placed {}
 
 // Where column `index`, `height` tall in the block axis, starts in the set.
-fn columnOrigin(nodes: &BoxTree<'_>, set: usize, box: &ResolvedBox, columns: Columns, index: usize, height: f32) -> Point {
+fn columnOrigin<S: LayoutSource>(nodes: &BoxTree<'_, S>, set: usize, box: &ResolvedBox, columns: Columns, index: usize, height: f32) -> Point {
   let style = nodes.style(set)
   let step = usize.toF32(index) * (columns.width + columns.gap)
   let rtl = style.direction == Direction.Rtl
@@ -277,7 +278,7 @@ fn columnOrigin(nodes: &BoxTree<'_>, set: usize, box: &ResolvedBox, columns: Col
 }
 
 // Lays out up to `allowed` columns of `height`; whether the flow finished.
-effect fn fillColumns<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, set: usize, flow: usize, base: &Input, box: &ResolvedBox, columns: Columns, height: f32, allowed: usize) -> Placed ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn fillColumns<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, set: usize, flow: usize, base: &Input, box: &ResolvedBox, columns: Columns, height: f32, allowed: usize) -> Placed ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let savedFrame = output.frame
   let parent = output.fragmentParent
   let mut frames = Fragmentainers.empty()
@@ -392,7 +393,7 @@ effect fn columnReach(output: &LayoutPass<'_, '_>, start: usize, style: &Style) 
 
 // One column of the flow, relaxing break rules when nothing fits (Break3 §4.4);
 // false when the column stays empty.
-effect fn fitColumn<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, flow: usize, input: &Input) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn fitColumn<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, flow: usize, input: &Input) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let checkpoint = output.checkpoint()
   let mut request = input.*
   while true {

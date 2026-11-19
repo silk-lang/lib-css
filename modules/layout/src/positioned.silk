@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.num.u64
 import silk.num.u32
 import silk.num.usize
@@ -32,15 +33,15 @@ import grid_subgrid as Subgrid
 fn fragmentPosition(output: &LayoutPass<'_, '_>, id: usize, visual: bool) -> Point {
   return physicalPosition(output, id, visual)
 }
-fn globalPosition(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize) -> Point {
+fn globalPosition<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize) -> Point {
   if id == NO_NODE { return Point { x: 0.0, y: 0.0 } }
   return fragmentPosition(output, output.fragments.first(id), true)
 }
-fn normalPosition(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize) -> Point {
+fn normalPosition<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize) -> Point {
   if id == NO_NODE { return Point { x: 0.0, y: 0.0 } }
   return flowPosition(output, output.fragments.first(id))
 }
-fn requestedScrollOffset(nodes: &BoxTree<'_>, id: usize, viewportScroll: Point) -> Point {
+fn requestedScrollOffset<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, viewportScroll: Point) -> Point {
   if id == NO_NODE || id == 0 { return viewportScroll }
   let style = nodes.style(id)
   let mut result = Point { x: 0.0, y: 0.0 }
@@ -58,13 +59,13 @@ fn clampScroll(request: Point, port: Rect, overflow: Rect) -> Point {
     y: clamp(request.y, min(0.0, overflow.y - port.y), max(0.0, overflow.y + overflow.height - port.y - port.height)),
   }
 }
-fn scrollOffset(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, viewportScroll: Point) -> Point {
+fn scrollOffset<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, viewportScroll: Point) -> Point {
   let request = requestedScrollOffset(nodes, id, viewportScroll)
   if id == NO_NODE || id == 0 { return request }
   let layout = &output.boxes[id]
   return clampScroll(request, layout.paddingRect(), layout.scrollableOverflow)
 }
-fn generatedParent(nodes: &BoxTree<'_>, id: usize) -> usize {
+fn generatedParent<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
   let mut parent = nodes.node(id).parent
   while parent != NO_NODE && (nodes.node(parent).kind == BoxKind.Inline || nodes.node(parent).kind == BoxKind.InlineFormatting) {
     parent = nodes.node(parent).parent
@@ -74,32 +75,32 @@ fn generatedParent(nodes: &BoxTree<'_>, id: usize) -> usize {
 }
 // NO_NODE for the viewport. A fixed box's is the nearest layout-contained
 // ancestor (CSS Containment 2 §3.2), else the viewport.
-pub fn absoluteContainingBlock(nodes: &BoxTree<'_>, id: usize) -> usize {
+pub fn absoluteContainingBlock<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
   let fixed = nodes.style(id).position == Position.Fixed
   let source = nodes.node(id).source
   if source == NO_NODE { return NO_NODE }
-  let mut parent = nodes.sources[source].parent
+  let mut parent = nodes.source.parent(source)
   while parent != NO_NODE {
     let box = nodes.firstBySource.get(parent)
     if box != NO_NODE {
-      let style = &nodes.styles[nodes.sources[parent].styleIndex]
+      let style = &nodes.styles[nodes.source.styleIndex(parent)]
       if style.layoutContainment || !fixed && style.position != Position.Static { return box }
     }
-    parent = nodes.sources[parent].parent
+    parent = nodes.source.parent(parent)
   }
   return NO_NODE
 }
 // A fixed box placed against the viewport; one inside a layout-contained box
 // is placed like an absolute one.
-pub fn viewportFixed(nodes: &BoxTree<'_>, id: usize) -> bool {
+pub fn viewportFixed<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   return nodes.style(id).position == Position.Fixed && absoluteContainingBlock(nodes, id) == NO_NODE
 }
-fn fixedTree(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn fixedTree<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let mut source = nodes.node(id).source
   while source != NO_NODE {
     let box = nodes.firstBySource.get(source)
     if box != NO_NODE && viewportFixed(nodes, box) { return true }
-    source = nodes.sources[source].parent
+    source = nodes.source.parent(source)
   }
   return false
 }
@@ -107,7 +108,7 @@ fn fixedTree(nodes: &BoxTree<'_>, id: usize) -> bool {
 // inline scope still has nonpainting geometry (CSSWG #13711 / #14104).
 // Materialize it before positioned descendants consume the inline CB, not in
 // the CSSOM iterator. The preceding piece owns it, preserving source order.
-effect fn interruption(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, last: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn interruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize, last: usize) ! OutOfMemoryError ? &mut Allocator {
   let node = nodes.node(id)
   let first = node.interruptionFirst
   let container = nodes.node(first).parent
@@ -144,7 +145,7 @@ effect fn interruption(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id:
   fragment.nonpainting = true
   drop run output.fragments.append(fragment)
 }
-effect fn fragmentedInterruption(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, last: usize, container: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn fragmentedInterruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize, last: usize, container: usize) ! OutOfMemoryError ? &mut Allocator {
   let mut frame: usize = 0
   let mut end = output.frameRoots.length()
   if fixedTree(nodes, id) {
@@ -202,7 +203,7 @@ effect fn fragmentedInterruption(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_
     frame = frame + 1
   }
 }
-fn textOnlyContinuation(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn textOnlyContinuation<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let mut child = nodes.node(id).firstChild
   while child != NO_NODE {
     let node = nodes.node(child)
@@ -214,7 +215,7 @@ fn textOnlyContinuation(nodes: &BoxTree<'_>, id: usize) -> bool {
   }
   return true
 }
-fn phantomInterruption(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
+fn phantomInterruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
   if id == NO_NODE || nodes.node(id).interruptionFirst == NO_NODE || !textOnlyContinuation(nodes, id) { return false }
   let mut current = output.fragments.first(id)
   if current == NO_NODE { return false }
@@ -225,7 +226,7 @@ fn phantomInterruption(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usi
   }
   return true
 }
-effect fn interruptions(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, first: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn interruptions<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, first: usize) ! OutOfMemoryError ? &mut Allocator {
   let mut id = first
   while id != NO_NODE {
     let mut next = nodes.node(id).nextContinuation
@@ -257,7 +258,7 @@ effect fn interruptions(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, fi
     id = next
   }
 }
-fn inlineContainingRect(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, frame: usize) -> Rect {
+fn inlineContainingRect<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, frame: usize) -> Rect {
   let style = nodes.style(id)
   let reverseX = startReverse(style, true)
   let reverseY = startReverse(style, false)
@@ -334,13 +335,13 @@ fn inlineContainingRect(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: us
     height = startY - endY }
   return Rect { x: x, y: y, width: max(0.0, width), height: max(0.0, height) }
 }
-fn containingRect(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, viewport: OptionalSize) -> Rect {
+fn containingRect<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, viewport: OptionalSize) -> Rect {
   if id == NO_NODE { return Rect { x: 0.0, y: 0.0, width: viewport.width, height: viewport.height } }
   if nodes.node(id).kind == BoxKind.Inline { return inlineContainingRect(nodes, output, id, NO_NODE) }
   let fragment = output.fragments.first(id)
   return output.fragments.values.asSlice()[fragment].paddingRect.translated(flowPosition(output, fragment))
 }
-fn usedInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, viewport: OptionalSize) -> Input {
+fn usedInput<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, viewport: OptionalSize) -> Input {
   let positioned = absolutelyPositioned(nodes.style(id))
   let mut parent = generatedParent(nodes, id)
   if positioned { parent = absoluteContainingBlock(nodes, id) }
@@ -380,23 +381,23 @@ fn usedInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, viewpo
   }
   return input
 }
-fn usedBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, viewport: OptionalSize) -> ResolvedBox {
+fn usedBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, viewport: OptionalSize) -> ResolvedBox {
   return withGutter(&shapedBox(output, nodes.style(id), id, &usedInput(nodes, output, id, viewport)), output.boxes[id].scrollbarGutter)
 }
 // The used box of an absolutely positioned box's generated parent, or of the
 // initial containing block without one; positionTree keeps the containing
 // block's in output.absoluteBox.
-fn staticParentBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, parent: usize, viewport: OptionalSize, fragmented: bool, viewportStyle: &Style) -> ResolvedBox {
+fn staticParentBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, parent: usize, viewport: OptionalSize, fragmented: bool, viewportStyle: &Style) -> ResolvedBox {
   if parent == NO_NODE { return resolveBox(viewportStyle, &Input.make(viewport)) }
   if !fragmented && parent == output.absoluteInputOwner { return output.absoluteBox }
   return usedBox(nodes, output, parent, viewport)
 }
-fn usedChildrenInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, viewport: OptionalSize, parent: OptionalSize) -> Input {
+fn usedChildrenInput<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, viewport: OptionalSize, parent: OptionalSize) -> Input {
   let input = usedInput(nodes, output, id, viewport)
   return usedChildrenInputOf(nodes, output, id, &input, &withGutter(&shapedBox(output, nodes.style(id), id, &input), output.boxes[id].scrollbarGutter), parent)
 }
 // usedChildrenInput from the box's usedInput and usedBox.
-fn usedChildrenInputOf(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, input: &Input, used: &ResolvedBox, parent: OptionalSize) -> Input {
+fn usedChildrenInputOf<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, input: &Input, used: &ResolvedBox, parent: OptionalSize) -> Input {
   let mut box = used.*
   box.size = OptionalSize {
     width: output.boxes[id].size.width, height: output.boxes[id].size.height,
@@ -404,12 +405,12 @@ fn usedChildrenInputOf(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usi
   }
   return childrenInput(input, nodes.style(id), &box, parent)
 }
-fn nextPositionSource(nodes: &BoxTree<'_>, id: usize) -> usize {
-  if !nodes.styles[nodes.sources[id].styleIndex].display.isNone() && nodes.sources[id].firstChild != NO_NODE { return nodes.sources[id].firstChild }
+fn nextPositionSource<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
+  if !nodes.styles[nodes.source.styleIndex(id)].display.isNone() && nodes.source.firstChild(id) != NO_NODE { return nodes.source.firstChild(id) }
   let mut current = id
   while current != NO_NODE {
-    if nodes.sources[current].nextSibling != NO_NODE { return nodes.sources[current].nextSibling }
-    current = nodes.sources[current].parent
+    if nodes.source.nextSibling(current) != NO_NODE { return nodes.source.nextSibling(current) }
+    current = nodes.source.parent(current)
   }
   return NO_NODE
 }
@@ -490,7 +491,7 @@ fn stickyAxis(style: &Style, containingStyle: &Style, horizontal: bool, position
   if offset < 0.0 { return max(offset, min(0.0, minimum)) }
   return 0.0
 }
-fn sticky(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, fragmentId: usize, viewport: OptionalSize, viewportScroll: Point, viewportOverflow: Rect) {
+fn sticky<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize, fragmentId: usize, viewport: OptionalSize, viewportScroll: Point, viewportOverflow: Rect) {
   let parent = generatedParent(nodes, id)
   let viewportStyle = Style.make()
   let mut containingStyle = &viewportStyle
@@ -558,7 +559,7 @@ fn sticky(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, fragm
   fragments[fragmentId].visualOffset.x = fragments[fragmentId].visualOffset.x + x
   fragments[fragmentId].visualOffset.y = fragments[fragmentId].visualOffset.y + y
 }
-fn nextGenerated(nodes: &BoxTree<'_>, root: usize, id: usize) -> usize {
+fn nextGenerated<S: LayoutSource>(nodes: &BoxTree<'_, S>, root: usize, id: usize) -> usize {
   let mut current = id
   while current != root && current != NO_NODE {
     if nodes.node(current).nextSibling != NO_NODE { return nodes.node(current).nextSibling }
@@ -604,7 +605,7 @@ fn insetPosition(low: f32, high: f32, hasLow: bool, hasHigh: bool, size: f32, co
 }
 
 
-effect fn absolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, viewport: OptionalSize, fragmented: bool, viewportStyle: &Style) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn absolute<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, viewport: OptionalSize, fragmented: bool, viewportStyle: &Style) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let parent = generatedParent(nodes, id)
   let cb = absoluteContainingBlock(nodes, id)
@@ -1004,7 +1005,7 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
 
 // The exclusion areas of the boxes as positioned now, in box order, into
 // `output.foundExclusions` (see exclusions.silk).
-pub effect fn gatherExclusions(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>) ! OutOfMemoryError ? &mut Allocator {
+pub effect fn gatherExclusions<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>) ! OutOfMemoryError ? &mut Allocator {
   output.foundExclusions.clear()
   if output.frame != NO_NODE { return }
   let mut id: usize = 0
@@ -1026,7 +1027,7 @@ pub effect fn gatherExclusions(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, 
   }
 }
 
-fn monolithicContaining(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: usize) -> bool {
+fn monolithicContaining<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, cb: usize) -> bool {
   if cb == NO_NODE { return false }
   let mut current = output.fragments.first(cb)
   while current != NO_NODE {
@@ -1040,7 +1041,7 @@ fn monolithicContaining(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: us
   return false
 }
 
-fn containingExisting(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: usize, frame: usize) -> usize {
+fn containingExisting<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, cb: usize, frame: usize) -> usize {
   let mut box = cb
   while box != NO_NODE {
     let found = instance(output, box, frame)
@@ -1052,7 +1053,7 @@ fn containingExisting(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: usiz
 
 // A flex or grid item's allocation belongs to its parent's sizing algorithm.
 // Cache the complete probe results together so sibling continuations reuse them.
-effect fn containerShellAllocation<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, parent: usize, initial: OptionalSize, gridContext: &mut usize) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn containerShellAllocation<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, parent: usize, initial: OptionalSize, gridContext: &mut usize) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let parentBox = output.fragments.values.get(parent).box
   let inherited = nodes.node(parentBox).kind == BoxKind.Grid && Subgrid.eligible(nodes, id)
   gridContext.* = 0
@@ -1105,7 +1106,7 @@ effect fn containerShellAllocation<'pass, 'source, M: Measure + TextMeasure>(nod
   return result
 }
 
-effect fn prepareGridGeometry<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, fragment: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn prepareGridGeometry<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, fragment: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if !GridPositioned.isContainer(nodes, id) || output.cache.gridGeometry.findFragment(id, fragment) != NO_NODE { return }
   if !containsAbsolute(nodes.style(id)) && !Subgrid.eligible(nodes, id) { return }
   let metadata = match output.fragmentFullBox(fragment) {
@@ -1126,7 +1127,7 @@ effect fn prepareGridGeometry<'pass, 'source, M: Measure + TextMeasure>(nodes: &
   run GridPositioned.captureShell(nodes, &mut output, &mut measurer, id, fragment, &input)
 }
 
-effect fn containingInstance<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, frame: usize) -> usize ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn containingInstance<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, frame: usize) -> usize ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if id == NO_NODE || id == 0 { return run output.ensureFrameRoot(frame) }
   let existing = containingExisting(nodes, &output, id, frame)
   if existing != NO_NODE {
@@ -1287,7 +1288,7 @@ effect fn containingInstance<'pass, 'source, M: Measure + TextMeasure>(nodes: &B
 }
 
 @optimizeSize
-effect fn frameContainingRect(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, cb: usize, parent: usize, frame: usize) -> Rect ! FragmentationError {
+effect fn frameContainingRect<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, cb: usize, parent: usize, frame: usize) -> Rect ! FragmentationError {
   if cb == NO_NODE {
     match output.frames.page(frame) {
       Option<FragmentAncestor>.Some { value } => { return value.rect }
@@ -1307,7 +1308,7 @@ effect fn frameContainingRect(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, 
 }
 
 @optimizeSize
-effect fn absoluteFrameInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, cb: usize, parent: usize, frame: usize, offset: f32, relaxation: BreakRelaxation, original: &Input) -> Input ! FragmentationError {
+effect fn absoluteFrameInput<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, cb: usize, parent: usize, frame: usize, offset: f32, relaxation: BreakRelaxation, original: &Input) -> Input ! FragmentationError {
   let geometry = run output.requiredFrame(frame)
   let containing = run frameContainingRect(nodes, output, id, cb, parent, frame)
   let style = nodes.style(id)
@@ -1351,7 +1352,7 @@ effect fn absoluteFrameInput(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, i
   return input
 }
 
-fn placedInline(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, cb: usize, input: &Input, containing: Rect, desired: Point, size: Size) -> Point {
+fn placedInline<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, cb: usize, input: &Input, containing: Rect, desired: Point, size: Size) -> Point {
   let style = nodes.style(id)
   let viewportStyle = Style.make()
   let mut cbStyle = &viewportStyle
@@ -1401,7 +1402,7 @@ fn placedInline(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, cb:
 
 struct AbsoluteStart { frame: usize, offset: f32 }
 
-fn containingSegment(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: usize, frame: usize) -> Option<Rect> {
+fn containingSegment<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, cb: usize, frame: usize) -> Option<Rect> {
   let mut result = Rect.zero()
   let mut found = false
   let mut box = cb
@@ -1440,7 +1441,7 @@ fn containingSegment(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: usize
   return Option<Rect>.None
 }
 
-fn joinedContainingRect(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: usize, viewport: OptionalSize) -> Rect {
+fn joinedContainingRect<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, cb: usize, viewport: OptionalSize) -> Rect {
   let mut rect = containingRect(nodes, output, cb, viewport)
   if cb == NO_NODE || nodes.node(cb).kind == BoxKind.Inline { return rect }
   // Break3 §5.3: break-fill increases the used content extent. Join accepted
@@ -1466,7 +1467,7 @@ fn joinedContainingRect(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: us
   return rect
 }
 
-effect fn locateAbsolute(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: usize, location: Point, size: Size) -> AbsoluteStart ! FragmentationError {
+effect fn locateAbsolute<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, cb: usize, location: Point, size: Size) -> AbsoluteStart ! FragmentationError {
   let mut distance = blockStart(output, location, size)
   let mut frame: usize = 0
   // Inline containing rectangles already span accepted line fragments in the
@@ -1523,7 +1524,7 @@ effect fn locateAbsolute(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: u
   }
 }
 
-effect fn semanticStaticPosition(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, cb: usize, point: Point, size: Size) -> Point ! FragmentationError {
+effect fn semanticStaticPosition<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, cb: usize, point: Point, size: Size) -> Point ! FragmentationError {
   if nodes.node(cb).kind == BoxKind.Inline { return point }
   let mut position = blockStart(output, point, size)
   let mut target: usize = 0
@@ -1568,7 +1569,7 @@ effect fn semanticStaticPosition(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_
   return result
 }
 
-effect fn previewPositionedWidows<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, cb: usize, original: &Input, checks: &mut List<WidowCheck>) -> WidowDecision ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn previewPositionedWidows<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, cb: usize, original: &Input, checks: &mut List<WidowCheck>) -> WidowDecision ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut frame = output.frame + 1
   let waiting = output.resumes.get(id).notBeforeFrame
   if waiting > frame { frame = waiting }
@@ -1612,7 +1613,7 @@ effect fn previewPositionedWidows<'pass, 'source, M: Measure + TextMeasure>(node
 
 // Continuous measurement resolves positioning only. Each physical instance is
 // laid out against its real frame; no rectangles from the probe are sliced.
-effect fn fragmentedAbsolute<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, cb: usize, original: &Input, location: Point, fullSize: Size) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn fragmentedAbsolute<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, cb: usize, original: &Input, location: Point, fullSize: Size) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let attached = fixedTree(nodes, id)
   let unfragmented = attached || monolithicContaining(nodes, &output, cb)
   let savedFrame = output.frame
@@ -1802,7 +1803,7 @@ pub fn propagatedOverflow(style: &Style, rect: Rect, padding: Rect) -> Rect {
   }
   return Rect { x: left, y: top, width: max(0.0, right - left), height: max(0.0, bottom - top) }
 }
-fn fragmentFlowMargin(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, parentId: usize, childId: usize) -> Rect {
+fn fragmentFlowMargin<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, parentId: usize, childId: usize) -> Rect {
   let parent = &output.fragments.values.asSlice()[parentId]
   let child = &output.fragments.values.asSlice()[childId]
   let style = nodes.style(child.box)
@@ -1834,7 +1835,7 @@ fn fragmentFlowMargin(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, parentId
 }
 
 // Propagates the scrollable overflow of a pass holding one subtree alone.
-pub fn subtreeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>) {
+pub fn subtreeOverflow<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>) {
   drop treeOverflow(nodes, &mut output, Rect.zero(), Rect.zero(), false, false)
 }
 
@@ -1886,7 +1887,7 @@ fn previousMark(marks: &[u64], index: usize) -> usize {
 // Adds the border boxes of a kept run's members (see keepRun) to their
 // parent's overflow, last to first, as treeOverflow adds each absolute box
 // whose own overflow stays inside its border box.
-fn runOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, range: &SettledRange, plain: bool) {
+fn runOverflow<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, range: &SettledRange, plain: bool) {
   let values = output.fragments.values.asMutSlice()
   let parentId = values[range.start].parent
   let cb = values[parentId].box
@@ -1937,7 +1938,7 @@ fn addInlineOverflow(output: &mut LayoutPass<'_, '_>, parentId: usize, limits: R
 // bounds. A line box the fragment carries (see LineText) adds its box and its
 // overflow, which the layout folded from its runs: the records of a line
 // several text fragments share add it once, where it begins.
-fn textOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, index: usize) {
+fn textOverflow<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, index: usize) {
   let fragment = output.fragments.values.asSlice()[index]
   let parentId = fragment.parent
   if parentId == NO_NODE || fragment.textData == NO_NODE { return }
@@ -1992,7 +1993,7 @@ fn textOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, index: usi
     addInlineOverflow(&mut output, parentId, limits, border, content.translated(position), overflow.translated(position), inside)
   }
 }
-fn treeOverflow(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: Rect, normalViewport: Rect, marked: bool, plain: bool) -> Rect {
+fn treeOverflow<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, viewport: Rect, normalViewport: Rect, marked: bool, plain: bool) -> Rect {
   let mut result = normalViewport
   let viewportStyle = Style.make()
   let mut viewportLimits = reachableLimits(&viewportStyle, viewport, viewport, true)
@@ -2182,7 +2183,7 @@ fn fragmentSource(output: &LayoutPass<'_, '_>, id: usize) -> usize {
   }
   return NO_NODE
 }
-fn sourceRelative(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, source: usize, viewport: OptionalSize, frame: usize) -> Point {
+fn sourceRelative<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, source: usize, viewport: OptionalSize, frame: usize) -> Point {
   let mut offset = Point { x: 0.0, y: 0.0 }
   let viewportStyle = Style.make()
   let mut current = source
@@ -2235,7 +2236,7 @@ fn sourceRelative(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, source: usiz
         offset.y = offset.y + own.y
       }
     }
-    current = nodes.sources[current].parent
+    current = nodes.source.parent(current)
   }
   return offset
 }
@@ -2243,14 +2244,14 @@ fn sourceRelative(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, source: usiz
 // fragmentation, computed once top-down instead of walking every fragment's
 // ancestors. A fixed box restarts the sum, as sourceRelative stops there.
 // Reports whether any source moves.
-effect fn relativeOffsets(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: OptionalSize) -> bool ! OutOfMemoryError ? &mut Allocator {
+effect fn relativeOffsets<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, viewport: OptionalSize) -> bool ! OutOfMemoryError ? &mut Allocator {
   let mut moved = false
   output.relativeOffsets.clear()
-  run output.relativeOffsets.appendRepeated(Point { x: 0.0, y: 0.0 }, nodes.sources.length)
+  run output.relativeOffsets.appendRepeated(Point { x: 0.0, y: 0.0 }, nodes.source.nodeCount())
   let viewportStyle = Style.make()
   let mut source: usize = 0
   while source != NO_NODE {
-    let parentSource = nodes.sources[source].parent
+    let parentSource = nodes.source.parent(source)
     let mut offset = Point { x: 0.0, y: 0.0 }
     if parentSource != NO_NODE { offset = output.relativeOffsets.get(parentSource) }
     let id = nodes.firstBySource.get(source)
@@ -2277,17 +2278,17 @@ effect fn relativeOffsets(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, 
     }
     let offsets = output.relativeOffsets.asMutSlice()
     offsets[source] = offset
-    if nodes.sources[source].firstChild != NO_NODE { source = nodes.sources[source].firstChild }
+    if nodes.source.firstChild(source) != NO_NODE { source = nodes.source.firstChild(source) }
     else {
-      while source != NO_NODE && nodes.sources[source].nextSibling == NO_NODE { source = nodes.sources[source].parent }
-      if source != NO_NODE { source = nodes.sources[source].nextSibling }
+      while source != NO_NODE && nodes.source.nextSibling(source) == NO_NODE { source = nodes.source.parent(source) }
+      if source != NO_NODE { source = nodes.source.nextSibling(source) }
     }
   }
   return moved
 }
 // Reports whether any fragment may have moved. Visual offsets are all zero
 // on entry, so when no source moves there is nothing to write.
-effect fn positionRelative(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: OptionalSize) -> bool ! OutOfMemoryError ? &mut Allocator {
+effect fn positionRelative<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, viewport: OptionalSize) -> bool ! OutOfMemoryError ? &mut Allocator {
   let memo = output.frame == NO_NODE
   if memo {
     let moved = run relativeOffsets(nodes, &mut output, viewport)
@@ -2324,11 +2325,11 @@ effect fn positionRelative(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>,
 // non-inline boxes at the top of the generated tree. Every other box is left
 // as normal-flow layout placed it. Depends only on the boxes and their styles.
 // Returns whether the visits changed.
-pub effect fn positionVisits(nodes: &BoxTree<'_>, result: &mut List<usize>) -> bool ! OutOfMemoryError ? &mut Allocator {
+pub effect fn positionVisits<S: LayoutSource>(nodes: &BoxTree<'_, S>, result: &mut List<usize>) -> bool ! OutOfMemoryError ? &mut Allocator {
   let before = result.length()
   let mut count: usize = 0
   let mut changed = false
-  if nodes.sources.length == 0 {
+  if nodes.source.nodeCount() == 0 {
     result.clear()
     return before != 0
   }
@@ -2376,7 +2377,7 @@ struct AnchoredBlock { cb: usize, sourceParent: usize, fragment: usize, origin: 
 // its containing block is its parent: its request and place read only where
 // that block's padding box starts, and the parts of the request the block's
 // style gives, compared here. See absolute, whose arithmetic this follows.
-effect fn keepAnchored(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, anchored: &mut AnchoredBlock) -> bool ! OutOfMemoryError ? &mut Allocator {
+effect fn keepAnchored<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize, anchored: &mut AnchoredBlock) -> bool ! OutOfMemoryError ? &mut Allocator {
   if !anchorBlock(nodes, &output, id, &mut anchored) { return false }
   let style = nodes.style(id)
   let x = anchored.padding.x + (style.inset.left.value + style.margin.left.value)
@@ -2385,13 +2386,13 @@ effect fn keepAnchored(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id:
 }
 // keepAnchored's conditions on the box and its containing block, which it
 // leaves in `anchored`.
-fn anchorBlock(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, anchored: &mut AnchoredBlock) -> bool {
+fn anchorBlock<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, anchored: &mut AnchoredBlock) -> bool {
   if (output.facts.own.get(id) & FACT_ANCHORED) == 0 || !output.facts.viewportFree.get(id) || !output.keptAsBefore(id, REUSE_INDEPENDENT) { return false }
   let cb = nodes.node(id).parent
   let source = nodes.node(id).source
   if cb == NO_NODE || source == NO_NODE { return false }
   // Siblings of one source parent share their containing block.
-  let sourceParent = nodes.sources[source].parent
+  let sourceParent = nodes.source.parent(source)
   if anchored.cb != cb || anchored.sourceParent != sourceParent {
     anchored.cb = NO_NODE
     if absoluteContainingBlock(nodes, id) != cb || nodes.node(cb).kind == BoxKind.Inline || GridPositioned.isContainer(nodes, cb) { return false }
@@ -2429,7 +2430,7 @@ impl RunBuilder {
 // `anchored`, to the run being gathered, or starts one with it. Only a box
 // that scrolls nothing, in one unmoved fragment holding its own overflow,
 // joins a run.
-effect fn gatherRun(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, builder: &mut RunBuilder, runs: &mut List<PositionedRun>, id: usize, at: usize, anchored: &AnchoredBlock) ! OutOfMemoryError ? &mut Allocator {
+effect fn gatherRun<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, builder: &mut RunBuilder, runs: &mut List<PositionedRun>, id: usize, at: usize, anchored: &AnchoredBlock) ! OutOfMemoryError ? &mut Allocator {
   let style = nodes.style(id)
   let node = nodes.node(id)
   let start = output.fragments.first(id)
@@ -2475,7 +2476,7 @@ effect fn gatherRun(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, builder: &
 // containing block's padding box starts where it did, and their fragments
 // still follow its last child. The run must also lie inside the block's
 // overflow as laid out, to which it then adds nothing (see treeOverflow).
-effect fn keepRun(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, saved: &mut PositionedRun, at: usize, anchored: &mut AnchoredBlock) -> bool ! OutOfMemoryError ? &mut Allocator {
+effect fn keepRun<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, saved: &mut PositionedRun, at: usize, anchored: &mut AnchoredBlock) -> bool ! OutOfMemoryError ? &mut Allocator {
   if saved.visits != output.facts.visitsRevision || at + saved.count > output.facts.visits.length() { return false }
   if output.facts.visits.get(at) != saved.first || output.facts.visits.get(at + saved.count - 1) != saved.last { return false }
   let clock = output.cache.clearClock()
@@ -2505,9 +2506,9 @@ effect fn keepRun(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, saved: &
   return true
 }
 
-pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, viewport: OptionalSize, viewportScroll: Point, normalOffsets: &mut List<Point>, offsetsZero: &mut bool) -> Rect ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, viewport: OptionalSize, viewportScroll: Point, normalOffsets: &mut List<Point>, offsetsZero: &mut bool) -> Rect ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let viewportRect = Rect { x: 0.0, y: 0.0, width: max(0.0, viewport.width), height: max(0.0, viewport.height) }
-  if nodes.sources.length == 0 {
+  if nodes.source.nodeCount() == 0 {
     normalOffsets.clear()
     offsetsZero.* = true
     return viewportRect
@@ -2646,7 +2647,7 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
 }
 
 // Reapplies just scroll and sticky offsets to settled, unfragmented geometry.
-pub fn positionScroll(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, viewport: OptionalSize, viewportScroll: Point, overflow: Rect) {
+pub fn positionScroll<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, viewport: OptionalSize, viewportScroll: Point, overflow: Rect) {
   let viewportRect = Rect { x: 0.0, y: 0.0, width: max(0.0, viewport.width), height: max(0.0, viewport.height) }
   output.fragments.offsetting()
   let usedViewportScroll = clampScroll(viewportScroll, viewportRect, overflow)
@@ -2673,7 +2674,7 @@ pub fn positionScroll(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, view
 }
 
 @optimizeSize
-fn fragmentScroll(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, fragmentId: usize, viewportScroll: Point) -> Point {
+fn fragmentScroll<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, fragmentId: usize, viewportScroll: Point) -> Point {
   if fragmentId == NO_NODE { return viewportScroll }
   let fragment = output.fragments.values.get(fragmentId)
   if fragment.box == NO_NODE { return Point { x: 0.0, y: 0.0 } }
@@ -2683,7 +2684,7 @@ fn fragmentScroll(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, fragmentId: 
 }
 
 @optimizeSize
-fn stickyFragment(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, fragmentId: usize, viewport: OptionalSize, viewportScroll: Point) {
+fn stickyFragment<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize, fragmentId: usize, viewport: OptionalSize, viewportScroll: Point) {
   let fragment = output.fragments.values.get(fragmentId)
   let frame = fragment.fragmentainer
   let viewportStyle = Style.make()
@@ -2748,10 +2749,10 @@ fn stickyFragment(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usiz
 }
 
 @optimizeSize
-pub effect fn positionFragmentedTree<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, viewport: OptionalSize, viewportScroll: Point) -> Rect ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn positionFragmentedTree<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, viewport: OptionalSize, viewportScroll: Point) -> Rect ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let savedFrame = output.frame
   let viewportRect = Rect { x: 0.0, y: 0.0, width: max(0.0, viewport.width), height: max(0.0, viewport.height) }
-  if nodes.sources.length == 0 { return viewportRect }
+  if nodes.source.nodeCount() == 0 { return viewportRect }
   let viewportStyle = Style.make()
   // Finish every non-fixed parallel flow first. Absolute-only pages are real
   // accepted pages and therefore participate in the subsequent fixed pass.

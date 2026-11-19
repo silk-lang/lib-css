@@ -5,7 +5,8 @@ import silk.core.option { Option }
 import silk.text.string { String }
 import geometry { Point }
 import style { SizeContainment, Style, Display, DisplayOutside, DisplayInside, WritingMode, Direction, Align, Float, BreakBetween, Visibility, DimensionKind, Overflow, ColumnSpan, WhiteSpaceCollapse }
-import tree { Node, Measurement, NO_NODE }
+import tree { Measurement, NO_NODE }
+import source { LayoutSource, laidText }
 import context { outOfFlow, scrollable, overflowForAxis, containsAbsolute }
 import grid_style { GridTemplate }
 import silk.num.u32
@@ -44,14 +45,15 @@ pub struct BoxNode {
 }
 impl Copy for BoxNode {}
 
-pub struct BoxTree<'a> {
+pub struct BoxTree<'a, S> {
   pub boxes: List<BoxNode>,
   pub anonymousStyles: List<Style>,
   // The source element each anonymous style inherits from, and whether it
   // styles text; see refreshAnonymous.
   pub anonymousOrigins: List<usize>, pub anonymousText: List<bool>,
   pub firstBySource: List<usize>, pub lastBySource: List<usize>,
-  pub sources: &'a [Node],
+  // The source the boxes are generated from (see source.silk), and its tables.
+  pub source: &'a S,
   pub styles: &'a [Style],
   pub grids: &'a [GridTemplate],
   pub gridNames: &'a [String],
@@ -74,17 +76,17 @@ pub struct BoxTree<'a> {
   pub slots: List<usize>, pub slotsTaken: usize,
   patchTexts: List<usize>,
 }
-impl<'tree> BoxTree<'tree> {
+impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   // A box tree built from these sources at an earlier revision, when no
   // change since could alter which boxes are generated.
-  pub fn restore<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [GridTemplate], gridNames: &'a [String], boxes: List<BoxNode>, anonymousStyles: List<Style>, anonymousOrigins: List<usize>, anonymousText: List<bool>, firstBySource: List<usize>, lastBySource: List<usize>, copyScrolls: bool) -> BoxTree<'a> {
-    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, sources: sources, styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false, spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE, freeBoxes: List<usize>.make(), freeStyles: List<usize>.make(), slots: List<usize>.make(), slotsTaken: 0, patchTexts: List<usize>.make() }
+  pub fn restore<'a>(source: &'a S, boxes: List<BoxNode>, anonymousStyles: List<Style>, anonymousOrigins: List<usize>, anonymousText: List<bool>, firstBySource: List<usize>, lastBySource: List<usize>, copyScrolls: bool) -> BoxTree<'a, S> {
+    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, source: source, styles: source.styles(), grids: source.grids(), gridNames: source.gridNames(), shapes: source.shapes(), textStyles: List<usize>.make(), columnSets: false, spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE, freeBoxes: List<usize>.make(), freeStyles: List<usize>.make(), slots: List<usize>.make(), slotsTaken: 0, patchTexts: List<usize>.make() }
     if !copyScrolls { return move result }
     let values = result.boxes.asMutSlice()
     let mut index: usize = 0
     while index < values.length {
-      let source = values[index].source
-      if source != NO_NODE { values[index].scrollOffset = sources[source].scrollOffset }
+      let owner = values[index].source
+      if owner != NO_NODE { values[index].scrollOffset = source.scrollOffset(owner) }
       index = index + 1
     }
     return move result
@@ -92,7 +94,7 @@ impl<'tree> BoxTree<'tree> {
   // Copies a source's scroll offset to its boxes.
   pub fn refreshScroll(self: &mut Self, source: usize) {
     if source >= self.firstBySource.length() { return }
-    let offset = self.sources[source].scrollOffset
+    let offset = self.source.scrollOffset(source)
     let boxes = self.boxes.asMutSlice()
     let mut id = self.firstBySource.get(source)
     while id != NO_NODE {
@@ -104,7 +106,7 @@ impl<'tree> BoxTree<'tree> {
   pub fn refreshAnonymous(self: &mut Self, slot: usize) {
     let origin = self.anonymousOrigins.get(slot)
     if origin == NO_NODE { return }
-    let parent = &self.styles[self.sources[origin].styleIndex]
+    let parent = &self.styles[self.source.styleIndex(origin)]
     let mut style = runStyle(parent)
     if self.anonymousText.get(slot) { style = textStyle(parent) }
     let styles = self.anonymousStyles.asMutSlice()
@@ -298,12 +300,12 @@ impl<'tree> BoxTree<'tree> {
   }
 
   effect fn appendText(self: &mut Self, source: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
-    let styleIndex = self.sources[source].styleIndex
+    let styleIndex = self.source.styleIndex(source)
     let mut slot = self.textSlot(styleIndex)
     if slot == NO_NODE {
       let mut style = inherited(&self.styles[styleIndex])
       style.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flow }
-      let origin = self.sources[source].parent
+      let origin = self.source.parent(source)
       slot = run self.newStyle(move style, origin, true)
       if styleIndex < self.textStyles.length() { self.textStyles.set(styleIndex, slot) }
       else {
@@ -369,14 +371,14 @@ impl<'tree> BoxTree<'tree> {
   }
 
   effect fn children(self: &mut Self, source: usize, flow: &mut Flow, inline: usize, parentWritingMode: WritingMode) ! OutOfMemoryError ? &mut Allocator {
-    let mut child = self.sources[source].firstChild
+    let mut child = self.source.firstChild(source)
     if self.resumeDepth < self.resumePath.length() && self.resumePath.get(self.resumeDepth) == source {
       // The continuation of a block a spanner split: go on after the spanner.
       self.resumeDepth = self.resumeDepth + 1
       if self.resumeDepth < self.resumePath.length() { child = self.resumePath.get(self.resumeDepth) } else { child = self.resumeAfter }
     }
     while child != NO_NODE {
-      let next = self.sources[child].nextSibling
+      let next = self.source.nextSibling(child)
       if self.spanRoot != NO_NODE && inline == NO_NODE && self.spanner(child) {
         self.spanHit = child
         return
@@ -388,10 +390,10 @@ impl<'tree> BoxTree<'tree> {
   }
 
   effect fn construct(self: &mut Self, source: usize, flow: &mut Flow, inline: usize, parentWritingMode: WritingMode) ! OutOfMemoryError ? &mut Allocator {
-    if self.sources[source].isText() {
+    if self.source.isText(source) {
       if itemParent(self.node(flow.container).kind) {
         run flow.flexText.append(source)
-        match self.sources[source].laidText() {
+        match laidText(self.source, source) {
           Option<string>.Some { value } => {
             if !documentWhitespace(value) { flow.flexTextVisible = true }
           }
@@ -403,7 +405,7 @@ impl<'tree> BoxTree<'tree> {
       }
       return
     }
-    let sourceStyle = &self.styles[self.sources[source].styleIndex]
+    let sourceStyle = &self.styles[self.source.styleIndex(source)]
     if sourceStyle.display.isNone() { return }
     if sourceStyle.display.isContents() {
       // Display 4 2.5 / Appendix B: replaced contents computes to none.
@@ -416,7 +418,7 @@ impl<'tree> BoxTree<'tree> {
     run self.flushFlexText(&mut flow)
     let parentKind = self.node(flow.container).kind
     let flexChild = itemParent(parentKind)
-    let style = &self.styles[self.sources[source].styleIndex]
+    let style = &self.styles[self.source.styleIndex(source)]
     let positioned = outOfFlow(style)
     let floating = style.float != Float.None && !flexChild && !positioned
     let blockify = flexChild || positioned || floating
@@ -433,7 +435,7 @@ impl<'tree> BoxTree<'tree> {
     let differentWritingMode = style.writingMode != parentWritingMode
     let writingMode = style.writingMode
     let replaced = style.replaced
-    let measured = self.sources[source].measurement != Measurement.None
+    let measured = self.source.measurement(source) != Measurement.None
     let mut kind = BoxKind.Block
     if !replaced {
       if display.insideIs(DisplayInside.Flex) { kind = BoxKind.Flex }
@@ -447,7 +449,7 @@ impl<'tree> BoxTree<'tree> {
     let multicol = kind == BoxKind.Block && !measured && style.multicol()
     let independent = kind != BoxKind.Inline && (multicol || style.sizeContainment != SizeContainment.None || style.layoutContainment || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || display.insideIs(DisplayInside.TableCell) || display.insideIs(DisplayInside.TableCaption) || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
     let node = BoxNode {
-      source: source, styleOwner: source, anonymousStyle: NO_NODE, styleIndex: self.sources[source].styleIndex, kind: kind,
+      source: source, styleOwner: source, anonymousStyle: NO_NODE, styleIndex: self.source.styleIndex(source), kind: kind,
       parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE,
       previousContinuation: NO_NODE, nextContinuation: NO_NODE,
       firstForSource: true, lastForSource: true,
@@ -459,8 +461,8 @@ impl<'tree> BoxTree<'tree> {
       fragmentMonolithic: false,
       beforeControl: false, dynamicBefore: false,
       afterControl: false, dynamicAfter: false,
-      measureKey: self.sources[source].measureKey, measurement: self.sources[source].measurement,
-      scrollOffset: self.sources[source].scrollOffset,
+      measureKey: self.source.measureKey(source), measurement: self.source.measurement(source),
+      scrollOffset: self.source.scrollOffset(source),
     }
 
     if kind == BoxKind.Inline {
@@ -530,9 +532,9 @@ impl<'tree> BoxTree<'tree> {
     let collapsible = self.style(id).whiteSpaceCollapse == WhiteSpaceCollapse.Collapse
     let spanRoot = self.spanRoot
     let mut flow = Flow.make(NO_NODE)
-    let mut child = self.sources[source].firstChild
+    let mut child = self.source.firstChild(source)
     while child != NO_NODE {
-      let next = self.sources[child].nextSibling
+      let next = self.source.nextSibling(child)
       if self.spanner(child) {
         if flow.container != NO_NODE {
           run self.finishFlow(&mut flow)
@@ -549,11 +551,11 @@ impl<'tree> BoxTree<'tree> {
           run self.finishFlow(&mut flow)
           run self.spannerBox(hit, id, writingMode)
           self.resumePath.clear()
-          let mut at = self.sources[hit].parent
+          let mut at = self.source.parent(hit)
           while true {
             run self.resumePath.append(at)
             if at == child { break }
-            at = self.sources[at].parent
+            at = self.source.parent(at)
           }
           let path = self.resumePath.asMutSlice()
           let mut low: usize = 0
@@ -566,7 +568,7 @@ impl<'tree> BoxTree<'tree> {
             low = low + 1
           }
           self.resumeDepth = 0
-          self.resumeAfter = self.sources[hit].nextSibling
+          self.resumeAfter = self.source.nextSibling(hit)
           flow = Flow.make(run self.columnSet(id))
           self.spanRoot = id
           run self.construct(child, &mut flow, NO_NODE, writingMode)
@@ -588,14 +590,14 @@ impl<'tree> BoxTree<'tree> {
     run self.finishFlow(&mut outer)
   }
   fn spanner(self: &Self, source: usize) -> bool {
-    if self.sources[source].isText() { return false }
-    let style = &self.styles[self.sources[source].styleIndex]
+    if self.source.isText(source) { return false }
+    let style = &self.styles[self.source.styleIndex(source)]
     return style.multicolSpan == ColumnSpan.All && !style.display.isNone() && !style.display.isContents()
       && style.display.outsideIs(DisplayOutside.Block) && style.float == Float.None && !outOfFlow(style)
   }
   fn blankText(self: &Self, source: usize) -> bool {
-    if !self.sources[source].isText() { return false }
-    return match self.sources[source].laidText() {
+    if !self.source.isText(source) { return false }
+    return match laidText(self.source, source) {
       Option<string>.Some { value } => documentWhitespace(value)
       Option<string>.None => true
     }
@@ -629,9 +631,9 @@ impl<'tree> BoxTree<'tree> {
     boxes[root].firstChild = NO_NODE
     boxes[root].lastChild = NO_NODE
     let mut flow = Flow.make(root)
-    let mut child = self.sources[source].firstChild
+    let mut child = self.source.firstChild(source)
     while child != NO_NODE {
-      let next = self.sources[child].nextSibling
+      let next = self.source.nextSibling(child)
       let mut keep = NO_NODE
       if child < self.firstBySource.length() { keep = self.firstBySource.get(child) }
       if keep != NO_NODE && sortedContains(kept, keep) {
@@ -786,20 +788,22 @@ pub fn anonymous(kind: BoxKind, owner: usize, slot: usize) -> BoxNode {
   }
 }
 
-pub effect fn build<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [GridTemplate], gridNames: &'a [String], writingMode: WritingMode, direction: Direction) -> BoxTree<'a> ! OutOfMemoryError ? &mut Allocator {
+pub effect fn build<'a, S: LayoutSource>(source: &'a S, writingMode: WritingMode, direction: Direction) -> BoxTree<'a, S> ! OutOfMemoryError ? &mut Allocator {
+  let styles = source.styles()
+  let sources = source.nodeCount()
   let mut result = BoxTree {
     boxes: List<BoxNode>.make(), anonymousStyles: List<Style>.make(),
     anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
-    firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), sources: sources,
-    styles: styles, grids: grids, gridNames: gridNames, shapes: &[], textStyles: List<usize>.make(), columnSets: false,
+    firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), source: source,
+    styles: styles, grids: source.grids(), gridNames: source.gridNames(), shapes: source.shapes(), textStyles: List<usize>.make(), columnSets: false,
     spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE,
     freeBoxes: List<usize>.make(), freeStyles: List<usize>.make(), slots: List<usize>.make(), slotsTaken: 0, patchTexts: List<usize>.make(),
   }
-  run result.boxes.reserveExact(sources.length + 1)
-  run result.firstBySource.reserveExact(sources.length)
-  run result.lastBySource.reserveExact(sources.length)
+  run result.boxes.reserveExact(sources + 1)
+  run result.firstBySource.reserveExact(sources)
+  run result.lastBySource.reserveExact(sources)
   let mut index: usize = 0
-  while index < sources.length {
+  while index < sources {
     run result.firstBySource.append(NO_NODE)
     run result.lastBySource.append(NO_NODE)
     index = index + 1
@@ -823,7 +827,7 @@ pub effect fn build<'a>(sources: &'a [Node], styles: &'a [Style], grids: &'a [Gr
   viewport.independentRoot = true
   let viewportId = run result.append(viewport, NO_NODE)
   let mut flow = Flow.make(viewportId)
-  if sources.length != 0 { run result.construct(0, &mut flow, NO_NODE, writingMode) }
+  if sources != 0 { run result.construct(0, &mut flow, NO_NODE, writingMode) }
   run result.finishFlow(&mut flow)
   return move result
 }

@@ -2,6 +2,7 @@
 // lays out its parts; row groups, rows and column groups (TablePart boxes) place their
 // children where the table put them. A table is laid out in a horizontal writing mode.
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.num.usize
@@ -53,17 +54,17 @@ impl Plan {
   }
 }
 
-fn display(nodes: &BoxTree<'_>, id: usize, inside: DisplayInside) -> bool { return nodes.style(id).display.insideIs(inside) }
-fn part(nodes: &BoxTree<'_>, id: usize) -> bool { return nodes.node(id).kind == BoxKind.TablePart }
-fn rowGroup(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn display<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, inside: DisplayInside) -> bool { return nodes.style(id).display.insideIs(inside) }
+fn part<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool { return nodes.node(id).kind == BoxKind.TablePart }
+fn rowGroup<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   return part(nodes, id) && (display(nodes, id, DisplayInside.TableRowGroup) || display(nodes, id, DisplayInside.TableHeaderGroup) || display(nodes, id, DisplayInside.TableFooterGroup))
 }
-fn inFlow(nodes: &BoxTree<'_>, id: usize) -> bool { return !outOfFlow(nodes.style(id)) }
+fn inFlow<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool { return !outOfFlow(nodes.style(id)) }
 fn length(value: f32) -> f32 { return max(0.0, value) }
 
 // CSS 2 §17.2.1: rows and cells outside a group or row get anonymous ones, which
 // here are only rows of the plan, never boxes.
-effect fn collect(nodes: &BoxTree<'_>, id: usize, plan: &mut Plan) ! OutOfMemoryError ? &mut Allocator {
+effect fn collect<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, plan: &mut Plan) ! OutOfMemoryError ? &mut Allocator {
   // §17.2: the first header group goes first and the first footer group last.
   let mut header = NO_NODE
   let mut footer = NO_NODE
@@ -148,7 +149,7 @@ fn closeSection(plan: &mut Plan) {
   }
 }
 
-effect fn addSection(nodes: &BoxTree<'_>, plan: &mut Plan, section: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn addSection<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, section: usize) ! OutOfMemoryError ? &mut Allocator {
   closeSection(&mut plan)
   run plan.sections.append(Section { box: section, first: plan.rows.length(), end: plan.rows.length() })
   plan.busy.clear()
@@ -165,7 +166,7 @@ effect fn addSection(nodes: &BoxTree<'_>, plan: &mut Plan, section: usize) ! Out
   closeSection(&mut plan)
 }
 
-effect fn startRow(nodes: &BoxTree<'_>, plan: &mut Plan, row: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn startRow<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, row: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
   let mut specified: f32 = 0.0
   if row != NO_NODE && nodes.style(row).height.kind == DimensionKind.Length { specified = length(nodes.style(row).height.value) }
   let section = plan.sections.length() - 1
@@ -176,7 +177,7 @@ effect fn startRow(nodes: &BoxTree<'_>, plan: &mut Plan, row: usize, parent: usi
   plan.cursor = 0
 }
 
-effect fn addRow(nodes: &BoxTree<'_>, plan: &mut Plan, row: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn addRow<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, row: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
   plan.openRow = false
   run startRow(nodes, &mut plan, row, parent)
   let mut child = nodes.node(row).firstChild
@@ -186,7 +187,7 @@ effect fn addRow(nodes: &BoxTree<'_>, plan: &mut Plan, row: usize, parent: usize
   }
 }
 
-effect fn addLooseCell(nodes: &BoxTree<'_>, plan: &mut Plan, cell: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn addLooseCell<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, cell: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
   if !plan.openRow {
     run startRow(nodes, &mut plan, NO_NODE, parent)
     plan.openRow = true
@@ -196,7 +197,7 @@ effect fn addLooseCell(nodes: &BoxTree<'_>, plan: &mut Plan, cell: usize, parent
 
 // HTML's table forming algorithm: a cell takes the first column of its row that no
 // cell from a row above still spans into.
-effect fn addCell(nodes: &BoxTree<'_>, plan: &mut Plan, cell: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn addCell<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, cell: usize) ! OutOfMemoryError ? &mut Allocator {
   let row = plan.rows.length() - 1
   let style = nodes.style(cell)
   let columns = max(1.0, usize.toF32(style.columnSpan))
@@ -217,7 +218,7 @@ effect fn addCell(nodes: &BoxTree<'_>, plan: &mut Plan, cell: usize) ! OutOfMemo
   if plan.cursor > plan.columnCount { plan.columnCount = plan.cursor }
 }
 
-effect fn addColumnGroup(nodes: &BoxTree<'_>, plan: &mut Plan, group: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn addColumnGroup<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, group: usize) ! OutOfMemoryError ? &mut Allocator {
   let first = plan.nextColumn
   let mut child = nodes.node(group).firstChild
   let mut any = false
@@ -232,7 +233,7 @@ effect fn addColumnGroup(nodes: &BoxTree<'_>, plan: &mut Plan, group: usize) ! O
   run plan.columnBoxes.append(ColumnBox { box: group, parent: NO_NODE, first: first, span: plan.nextColumn - first })
 }
 
-effect fn addColumn(nodes: &BoxTree<'_>, plan: &mut Plan, column: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn addColumn<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, column: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
   let span = larger(1, nodes.style(column).columnSpan)
   run plan.columnBoxes.append(ColumnBox { box: column, parent: parent, first: plan.nextColumn, span: span })
   plan.nextColumn = plan.nextColumn + span
@@ -274,7 +275,7 @@ fn side(style: &Style, bit: u8) -> f32 {
   if bit == BOTTOM { return edge(style.border.bottom) }
   return edge(style.border.left)
 }
-fn sideOf(nodes: &BoxTree<'_>, id: usize, bit: u8) -> f32 {
+fn sideOf<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, bit: u8) -> f32 {
   if id == NO_NODE { return 0.0 }
   return side(nodes.style(id), bit)
 }
@@ -288,7 +289,7 @@ fn join(a: f32, b: f32) -> f32 {
 // holds rows x (columns + 1) segments, `horizontal` (rows + 1) x columns. Each cell
 // gets half of the widest segment along each of its sides, and the table half of
 // the widest along each of its edges.
-effect fn collapseBorders(nodes: &BoxTree<'_>, id: usize, plan: &mut Plan, frame: &mut Frame) ! OutOfMemoryError ? &mut Allocator {
+effect fn collapseBorders<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, plan: &mut Plan, frame: &mut Frame) ! OutOfMemoryError ? &mut Allocator {
   let columns = plan.columns.length()
   let rows = plan.rows.length()
   if columns == 0 || rows == 0 { return }
@@ -474,14 +475,14 @@ fn sized(base: &Input, width: f32, height: f32, heightKnown: bool, performLayout
 }
 
 // Whether the fixed layout reads a cell: a first-row cell with a length or percentage width.
-fn fixedCell(nodes: &BoxTree<'_>, cell: &Cell) -> bool {
+fn fixedCell<S: LayoutSource>(nodes: &BoxTree<'_, S>, cell: &Cell) -> bool {
   return cell.row == 0 && (nodes.style(cell.box).width.kind == DimensionKind.Length || cell.percent >= 0.0)
 }
 
 // Column minimum and maximum widths from the cells (§17.5.2.2) or, in the fixed
 // layout, specified widths from the columns and the first row (§17.5.2.1).
 // Percentages are kept apart, as browsers do, and resolved against the grid width.
-effect fn columnWidths<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, plan: &mut Plan, base: &Input, frame: &Frame, fixed: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn columnWidths<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, plan: &mut Plan, base: &Input, frame: &Frame, fixed: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let count = plan.columns.length()
   let mut index: usize = 0
   while index < plan.columnBoxes.length() {
@@ -856,7 +857,7 @@ effect fn reserveSlots(output: &mut LayoutPass<'_, '_>, count: usize) ! OutOfMem
 
 fn relative(rect: Rect, origin: Rect) -> Rect { return Rect { x: rect.x - origin.x, y: rect.y - origin.y, width: rect.width, height: rect.height } }
 
-pub effect fn layoutTable<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutTable<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let mut plan = Plan.make()
   run collect(nodes, id, &mut plan)
@@ -1049,7 +1050,7 @@ fn rowsExtent(plan: &Plan, frame: &Frame, first: usize, end: usize) -> f32 {
 
 // Whether a forced break comes before `row`: break-after of the row (or the group it
 // ends) before it, or break-before of the row (or the group it opens).
-fn forcedBefore(nodes: &BoxTree<'_>, plan: &Plan, row: usize, input: &Input) -> bool {
+fn forcedBefore<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &Plan, row: usize, input: &Input) -> bool {
   let mut boundary = BreakBoundary.none()
   let kind = input.fragmentation.kind
   let recto = input.fragmentation.rectoOnRight
@@ -1091,7 +1092,7 @@ effect fn showRows(plan: &mut Plan, frame: &Frame, shown: &mut List<bool>, first
 // rest of the fragmentainer, and its cells break inside and go on in the next one.
 // The header and footer groups repeat on every page when they take at most a quarter
 // of it, as in Chromium. The cursor is the next body row and how much of it was placed.
-effect fn layoutFragment<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, plan: &mut Plan, frame: &Frame, base: &Input, width: f32, above: f32, below: f32) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutFragment<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, plan: &mut Plan, frame: &Frame, base: &Input, width: f32, above: f32, below: f32) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut state = output.resumes.get(id)
   let mut result = Layout.zero()
   if input.fragmentation.boundaryProbe != BoundaryProbe.None {
@@ -1311,7 +1312,7 @@ fn cellEnd(cell: &Cell) -> usize { return cell.row + larger(1, cell.rows) }
 // Lays out the parts a fragment holds. A cell that began in an earlier fragment or goes
 // on in a later one breaks inside: it gets its whole height and the fragmentainer's
 // limit, and its fragment here is stretched to the rows it covers.
-effect fn placeFragment<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, plan: &mut Plan, frame: &Frame, base: &Input, shown: &mut List<bool>, full: &List<f32>, started: bool, start: usize, startConsumed: f32, next: usize, consumed: f32, headEnd: usize, bodyStart: f32, limit: f32, gridTop: f32, y: f32, complete: bool, width: f32, repeatHeader: bool, header: usize, footer: usize, repeatFooter: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn placeFragment<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, plan: &mut Plan, frame: &Frame, base: &Input, shown: &mut List<bool>, full: &List<f32>, started: bool, start: usize, startConsumed: f32, next: usize, consumed: f32, headEnd: usize, bodyStart: f32, limit: f32, gridTop: f32, y: f32, complete: bool, width: f32, repeatHeader: bool, header: usize, footer: usize, repeatFooter: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut began = start
   if startConsumed > 0.0 { began = start + 1 }
   let mut goes = next
@@ -1427,7 +1428,7 @@ fn markRepeated(output: &mut LayoutPass<'_, '_>, id: usize) {
 // it holds (empty: all of them); a part it does not hold gets a slot of negative width,
 // which placeChildren skips. Columns span from `rowsTop` to the last row held. Top captions go only in the first fragment, bottom ones at
 // `captionBottom` only in the last.
-effect fn assignSlots(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, plan: &Plan, frame: &Frame, shown: &List<bool>, cut: &List<u8>, full: &List<f32>, rowsTop: f32, first: bool, captionBottom: f32, last: bool, captionWidth: f32) ! OutOfMemoryError ? &mut Allocator {
+effect fn assignSlots<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize, plan: &Plan, frame: &Frame, shown: &List<bool>, cut: &List<u8>, full: &List<f32>, rowsTop: f32, first: bool, captionBottom: f32, last: bool, captionWidth: f32) ! OutOfMemoryError ? &mut Allocator {
   let count = plan.columns.length()
   let rowCount = plan.rows.length()
   let all = shown.length() == 0
@@ -1571,7 +1572,7 @@ effect fn assignSlots(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: 
   }
 }
 
-effect fn digest(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn digest<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize) ! OutOfMemoryError ? &mut Allocator {
   let mut hash = OFFSET
   let mut child = nodes.node(id).firstChild
   while child != NO_NODE {
@@ -1588,7 +1589,7 @@ effect fn digest(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize
 }
 
 // `repeated` is a part laid out again in a later fragment, whose fragments say so.
-effect fn placeChildren<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, base: &Input, performLayout: bool, repeated: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn placeChildren<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, base: &Input, performLayout: bool, repeated: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut child = nodes.node(id).firstChild
   while child != NO_NODE {
     if inFlow(nodes, child) {
@@ -1613,7 +1614,7 @@ effect fn placeChildren<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
 
 // A row group, row or column group, sized by its table: it places its children
 // where the table put them.
-pub effect fn layoutTablePart<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutTablePart<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut result = Layout.zero()
   result.size = Size { width: box.size.width, height: box.size.height }
   if !box.size.widthDefinite { result.size.width = box.inset.horizontal() }

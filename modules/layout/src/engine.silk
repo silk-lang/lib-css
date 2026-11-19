@@ -1,8 +1,9 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.num.usize
 import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT, TRACE_BOXES, TRACE_LAYOUT, TRACE_POSITION, TRACE_KEEP, TRACE_END, TRACE_FLEX, TRACE_GRID }
 import style { SizeContainment, Style, Display, Dimension, SizeValue, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility, WrapFlow, WrapThrough }
-import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
+import tree { LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
 import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edgesIn, isFlex, isGrid, outOfFlow, absolutelyPositioned, containsAbsolute, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
 import block { layoutBlock, leafBlockInto, BlockScratch, TextLeafChild, textLeafChild, textLeafLargest, textLeafContents }
 import flex { layoutFlex, emptyFlexSize, FlexScratch }
@@ -81,14 +82,14 @@ fn configureScrollbars<M: Measure>(style: &Style, output: &mut LayoutPass<'_, '_
   result.scrollbarMetrics = metrics
   box.* = result
 }
-fn measureLeaf<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &BfcState) -> Layout {
+fn measureLeaf<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &BfcState) -> Layout {
   let mut layout = Layout.zero()
   measureLeafInto(nodes, &mut measurer, id, &input, &box, &bfc, &mut layout)
   return layout
 }
 // measureLeaf, written into a zeroed `layout`.
 @inlineAlways
-fn measureLeafInto<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &BfcState, layout: &mut Layout) {
+fn measureLeafInto<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &BfcState, layout: &mut Layout) {
   let style = nodes.style(id)
   let mut known = box.size
   if known.widthDefinite { known.width = max(0.0, known.width - box.inset.horizontal()) }
@@ -145,7 +146,7 @@ fn measureLeafInto<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, id: usize,
 // A size probe of a flex container whose border box is already fixed needs
 // nothing from its items unless the caller reads baselines.
 @inlineAlways
-effect fn firstContents<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, natural: NaturalDimensions, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn firstContents<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, natural: NaturalDimensions, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   if !input.performLayout && !input.baselines && !input.intrinsicWidth && !input.intrinsicHeight && box.size.widthDefinite && box.size.heightDefinite && isFlex(style) && !style.replaced {
     let mut result = Layout.zero()
@@ -155,7 +156,7 @@ effect fn firstContents<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
   return run contents(nodes, &mut output, &mut measurer, id, &input, &box, natural, &mut bfc)
 }
 
-effect fn contents<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, natural: NaturalDimensions, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn contents<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, natural: NaturalDimensions, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut contained = box.*
   run containSize(nodes, &mut output, &mut measurer, id, input, &mut contained)
   if !(input.performLayout && input.fragmentation.active) { return run contentAlgorithm(nodes, &mut output, &mut measurer, id, &input, &contained, natural, &mut bfc) }
@@ -165,7 +166,7 @@ effect fn contents<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
 // Contained automatic sizes behave as an empty box. Explicit sizes and
 // available inline space have already been resolved; descendants still lay out
 // and contribute overflow inside these definite content-box dimensions.
-effect fn containSize<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &mut ResolvedBox) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn containSize<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &mut ResolvedBox) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let width = style.containsSize(true) && !box.size.widthDefinite
   let height = style.containsSize(false) && !box.size.heightDefinite
@@ -192,7 +193,7 @@ effect fn containSize<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<
 // contents in a fragmented pass, kept out of line so the common path's code stays small.
 @inlineNever
 @optimizeSize
-effect fn fragmentedContents<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, natural: NaturalDimensions, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn fragmentedContents<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, natural: NaturalDimensions, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut resolved = box.*
   let mut request = input.*
   if input.performLayout && input.fragmentation.active {
@@ -241,7 +242,7 @@ effect fn fragmentedContents<'pass, 'source, M: Measure + TextMeasure>(nodes: &B
   return run contentAlgorithm(nodes, &mut output, &mut measurer, id, &request, &resolved, natural, &mut bfc)
 }
 
-effect fn contentAlgorithm<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, request: &Input, resolved: &ResolvedBox, natural: NaturalDimensions, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn contentAlgorithm<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, request: &Input, resolved: &ResolvedBox, natural: NaturalDimensions, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if nodes.node(id).kind == BoxKind.InlineFormatting { return run layoutInline(nodes, &mut output, &mut measurer, id, &request, &resolved, &mut bfc) }
   if nodes.node(id).measurement == Measurement.Content { return measureLeaf(nodes, &mut measurer, id, &request, &resolved, &bfc) }
   if nodes.style(id).replaced { return replacedContents(nodes.style(id), &request, &resolved, natural) }
@@ -272,7 +273,7 @@ fn replacedContents(style: &Style, input: &Input, box: &ResolvedBox, natural: Na
   return layoutReplaced(style, &input, &box, natural)
 }
 
-effect fn intrinsic<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, natural: NaturalDimensions, horizontal: bool, minimum: bool) -> f32 ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn intrinsic<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, natural: NaturalDimensions, horizontal: bool, minimum: bool) -> f32 ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut request = input.*
   request.performLayout = false
   request.baselines = false
@@ -340,7 +341,7 @@ effect fn intrinsic<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
 // ratio, scrollbars or floats (KEY_CONTENT_FREE_TREE), so that no request
 // reaches its widths and its min- and max-content widths agree. Negative
 // for any other box. Kept per box until the box's cache entries are dropped.
-pub effect fn plainWidth(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize) -> f32 ! OutOfMemoryError ? &mut Allocator {
+pub effect fn plainWidth<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize) -> f32 ! OutOfMemoryError ? &mut Allocator {
   let count = nodes.boxes.length()
   if output.facts.keyShapes.length() != count { return PLAIN_NEVER }
   if output.cache.plainWidths.length() != count {
@@ -356,7 +357,7 @@ pub effect fn plainWidth(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, i
 // box without content, ratio, scrollbars, floats or percentages (so that
 // emptyContentWidth holds and no request reaches its sizes), whose sizes and
 // limits are lengths or absent.
-pub fn plainGridItem(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
+pub fn plainGridItem<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
   let need = KEY_EMPTY | KEY_WIDTH_FREE
   if output.keyShape(id) & (need | KEY_PERCENT) != need { return false }
   let style = nodes.style(id)
@@ -367,7 +368,7 @@ pub fn plainGridItem(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize
 fn plainDimension(value: &SizeValue, none: bool) -> bool {
   return value.kind == DimensionKind.Auto || value.kind == DimensionKind.Length || (none && value.kind == DimensionKind.None)
 }
-fn plainWidthOf(nodes: &BoxTree<'_>, shapes: &[u16], widths: &mut [f32], base: &Input, id: usize) -> f32 {
+fn plainWidthOf<S: LayoutSource>(nodes: &BoxTree<'_, S>, shapes: &[u16], widths: &mut [f32], base: &Input, id: usize) -> f32 {
   let known = widths[id]
   if known != PLAIN_UNKNOWN { return known }
   let mut result = PLAIN_NEVER
@@ -407,7 +408,7 @@ fn plainWidthOf(nodes: &BoxTree<'_>, shapes: &[u16], widths: &mut [f32], base: &
 // no part in its sizing (CSS2 §10.6.7, Flexbox §4.1), so its probes size it
 // as if childless. Its final layout still places them. An outside marker is
 // placed by the box's own layout, so it keeps the box off the empty paths.
-fn noInFlowChildren(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn noInFlowChildren<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let mut child = nodes.node(id).firstChild
   while child != NO_NODE {
     let node = nodes.node(child)
@@ -424,7 +425,7 @@ pub fn percentFree(output: &LayoutPass<'_, '_>, id: usize) -> bool {
 // its containing block's: a subtree whose widths never read heights
 // (KEY_WIDTH_FREE_TREE), or a childless leaf with Measure-sized content,
 // whose horizontal width answers ignore height inputs (see Measure).
-pub fn widthIgnoresHeight(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
+pub fn widthIgnoresHeight<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
   if output.keyShape(id) & KEY_WIDTH_FREE_TREE != 0 { return true }
   if id < output.facts.itemFlags.length() { return output.facts.itemFlags.get(id) & ITEM_MEASURED_WIDTH != 0 }
   return measuredWidthLeaf(nodes, id)
@@ -432,12 +433,12 @@ pub fn widthIgnoresHeight(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: 
 // Whether a horizontal box's laid-out width cannot read its own height:
 // widthIgnoresHeight, or a block holding only text (textContents) whose
 // own style lets no height feed its width (KEY_WIDTH_FREE).
-pub fn crossIgnoresMain(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
+pub fn crossIgnoresMain<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
   if widthIgnoresHeight(nodes, output, id) { return true }
   return output.keyShape(id) & KEY_WIDTH_FREE != 0 && textContents(nodes, id)
 }
 // The leaf case of widthIgnoresHeight, which itemFlags records.
-fn measuredWidthLeaf(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn measuredWidthLeaf<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let node = nodes.node(id)
   let style = nodes.style(id)
   return (node.kind == BoxKind.Block || node.kind == BoxKind.Flex)
@@ -450,13 +451,13 @@ fn measuredWidthLeaf(nodes: &BoxTree<'_>, id: usize) -> bool {
 // noInFlowChildren && emptyBoxApplies, from the box's key shape once
 // keyShapes covers it.
 @inlineAlways
-fn keptEmptyBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, input: &Input) -> bool {
+fn keptEmptyBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, input: &Input) -> bool {
   if id < output.facts.keyShapes.length() { return shapeEmptyBox(nodes, output.facts.keyShapes.get(id), id, &input) }
   return noInFlowChildren(nodes, id) && emptyBoxApplies(nodes, id, &input)
 }
 
 @inlineAlways
-pub fn emptyContentWidth(nodes: &BoxTree<'_>, id: usize) -> bool {
+pub fn emptyContentWidth<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let node = nodes.node(id)
   let style = nodes.style(id)
   return noInFlowChildren(nodes, id) && node.measurement == Measurement.None && (node.kind == BoxKind.Block || node.kind == BoxKind.Flex)
@@ -464,7 +465,7 @@ pub fn emptyContentWidth(nodes: &BoxTree<'_>, id: usize) -> bool {
     && style.overflowX == Overflow.Visible && style.overflowY == Overflow.Visible
 }
 
-pub fn flowMarginRect(nodes: &BoxTree<'_>, id: usize, child: usize, layout: &Layout, parent: &Layout) -> Rect {
+pub fn flowMarginRect<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, child: usize, layout: &Layout, parent: &Layout) -> Rect {
   return flowMarginIn(nodes, &FlowMargins.of(nodes.style(id), parent), child, layout)
 }
 // What flowMarginRect reads of the parent, worked out once for its children.
@@ -479,7 +480,7 @@ impl FlowMargins {
   }
 }
 @inlineAlways
-fn flowMarginIn(nodes: &BoxTree<'_>, parent: &FlowMargins, child: usize, layout: &Layout) -> Rect {
+fn flowMarginIn<S: LayoutSource>(nodes: &BoxTree<'_, S>, parent: &FlowMargins, child: usize, layout: &Layout) -> Rect {
   let style = nodes.style(child)
   if !layout.hasBox() || absolutelyPositioned(style) { return Rect.zero() }
   let mut margin = layout.usedMargin
@@ -504,7 +505,7 @@ fn addFlow(base: Rect, rect: Rect, padding: ResolvedEdges, limits: ResolvedEdges
 // Capture normal-flow extents before relative/sticky/scroll translations.
 // Keep the full extent separately: clipping a union's bounding rectangle
 // would let wholly unreachable boxes spuriously enlarge its other axis.
-fn overflowGeometry(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, box: &ResolvedBox, result: &mut Layout) {
+fn overflowGeometry<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, box: &ResolvedBox, result: &mut Layout) {
   let padding = Rect { x: box.border.left + box.gutter.left, y: box.border.top + box.gutter.top, width: max(0.0, result.size.width - box.border.horizontal() - box.gutter.horizontal()), height: max(0.0, result.size.height - box.border.vertical() - box.gutter.vertical()) }
   let mut flow = Rect { x: box.inset.left, y: box.inset.top, width: result.contentSize.width, height: result.contentSize.height }
   let measured = nodes.node(id).measurement == Measurement.Content || nodes.node(id).kind == BoxKind.InlineFormatting
@@ -667,7 +668,7 @@ const KEY_EMPTY_PLAIN: u16 = 16384
 // resolveBoxEdges can skip them.
 const KEY_ZERO_EDGES: u16 = 32768
 
-fn keyShape(nodes: &BoxTree<'_>, id: usize) -> u16 {
+fn keyShape<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> u16 {
   let node = nodes.node(id)
   let style = nodes.style(id)
   if node.kind == BoxKind.InlineFormatting || style.replaced { return KEY_FIXED }
@@ -771,7 +772,7 @@ fn sliceSplit(style: &Style, split: u8, box: &mut ResolvedBox) {
 // subtree has KEY_WIDTH_FREE and KEY_CONTENT_FREE. A child's id is always
 // greater than its parent's, so one reverse pass sees every child before
 // its parent.
-fn widthFreeTrees(nodes: &BoxTree<'_>, shapes: &mut List<u16>) {
+fn widthFreeTrees<S: LayoutSource>(nodes: &BoxTree<'_, S>, shapes: &mut List<u16>) {
   let count = shapes.length()
   let slice = shapes.asMutSlice()
   let mut id: usize = 0
@@ -795,7 +796,7 @@ fn widthFreeTrees(nodes: &BoxTree<'_>, shapes: &mut List<u16>) {
 
 // Recomputes a box's shape, keeping its tree bits when its own free bits
 // stay, since its children's are unchanged; returns whether they changed.
-fn refreshShape(nodes: &BoxTree<'_>, shapes: &mut [u16], id: usize) -> bool {
+fn refreshShape<S: LayoutSource>(nodes: &BoxTree<'_, S>, shapes: &mut [u16], id: usize) -> bool {
   let old = shapes[id]
   let shape = keyShape(nodes, id)
   let own: u16 = KEY_WIDTH_FREE | KEY_CONTENT_FREE
@@ -810,7 +811,7 @@ fn refreshShape(nodes: &BoxTree<'_>, shapes: &mut [u16], id: usize) -> bool {
 // widthFreeTrees after only the boxes in `changed` got new shapes: each one
 // and its ancestors are recomputed from their children. A walk goes up to the
 // root, so the last walk through a box sees all of its changed descendants.
-fn widthFreeTreesAt(nodes: &BoxTree<'_>, shapes: &mut List<u16>, changed: &[usize]) {
+fn widthFreeTreesAt<S: LayoutSource>(nodes: &BoxTree<'_, S>, shapes: &mut List<u16>, changed: &[usize]) {
   let count = shapes.length()
   let slice = shapes.asMutSlice()
   let mut at: usize = 0
@@ -849,7 +850,7 @@ pub const ITEM_TEXT_LEAF: u8 = 32
 const ITEM_CONTINUES_BEFORE: u8 = 64
 const ITEM_CONTINUES_AFTER: u8 = 128
 pub fn baselineValue(value: Align) -> bool { return value == Align.Baseline || value == Align.LastBaseline }
-fn itemFlags(nodes: &BoxTree<'_>, id: usize) -> u8 {
+fn itemFlags<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> u8 {
   let style = nodes.style(id)
   let mut flags: u8 = 0
   if outOfFlow(style) { flags = ITEM_OUT_OF_FLOW }
@@ -869,7 +870,7 @@ fn itemFlags(nodes: &BoxTree<'_>, id: usize) -> u8 {
 // keyShapes for the boxes a patch of the box tree touched, `ids` ascending
 // with the patch's roots among them: their shapes and flags from their
 // styles and children, then the tree bits of the roots' ancestors.
-effect fn patchShapes(nodes: &BoxTree<'_>, facts: &mut BoxFacts, ids: &[usize], roots: &[usize]) ! OutOfMemoryError ? &mut Allocator {
+effect fn patchShapes<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut BoxFacts, ids: &[usize], roots: &[usize]) ! OutOfMemoryError ? &mut Allocator {
   let count = nodes.boxes.length()
   let shapes = facts.keyShapes.length()
   if shapes < count { run facts.keyShapes.appendRepeated(0, count - shapes) }
@@ -902,7 +903,7 @@ effect fn patchShapes(nodes: &BoxTree<'_>, facts: &mut BoxFacts, ids: &[usize], 
   widthFreeTreesAt(nodes, &mut facts.keyShapes, parents.asSlice())
 }
 
-effect fn keyShapes(nodes: &BoxTree<'_>, result: &mut List<u16>, flags: &mut List<u8>) ! OutOfMemoryError ? &mut Allocator {
+effect fn keyShapes<S: LayoutSource>(nodes: &BoxTree<'_, S>, result: &mut List<u16>, flags: &mut List<u8>) ! OutOfMemoryError ? &mut Allocator {
   let count = nodes.boxes.length()
   result.clear()
   run result.reserveExact(count)
@@ -1005,7 +1006,7 @@ pub fn normalizeKey(shape: u16, key: &mut Input, viewportFree: bool) {
 // Intrinsic probes preserve the original percentage containing block.
 // layoutNode for callers that read the result from output.boxes[id], if at
 // all: it skips copying the Layout out.
-pub effect fn layoutNodeInPlace<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutNodeInPlace<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if !input.performLayout {
     run probeNode(nodes, &mut output, &mut measurer, id, &input)
     return
@@ -1027,7 +1028,7 @@ pub effect fn layoutNodeInPlace<'pass, 'source, M: Measure + TextMeasure>(nodes:
 // so an edit of the box alone can still be spliced in. layoutEmptyBox's
 // relayout begins the box's cache range, so no stale kept range survives.
 // False, doing nothing, for any other request.
-pub effect fn layoutEmptyLeafInPlace<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, id: usize, input: &Input) -> bool ! OutOfMemoryError ? &mut Allocator {
+pub effect fn layoutEmptyLeafInPlace<'pass, 'source, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, id: usize, input: &Input) -> bool ! OutOfMemoryError ? &mut Allocator {
   if !input.performLayout || output.frame != NO_NODE || input.bfcContentOrigin.x != 0.0 || input.bfcContentOrigin.y != 0.0 || !output.freshCompute() { return false }
   if nodes.node(id).firstChild != NO_NODE || !keptEmptyBox(nodes, &output, id, &input) { return false }
   drop run layoutEmptyBox(nodes, &mut output, id, &input, &BfcState.make())
@@ -1038,7 +1039,7 @@ pub effect fn layoutEmptyLeafInPlace<'pass, 'source>(nodes: &BoxTree<'source>, o
 // reads the result with output.probed(id, index), index being the returned
 // value: a probe the cache answers is read from the cache, leaving
 // output.boxes[id] (in an in-place compute, the box's kept layout) unwritten.
-pub effect fn probeRead<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input) -> usize ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn probeRead<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input) -> usize ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if output.frame != NO_NODE {
     run probeNode(nodes, &mut output, &mut measurer, id, &input)
     return NO_NODE
@@ -1049,7 +1050,7 @@ pub effect fn probeRead<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
   return index
 }
 
-pub effect fn layoutNode<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutNode<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if !input.performLayout {
     run probeNode(nodes, &mut output, &mut measurer, id, &input)
     return output.boxes[id]
@@ -1068,7 +1069,7 @@ pub effect fn layoutNode<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
 // layoutNode's fresh final layout, kept to one returned local so the result
 // is built in the caller's slot.
 @inlineAlways
-effect fn layoutFinal<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, request: &Input, key: &Input) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutFinal<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, request: &Input, key: &Input) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let start = output.fragments.checkpoint()
   let mut bfc = BfcState.make()
   let result = run layoutInBfc(nodes, &mut output, &mut measurer, id, &request, &mut bfc)
@@ -1079,14 +1080,14 @@ effect fn layoutFinal<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<
 // A size probe (a request without performLayout) of an independent box. Its
 // result is left in output.boxes[id] rather than returned, so callers that
 // read a few fields skip copying the whole Layout.
-pub effect fn probeNode<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn probeNode<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let key = cacheKey(output.keyShape(id), &input, output.viewportFree(id))
   if run output.storeCached(id, &key, CacheKind.IndependentBox) { return }
   run probeFresh(nodes, &mut output, &mut measurer, id, &input, &key)
 }
 
 // probeNode after a cache miss for `key`.
-pub effect fn probeFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, key: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn probeFresh<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, key: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if keptEmptyBox(nodes, &output, id, &input) {
     run probeEmptyBox(nodes, &mut output, id, &input, &key)
     return
@@ -1120,7 +1121,7 @@ pub effect fn probeFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
 // emptyBoxApplies' conditions on the box and the parts of the request that
 // a size probe keeps from its parent's request.
 @inlineAlways
-fn emptyBoxPlain(nodes: &BoxTree<'_>, id: usize, input: &Input) -> bool {
+fn emptyBoxPlain<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, input: &Input) -> bool {
   let style = nodes.style(id)
   let node = nodes.node(id)
   if (node.kind != BoxKind.Block && node.kind != BoxKind.Flex) || isGrid(style) || node.measurement == Measurement.Content { return false }
@@ -1145,7 +1146,7 @@ fn plainLeafStyle(style: &Style) -> bool {
 // noInFlowChildren && emptyBoxPlain for a box with key shape `shape`: the
 // request's part of the checks.
 @inlineAlways
-fn shapeEmptyBox(nodes: &BoxTree<'_>, shape: u16, id: usize, input: &Input) -> bool {
+fn shapeEmptyBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, shape: u16, id: usize, input: &Input) -> bool {
   if shape & KEY_EMPTY_PLAIN == 0 || nodes.node(id).measurement != Measurement.None || input.parentWritingMode != WritingMode.HorizontalTb { return false }
   if input.fragmentation.active || input.fragmentation.boundaryProbe != BoundaryProbe.None || boxInputChanges(nodes, id, &input) { return false }
   return effectiveDisplay(nodes.style(id), &input).outsideIs(DisplayOutside.Block)
@@ -1153,11 +1154,11 @@ fn shapeEmptyBox(nodes: &BoxTree<'_>, shape: u16, id: usize, input: &Input) -> b
 
 // Whether an intrinsic width probe of a childless box, made from `input`,
 // takes emptyBoxApplies' path; its width is then the box's inset.
-pub fn emptyIntrinsicWidth(nodes: &BoxTree<'_>, shape: u16, id: usize, input: &Input) -> bool {
+pub fn emptyIntrinsicWidth<S: LayoutSource>(nodes: &BoxTree<'_, S>, shape: u16, id: usize, input: &Input) -> bool {
   return shapeEmptyBox(nodes, shape, id, &input)
 }
 
-fn emptyBoxApplies(nodes: &BoxTree<'_>, id: usize, input: &Input) -> bool {
+fn emptyBoxApplies<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, input: &Input) -> bool {
   return emptyBoxPlain(nodes, id, &input)
 }
 
@@ -1228,7 +1229,7 @@ fn emptyBoxLayout(style: &Style, input: &Input, bfc: &BfcState, box: &mut Resolv
 // probeEmptyBox's size without the cache: sizing a childless box again
 // costs less than storing and finding its result. False when
 // emptyBoxApplies does not hold, leaving result untouched.
-pub fn sizeEmptyBox(nodes: &BoxTree<'_>, shape: u16, id: usize, input: &Input, result: &mut Layout) -> bool {
+pub fn sizeEmptyBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, shape: u16, id: usize, input: &Input, result: &mut Layout) -> bool {
   if !shapeEmptyBox(nodes, shape, id, &input) { return false }
   let style = nodes.style(id)
   let mut box = resolveBoxEdges(style, &input, shape & KEY_ZERO_EDGES != 0)
@@ -1236,7 +1237,7 @@ pub fn sizeEmptyBox(nodes: &BoxTree<'_>, shape: u16, id: usize, input: &Input, r
   return true
 }
 
-effect fn probeEmptyBox<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, id: usize, input: &Input, key: &Input) ! OutOfMemoryError ? &mut Allocator {
+effect fn probeEmptyBox<'pass, 'source, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, id: usize, input: &Input, key: &Input) ! OutOfMemoryError ? &mut Allocator {
   output.stats.sizeProbes = output.stats.sizeProbes + 1
   let style = nodes.style(id)
   let mut box = shapedBox(&output, style, id, &input)
@@ -1247,7 +1248,7 @@ effect fn probeEmptyBox<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut L
 }
 
 // layoutBox's final layout of a box emptyBoxApplies to, outside fragmentation.
-effect fn layoutEmptyBox<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, id: usize, input: &Input, bfc: &BfcState) -> Layout ! OutOfMemoryError ? &mut Allocator {
+effect fn layoutEmptyBox<'pass, 'source, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, id: usize, input: &Input, bfc: &BfcState) -> Layout ! OutOfMemoryError ? &mut Allocator {
   output.stats.fullLayouts = output.stats.fullLayouts + 1
   let node = nodes.node(id)
   let previousParent = output.fragmentParent
@@ -1275,7 +1276,7 @@ effect fn layoutEmptyBox<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut 
 // plainLeafTail: a childless block or flex container with measured content,
 // under emptyBoxPlain's other conditions.
 @inlineAlways
-pub fn plainMeasuredBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, input: &Input) -> bool {
+pub fn plainMeasuredBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, input: &Input) -> bool {
   if nodes.node(id).measurement != Measurement.Content { return false }
   if id < output.facts.keyShapes.length() {
     if output.facts.keyShapes.get(id) & KEY_EMPTY_PLAIN == 0 { return false }
@@ -1287,7 +1288,7 @@ pub fn plainMeasuredBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: us
 // A plain in-flow block whose one child is an anonymous run of text, both
 // in its own horizontal writing mode: the conditions of textLeafBox that
 // the box tree and the styles alone decide.
-fn textLeafShape(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn textLeafShape<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let node = nodes.node(id)
   let style = nodes.style(id)
   if node.kind != BoxKind.Block || node.measurement != Measurement.None || !plainLeafStyle(style) || outOfFlow(style) { return false }
@@ -1303,7 +1304,7 @@ fn textLeafShape(nodes: &BoxTree<'_>, id: usize) -> bool {
 // emptyBoxPlain's conditions on the request, in a formatting context
 // without floats, whose inline size does not come from an intrinsic request.
 @inlineAlways
-fn textLeafBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, input: &Input, bfc: &BfcState) -> bool {
+fn textLeafBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, input: &Input, bfc: &BfcState) -> bool {
   if id < output.facts.itemFlags.length() {
     if output.facts.itemFlags.get(id) & ITEM_TEXT_LEAF == 0 { return false }
   } else if !textLeafShape(nodes, id) { return false }
@@ -1318,7 +1319,7 @@ fn textLeafBox(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, inpu
 // False, with nothing written, where the general path is needed: an
 // independent child, or a shrink-to-fit size the text does not fit.
 @inlineNever
-effect fn layoutTextLeaf<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutTextLeaf<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let mut box = shapedBox(&output, style, id, &input)
   let mut leaf = TextLeafChild.make(&input)
@@ -1374,7 +1375,7 @@ effect fn layoutTextLeaf<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
 // request. Its style sets no size or edge, so min and max sizes leave its
 // contents' size as it is.
 @inlineAlways
-fn textRunBox(nodes: &BoxTree<'_>, id: usize, input: &Input) -> bool {
+fn textRunBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, input: &Input) -> bool {
   let node = nodes.node(id)
   if node.kind != BoxKind.InlineFormatting || node.anonymousStyle == NO_NODE || node.anonymousBlock || node.measurement != Measurement.None { return false }
   let style = nodes.style(id)
@@ -1387,7 +1388,7 @@ fn textRunBox(nodes: &BoxTree<'_>, id: usize, input: &Input) -> bool {
 // plainLeafWidth has sized `box`: the lines are laid out, and no size
 // constraint or ratio lays them out again.
 @inlineNever
-effect fn layoutTextRun<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutTextRun<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   if input.performLayout {
     output.stats.fullLayouts = output.stats.fullLayouts + 1
@@ -1409,7 +1410,7 @@ effect fn layoutTextRun<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
 // layoutBox for a box plainMeasuredBox holds for, outside fragmentation,
 // once plainLeafWidth has sized `box`.
 @inlineNever
-effect fn layoutMeasuredBox<'pass, 'source, M: Measure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &BfcState, box: &mut ResolvedBox) -> Layout ! OutOfMemoryError ? &mut Allocator {
+effect fn layoutMeasuredBox<'pass, 'source, M: Measure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &BfcState, box: &mut ResolvedBox) -> Layout ! OutOfMemoryError ? &mut Allocator {
   let style = nodes.style(id)
   let previousParent = output.fragmentParent
   if input.performLayout {
@@ -1464,7 +1465,7 @@ fn emptyContents(style: &Style, input: &Input, box: &ResolvedBox, bfc: &BfcState
 // only on its request and the floats extending below its content origin:
 // with both unchanged, a clean child is copied like an independent
 // formatting context.
-pub effect fn layoutInFlow<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutInFlow<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if !input.performLayout && plainTextProbe(nodes, &output, id, &input, &bfc) { return run probeText(nodes, &mut output, &mut measurer, id, &input, &mut bfc) }
   let reusable = input.performLayout && !input.fragmentation.active && output.frame == NO_NODE && bfc.settled()
   if !reusable { return run layoutInBfc(nodes, &mut output, &mut measurer, id, &input, &mut bfc) }
@@ -1481,14 +1482,14 @@ pub effect fn layoutInFlow<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
 // the block probes of its parent (a flex item's min- and max-content and
 // main-size probes, say) share it instead of laying the text out again.
 @inlineAlways
-fn plainTextProbe(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, id: usize, input: &Input, bfc: &BfcState) -> bool {
+fn plainTextProbe<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, input: &Input, bfc: &BfcState) -> bool {
   if input.fragmentation.active || output.frame != NO_NODE || bfc.count != 0 || !bfc.settled() { return false }
   return textOnly(nodes, id)
 }
 
 // Whether a box is an anonymous run of text alone, with no box edges of its
 // own and no size that depends on its parent's (see probeText).
-fn widthFreeText(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn widthFreeText<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   if nodes.node(id).anonymousStyle == NO_NODE { return false }
   let indent = nodes.style(id).textIndent.value.kind
   return indent != DimensionKind.Percent && indent != DimensionKind.Calc
@@ -1496,7 +1497,7 @@ fn widthFreeText(nodes: &BoxTree<'_>, id: usize) -> bool {
 
 // Whether a box holds text alone, directly or in the one anonymous inline
 // formatting context of a block (see textOnly).
-fn textContents(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn textContents<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   if textOnly(nodes, id) { return true }
   let node = nodes.node(id)
   if node.kind != BoxKind.Block || node.measurement != Measurement.None || nodes.style(id).aspectRatio > 0.0 { return false }
@@ -1507,7 +1508,7 @@ fn textContents(nodes: &BoxTree<'_>, id: usize) -> bool {
 // Whether a box is an inline formatting context of text runs alone. Its
 // min-content width, the widest unbreakable run, is at most its max-content
 // width, the widest line.
-fn textOnly(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn textOnly<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let node = nodes.node(id)
   if node.kind != BoxKind.InlineFormatting { return false }
   let mut child = node.firstChild
@@ -1522,7 +1523,7 @@ fn textOnly(nodes: &BoxTree<'_>, id: usize) -> bool {
 // layoutInFlow's size probe of a plainTextProbe box. Without floats the
 // position in the formatting context reads nothing, so the key drops it.
 @inlineNever
-effect fn probeText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn probeText<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut request = input.*
   request.bfcContentOrigin = Point { x: 0.0, y: 0.0 }
   let key = cacheKey(output.keyShape(id), &request, output.viewportFree(id))
@@ -1552,7 +1553,7 @@ effect fn probeText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
 
 // layoutInFlow without a reusable result. It returns one local, so the result
 // is built in the caller's slot.
-effect fn layoutInFlowFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState, key: &Input) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutInFlowFresh<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, bfc: &mut BfcState, key: &Input) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let start = output.fragments.checkpoint()
   let result = run layoutInBfc(nodes, &mut output, &mut measurer, id, &input, &mut bfc)
   if bfc.settled() {
@@ -1564,7 +1565,7 @@ effect fn layoutInFlowFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
 
 // Ordinary block descendants share exclusions; independent formatting contexts
 // and intrinsic probes enter through layoutNode instead.
-pub effect fn layoutInBfc<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutInBfc<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if !incoming.performLayout || !incoming.fragmentation.active {
     return run layoutBox(nodes, &mut output, &mut measurer, id, &incoming, &mut bfc)
   }
@@ -1646,7 +1647,7 @@ fn keywordSize(kind: DimensionKind) -> bool {
 }
 
 // Fills `sizing`, which the caller seeds with the resolved box and a copy of `input`.
-effect fn prepareSizing<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, fragmented: bool, monolithic: bool, sizing: &mut BoxSizing) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn prepareSizing<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, fragmented: bool, monolithic: bool, sizing: &mut BoxSizing) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let node = nodes.node(id)
   let inherited = output.cache.subgrids.physicalMask(input.gridContext, style.writingMode)
@@ -1830,7 +1831,7 @@ effect fn prepareSizing<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
 }
 
 // Whether adjustBoxInput would change the request.
-fn boxInputChanges(nodes: &BoxTree<'_>, id: usize, input: &Input) -> bool {
+fn boxInputChanges<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, input: &Input) -> bool {
   let style = nodes.style(id)
   let node = nodes.node(id)
   if !input.blockRoot && node.independentRoot { return true }
@@ -1840,7 +1841,7 @@ fn boxInputChanges(nodes: &BoxTree<'_>, id: usize, input: &Input) -> bool {
   return input.atomicInline != atomicInline
 }
 
-fn adjustBoxInput(nodes: &BoxTree<'_>, id: usize, input: &mut Input) {
+fn adjustBoxInput<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, input: &mut Input) {
   let style = nodes.style(id)
   let node = nodes.node(id)
   input.blockRoot = input.blockRoot || node.independentRoot
@@ -1852,7 +1853,7 @@ fn adjustBoxInput(nodes: &BoxTree<'_>, id: usize, input: &mut Input) {
 
 // Resolve continuation geometry without replaying already-consumed normal flow.
 @optimizeSize
-pub effect fn resolveFragmentBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input) -> ResolvedBox ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn resolveFragmentBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input) -> ResolvedBox ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut input = incoming.*
   adjustBoxInput(nodes, id, &mut input)
   input.performLayout = false
@@ -1865,7 +1866,7 @@ pub effect fn resolveFragmentBox<'pass, 'source, M: Measure + TextMeasure>(nodes
   return sizing.box
 }
 
-effect fn layoutBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if output.exclusions.length() != 0 && incoming.performLayout && output.frame == NO_NODE { return run layoutExcludingBox(nodes, &mut output, &mut measurer, id, &incoming, &mut bfc) }
   return run layoutPlainBox(nodes, &mut output, &mut measurer, id, &incoming, &mut bfc)
 }
@@ -1873,7 +1874,7 @@ effect fn layoutBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
 // layoutBox where exclusions exist: a box enters the wrapping context of the
 // exclusions it contains, or leaves those around it for `wrap-through: none`.
 @inlineNever
-effect fn layoutExcludingBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutExcludingBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mark = bfc.exclusionMark()
   let floor = bfc.exclusionFloor()
   let style = nodes.style(id)
@@ -1899,7 +1900,7 @@ effect fn layoutExcludingBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &B
 }
 
 @inlineAlways
-effect fn layoutPlainBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutPlainBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   // A box without in-flow children lays out as empty; positionTree then
   // places its absolutely positioned children, static positions included.
   if incoming.performLayout && output.frame == NO_NODE && keptEmptyBox(nodes, &output, id, &incoming) {
@@ -1932,7 +1933,7 @@ effect fn layoutPlainBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
 // layoutBox for a request that adjustBoxInput changes or that fragments, kept out of line so the
 // common path's code stays small.
 @inlineNever
-effect fn layoutChangedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutChangedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut input = incoming.*
   adjustBoxInput(nodes, id, &mut input)
   let monolithic = incoming.performLayout && incoming.fragmentation.active && nodes.node(id).fragmentMonolithic
@@ -1942,7 +1943,7 @@ effect fn layoutChangedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
 
 // layoutBox with `input` the request after adjustBoxInput.
 @inlineAlways
-effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, input: &Input, bfc: &mut BfcState, fragmented: bool) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, incoming: &Input, input: &Input, bfc: &mut BfcState, fragmented: bool) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if incoming.performLayout { output.stats.fullLayouts = output.stats.fullLayouts + 1 }
   else { output.stats.sizeProbes = output.stats.sizeProbes + 1 }
   let style = nodes.style(id)
@@ -2289,7 +2290,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
 }
 
 // Lists the boxes whose overflow is auto on an axis (see BoxFacts.scrollers).
-effect fn autoScrollers(nodes: &BoxTree<'_>, facts: &mut BoxFacts) ! OutOfMemoryError ? &mut Allocator {
+effect fn autoScrollers<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut BoxFacts) ! OutOfMemoryError ? &mut Allocator {
   facts.scrollers.clear()
   let count = nodes.boxes.length()
   let mut id: usize = 0
@@ -2305,11 +2306,9 @@ fn sameViewport(a: &OptionalSize, b: &OptionalSize) -> bool {
   return a.widthDefinite == b.widthDefinite && a.heightDefinite == b.heightDefinite && a.width == b.width && a.height == b.height
 }
 
-effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since: usize, restoring: bool) -> BoxTree<'source> ! OutOfMemoryError ? &mut Allocator {
+effect fn boxesFor<'source, S: LayoutSource>(tree: &'source S, output: &mut LayoutTree, since: usize, restoring: bool) -> BoxTree<'source, S> ! OutOfMemoryError ? &mut Allocator {
   if !restoring {
-    let mut built = run Boxes.build(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), WritingMode.HorizontalTb, Direction.Ltr)
-    built.shapes = tree.shapes.asSlice()
-    return move built
+    return run Boxes.build(tree, WritingMode.HorizontalTb, Direction.Ltr)
   }
   let boxes = Intrinsic.replace(output.boxNodes, List<BoxNode>.make())
   let styles = Intrinsic.replace(output.anonymousStyles, List<Style>.make())
@@ -2319,12 +2318,11 @@ effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since:
   let last = Intrinsic.replace(output.lastBySource, List<usize>.make())
   // Scroll offsets changed since: those boxes alone take the new offsets.
   let mut scrolled = List<usize>.make()
-  let logged = run tree.scrolledNodes(output.keptScrolls, &mut scrolled)
-  let mut nodes = BoxTree.restore(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), move boxes, move styles, move origins, move texts, move first, move last, !logged)
+  let logged = run tree.changes().scrolledNodes(output.keptScrolls, &mut scrolled)
+  let mut nodes = BoxTree.restore(tree, move boxes, move styles, move origins, move texts, move first, move last, !logged)
   nodes.columnSets = output.keptColumnSets
   nodes.freeBoxes = Intrinsic.replace(output.freeBoxes, List<usize>.make())
   nodes.freeStyles = Intrinsic.replace(output.freeStyles, List<usize>.make())
-  nodes.shapes = tree.shapes.asSlice()
   let mut at: usize = 0
   while at < scrolled.length() {
     nodes.refreshScroll(scrolled.get(at))
@@ -2333,7 +2331,7 @@ effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since:
   let mut slot: usize = 0
   while slot < nodes.anonymousOrigins.length() {
     let origin = nodes.anonymousOrigins.get(slot)
-    if origin != NO_NODE && tree.changedAt(origin) > since { nodes.refreshAnonymous(slot) }
+    if origin != NO_NODE && tree.changes().changedAt(origin) > since { nodes.refreshAnonymous(slot) }
     slot = slot + 1
   }
   return move nodes
@@ -2354,10 +2352,10 @@ fn cutoffLimit(style: &Style) -> usize { return if style.layoutContainment { CON
 
 // Whether the subtree has at most cutoffLimit boxes, all static, unscrolled,
 // unfloated and in one piece, adding their count to `seen`.
-fn staticSubtree(nodes: &BoxTree<'_>, id: usize, seen: &mut usize) -> bool {
+fn staticSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, seen: &mut usize) -> bool {
   return staticWithin(nodes, id, &mut seen, cutoffLimit(nodes.style(id)))
 }
-fn staticWithin(nodes: &BoxTree<'_>, id: usize, seen: &mut usize, limit: usize) -> bool {
+fn staticWithin<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, seen: &mut usize, limit: usize) -> bool {
   seen.* = seen.* + 1
   if seen.* > limit { return false }
   let node = nodes.node(id)
@@ -2375,7 +2373,7 @@ fn staticWithin(nodes: &BoxTree<'_>, id: usize, seen: &mut usize, limit: usize) 
 // Whether a box is a grid whose every track, implicit ones included, has a
 // fixed length (Grid §11.4 then reads no item's contribution). Its retained
 // placement may show it has no implicit tracks.
-fn fixedGrid(nodes: &BoxTree<'_>, cache: &LayoutCache, id: usize) -> bool {
+fn fixedGrid<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &LayoutCache, id: usize) -> bool {
   if id == NO_NODE || nodes.node(id).kind != BoxKind.Grid { return false }
   let template = &nodes.grids[nodes.style(id).grid]
   if template.rows.subgrid || template.columns.subgrid || !fixedTracks(template.rows.tracks.asSlice()) || !fixedTracks(template.columns.tracks.asSlice()) { return false }
@@ -2400,7 +2398,7 @@ fn fixedTracks(tracks: &[GridTrack]) -> bool {
 
 // Whether a box is absolutely positioned in its parent, a block or flex box,
 // in one piece.
-fn placedAlone(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn placedAlone<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let parent = nodes.node(id).parent
   if parent == NO_NODE || nodes.style(id).position != Position.Absolute || absoluteContainingBlock(nodes, id) != parent { return false }
   let kind = nodes.node(parent).kind
@@ -2408,7 +2406,7 @@ fn placedAlone(nodes: &BoxTree<'_>, id: usize) -> bool {
 }
 // staticSubtree for the box's children, and the rest of its conditions on
 // the box itself but its position.
-fn staticBelow(nodes: &BoxTree<'_>, id: usize, seen: &mut usize) -> bool {
+fn staticBelow<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, seen: &mut usize) -> bool {
   seen.* = seen.* + 1
   let node = nodes.node(id)
   let style = nodes.style(id)
@@ -2423,14 +2421,14 @@ fn staticBelow(nodes: &BoxTree<'_>, id: usize, seen: &mut usize) -> bool {
 }
 
 // The block or flex box that lays out a text box's lines.
-fn textContainer(nodes: &BoxTree<'_>, id: usize) -> usize {
+fn textContainer<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
   let mut box = nodes.node(id).parent
   while box != NO_NODE && nodes.node(box).kind != BoxKind.Block && nodes.node(box).kind != BoxKind.Flex && nodes.node(box).kind != BoxKind.Grid { box = nodes.node(box).parent }
   return box
 }
 // Whether every changed source with a box inside `container` is text it
 // lays out.
-fn textOnlyInside(nodes: &BoxTree<'_>, changes: &[usize], container: usize) -> bool {
+fn textOnlyInside<S: LayoutSource>(nodes: &BoxTree<'_, S>, changes: &[usize], container: usize) -> bool {
   let mut at: usize = 0
   while at < changes.length {
     let box = nodes.firstBySource.get(changes[at])
@@ -2453,7 +2451,7 @@ fn contains(values: &[usize], value: usize) -> bool {
 }
 
 // Whether every changed source is a box in `alone`, or inside one of them.
-fn allAlone(nodes: &BoxTree<'_>, changes: &[usize], alone: &[usize]) -> bool {
+fn allAlone<S: LayoutSource>(nodes: &BoxTree<'_, S>, changes: &[usize], alone: &[usize]) -> bool {
   let mut at: usize = 0
   while at < changes.length {
     let box = nodes.firstBySource.get(changes[at])
@@ -2468,14 +2466,14 @@ fn allAlone(nodes: &BoxTree<'_>, changes: &[usize], alone: &[usize]) -> bool {
 }
 
 // Whether a block container lays out the box in flow, horizontally.
-fn blockPlaced(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn blockPlaced<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let style = nodes.style(id)
   let parent = nodes.style(nodes.node(id).parent)
   return style.display.outsideIs(DisplayOutside.Block) && !style.replaced && style.writingMode == WritingMode.HorizontalTb && parent.writingMode == WritingMode.HorizontalTb
     && (parent.display.insideIs(DisplayInside.Flow) || parent.display.insideIs(DisplayInside.FlowRoot))
 }
 
-fn inheritedGridItem(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn inheritedGridItem<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let node = nodes.node(id)
   if node.kind != BoxKind.Grid || node.parent == NO_NODE || nodes.node(node.parent).kind != BoxKind.Grid { return false }
   let style = nodes.style(id)
@@ -2488,7 +2486,7 @@ fn inheritedGridItem(nodes: &BoxTree<'_>, id: usize) -> bool {
 // (`probes[ends[i - 1]..ends[i]]`) that the previous compute used. A plain
 // box's width is read without a probe (see plainWidth): `plains` has what
 // each box's was when anything asked for it, else PLAIN_UNKNOWN.
-effect fn cutoffCandidates(tree: &Tree, since: usize, nodes: &BoxTree<'_>, output: &LayoutTree, changes: &[usize], boxes: &mut List<usize>, ranges: &mut List<FinalRange>, probes: &mut List<CachedProbe>, ends: &mut List<usize>, plains: &mut List<f32>) ! OutOfMemoryError ? &mut Allocator {
+effect fn cutoffCandidates<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxTree<'_, S>, output: &LayoutTree, changes: &[usize], boxes: &mut List<usize>, ranges: &mut List<FinalRange>, probes: &mut List<CachedProbe>, ends: &mut List<usize>, plains: &mut List<f32>) ! OutOfMemoryError ? &mut Allocator {
   if !output.fragments.settledOutput() { return }
   if output.boxes.length() != nodes.boxes.length() { return }
   let previous = output.cache.previousGeneration()
@@ -2512,17 +2510,17 @@ effect fn cutoffCandidates(tree: &Tree, since: usize, nodes: &BoxTree<'_>, outpu
       // out the same when its size does; its float origin matters to no float.
       // A flex parent sees them only through a size they cannot change (see
       // Tree.setStyle).
-      insets = tree.insetsChangedAt(changes[at - 1]) > since
+      insets = tree.changes().insetsChangedAt(changes[at - 1]) > since
       // Its parent reads its outer style: a change there needs the parent,
       // laid out alone in its place (see cutoffAncestor).
-      if tree.outerChangedAt(changes[at - 1]) > since || insets && !blockPlaced(nodes, id) && nodes.node(nodes.node(id).parent).kind != BoxKind.Flex {
+      if tree.changes().outerChangedAt(changes[at - 1]) > since || insets && !blockPlaced(nodes, id) && nodes.node(nodes.node(id).parent).kind != BoxKind.Flex {
         // An absolutely positioned box is placed after its parent's layout,
         // which reads none of it: by itself, from its size, insets and
         // margins, and laid out alone when only its padding or border changed.
         // So is an item of a grid whose tracks are all fixed: the grid sizes
         // no track by its items, so it reads only their styles' placement,
         // margins, sizes and alignment, and their layouts.
-        if !((placedAlone(nodes, id) || fixedGrid(nodes, &output.cache, nodes.node(id).parent)) && tree.placedChangedAt(changes[at - 1]) <= since) {
+        if !((placedAlone(nodes, id) || fixedGrid(nodes, &output.cache, nodes.node(id).parent)) && tree.changes().placedChangedAt(changes[at - 1]) <= since) {
           id = cutoffAncestor(nodes, changes, boxes.asSlice(), id)
           if id == NO_NODE { continue }
         }
@@ -2581,7 +2579,7 @@ effect fn cutoffCandidates(tree: &Tree, since: usize, nodes: &BoxTree<'_>, outpu
 // cannot change, else the parent, so long as its subtree is static (see
 // staticSubtree); never the root box or the viewport's, a changed box, or
 // one around or inside another box laid out alone.
-fn cutoffAncestor(nodes: &BoxTree<'_>, changes: &[usize], boxes: &[usize], id: usize) -> usize {
+fn cutoffAncestor<S: LayoutSource>(nodes: &BoxTree<'_, S>, changes: &[usize], boxes: &[usize], id: usize) -> usize {
   let mut found = NO_NODE
   let mut box = nodes.node(id).parent
   while box != NO_NODE && box != 0 && nodes.node(box).parent != 0 {
@@ -2612,7 +2610,7 @@ fn fixedSize(style: &Style) -> bool {
     && (style.height.kind == DimensionKind.Length || style.height.kind == DimensionKind.Percent)
 }
 // Whether `id` is `ancestor` or one of its descendants.
-fn inside(nodes: &BoxTree<'_>, id: usize, ancestor: usize) -> bool {
+fn inside<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, ancestor: usize) -> bool {
   let mut box = id
   while box != NO_NODE {
     if box == ancestor { return true }
@@ -2667,7 +2665,7 @@ const CUTOFF_MISSES: usize = 32
 // block or flex container that aligns nothing by baseline and the box sits
 // between in-flow siblings that have baselines of their own, which the
 // parent's first and last baselines would come from instead.
-fn baselinesMatter(nodes: &BoxTree<'_>, cache: &LayoutCache, fragments: &FragmentArena, id: usize, fragment: usize) -> bool {
+fn baselinesMatter<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &LayoutCache, fragments: &FragmentArena, id: usize, fragment: usize) -> bool {
   let parent = nodes.node(id).parent
   if parent == NO_NODE { return true }
   // An absolutely positioned box gives its parent no baseline.
@@ -2703,7 +2701,7 @@ fn baselinesMatter(nodes: &BoxTree<'_>, cache: &LayoutCache, fragments: &Fragmen
 // it is the same as before, or, for an unmoved or absolutely positioned box
 // of a block or flex parent, both lie inside the parent's padding box,
 // which the parent's overflow covers anyway (see overflowGeometry).
-fn overflowStays(nodes: &BoxTree<'_>, output: &LayoutTree, cache: &LayoutCache, id: usize, overflow: Rect, previous: Rect, moved: Point, size: Size) -> bool {
+fn overflowStays<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutTree, cache: &LayoutCache, id: usize, overflow: Rect, previous: Rect, moved: Point, size: Size) -> bool {
   let layout = &output.boxes.asSlice()[id]
   if moved.x == 0.0 && moved.y == 0.0 && sameSize(size, layout.size) && sameOverflow(overflow, previous, layout.size) { return true }
   let parent = nodes.node(id).parent
@@ -2767,7 +2765,7 @@ fn sideStays(now: f32, before: f32, padding: f32, area: f32, counted: bool, was:
 // size. An axis of unchanged size keeps its position; on another, exactly
 // one inset must apply, so the box keeps that side (Position 3 §4.1) and
 // its alignment and static position play no part.
-fn relocation(nodes: &BoxTree<'_>, cache: &LayoutCache, id: usize, old: Size, new: Size, moved: &mut Point) -> bool {
+fn relocation<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &LayoutCache, id: usize, old: Size, new: Size, moved: &mut Point) -> bool {
   moved.* = Point { x: 0.0, y: 0.0 }
   if fixedGrid(nodes, cache, nodes.node(id).parent) {
     return (old.width == new.width || gridStart(nodes, id, true)) && (old.height == new.height || gridStart(nodes, id, false))
@@ -2789,7 +2787,7 @@ fn relocation(nodes: &BoxTree<'_>, cache: &LayoutCache, id: usize, old: Size, ne
 // Whether an item of a fixed grid keeps its place on an axis whatever its
 // size there: aligned to the start of its area, horizontal and left to
 // right, without automatic margins (Grid §11.1, Box Alignment §6).
-fn gridStart(nodes: &BoxTree<'_>, id: usize, horizontal: bool) -> bool {
+fn gridStart<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, horizontal: bool) -> bool {
   let grid = nodes.style(nodes.node(id).parent)
   let style = nodes.style(id)
   if grid.writingMode != WritingMode.HorizontalTb || grid.usedDirection() != Direction.Ltr || style.writingMode != WritingMode.HorizontalTb || style.usedDirection() != Direction.Ltr { return false }
@@ -2808,7 +2806,7 @@ fn gridStart(nodes: &BoxTree<'_>, id: usize, horizontal: bool) -> bool {
 // Whether a box placed alone, without insets on an axis, keeps its static
 // position there whatever its size: its parent, horizontal and left to
 // right, puts it at the start of that axis (see positioned.absolute).
-fn staticStart(nodes: &BoxTree<'_>, id: usize, horizontal: bool) -> bool {
+fn staticStart<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, horizontal: bool) -> bool {
   let parent = nodes.style(nodes.node(id).parent)
   let style = nodes.style(id)
   if parent.writingMode != WritingMode.HorizontalTb || parent.usedDirection() != Direction.Ltr { return false }
@@ -2827,7 +2825,7 @@ fn staticStart(nodes: &BoxTree<'_>, id: usize, horizontal: bool) -> bool {
 
 // Gives each box of the subtree its layout from `scratch` and makes its
 // recorded range, `shift` fragments on, its range of the previous compute.
-fn adoptSubtree(nodes: &BoxTree<'_>, output: &mut LayoutTree, scratch: &[Layout], id: usize, root: usize, shift: usize) {
+fn adoptSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutTree, scratch: &[Layout], id: usize, root: usize, shift: usize) {
   let boxes = output.boxes.asMutSlice()
   if id == root {
     let location = boxes[id].location
@@ -2844,7 +2842,7 @@ fn adoptSubtree(nodes: &BoxTree<'_>, output: &mut LayoutTree, scratch: &[Layout]
 
 // Gives each box of the subtree a zero layout in `scratch`, which holds
 // whatever an earlier cutoff left, or zero bytes (see ScratchBoxes).
-fn resetSubtree(nodes: &BoxTree<'_>, scratch: &mut [Layout], id: usize) {
+fn resetSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, scratch: &mut [Layout], id: usize) {
   scratch[id] = Layout.zero()
   let mut child = nodes.node(id).firstChild
   while child != NO_NODE {
@@ -2854,7 +2852,7 @@ fn resetSubtree(nodes: &BoxTree<'_>, scratch: &mut [Layout], id: usize) {
 }
 
 // Unsets the box chains of a subtree laid out alone in the scratch arena.
-fn unsetSubtree(nodes: &BoxTree<'_>, fragments: &mut FragmentArena, id: usize) {
+fn unsetSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, fragments: &mut FragmentArena, id: usize) {
   fragments.unsetChains(id)
   let mut child = nodes.node(id).firstChild
   while child != NO_NODE {
@@ -2865,7 +2863,7 @@ fn unsetSubtree(nodes: &BoxTree<'_>, fragments: &mut FragmentArena, id: usize) {
 
 // Lays out a candidate alone and, when its parent would see no change,
 // splices it into the previous output; see cutoffCandidates.
-effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutTree, facts: &mut BoxFacts, measurer: &mut M, id: usize, range: FinalRange, probes: &[CachedProbe], first: usize, end: usize, plain: f32) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn cutoffBox<'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutTree, facts: &mut BoxFacts, measurer: &mut M, id: usize, range: FinalRange, probes: &[CachedProbe], first: usize, end: usize, plain: f32) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let final = output.cache.result(id).*
   let count = nodes.boxes.length()
   let mut scratchBoxes = Intrinsic.replace(output.scratchBoxes, ScratchBoxes.make())
@@ -2881,7 +2879,7 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>,
   state.facts.viewportFree = Intrinsic.replace(facts.viewportFree, List<bool>.make())
   state.facts.keyShapes = Intrinsic.replace(facts.keyShapes, List<u16>.make())
   state.facts.itemFlags = Intrinsic.replace(facts.itemFlags, List<u8>.make())
-  let mut pass = run LayoutPass.make(scratchBoxes.asMutSlice(), &mut scratchFragments, nodes.sources, &mut state)
+  let mut pass = run LayoutPass.make(scratchBoxes.asMutSlice(), &mut scratchFragments, nodes.source, &mut state)
   pass.flexScratch = Intrinsic.replace(output.flexScratch, List<FlexScratch>.make())
   pass.inlineScratch = Intrinsic.replace(output.inlineScratch, List<InlineScratch>.make())
   output.preparedGeneration = output.preparedGeneration + 1
@@ -2964,8 +2962,8 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>,
 /// Updates scroll/sticky positions without measuring or laying out again. Returns false
 /// when geometry cannot be reused. The caller must ensure measurement inputs are unchanged;
 /// use compute after a font/measurement-provider change, and invalidate retained output.
-pub effect fn repositionScroll(tree: &Tree, output: &mut LayoutTree, viewport: OptionalSize) -> bool ! OutOfMemoryError ? &mut Allocator {
-  if !output.scrollReady || tree.revision() != output.treeRevision()
+pub effect fn repositionScroll<S: LayoutSource>(tree: &S, output: &mut LayoutTree, viewport: OptionalSize) -> bool ! OutOfMemoryError ? &mut Allocator {
+  if !output.scrollReady || tree.changes().revision() != output.treeRevision()
     || !sameViewport(&output.keptViewport, &viewport)
     || output.normalOffsets.length() != output.fragments.values.length() { return false }
   let revision = output.treeRevision()
@@ -2979,12 +2977,12 @@ pub effect fn repositionScroll(tree: &Tree, output: &mut LayoutTree, viewport: O
     at = at + 1
   }
   drop values
-  let mut pass = run LayoutPass.over(output.boxes.asMutSlice(), &mut output.fragments, nodes.sources, &mut output.cache, &mut output.snapshot, &mut output.writes, &mut output.facts)
-  pass.deferSticky = tree.stickyDeferred
-  positionScroll(&nodes, &mut pass, viewport, tree.viewportScrollOffset, output.viewportOverflow)
+  let mut pass = run LayoutPass.over(output.boxes.asMutSlice(), &mut output.fragments, nodes.source, &mut output.cache, &mut output.snapshot, &mut output.writes, &mut output.facts)
+  pass.deferSticky = tree.stickyDeferred()
+  positionScroll(&nodes, &mut pass, viewport, tree.viewportScrollOffset(), output.viewportOverflow)
   drop pass
-  output.keptScroll = tree.viewportScrollOffset
-  output.keptScrolls = tree.scrollRevision()
+  output.keptScroll = tree.viewportScrollOffset()
+  output.keptScrolls = tree.changes().scrollRevision()
   output.fragments.deferLocations()
   output.stats = LayoutStats.zero()
   output.keep(revision, reusable)
@@ -2993,11 +2991,11 @@ pub effect fn repositionScroll(tree: &Tree, output: &mut LayoutTree, viewport: O
   return true
 }
 
-pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, output: &mut LayoutTree, measurer: &mut M, viewport: OptionalSize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn compute<'source, M: Measure + TextMeasure, S: LayoutSource>(tree: &'source S, output: &mut LayoutTree, measurer: &mut M, viewport: OptionalSize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   TextMeasure.beginTextLayout(&mut measurer)
   // Nothing changed since the last compute: its output stands.
   let since = output.treeRevision()
-  if output.reusable() && tree.revision() == since && sameViewport(&output.keptViewport, &viewport) && output.keptScroll.x == tree.viewportScrollOffset.x && output.keptScroll.y == tree.viewportScrollOffset.y && tree.scrollRevision() == output.keptScrolls {
+  if output.reusable() && tree.changes().revision() == since && sameViewport(&output.keptViewport, &viewport) && output.keptScroll.x == tree.viewportScrollOffset().x && output.keptScroll.y == tree.viewportScrollOffset().y && tree.changes().scrollRevision() == output.keptScrolls {
     output.stats = LayoutStats.zero()
     output.lastMode = 0
     return
@@ -3009,13 +3007,13 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   // boxes themselves when no change since could alter them.
   // When they differ, carry results over to the matching new boxes.
   let kept = output.reusable() && output.boxNodes.length() != 0
-  let restoringKept = kept && tree.structureRevision() <= since && tree.boxRevision() <= since
+  let restoringKept = kept && tree.changes().structureRevision() <= since && tree.changes().boxRevision() <= since
   // After invalidate() with the tree unchanged since, the boxes still stand:
   // only the cached results are gone, so the compute is fresh on old boxes.
   // So they do when every change since was a markDirty, which changes no
   // style, text or structure: boxes are generated from those alone.
-  let onlyMarked = tree.revision() >= since && tree.revision() - since == tree.markRevision() - output.keptMarks
-  let boxesStand = !kept && output.boxNodes.length() != 0 && onlyMarked && tree.scrollRevision() == output.keptScrolls
+  let onlyMarked = tree.changes().revision() >= since && tree.changes().revision() - since == tree.changes().markRevision() - output.keptMarks
+  let boxesStand = !kept && output.boxNodes.length() != 0 && onlyMarked && tree.changes().scrollRevision() == output.keptScrolls
   output.cache.gridMemos.settle(boxesStand)
   // Otherwise, with the output complete, the kept boxes are patched where
   // the changes reach them (box_patch.silk): every other box keeps its id,
@@ -3051,11 +3049,11 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   // kept facts' style source index.
   let mut changes = List<usize>.make()
   let mut logged = false
-  if restoring && facts.styledOffsets.length() == tree.nodes.length() + 1 && facts.styledBoxes.length() == nodes.boxes.length() {
-    logged = run tree.changedNodes(since, &mut changes)
+  if restoring && facts.styledOffsets.length() == tree.nodeCount() + 1 && facts.styledBoxes.length() == nodes.boxes.length() {
+    logged = run tree.changes().changedNodes(since, &mut changes)
   } else if patched {
     // The patch reindexes style sources before they are read (see below).
-    logged = run tree.touchedNodes(since, &mut changes)
+    logged = run tree.changes().touchedNodes(since, &mut changes)
   }
   let mut alone = List<usize>.make()
   let mut aloneRanges = List<FinalRange>.make()
@@ -3065,7 +3063,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   if !sameBoxes { output.cutoffMisses.clear() }
   if sameBoxes {
     run output.cache.rotateFinals()
-    if logged && output.exclusions.length() == 0 && !tree.exclusionStyles { run cutoffCandidates(tree, since, &nodes, &output, changes.asSlice(), &mut alone, &mut aloneRanges, &mut aloneProbes, &mut aloneEnds, &mut alonePlains) }
+    if logged && output.exclusions.length() == 0 && !tree.exclusionStyles() { run cutoffCandidates(tree, since, &nodes, &output, changes.asSlice(), &mut alone, &mut aloneRanges, &mut aloneProbes, &mut aloneEnds, &mut alonePlains) }
     Incremental.invalidateChanged(tree, &nodes, &mut output.cache, since, logged, changes.asSlice(), alone.asSlice())
     run output.cache.compact()
   } else if patched {
@@ -3170,7 +3168,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       run autoScrollers(&nodes, &mut facts)
       run Incremental.indexStyleSources(tree, &nodes, &mut facts.styledOffsets, &mut facts.styledBoxes)
     }
-  } else if boxesStand && facts.covers(nodes.boxes.length()) && facts.styledOffsets.length() == tree.nodes.length() + 1 && facts.styledBoxes.length() == nodes.boxes.length() {
+  } else if boxesStand && facts.covers(nodes.boxes.length()) && facts.styledOffsets.length() == tree.nodeCount() + 1 && facts.styledBoxes.length() == nodes.boxes.length() {
     // Facts read only styles and structure, which stand with the boxes.
   } else {
     run Incremental.markSubtrees(&nodes, &mut facts)
@@ -3198,13 +3196,13 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   // Every change was laid out alone and its parent sees none of it: the
   // previous output, with those boxes spliced in, is this compute's, and the
   // cache stays the previous compute's but for them.
-  if allCut && sameViewport(&output.keptViewport, &viewport) && output.keptScroll.x == tree.viewportScrollOffset.x && output.keptScroll.y == tree.viewportScrollOffset.y && tree.scrollRevision() == output.keptScrolls
+  if allCut && sameViewport(&output.keptViewport, &viewport) && output.keptScroll.x == tree.viewportScrollOffset().x && output.keptScroll.y == tree.viewportScrollOffset().y && tree.changes().scrollRevision() == output.keptScrolls
     && allAlone(&nodes, changes.asSlice(), alone.asSlice()) && output.cache.undoRotate() {
     output.facts = move facts
     output.stats = LayoutStats.zero()
     output.lastMode = 1
-    output.keep(tree.revision(), true)
-    output.keptMarks = tree.markRevision()
+    output.keep(tree.changes().revision(), true)
+    output.keptMarks = tree.changes().markRevision()
     output.adopt(move nodes)
     Measure.tracePhase(&mut measurer, TRACE_END)
     return
@@ -3239,7 +3237,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   run output.prepareBoxes(nodes.boxes.length(), inPlace)
   run output.writes.begin(nodes.boxes.length())
   output.viewportOverflow = Rect { x: 0.0, y: 0.0, width: max(0.0, viewport.width), height: max(0.0, viewport.height) }
-  let mut boxes = run LayoutPass.over(output.boxes.asMutSlice(), &mut output.fragments, nodes.sources, &mut output.cache, &mut output.snapshot, &mut output.writes, &mut facts)
+  let mut boxes = run LayoutPass.over(output.boxes.asMutSlice(), &mut output.fragments, nodes.source, &mut output.cache, &mut output.snapshot, &mut output.writes, &mut facts)
   // A viewport resize amid computes that reuse nothing records no ranges
   // for the next one, unless that one is the eighth that tries reuse
   // again (see `tracking` below). An edit after the resizes then lays out
@@ -3252,7 +3250,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   boxes.preparedGeneration = output.preparedGeneration
   boxes.blockScratch = move blockScratch
   boxes.inPlace = inPlace
-  boxes.deferSticky = tree.stickyDeferred
+  boxes.deferSticky = tree.stickyDeferred()
   // After computes that laid out most boxes again and copied none, copying
   // is unlikely to pay: this one skips its checks and the write tracking
   // they need, trying again every eighth compute.
@@ -3267,10 +3265,10 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     let flowShift = run boxes.fragments.endFlow()
     if flowShift.by != 0 { boxes.cache.shiftRanges(flowShift) }
     Measure.tracePhase(&mut measurer, TRACE_POSITION)
-    let overflow = run positionTree(&nodes, &mut boxes, &mut measurer, viewport, tree.viewportScrollOffset, &mut output.normalOffsets, &mut output.normalOffsetsZero)
+    let overflow = run positionTree(&nodes, &mut boxes, &mut measurer, viewport, tree.viewportScrollOffset(), &mut output.normalOffsets, &mut output.normalOffsetsZero)
     run boxes.fragments.finishInPlace()
     boxes.stats.passes = boxes.stats.passes + 1
-    if !boxes.needsRelayout && tree.exclusionStyles && boxes.exclusionPasses == 0 {
+    if !boxes.needsRelayout && tree.exclusionStyles() && boxes.exclusionPasses == 0 {
       run gatherExclusions(&nodes, &mut boxes)
       boxes.exclusionPasses = 1
       if boxes.foundExclusions.length() != 0 {
@@ -3302,11 +3300,11 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       output.preparedSlots = move keptSlots
       output.blockScratch = move keptBlock
       output.facts = move facts
-      output.keep(tree.revision(), settled)
-      output.keptMarks = tree.markRevision()
+      output.keep(tree.changes().revision(), settled)
+      output.keptMarks = tree.changes().markRevision()
       output.keptViewport = viewport
-      output.keptScroll = tree.viewportScrollOffset
-      output.keptScrolls = tree.scrollRevision()
+      output.keptScroll = tree.viewportScrollOffset()
+      output.keptScrolls = tree.changes().scrollRevision()
       output.fragments.releaseSaved()
       output.fragments.deferLocations()
       output.viewportOverflow = overflow

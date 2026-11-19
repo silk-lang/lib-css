@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import box_tree { BoxTree }
@@ -15,7 +16,7 @@ impl Copy for WidowDecision {}
 // Capture cuts from the accepted candidate before running a speculative future
 // frame. The caller supplies REAL future ancestor/float/containing geometry.
 @optimizeSize
-pub effect fn collectWidows(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, start: usize, relaxation: BreakRelaxation, checks: &mut List<WidowCheck>) ! OutOfMemoryError ? &mut Allocator {
+pub effect fn collectWidows<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, start: usize, relaxation: BreakRelaxation, checks: &mut List<WidowCheck>) ! OutOfMemoryError ? &mut Allocator {
   checks.clear()
   if relaxation != BreakRelaxation.Strict { return }
   let fragments = output.fragments.values.asSlice()

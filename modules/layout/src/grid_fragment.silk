@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.core.option { Option }
 import silk.core.ownership { Copy }
 import silk.num.i32
@@ -51,8 +52,8 @@ pub struct FragmentGrid<'a> {
   pub source: GridSource<'a>,
 }
 
-fn itemBoundary(
-  nodes: &BoxTree<'_>,
+fn itemBoundary<S: LayoutSource>(
+  nodes: &BoxTree<'_, S>,
   output: &LayoutPass<'_, '_>,
   item: &GridItem,
   before: bool,
@@ -71,8 +72,8 @@ fn itemBoundary(
 // Only an item's leading/trailing occupied row owns its boundary controls.
 // Crossing a spanning item does not replay that item's break-before/after.
 @optimizeSize
-pub fn outerBoundary(
-  nodes: &BoxTree<'_>,
+pub fn outerBoundary<S: LayoutSource>(
+  nodes: &BoxTree<'_, S>,
   output: &LayoutPass<'_, '_>,
   items: &[GridItem],
   rowCount: usize,
@@ -94,8 +95,8 @@ pub fn outerBoundary(
 }
 
 @optimizeSize
-fn rowBoundary(
-  nodes: &BoxTree<'_>,
+fn rowBoundary<S: LayoutSource>(
+  nodes: &BoxTree<'_, S>,
   output: &LayoutPass<'_, '_>,
   grid: &FragmentGrid<'_>,
   scratch: &GridFragmentScratch,
@@ -144,8 +145,8 @@ fn allocatedInput(
   return request
 }
 
-effect fn prepareAllocations<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+effect fn prepareAllocations<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   id: usize,
@@ -280,8 +281,8 @@ effect fn prepareAllocations<'pass, 'source, M: Measure + TextMeasure>(
 }
 
 @optimizeSize
-effect fn discoverBefore<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+effect fn discoverBefore<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   base: &Input,
@@ -346,8 +347,8 @@ struct ItemFit {
 impl Copy for ItemFit {}
 
 @optimizeSize
-effect fn fitItem<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+effect fn fitItem<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   parent: &Style,
@@ -503,8 +504,8 @@ effect fn fitItem<'pass, 'source, M: Measure + TextMeasure>(
 // Grid §13: rows and item content are parallel progress domains. A spanning
 // item is entered once per frame, not once for every row that intersects it.
 @optimizeSize
-pub effect fn layoutGridFragment<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn layoutGridFragment<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   id: usize,

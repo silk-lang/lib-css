@@ -59,12 +59,7 @@ test effect fn gridItemsEstablishIndependentBlockifiedBoxes()
   itemStyle.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flow }
   itemStyle.float = Float.Left
   let item = run tree.append(root, move itemStyle) |> Effect.provideMut<Allocator>(&mut allocator)
-  let boxes = run Boxes.build(
-    tree.nodes.asSlice(),
-    tree.styles.asSlice(),
-    tree.grids.asSlice(),
-    tree.gridNames.asSlice(),
-    WritingMode.HorizontalTb,
+  let boxes = run Boxes.build(&tree, WritingMode.HorizontalTb,
     Direction.Ltr,
   )
     |> Effect.provideMut<Allocator>(&mut allocator)
@@ -100,12 +95,7 @@ test effect fn gridTextRunsBecomeAnonymousItems()
   let secondText = run String.copy("two") |> Effect.provideMut<Allocator>(&mut allocator)
   let second = run tree.appendText(root, move secondText)
     |> Effect.provideMut<Allocator>(&mut allocator)
-  let boxes = run Boxes.build(
-    tree.nodes.asSlice(),
-    tree.styles.asSlice(),
-    tree.grids.asSlice(),
-    tree.gridNames.asSlice(),
-    WritingMode.HorizontalTb,
+  let boxes = run Boxes.build(&tree, WritingMode.HorizontalTb,
     Direction.Ltr,
   )
     |> Effect.provideMut<Allocator>(&mut allocator)

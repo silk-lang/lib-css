@@ -29,7 +29,8 @@ import breaks {
 }
 import fragments { FragmentArena, FragmentKind, LineText, TextFragmentKind }
 import layout_pass { LayoutPass, PassState }
-import tree { Node, NO_NODE }
+import tree { Tree, NO_NODE }
+import style { Style }
 
 fn close(actual: f32, expected: f32) -> bool {
   return actual > expected - 0.0001 && actual < expected + 0.0001
@@ -482,7 +483,7 @@ test effect fn fragmentPublicationAndRejectedLookaheadPreserveEarlierGeometry()
   }
   let mut arena = FragmentArena.make()
   run arena.prepare(4) |> Effect.provideMut<Allocator>(&mut allocator)
-  let sources: [Node; 0] = []
+  let sources = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut passState = PassState.make()
   let mut pass = run LayoutPass.make(layouts.asMutSlice(), &mut arena, &sources, &mut passState)
     |> Effect.provideMut<Allocator>(&mut allocator)
@@ -595,7 +596,7 @@ test effect fn nestedContextRoutingUsesIdentityRatherThanKindBits()
     FragmentAncestor { index: 1, rect: Rect { x: 0.0, y: 100.0, width: 140.0, height: 40.0 } },
   ]
   let mut layouts: [Layout; 0] = []
-  let sources: [Node; 0] = []
+  let sources = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
   let mut arena = FragmentArena.make()
   let mut passState = PassState.make()
   let mut pass = run LayoutPass.make(&mut layouts, &mut arena, &sources, &mut passState)

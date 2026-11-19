@@ -273,8 +273,7 @@ effect fn hoistedBaselineMembers(reverse: bool, last: bool)
   if last { nestedStyle.justifyItems = Align.LastBaseline }
   let nested = run tree.append(root, move nestedStyle)
   let descendant = run tree.append(nested, Style.make())
-  let boxes = run Boxes.build(tree.nodes.asSlice(), tree.styles.asSlice(),
-    tree.grids.asSlice(), tree.gridNames.asSlice(), WritingMode.HorizontalTb, Direction.Ltr)
+  let boxes = run Boxes.build(&tree, WritingMode.HorizontalTb, Direction.Ltr)
   let rootId = boxes.firstBySource.get(root.index)
   let firstId = boxes.firstBySource.get(first.index)
   let secondId = boxes.firstBySource.get(second.index)
@@ -300,7 +299,7 @@ effect fn hoistedBaselineMembers(reverse: bool, last: bool)
   let mut output = LayoutTree.make()
   run output.prepare(boxes.boxes.length())
   let mut passState = PassState.make()
-  let mut pass = run LayoutPass.make(output.boxes.asMutSlice(), &mut output.fragments, boxes.sources, &mut passState)
+  let mut pass = run LayoutPass.make(output.boxes.asMutSlice(), &mut output.fragments, boxes.source, &mut passState)
   let request = Input.make(OptionalSize.none())
   let measured = ItemContribution { minimum: 1.0, minContent: 2.0, maxContent: 3.0, usedMinimum: 0.0 }
   let empty: [TrackContribution; 0] = []
@@ -414,8 +413,7 @@ effect fn hoistedBaselineEligibility()
   let mut childStyle = Style.make()
   childStyle.height = SizeValue.pct(0.5)
   let child = run tree.append(nested, move childStyle)
-  let boxes = run Boxes.build(tree.nodes.asSlice(), tree.styles.asSlice(),
-    tree.grids.asSlice(), tree.gridNames.asSlice(), WritingMode.HorizontalTb, Direction.Ltr)
+  let boxes = run Boxes.build(&tree, WritingMode.HorizontalTb, Direction.Ltr)
   let parentStyle = boxes.style(boxes.firstBySource.get(root.index))
   let nestedId = boxes.firstBySource.get(nested.index)
   let items = [GridItem.make(nestedId)]

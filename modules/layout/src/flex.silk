@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
 import silk.core.option { Option }
 import silk.core.ownership { Copy }
@@ -148,7 +149,7 @@ struct Line { start: usize, end: usize, count: usize, cross: f32, baseline: f32,
 impl Copy for Line {}
 // Whether any collected item has a nonzero order, so that sort can move it.
 // Reads the items' styles only without facts' itemFlags.
-effect fn collect(nodes: &BoxTree<'_>, flags: &[u8], id: usize, items: &mut List<Item>) -> bool ! OutOfMemoryError ? &mut Allocator {
+effect fn collect<S: LayoutSource>(nodes: &BoxTree<'_, S>, flags: &[u8], id: usize, items: &mut List<Item>) -> bool ! OutOfMemoryError ? &mut Allocator {
   let mut ordered = false
   let mut child = nodes.node(id).firstChild
   if flags.length == nodes.boxes.length() {
@@ -173,7 +174,7 @@ effect fn collect(nodes: &BoxTree<'_>, flags: &[u8], id: usize, items: &mut List
   return ordered
 }
 @cold
-fn sort(items: &mut [Item], nodes: &BoxTree<'_>, count: usize) {
+fn sort<S: LayoutSource>(items: &mut [Item], nodes: &BoxTree<'_, S>, count: usize) {
   let mut index: usize = 1
   while index < count {
     // Items are almost always in order already; only an out-of-order item
@@ -208,7 +209,7 @@ fn blockAxisConstraint(style: &Style, horizontal: bool, constraint: AvailableSpa
   if isFlex(style) && style.flexWrap != FlexWrap.NoWrap && axes(style).horizontal != inlineHorizontal { return constraint }
   return AvailableSpace.maxContent()
 }
-effect fn probe<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, childInput: &Input, horizontal: bool, constraint: AvailableSpace, crossKnown: bool, cross: f32) -> Probe ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn probe<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, childInput: &Input, horizontal: bool, constraint: AvailableSpace, crossKnown: bool, cross: f32) -> Probe ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if horizontal && constraint.kind != AvailableKind.Definite && childInput.parentWritingMode == WritingMode.HorizontalTb && childInput.gridContext == 0 {
     let plain = run plainWidth(nodes, &mut output, id)
     if plain >= 0.0 { return Probe { size: Size { width: plain, height: 0.0 }, preferredRatio: 0.0, ratioBorderBox: false } }
@@ -259,7 +260,7 @@ fn stretchesCross(item: &Item) -> bool {
 // once its cross constraint is known or independent of the line size:
 // with the item's target main size when `mainKnown`, else with none, so the
 // layout finds the content size a probe would. Marks the item `early`.
-effect fn layoutAhead<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, horizontal: bool, mainKnown: bool) -> Probe ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutAhead<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, horizontal: bool, mainKnown: bool) -> Probe ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let id = item.id
   let mut finalInput = childInput.*
   if mainKnown { setKnown(&mut finalInput, horizontal, item.target) }
@@ -281,7 +282,7 @@ effect fn layoutAhead<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<
 }
 // prepareFresh, or what it made of the item before under the same arguments.
 // `request` is FlexMemos.request for the container pass.
-effect fn prepare<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, axis: &Axes, parentStyle: &Style, mainConstraint: AvailableSpace, intrinsic: bool, containerMainDefinite: bool, request: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn prepare<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, axis: &Axes, parentStyle: &Style, mainConstraint: AvailableSpace, intrinsic: bool, containerMainDefinite: bool, request: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let id = item.id
   let memoable = request != 0
   if memoable {
@@ -296,7 +297,7 @@ effect fn prepare<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'sou
   else { run prepareFresh(nodes, &mut output, &mut measurer, &mut item, &childInput, &axis, &parentStyle, mainConstraint, intrinsic, containerMainDefinite, false, false) }
   if memoable { run output.cache.flexMemos.remember(id, request, &item) }
 }
-effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, axis: &Axes, parentStyle: &Style, mainConstraint: AvailableSpace, intrinsic: bool, containerMainDefinite: bool, early: bool, static horizontal: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, axis: &Axes, parentStyle: &Style, mainConstraint: AvailableSpace, intrinsic: bool, containerMainDefinite: bool, early: bool, static horizontal: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let id = item.id
   let style = nodes.style(id)
   let box = shapedBox(&output, style, id, &childInput)
@@ -519,7 +520,7 @@ effect fn collectLines(items: &[Item], count: usize, lines: &mut List<Line>, mai
 }
 // Measures the automatic minimums prepare deferred, once a line shrinks.
 // The memo of the pass's `request` keeps what it measured.
-effect fn deferredMinimums<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &mut [Item], line: &Line, childInput: &Input, axis: &Axes, main: f32, gap: f32, collapsed: bool, request: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn deferredMinimums<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &mut [Item], line: &Line, childInput: &Input, axis: &Axes, main: f32, gap: f32, collapsed: bool, request: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut pending = false
   let mut hypothetical: f32 = 0.0
   let mut index = line.start
@@ -669,7 +670,7 @@ fn lineOverReverse(mode: WritingMode) -> bool {
 // A cross size the item's own style fixes is its hypothetical cross size
 // (§9.4 step 7) without a layout. Stretching is the only other way an item's
 // cross size is known before layout, and it needs an auto cross size.
-fn fixedCross(nodes: &BoxTree<'_>, item: &Item, parentStyle: &Style) -> bool {
+fn fixedCross<S: LayoutSource>(nodes: &BoxTree<'_, S>, item: &Item, parentStyle: &Style) -> bool {
   let style = nodes.style(item.id)
   return item.knownCrossDefinite && !item.crossAuto && !style.replaced && style.aspectRatio == 0.0 && style.writingMode == parentStyle.writingMode && nodes.node(item.id).measurement == Measurement.None
 }
@@ -683,7 +684,7 @@ fn crossProbeInput(input: &Input, item: &Item, axis: &Axes) -> Input {
   setIndefinite(&mut childInput, axis.horizontal, !item.mainDefinite)
   return childInput
 }
-effect fn crossSizes<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &mut [Item], line: &Line, input: &Input, axis: &Axes, parentStyle: &Style, collapsed: bool, lineKnown: bool) -> Line ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn crossSizes<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &mut [Item], line: &Line, input: &Input, axis: &Axes, parentStyle: &Style, collapsed: bool, lineKnown: bool) -> Line ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut result = line.*
   // §9.4 floors the line size at zero, not the signed distances of its items.
   let mut before = -UNBOUNDED
@@ -825,7 +826,7 @@ fn selfStartReverse(style: &Style, horizontal: bool) -> bool {
   }
   return style.writingMode == WritingMode.VerticalRl || style.writingMode == WritingMode.SidewaysRl
 }
-effect fn zeroSubtree(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize) ! OutOfMemoryError ? &mut Allocator {
+effect fn zeroSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize) ! OutOfMemoryError ? &mut Allocator {
   run output.store(id, &Layout.zero(), false)
   let mut child = nodes.node(id).firstChild
   while child != NO_NODE { run zeroSubtree(nodes, &mut output, child)
@@ -895,7 +896,7 @@ fn considerBaseline(pick: &mut BaselinePick, item: &Item, child: &Layout, compat
 }
 
 // Picks the first-baseline item, the last-baseline item, or both from items[start..end].
-fn scanBaselineItems(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[Item], start: usize, end: usize, blockHorizontal: bool, axis: &Axes, fragmented: bool, first: bool, last: bool, picks: &mut BaselinePicks) {
+fn scanBaselineItems<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, items: &[Item], start: usize, end: usize, blockHorizontal: bool, axis: &Axes, fragmented: bool, first: bool, last: bool, picks: &mut BaselinePicks) {
   let mut index = start
   while index < end {
     let item = &items[index]
@@ -918,7 +919,7 @@ fn scanBaselineItems(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[
 // and last items with a baseline make the picks (§8.5): found from either end
 // without reading the other items' layouts. False when an item is
 // baseline-aligned or the range has no item.
-fn scanBaselineEdges(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[Item], start: usize, end: usize, blockHorizontal: bool, axis: &Axes, first: bool, last: bool, picks: &mut BaselinePicks) -> bool {
+fn scanBaselineEdges<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, items: &[Item], start: usize, end: usize, blockHorizontal: bool, axis: &Axes, first: bool, last: bool, picks: &mut BaselinePicks) -> bool {
   let mut index = start
   while index < end {
     let item = &items[index]
@@ -939,7 +940,7 @@ fn scanBaselineEdges(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[
 // position makes the pick, as scanBaselineItems would choose it.
 // With `alsoLast`, a forward scan that meets no item with any baseline
 // also makes the last pick into `lastPick`, which stays unset otherwise.
-fn edgeBaseline(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[Item], start: usize, end: usize, blockHorizontal: bool, axis: &Axes, last: bool, pick: &mut BaselinePick, alsoLast: bool, lastPick: &mut BaselinePick) -> bool {
+fn edgeBaseline<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, items: &[Item], start: usize, end: usize, blockHorizontal: bool, axis: &Axes, last: bool, pick: &mut BaselinePick, alsoLast: bool, lastPick: &mut BaselinePick) -> bool {
   let mut fallback = NO_NODE
   let mut fallbackPosition: f32 = 0.0
   let mut endmost = NO_NODE
@@ -989,7 +990,7 @@ fn edgeBaseline(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[Item]
   return true
 }
 
-fn containerBaselines<M: Measure>(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, measurer: &mut M, items: &[Item], lines: &[Line], lineCount: usize, style: &Style, axis: &Axes, fragmented: bool, summary: &EdgeSummary, result: &mut Layout) {
+fn containerBaselines<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, measurer: &mut M, items: &[Item], lines: &[Line], lineCount: usize, style: &Style, axis: &Axes, fragmented: bool, summary: &EdgeSummary, result: &mut Layout) {
   if lineCount == 0 { return }
   let mut firstLine: usize = 0
   let mut lastLine = lineCount - 1
@@ -1119,7 +1120,7 @@ pub fn emptyFlexSize(style: &Style, box: &ResolvedBox) -> Size {
   }
   return result
 }
-pub effect fn layoutFlex<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutFlex<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if nodes.node(id).firstChild == NO_NODE && !input.fragmentation.active && input.fragmentation.boundaryProbe == BoundaryProbe.None { return emptyFlex(nodes.style(id), &box) }
   // placeFlexLines hands the scratch lists back, so the pass result is
   // returned straight into the caller's slot.
@@ -1343,7 +1344,7 @@ impl FlexMemos {
 }
 // Whether no item of a column can have a width that reads its height, or
 // a collapsed item's strut, or a cross size from an aspect ratio.
-fn columnWidthFree(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[Item]) -> bool {
+fn columnWidthFree<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, items: &[Item]) -> bool {
   let mut index: usize = 0
   while index < items.length {
     let id = items[index].id
@@ -1358,7 +1359,7 @@ fn sameAxes(a: &Axes, b: &Axes) -> bool {
   return a.horizontal == b.horizontal && a.row == b.row && a.mainReverse == b.mainReverse && a.crossReverse == b.crossReverse
     && a.mainStartReverse == b.mainStartReverse && a.crossStartReverse == b.crossStartReverse
 }
-effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, resolvedIntrinsicInline: bool, aheadAllowed: bool, owned: FlexScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, resolvedIntrinsicInline: bool, aheadAllowed: bool, owned: FlexScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut scratch = move owned
   let style = nodes.style(id)
   let axis = axes(style)
@@ -1621,7 +1622,7 @@ effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
 
 // An item's location within its container, with auto margins resolved
 // into usedMargin. cursor is the main position before the item's margin.
-fn itemLocation(nodes: &BoxTree<'_>, item: &Item, line: &Line, style: &Style, axis: &Axes, box: &ResolvedBox, size: Size, usedMargin: &mut ResolvedEdges, autoShare: f32, cursor: f32, crossCursor: f32, main: f32, cross: f32) -> Point {
+fn itemLocation<S: LayoutSource>(nodes: &BoxTree<'_, S>, item: &Item, line: &Line, style: &Style, axis: &Axes, box: &ResolvedBox, size: Size, usedMargin: &mut ResolvedEdges, autoShare: f32, cursor: f32, crossCursor: f32, main: f32, cross: f32) -> Point {
   let childCross = axisSize(size, !axis.horizontal)
   let crossOffset = fragmentCrossOffset(nodes, item, line, style, axis, childCross)
   if item.autoStart { setEdge(&mut usedMargin, axis.horizontal, axis.mainReverse, autoShare) }
@@ -1643,7 +1644,7 @@ fn itemLocation(nodes: &BoxTree<'_>, item: &Item, line: &Line, style: &Style, ax
 
 // layoutFlexPass's line and item placement, returning one local so the result
 // is built in the caller's slot.
-effect fn placeFlexLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, childInput: &Input, axis: &Axes, scratch: FlexScratch, main: f32, cross: f32, mainGap: f32, crossGap: f32, collapsed: bool) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn placeFlexLines<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, childInput: &Input, axis: &Axes, scratch: FlexScratch, main: f32, cross: f32, mainGap: f32, crossGap: f32, collapsed: bool) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let items = scratch.items.asSlice()
   let lines = scratch.lines.asSlice()
   let style = nodes.style(id)
@@ -1790,7 +1791,7 @@ effect fn collectOwnedLines(items: &[Item], output: &LayoutPass<'_, '_>, lines: 
   }
 }
 
-fn itemBoundary(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, item: Item, before: bool, rectoOnRight: bool) -> BreakBoundary {
+fn itemBoundary<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, item: Item, before: bool, rectoOnRight: bool) -> BreakBoundary {
   let state = output.resumes.get(item.id)
   let mut boundary = FragmentBox.boundary(nodes, item.id, before, output.frames.kind, rectoOnRight)
   if before { boundary.merge(state.before) }
@@ -1811,7 +1812,7 @@ fn boundaryItemIndex(items: &[Item], collapsed: bool, before: bool) -> usize {
   return items.length
 }
 
-fn lineBoundary(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[Item], line: Line, before: bool, rectoOnRight: bool, collapsed: bool) -> BreakBoundary {
+fn lineBoundary<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, items: &[Item], line: Line, before: bool, rectoOnRight: bool, collapsed: bool) -> BreakBoundary {
   let mut boundary = BreakBoundary.none()
   let mut index = line.start
   while index < line.end {
@@ -1821,7 +1822,7 @@ fn lineBoundary(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[Item]
   return boundary
 }
 
-fn fragmentItemInput(nodes: &BoxTree<'_>, item: Item, line: Line, childInput: &Input, axis: Axes) -> Input {
+fn fragmentItemInput<S: LayoutSource>(nodes: &BoxTree<'_, S>, item: Item, line: Line, childInput: &Input, axis: Axes) -> Input {
   let mut result = childInput.*
   setKnown(&mut result, axis.horizontal, item.target)
   setIndefinite(&mut result, axis.horizontal, !item.mainDefinite)
@@ -1835,7 +1836,7 @@ fn fragmentItemInput(nodes: &BoxTree<'_>, item: Item, line: Line, childInput: &I
 
 // Shared with continuous layout so fragmentation retains auto-margin,
 // self-alignment, and first/last-baseline sharing-group placement.
-fn fragmentCrossOffset(nodes: &BoxTree<'_>, item: &Item, line: &Line, style: &Style, axis: &Axes, childCross: f32) -> f32 {
+fn fragmentCrossOffset<S: LayoutSource>(nodes: &BoxTree<'_, S>, item: &Item, line: &Line, style: &Style, axis: &Axes, childCross: f32) -> f32 {
   let free = line.cross - childCross - item.crossStart - item.crossEnd
   let mut offset = item.crossStart
   if item.autoCrossStart || item.autoCrossEnd {
@@ -1904,7 +1905,7 @@ fn placeFragment(layout: &mut Layout, blockHorizontal: bool, position: f32, inli
 
 // Only a boundary-bearing nested flex scope needs this discovery pass. It
 // resolves its first logical line, not its physically earlier reverse lines.
-effect fn discoverItemBefore<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &Item, line: &Line, childInput: &Input, axis: &Axes) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn discoverItemBefore<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &Item, line: &Line, childInput: &Input, axis: &Axes) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if !nodes.node(item.id).dynamicBefore { return }
   let checkpoint = output.checkpoint()
   let mut request = fragmentItemInput(nodes, item.*, line.*, &childInput, axis.*)
@@ -1926,7 +1927,7 @@ effect fn discoverItemBefore<'pass, 'source, M: Measure + TextMeasure>(nodes: &B
 }
 
 @optimizeSize
-effect fn layoutFlexFragment<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, childInput: &Input, axis: Axes, items: &[Item], lines: &[Line], main: f32, cross: f32, mainGap: f32, crossGap: f32, collapsed: bool) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutFlexFragment<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, childInput: &Input, axis: Axes, items: &[Item], lines: &[Line], main: f32, cross: f32, mainGap: f32, crossGap: f32, collapsed: bool) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let blockHorizontal = output.frames.writingMode != WritingMode.HorizontalTb
   let reverse = blockReverseMode(output.frames.writingMode)
@@ -2018,7 +2019,7 @@ effect fn handleLineBefore(output: &mut LayoutPass<'_, '_>, items: &[Item], line
   }
 }
 
-effect fn fragmentRows<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, childInput: &Input, axis: Axes, items: &[Item], lines: &[Line], main: f32, cross: f32, mainGap: f32, crossGap: f32, collapsed: bool, blockHorizontal: bool, reverse: bool, result: &mut Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn fragmentRows<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, childInput: &Input, axis: Axes, items: &[Item], lines: &[Line], main: f32, cross: f32, mainGap: f32, crossGap: f32, collapsed: bool, blockHorizontal: bool, reverse: bool, result: &mut Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let initial = output.resumes.get(id)
   let mut before = initial.before
@@ -2344,7 +2345,7 @@ effect fn fragmentRows<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
   }
 }
 
-effect fn fragmentColumns<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, childInput: &Input, axis: Axes, items: &[Item], lines: &[Line], main: f32, cross: f32, mainGap: f32, crossGap: f32, collapsed: bool, blockHorizontal: bool, reverse: bool, result: &mut Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn fragmentColumns<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, childInput: &Input, axis: Axes, items: &[Item], lines: &[Line], main: f32, cross: f32, mainGap: f32, crossGap: f32, collapsed: bool, blockHorizontal: bool, reverse: bool, result: &mut Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let initial = output.resumes.get(id)
   let firstItem = boundaryItemIndex(items, collapsed, true)

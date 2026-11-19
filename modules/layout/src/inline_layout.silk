@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource, laidText }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.core.option { Option }
@@ -7,7 +8,7 @@ import silk.text.string { String }
 import silk.num.u32
 import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min, TRACE_TEXT_PROBE, TRACE_TEXT_LAYOUT, TRACE_EMIT }
 import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, TextBoxTrim, TextEdge, EmphasisSide }
-import tree { Node, NO_NODE }
+import tree { NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import fragments { FragmentKind, LineText, TextFragmentKind, TEXT_LINE, TEXT_LINE_CONTINUED, TEXT_LINE_OVERFLOW }
 import axes { Axes }
@@ -260,7 +261,7 @@ fn indentBand(band: Band, indent: f32, rtl: bool) -> Band {
   return result
 }
 
-effect fn collect<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &mut List<Item>, atomics: &mut List<AtomicData>, scopes: &mut List<Scope>, extents: &mut List<Extent>, id: usize, parentScope: usize, input: &Input, axes: Axes, mode: WritingMode) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn collect<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &mut List<Item>, atomics: &mut List<AtomicData>, scopes: &mut List<Scope>, extents: &mut List<Extent>, id: usize, parentScope: usize, input: &Input, axes: Axes, mode: WritingMode) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let node = nodes.node(id)
   let style = nodes.style(id)
   let parent = scopes.get(parentScope)
@@ -409,7 +410,7 @@ fn lineExtents(items: &[Item], scopes: &[Scope], extents: &mut [Extent], start: 
 
 // Resolve boundary margins before fitting and baseline export. Only an atomic
 // margin edge that actually defines the line envelope adjoins the boundary.
-fn atomicLineMargins(nodes: &BoxTree<'_>, items: &mut [Item], atomics: &mut [AtomicData], scopes: &[Scope], extents: &mut [Extent], axes: &Axes, input: &Input, start: usize, end: usize, atStart: bool, atEnd: bool, real: bool) -> Size {
+fn atomicLineMargins<S: LayoutSource>(nodes: &BoxTree<'_, S>, items: &mut [Item], atomics: &mut [AtomicData], scopes: &[Scope], extents: &mut [Extent], axes: &Axes, input: &Input, start: usize, end: usize, atStart: bool, atEnd: bool, real: bool) -> Size {
   let mut index = start
   while index < end {
     let mut item = items[index]
@@ -484,7 +485,7 @@ impl Spans {
     self.values.set(0, Span.make(line))
   }
 }
-fn canBreak(nodes: &BoxTree<'_>, scopes: &[Scope], first: usize, second: usize) -> bool {
+fn canBreak<S: LayoutSource>(nodes: &BoxTree<'_, S>, scopes: &[Scope], first: usize, second: usize) -> bool {
   let mut a = first
   let mut b = second
   while a != b {
@@ -502,7 +503,7 @@ fn cloneEdge(scope: Scope, leading: bool, rtl: bool) -> f32 {
   if leading != rtl { return scope.inset.left + scope.margin.left }
   return scope.inset.right + scope.margin.right
 }
-fn continuationEdges(nodes: &BoxTree<'_>, items: &[Item], scopes: &[Scope], at: usize, leading: bool, rtl: bool) -> f32 {
+fn continuationEdges<S: LayoutSource>(nodes: &BoxTree<'_, S>, items: &[Item], scopes: &[Scope], at: usize, leading: bool, rtl: bool) -> f32 {
   let mut current = boundaryScope(items, scopes, at)
   let mut size: f32 = 0.0
   while current != 0 {
@@ -512,7 +513,7 @@ fn continuationEdges(nodes: &BoxTree<'_>, items: &[Item], scopes: &[Scope], at: 
   }
   return size
 }
-effect fn chunksFor(nodes: &BoxTree<'_>, items: &[Item], scopes: &[Scope]) -> List<Chunk> ! OutOfMemoryError ? &mut Allocator {
+effect fn chunksFor<S: LayoutSource>(nodes: &BoxTree<'_, S>, items: &[Item], scopes: &[Scope]) -> List<Chunk> ! OutOfMemoryError ? &mut Allocator {
   let mut chunks = List<Chunk>.make()
   let mut chunk = Chunk { start: 0, end: 0, advance: 0.0, real: false, breakBefore: false }
   let mut atomic = false
@@ -569,7 +570,7 @@ fn sourceBoundaryCursor(items: &[Item], tokens: &[TextToken<'_>], scopes: &[Scop
 
 // Class A float controls act at source adjacency, not at the exclusion's
 // bottom or at completion of its independent fragmented formatting context.
-effect fn sourceBoundaries<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &[Item], tokens: &[TextToken<'_>], scopes: &[Scope], atomics: &[AtomicData], input: &Input) -> SourceBoundaries ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn sourceBoundaries<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &[Item], tokens: &[TextToken<'_>], scopes: &[Scope], atomics: &[AtomicData], input: &Input) -> SourceBoundaries ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut result = SourceBoundaries { events: List<SourceBoundary>.make(), after: BreakBoundary.none(), afterValid: false }
   let mut seen = false
   let mut previousFloat = false
@@ -669,7 +670,7 @@ fn floatRequest(atomic: &AtomicData, input: &Input, blockInset: f32) -> Input {
   return request
 }
 
-effect fn placeFloats<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &[Item], visual: &Line, atomics: &mut [AtomicData], start: usize, end: usize, bfc: &mut BfcState, origin: Point, width: f32, sourceY: f32, lineHeight: f32, axes: Axes, leading: f32, input: &Input, blockInset: f32) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn placeFloats<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &[Item], visual: &Line, atomics: &mut [AtomicData], start: usize, end: usize, bfc: &mut BfcState, origin: Point, width: f32, sourceY: f32, lineHeight: f32, axes: Axes, leading: f32, input: &Input, blockInset: f32) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let fragmented = input.fragmentation.active && input.performLayout
   let mut advance = leading
   let mut index = start
@@ -760,7 +761,7 @@ effect fn placeFloats<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<
   }
 }
 
-effect fn emitFloat<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, owner: usize, item: Item, atomic: &AtomicData, input: &Input, blockInset: f32, parent: usize, point: Point, container: Size, axes: Axes) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn emitFloat<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, owner: usize, item: Item, atomic: &AtomicData, input: &Input, blockInset: f32, parent: usize, point: Point, container: Size, axes: Axes) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if atomic.deferred {
     if output.resumes.get(item.id).notBeforeFrame <= output.frame { run output.defer(item.id, atomic.requested) }
     run output.enqueuePending(owner, item.id)
@@ -787,7 +788,7 @@ effect fn emitFloat<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
   output.closeCheckpoint(checkpoint)
 }
 
-effect fn fitPendingFloats<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, owner: usize, original: &[Item], atomics: &mut [AtomicData], input: &Input, box: &ResolvedBox, bfc: &mut BfcState, width: f32, axes: Axes) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn fitPendingFloats<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, owner: usize, original: &[Item], atomics: &mut [AtomicData], input: &Input, box: &ResolvedBox, bfc: &mut BfcState, width: f32, axes: Axes) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut current = output.resumes.get(owner).pendingFirst
   let noVisual = Line.make()
   let mut progress = false
@@ -804,7 +805,7 @@ effect fn fitPendingFloats<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   return progress
 }
 
-effect fn emitPendingFloats<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, owner: usize, original: &[Item], atomics: &[AtomicData], input: &Input, box: &ResolvedBox, container: Size, axes: Axes) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn emitPendingFloats<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, owner: usize, original: &[Item], atomics: &[AtomicData], input: &Input, box: &ResolvedBox, container: Size, axes: Axes) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let last = output.resumes.get(owner).pendingLast
   if last == NO_NODE { return }
   while true {
@@ -840,12 +841,12 @@ fn floatPrefix(context: TextContext<'_, '_>, original: &[Item], start: TextCurso
   return result
 }
 
-fn middleClone(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn middleClone<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let node = nodes.node(id)
   return !node.firstForSource && !node.lastForSource
     && nodes.style(id).boxDecorationBreak == BoxDecorationBreak.Clone
 }
-fn suppressPhantomClones(nodes: &BoxTree<'_>, items: &mut [Item], scopes: &mut [Scope]) {
+fn suppressPhantomClones<S: LayoutSource>(nodes: &BoxTree<'_, S>, items: &mut [Item], scopes: &mut [Scope]) {
   let mut candidate = false
   let mut index: usize = 1
   while index < scopes.length {
@@ -863,7 +864,7 @@ fn suppressPhantomClones(nodes: &BoxTree<'_>, items: &mut [Item], scopes: &mut [
     if item.kind == ItemKind.Atomic { return }
     if item.kind == ItemKind.Float || item.kind == ItemKind.Anchor { retainGeometry = true }
     if item.kind == ItemKind.Text {
-      match Node.text(&nodes.sources[nodes.node(item.id).source]) {
+      match nodes.source.text(nodes.node(item.id).source) {
         Option<string>.Some { value } => {
           if !TextFlow.isCollapsibleWhitespace(value, nodes.style(item.id).whiteSpaceCollapse) { return }
         }
@@ -960,9 +961,9 @@ fn plainLineStyle(style: &Style) -> bool {
 // Longer one-line text with text-overflow: ellipsis skips plainLine, which shapes it whole.
 const PLAIN_ELLIPSIS_BYTES: usize = 1024
 
-fn textBytes(nodes: &BoxTree<'_>, item: Item) -> usize {
+fn textBytes<S: LayoutSource>(nodes: &BoxTree<'_, S>, item: Item) -> usize {
   if item.kind != ItemKind.Text { return 0 }
-  return match Node.text(&nodes.sources[nodes.node(item.id).source]) {
+  return match nodes.source.text(nodes.node(item.id).source) {
     Option<string<'_>>.Some { value } => String.byteLength(value)
     Option<string<'_>>.None => 0
   }
@@ -973,7 +974,7 @@ fn textBytes(nodes: &BoxTree<'_>, item: Item) -> usize {
 // spaces, shaped in one font. Such text has one bidi level and no forced
 // break, so it needs no analysis, and layoutText's shaping of the whole
 // paragraph is this one. False, with `line` refused, for any other text.
-effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, raw: &[Item], scopes: &[Scope], text: &mut TextScratch, line: &mut PlainLine) -> bool ! OutOfMemoryError | TextError ? &mut Allocator {
+effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, raw: &[Item], scopes: &[Scope], text: &mut TextScratch, line: &mut PlainLine) -> bool ! OutOfMemoryError | TextError ? &mut Allocator {
   let style = nodes.style(id)
   line.valid = true
   line.refused = true
@@ -984,7 +985,7 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   run tokensFor(nodes, raw, scopes, &mut rawTokens)
   let origins = Intrinsic.replace(text.origins, List<usize>.make())
   let mut gathered = Intrinsic.replace(output.normalTokens, List<TextToken<'source>>.make())
-  let mut normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins, &mut gathered)
+  let mut normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.source, move origins, &mut gathered)
   output.normalTokens = move gathered
   output.rawTokens = move rawTokens
   let tokens = normalized.tokens.asSlice()
@@ -1037,7 +1038,7 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
 // shaped line is kept in the cache (PlainLine), so a later probe or compute
 // can reuse it. When it overflows, layoutText uses the same whole-paragraph
 // advances for fitting, but still shapes the chosen lines at their boundaries.
-effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn plainLine<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   if !plainLineStyle(style) || !plainLineStyle(nodes.style(raw[0].id)) { return false }
   // A long line cut by an ellipsis is shaped by layoutText only as far as it can show.
@@ -1087,7 +1088,7 @@ effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
   return true
 }
 
-pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut scratch = match output.inlineScratch.pop() {
     Option<InlineScratch>.Some { value: spare } => move spare
     Option<InlineScratch>.None => InlineScratch { lists: run Box.make(InlineLists { scopes: List<Scope>.make(), extents: List<Extent>.make(), items: List<Item>.make(), atomics: List<AtomicData>.make(), text: TextScratch.make() }) }
@@ -1114,7 +1115,7 @@ pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
 // the under edge on the last line. Both are taken off the run's insets, so lines, floats and
 // baselines move with them. The strut's metrics stand for the line's: taller inline content
 // overflows the trimmed edge instead of moving it. Horizontal writing modes only.
-fn trimmedBox<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, id: usize, box: ResolvedBox) -> ResolvedBox {
+fn trimmedBox<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, id: usize, box: ResolvedBox) -> ResolvedBox {
   let style = nodes.style(id)
   if style.textBoxTrim == TextBoxTrim.None || style.writingMode != WritingMode.HorizontalTb { return box }
   let node = nodes.node(id)
@@ -1140,7 +1141,7 @@ fn trimmedBox<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, id: usize, box:
 }
 
 // layoutInline with its lists, empty, from InlineScratch.
-effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, scopes: &mut List<Scope>, extents: &mut List<Extent>, items: &mut List<Item>, atomics: &mut List<AtomicData>, text: &mut TextScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, scopes: &mut List<Scope>, extents: &mut List<Extent>, items: &mut List<Item>, atomics: &mut List<AtomicData>, text: &mut TextScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let axes = Axes.make(style.writingMode)
   let box = axes.box(physicalBox.*)
@@ -1332,7 +1333,7 @@ fn cover(spans: &mut Spans, scopes: &[Scope], scope: usize, start: f32, end: f32
   }
   values[scope].end = end
 }
-fn startClones(nodes: &BoxTree<'_>, scopes: &[Scope], spans: &mut Spans, current: usize, rtl: bool) -> f32 {
+fn startClones<S: LayoutSource>(nodes: &BoxTree<'_, S>, scopes: &[Scope], spans: &mut Spans, current: usize, rtl: bool) -> f32 {
   if current == 0 { return 0.0 }
   let scope = scopes[current]
   let start = startClones(nodes, scopes, &mut spans, scope.parent, rtl)
@@ -1380,7 +1381,7 @@ fn textOnlyLine(output: &LayoutPass<'_, '_>, items: &[Item], scopes: &[Scope], l
 // its runs here, last to first, as treeOverflow folds text fragments into
 // their line, and kept in a TEXT_LINE_OVERFLOW record when it is not the
 // line box.
-effect fn emitTextLine<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, items: &[Item], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, line: &LineBox) ! OutOfMemoryError ? &mut Allocator {
+effect fn emitTextLine<'pass, 'source, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, items: &[Item], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, line: &LineBox) ! OutOfMemoryError ? &mut Allocator {
   let parent = output.fragmentParent
   let physicalSize = axes.size(Size { width: line.width, height: line.height })
   let lineLocation = axes.physicalPoint(Point { x: box.inset.left + line.left, y: box.inset.top + line.y }, physicalSize, container)
@@ -1506,7 +1507,7 @@ effect fn emitTextLine<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut La
   output.lineItems = move owners
   output.lineBounds = move bounds
 }
-effect fn emitLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &[Item], atomics: &[AtomicData], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, spans: &mut Spans, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, line: &LineBox, lineBaselines: BaselineSet, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn emitLine<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, items: &[Item], atomics: &[AtomicData], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, spans: &mut Spans, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, line: &LineBox, lineBaselines: BaselineSet, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let previousParent = output.fragmentParent
   let physicalSize = axes.size(Size { width: line.width, height: line.height })
   if textOnlyLine(&output, items, scopes, line, input) {
@@ -1827,7 +1828,7 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
   output.fragmentParent = previousParent
 }
 
-fn paragraphBidi(nodes: &BoxTree<'_>, id: usize) -> UnicodeBidi {
+fn paragraphBidi<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> UnicodeBidi {
   // Flow runs keep the originating block's root policy. An anonymous flex
   // item's computed style is Normal, rather than the flex container's policy.
   let parent = nodes.node(id).parent
@@ -1837,13 +1838,13 @@ fn paragraphBidi(nodes: &BoxTree<'_>, id: usize) -> UnicodeBidi {
 fn inlineReplaced(style: &Style) -> bool {
   return style.replaced && style.display.outsideIs(DisplayOutside.Inline) && style.display.insideIs(DisplayInside.Flow)
 }
-fn shapingBarrier(nodes: &BoxTree<'_>, item: &Item, scopes: &[Scope]) -> bool {
+fn shapingBarrier<S: LayoutSource>(nodes: &BoxTree<'_, S>, item: &Item, scopes: &[Scope]) -> bool {
   if item.kind != ItemKind.Open && item.kind != ItemKind.Close { return false }
   let scope = &scopes[item.scope]
   return scope.inset.horizontal() != 0.0 || scope.margin.left != 0.0 || scope.margin.right != 0.0 || nodes.style(item.id).verticalAlign.kind != VerticalAlignKind.Baseline
 }
 
-effect fn tokensFor<'a>(nodes: &BoxTree<'a>, items: &[Item], scopes: &[Scope], result: &mut List<TextToken<'a>>) ! OutOfMemoryError | TextError ? &mut Allocator {
+effect fn tokensFor<'a, S: LayoutSource>(nodes: &BoxTree<'a, S>, items: &[Item], scopes: &[Scope], result: &mut List<TextToken<'a>>) ! OutOfMemoryError | TextError ? &mut Allocator {
   result.clear()
   run result.reserveExact(items.length)
   let mut index: usize = 0
@@ -1862,9 +1863,9 @@ effect fn tokensFor<'a>(nodes: &BoxTree<'a>, items: &[Item], scopes: &[Scope], r
     let mut value: string<'a> = ""
     let mut start: usize = 0
     if item.kind == ItemKind.Text {
-      let source: &'a Node = &nodes.sources[node.source]
-      start = source.textStart
-      value = match move Node.laidText<'a>(source) {
+      let source: &'a S = nodes.source
+      start = source.textStart(node.source)
+      value = match move laidText<'a, S>(source, node.source) {
         Option<string<'a>>.Some { value: content } => content
         Option<string<'a>>.None => { fail TextError { source: node.source, message: "Generated text box has no source text" } }
       }
@@ -1875,7 +1876,7 @@ effect fn tokensFor<'a>(nodes: &BoxTree<'a>, items: &[Item], scopes: &[Scope], r
   }
 }
 
-effect fn textFont<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, fonts: &mut List<TextFont>, scopes: &[Scope], item: Item, key: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
+effect fn textFont<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, fonts: &mut List<TextFont>, scopes: &[Scope], item: Item, key: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
   let slot = nodes.node(item.id).anonymousStyle
   let mut index: usize = 0
   while index < fonts.length() {
@@ -1904,7 +1905,7 @@ fn runUnit(value: TextRun) -> usize {
 // Shapes [start, end) into `result`. Without a visual plan or tabs a range's
 // shaping does not depend on its inline origin, so each range is shaped once
 // and copied when a later line, probe or compute covers it again.
-effect fn shapeRange<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], memo: &mut TextMemo, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, inlineOrigin: f32, reusable: bool, limit: usize) ! OutOfMemoryError | TextError ? &mut Allocator {
+effect fn shapeRange<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], memo: &mut TextMemo, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, inlineOrigin: f32, reusable: bool, limit: usize) ! OutOfMemoryError | TextError ? &mut Allocator {
   if reusable && !hyphenated {
     let found = memo.segment(start, end)
     if found != NO_NODE {
@@ -1951,7 +1952,7 @@ fn cursorAfter(context: TextContext<'_, '_>, start: TextCursor, end: TextCursor,
 // The end of the first of prefixes of [start, end) doubling in length that is wider than
 // `room`, with its shaping left in `result`; `end` when none is, with nothing shaped then. A
 // line cut by an ellipsis there shapes about twice what it shows, however long its text.
-effect fn overflowProbe<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, room: f32, inlineOrigin: f32, rtl: bool) -> TextCursor ! OutOfMemoryError | TextError ? &mut Allocator {
+effect fn overflowProbe<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, room: f32, inlineOrigin: f32, rtl: bool) -> TextCursor ! OutOfMemoryError | TextError ? &mut Allocator {
   let mut bytes: usize = 256
   while true {
     let at = cursorAfter(context, start, end, bytes)
@@ -1966,7 +1967,7 @@ effect fn overflowProbe<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer:
 // The end of the longest prefix of [start, end) that fits `room` with an ellipsis after it,
 // cut at a UTF-8 scalar boundary, with that prefix's shaping left in `result`. When no
 // prefix fits, the first scalar and the ellipsis overflow.
-effect fn ellipsisCut<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, room: f32, inlineOrigin: f32, rtl: bool) -> TextCursor ! OutOfMemoryError | TextError ? &mut Allocator {
+effect fn ellipsisCut<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, room: f32, inlineOrigin: f32, rtl: bool) -> TextCursor ! OutOfMemoryError | TextError ? &mut Allocator {
   let mut cuts = List<TextCursor>.make()
   let mut unit = start.unit
   while unit < end.unit || (unit == end.unit && end.offset != 0) {
@@ -2006,7 +2007,7 @@ effect fn ellipsisCut<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &
   return at
 }
 
-effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, ellipsis: bool, justificationSpace: f32, inlineOrigin: f32, hangingRanges: &[TextRange]) ! OutOfMemoryError | TextError ? &mut Allocator {
+effect fn shapeCandidate<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], fonts: &mut List<TextFont>, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, ellipsis: bool, justificationSpace: f32, inlineOrigin: f32, hangingRanges: &[TextRange]) ! OutOfMemoryError | TextError ? &mut Allocator {
   result.items.clear()
   result.texts.clear()
   result.advance = 0.0
@@ -2215,7 +2216,7 @@ effect fn collectHanging(candidate: &TextCandidate, context: TextContext<'_, '_>
   }
 }
 
-fn textBoundaryAllowed(nodes: &BoxTree<'_>, items: &[Item], scopes: &[Scope], tokens: &[TextToken<'_>], at: TextCursor) -> bool {
+fn textBoundaryAllowed<S: LayoutSource>(nodes: &BoxTree<'_, S>, items: &[Item], scopes: &[Scope], tokens: &[TextToken<'_>], at: TextCursor) -> bool {
   if at.unit == tokens.length { return true }
   if at.offset != 0 { return nodes.style(items[at.unit].id).textWrap == TextWrap.Wrap }
   let mut left = at.unit
@@ -2283,7 +2284,7 @@ fn inlineBreakBoundary(items: &[Item], scopes: &[Scope], at: usize) -> usize {
   return result
 }
 
-fn textEdge(nodes: &BoxTree<'_>, items: &[Item], scopes: &[Scope], at: TextCursor, leading: bool, rtl: bool, visual: bool) -> f32 {
+fn textEdge<S: LayoutSource>(nodes: &BoxTree<'_, S>, items: &[Item], scopes: &[Scope], at: TextCursor, leading: bool, rtl: bool, visual: bool) -> f32 {
   if visual { return 0.0 }
   return continuationEdges(nodes, items, scopes, at.unit, leading, rtl)
 }
@@ -2291,7 +2292,7 @@ fn textEdge(nodes: &BoxTree<'_>, items: &[Item], scopes: &[Scope], at: TextCurso
 // CSS2 §10.3.7 permits a hypothetical-position approximation. Resolve one
 // zero-width atomic stand-in at a time (WM4 §2.4.3), without feeding it into
 // the real paragraph's analysis, breaks, shaping, or source intervals.
-effect fn analyzeAnchors<M: TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, context: TextContext<'_, '_>, original: &[Item], external: bool, levels: &mut List<u8>) ! OutOfMemoryError | TextError ? &mut Allocator {
+effect fn analyzeAnchors<M: TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, original: &[Item], external: bool, levels: &mut List<u8>) ! OutOfMemoryError | TextError ? &mut Allocator {
   levels.clear()
   let mut tokens = List<TextToken>.make()
   let mut ignoredBreaks = List<TextBreak>.make()
@@ -2327,7 +2328,7 @@ effect fn analyzeAnchors<M: TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, 
 
 // Emits the fragments of a paragraph's fitted lines. `held` lends the span
 // list's storage.
-effect fn emitLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, lines: &[LineBox], items: &[Item], atomics: &[AtomicData], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, held: &mut List<Span>, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, baselineOffsets: &BaselineSet, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn emitLines<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, lines: &[LineBox], items: &[Item], atomics: &[AtomicData], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, held: &mut List<Span>, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, baselineOffsets: &BaselineSet, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   Measure.traceEnter(&mut measurer, TRACE_EMIT)
   let mut spans = Spans { values: Intrinsic.replace(held.*, List<Span>.make()), first: NO_NODE, last: NO_NODE }
   spans.values.clear()
@@ -2370,7 +2371,7 @@ effect fn takePrepared<'pass, 'source>(output: &mut LayoutPass<'pass, 'source>, 
   }
   return PreparedInline { tokens: List<TextToken<'source>>.make(), core: run Box.make(PreparedCore.make()), hasTokens: false }
 }
-effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, unicodeBidi: UnicodeBidi, externalAnalysis: bool, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, wholeItems: &[Item]) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutText<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, unicodeBidi: UnicodeBidi, externalAnalysis: bool, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, wholeItems: &[Item]) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let axes = Axes.make(style.writingMode)
   let rtl = style.usedDirection() == Direction.Rtl
@@ -2403,7 +2404,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     run tokensFor(nodes, raw, scopes, &mut rawTokens)
     let origins = Intrinsic.replace(normalized.origins, List<usize>.make())
     let mut gathered = Intrinsic.replace(output.normalTokens, List<TextToken<'source>>.make())
-    normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins, &mut gathered)
+    normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.source, move origins, &mut gathered)
     output.normalTokens = move gathered
     output.rawTokens = move rawTokens
   }

@@ -222,12 +222,7 @@ effect fn boundedPlacementCase(
       run tree.setGrid(child, move childTemplate) |> Effect.provideMut<Allocator>(&mut allocator)
       at = at + 1
     }
-    let boxes = run Boxes.build(
-      tree.nodes.asSlice(),
-      tree.styles.asSlice(),
-      tree.grids.asSlice(),
-      tree.gridNames.asSlice(),
-      WritingMode.HorizontalTb,
+    let boxes = run Boxes.build(&tree, WritingMode.HorizontalTb,
       Direction.Ltr,
     )
       |> Effect.provideMut<Allocator>(&mut allocator)

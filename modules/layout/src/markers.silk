@@ -4,6 +4,7 @@
 //! edge, with the marker's first baseline on the item's first baseline, which can be a line
 //! of a block descendant (`li > p`). An item without a line puts the marker at its content top.
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import geometry { Layout, Measure, OptionalSize, AvailableSpace, Point, ResolvedEdges, max }
 import style { Direction, WritingMode }
 import tree { NO_NODE }
@@ -17,7 +18,7 @@ import fragmentation { FragmentationError }
 /// Lays out and places the outside marker of block `id`, if its first child is one, after the
 /// final layout `result` of the block's contents. Fragmented and intrinsic passes leave it.
 @inlineNever
-pub effect fn placeMarker<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, result: &Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn placeMarker<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, result: &Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let marker = nodes.node(id).firstChild
   if marker == NO_NODE || !nodes.style(marker).outsideMarker { return }
   if !input.performLayout || input.fragmentation.active { return }

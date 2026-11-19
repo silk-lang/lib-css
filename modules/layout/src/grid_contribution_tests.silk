@@ -180,12 +180,7 @@ effect fn checkWithOptions(
   let root = tree.root()
   let item = run tree.append(root, move style)
   run tree.setMeasurement(item, 0)
-  let boxes = run Boxes.build(
-    tree.nodes.asSlice(),
-    tree.styles.asSlice(),
-    tree.grids.asSlice(),
-    tree.gridNames.asSlice(),
-    WritingMode.HorizontalTb,
+  let boxes = run Boxes.build(&tree, WritingMode.HorizontalTb,
     Direction.Ltr,
   )
   let mut output = LayoutTree.make()
@@ -194,7 +189,7 @@ effect fn checkWithOptions(
   let mut pass = run LayoutPass.make(
     output.boxes.asMutSlice(),
     &mut output.fragments,
-    boxes.sources,
+    boxes.source,
     &mut passState,
   )
   let mut measurer = ContributionMeasure { calls: 0 }
@@ -633,12 +628,7 @@ effect fn checkGridIntrinsicRequestMinimum()
   run template.columns.tracks.append(GridTrack.breadth(GridBreadth.fixed(10.0)))
   run template.rows.tracks.append(GridTrack.breadth(GridBreadth.fixed(5.0)))
   run tree.setGrid(root, move template)
-  let boxes = run Boxes.build(
-    tree.nodes.asSlice(),
-    tree.styles.asSlice(),
-    tree.grids.asSlice(),
-    tree.gridNames.asSlice(),
-    WritingMode.HorizontalTb,
+  let boxes = run Boxes.build(&tree, WritingMode.HorizontalTb,
     Direction.Ltr,
   )
   let id = boxes.firstBySource.get(root.index)
@@ -648,7 +638,7 @@ effect fn checkGridIntrinsicRequestMinimum()
   let mut pass = run LayoutPass.make(
     output.boxes.asMutSlice(),
     &mut output.fragments,
-    boxes.sources,
+    boxes.source,
     &mut passState,
   )
   let mut provider = ContributionMeasure { calls: 0 }
@@ -694,12 +684,7 @@ effect fn checkMeasuredCrossMinimum()
   let mut tree = run Tree.make(Style.make())
   let root = tree.root()
   run tree.setMeasurement(root, 3)
-  let boxes = run Boxes.build(
-    tree.nodes.asSlice(),
-    tree.styles.asSlice(),
-    tree.grids.asSlice(),
-    tree.gridNames.asSlice(),
-    WritingMode.HorizontalTb,
+  let boxes = run Boxes.build(&tree, WritingMode.HorizontalTb,
     Direction.Ltr,
   )
   let id = boxes.firstBySource.get(root.index)
@@ -709,7 +694,7 @@ effect fn checkMeasuredCrossMinimum()
   let mut pass = run LayoutPass.make(
     output.boxes.asMutSlice(),
     &mut output.fragments,
-    boxes.sources,
+    boxes.source,
     &mut passState,
   )
   let mut provider = ContributionMeasure { calls: 0 }

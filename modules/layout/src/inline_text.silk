@@ -3,7 +3,8 @@ import silk.collections.list { List }
 import silk.text.string { String }
 import text { TextToken, TextTokenKind, TextCursor, TextError }
 import style { WhiteSpaceCollapse }
-import tree { Node, NO_NODE }
+import tree { NO_NODE }
+import source { LayoutSource }
 
 pub struct NormalizedText<'a> {
   pub tokens: List<TextToken<'a>>, pub origins: List<usize>,
@@ -42,7 +43,7 @@ fn controlLength(bytes: &[u8], at: usize) -> usize {
 // `origins` is a spare list whose storage the result's origins take, and
 // `tokens` one the tokens are gathered in, so the result's list is made at
 // its final size.
-pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: List<usize>, tokens: &mut List<TextToken<'a>>) -> NormalizedText<'a> ! OutOfMemoryError ? &mut Allocator {
+pub effect fn normalize<'a, S: LayoutSource>(input: &[TextToken<'a>], source: &S, origins: List<usize>, tokens: &mut List<TextToken<'a>>) -> NormalizedText<'a> ! OutOfMemoryError ? &mut Allocator {
   let mut result = NormalizedText { tokens: List<TextToken<'a>>.make(), origins: move origins }
   result.origins.clear()
   tokens.clear()
@@ -64,7 +65,7 @@ pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: 
       if original.kind == TextTokenKind.Atomic { pending = NO_NODE
         segment = false }
     } else {
-      let parent = sources[original.source].parent
+      let parent = source.parent(original.source)
       if parent != sourceParent {
         localPending = false
         localBreak = false

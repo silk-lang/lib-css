@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.collections.list { List }
 import silk.core.ownership { Copy }
 import silk.core.option { Option }
@@ -39,7 +40,7 @@ struct Candidate {
 }
 impl Copy for Candidate {}
 
-fn boxChild(nodes: &BoxTree<'_>, candidate: usize) -> usize {
+fn boxChild<S: LayoutSource>(nodes: &BoxTree<'_, S>, candidate: usize) -> usize {
   let mut item = candidate
   while item != NO_NODE {
     if !outOfFlow(nodes.style(item)) { return item }
@@ -47,7 +48,7 @@ fn boxChild(nodes: &BoxTree<'_>, candidate: usize) -> usize {
   }
   return NO_NODE
 }
-fn normalChild(nodes: &BoxTree<'_>, candidate: usize) -> usize {
+fn normalChild<S: LayoutSource>(nodes: &BoxTree<'_, S>, candidate: usize) -> usize {
   let mut item = boxChild(nodes, candidate)
   while item != NO_NODE {
     if nodes.style(item).float == Float.None { return item }
@@ -106,14 +107,14 @@ fn settleCandidate(output: &mut LayoutPass<'_, '_>, previous: Option<Candidate>,
   }
 }
 
-fn prepareChild(nodes: &BoxTree<'_>, id: usize, base: &Input, axes: Axes, box: &ResolvedBox, availableInline: AvailableSpace, parallel: bool) -> Child {
+fn prepareChild<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, base: &Input, axes: Axes, box: &ResolvedBox, availableInline: AvailableSpace, parallel: bool) -> Child {
   let mut child = Child { id: id, margin: ResolvedEdges.zero(), inset: ResolvedEdges.zero(), input: base.*, width: 0.0, parallel: parallel }
   prepareChildInto(nodes, id, base, axes, box, availableInline, parallel, &mut child)
   return child
 }
 // prepareChild, written into an existing Child so its Input is copied once.
 @inlineAlways
-fn prepareChildInto(nodes: &BoxTree<'_>, id: usize, base: &Input, axes: Axes, box: &ResolvedBox, availableInline: AvailableSpace, parallel: bool, child: &mut Child) {
+fn prepareChildInto<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, base: &Input, axes: Axes, box: &ResolvedBox, availableInline: AvailableSpace, parallel: bool, child: &mut Child) {
   let style = nodes.style(id)
   child.input = base.*
   child.input.blockRoot = nodes.node(id).independentRoot || style.writingMode != base.parentWritingMode
@@ -144,7 +145,7 @@ fn prepareChildInto(nodes: &BoxTree<'_>, id: usize, base: &Input, axes: Axes, bo
 // what the last one gave them (see BlockBase): its request, margins and
 // width are those it was last laid out with, so its kept layout is reused
 // without preparing them, and `child` is filled from that layout.
-effect fn reuseAsBefore<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, block: usize, id: usize, base: &Input, axes: Axes, box: &ResolvedBox, availableInline: AvailableSpace, rtl: bool, probing: bool, same: &mut u8, child: &mut Child) -> bool ! OutOfMemoryError ? &mut Allocator {
+effect fn reuseAsBefore<'pass, 'source, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, block: usize, id: usize, base: &Input, axes: Axes, box: &ResolvedBox, availableInline: AvailableSpace, rtl: bool, probing: bool, same: &mut u8, child: &mut Child) -> bool ! OutOfMemoryError ? &mut Allocator {
   let style = nodes.style(id)
   if style.float != Float.None { return false }
   let blockRoot = nodes.node(id).independentRoot || style.writingMode != base.parentWritingMode
@@ -177,7 +178,7 @@ effect fn reuseAsBefore<'pass, 'source>(nodes: &BoxTree<'source>, output: &mut L
   return true
 }
 
-pub effect fn layoutBlock<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn layoutBlock<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   if !input.performLayout || !input.fragmentation.active {
     // Leaves skip layoutBlockPass and its large frame entirely.
     let afterProbe = input.performLayout && input.fragmentation.boundaryProbe == BoundaryProbe.After && nodes.node(id).dynamicAfter
@@ -191,7 +192,7 @@ pub effect fn layoutBlock<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxT
 // layoutBlock in a fragmented pass, kept out of line so the common path's code stays small.
 @inlineNever
 @optimizeSize
-effect fn layoutFragmentedBlock<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutFragmentedBlock<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let pass = output.checkpoint()
   let floats = bfc.checkpoint()
   let mut result = run layoutBlockPass(nodes, &mut output, &mut measurer, id, style, &input, &physicalBox, &mut bfc, NO_NODE, ForcedBreaks.none(), true)
@@ -268,7 +269,7 @@ pub fn leafBlockInto(style: &Style, input: &Input, physicalBox: &ResolvedBox, bf
 // the box as resolved for it: false when the child is independent or its
 // inline size is not yet known, which the pass handles.
 pub struct TextLeafChild { child: Child }
-pub fn textLeafChild(nodes: &BoxTree<'_>, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, leaf: &mut TextLeafChild) -> bool {
+pub fn textLeafChild<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, leaf: &mut TextLeafChild) -> bool {
   let axes = Axes.make(style.writingMode)
   let box = axes.box(physicalBox.*)
   let mut parent = OptionalSize.none()
@@ -295,7 +296,7 @@ impl TextLeafChild {
 // The max-content inline size of a text leaf, as the pass computes it for an
 // intrinsic request: `leaf` is textLeafChild's for that request and `box`
 // the box resolved for it, of indefinite inline size.
-pub effect fn textLeafLargest<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, style: &Style, physicalBox: &ResolvedBox, leaf: &TextLeafChild) -> f32 ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn textLeafLargest<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, style: &Style, physicalBox: &ResolvedBox, leaf: &TextLeafChild) -> f32 ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let axes = Axes.make(style.writingMode)
   let box = axes.box(physicalBox.*)
   run probeNode(nodes, &mut output, &mut measurer, leaf.child.id, &leaf.child.input)
@@ -305,7 +306,7 @@ pub effect fn textLeafLargest<'pass, 'source, M: Measure + TextMeasure>(nodes: &
 
 // The pass itself, for a box of definite inline size: lays the child out
 // and places it, and fills `result`, which starts as Layout.zero().
-pub effect fn textLeafContents<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, leaf: &mut TextLeafChild, result: &mut Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+pub effect fn textLeafContents<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, leaf: &mut TextLeafChild, result: &mut Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let axes = Axes.make(style.writingMode)
   let box = axes.box(physicalBox.*)
   let origin = input.bfcContentOrigin
@@ -401,7 +402,7 @@ pub effect fn textLeafContents<'pass, 'source, M: Measure + TextMeasure>(nodes: 
 // A block pass's child list, kept in LayoutPass between passes.
 pub struct BlockScratch { children: List<Child> }
 
-effect fn layoutBlockPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, endBefore: usize, endBreak: ForcedBreaks, static fragmentable: bool) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutBlockPass<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, endBefore: usize, endBreak: ForcedBreaks, static fragmentable: bool) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut scratch = BlockScratch { children: List<Child>.make() }
   match output.blockScratch.pop() {
     Option<BlockScratch>.Some { value: spare } => {
@@ -416,7 +417,7 @@ effect fn layoutBlockPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxT
 }
 
 // layoutBlockPass with its child list, empty, from BlockScratch.
-effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, endBefore: usize, endBreak: ForcedBreaks, static fragmentable: bool, children: &mut List<Child>) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, style: &Style, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, endBefore: usize, endBreak: ForcedBreaks, static fragmentable: bool, children: &mut List<Child>) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let axes = Axes.make(style.writingMode)
   let box = axes.box(physicalBox.*)
   // The common unfragmented instance drops every fragmentation path, which keeps its code small.

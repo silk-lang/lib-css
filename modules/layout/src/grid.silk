@@ -1,4 +1,5 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
+import source { LayoutSource }
 import silk.num.i32
 import silk.num.usize
 import silk.collections.list { List }
@@ -58,7 +59,7 @@ import grid_tracks {
   spanSize
 }
 
-fn nestedBaselines(nodes: &BoxTree<'_>, id: usize) -> bool {
+fn nestedBaselines<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let parent = nodes.style(id)
   let mut child = nodes.node(id).firstChild
   while child != NO_NODE {
@@ -72,7 +73,7 @@ fn nestedBaselines(nodes: &BoxTree<'_>, id: usize) -> bool {
   }
   return false
 }
-pub fn needsBaselines(nodes: &BoxTree<'_>, items: &[GridItem], parent: &Style) -> bool {
+pub fn needsBaselines<S: LayoutSource>(nodes: &BoxTree<'_, S>, items: &[GridItem], parent: &Style) -> bool {
   let mut index: usize = 0
   while index < items.length {
     let style = nodes.style(items[index].id)
@@ -261,8 +262,8 @@ fn cyclicTracks(tracks: &[GridTrack]) -> bool {
 // Baseline groups retain all three contribution kinds during either pass.
 // measureContribution, or what it returned for the same item, area and
 // policy when the cache has cleared nothing of the item since: memos' `slot`.
-effect fn memoContribution<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+effect fn memoContribution<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   memos: &mut ContributionMemos,
@@ -306,7 +307,7 @@ fn contributionKey(
 const TRACKED_ITEMS: usize = 8
 
 // Whether no item's width can depend on its height (see widthIgnoresHeight).
-fn widthsIgnoreHeights(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: &[GridItem]) -> bool {
+fn widthsIgnoreHeights<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, items: &[GridItem]) -> bool {
   let mut index: usize = 0
   while index < items.length {
     if !widthIgnoresHeight(nodes, &output, items[index].id) { return false }
@@ -315,8 +316,8 @@ fn widthsIgnoreHeights(nodes: &BoxTree<'_>, output: &LayoutPass<'_, '_>, items: 
   return true
 }
 
-effect fn collectContributions<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+effect fn collectContributions<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   items: &[GridItem],
@@ -705,8 +706,8 @@ effect fn finishTracks(
 
 // Cyclic percentages contribute zero/auto to the intrinsic size, then resolve
 // against that size for layout. Their overflow must not enlarge the container.
-pub effect fn sizeAxis<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn sizeAxis<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   items: &[GridItem],
@@ -881,8 +882,8 @@ fn applyMinimum(request: &mut Input, horizontal: bool, minimum: f32) {
 // Continuous and fragmented placement use the same area and automatic-minimum
 // constraints. A fragment changes the fitting budget, never the percentage basis.
 @inlineAlways
-pub effect fn requestItem<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn requestItem<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   item: &GridItem,
@@ -1003,8 +1004,8 @@ pub effect fn requestItem<'pass, 'source, M: Measure + TextMeasure>(
   return request
 }
 
-pub effect fn layoutGrid<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn layoutGrid<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   id: usize,
@@ -1022,8 +1023,8 @@ pub effect fn layoutGrid<'pass, 'source, M: Measure + TextMeasure>(
 
 // A containment sizing pass retains the grid's explicit tracks, repeats and
 // gaps, but creates no implicit tracks or contributions from descendants.
-pub effect fn layoutEmptyGrid<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+pub effect fn layoutEmptyGrid<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   id: usize,
@@ -1036,8 +1037,8 @@ pub effect fn layoutEmptyGrid<'pass, 'source, M: Measure + TextMeasure>(
   return run gridWithScratch(nodes, &mut output, &mut measurer, id, input, box, &mut scratch, true, true)
 }
 
-effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
-  nodes: &BoxTree<'source>,
+effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
+  nodes: &BoxTree<'source, S>,
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   id: usize,
@@ -1872,8 +1873,8 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure>(
 // A speculative containing-block replay owns its freshly sized memo until its
 // checkpoint is restored. Reconstruct the child binding from that geometry,
 // never from the most recently interned context of an unrelated probe.
-pub effect fn shellContext(
-  nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, parentBox: usize, child: usize,
+pub effect fn shellContext<S: LayoutSource>(
+  nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, parentBox: usize, child: usize,
 ) -> usize ! OutOfMemoryError ? &mut Allocator {
   if !Subgrid.eligible(nodes, child) { return 0 }
   let mut lease = run output.cache.gridMemos.take(parentBox, nodes.boxes.length())
