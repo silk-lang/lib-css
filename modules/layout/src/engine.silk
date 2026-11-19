@@ -2173,7 +2173,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
         let mut edges: u8 = 15
         // A block a spanner split continues in another box (see sliceSplit).
         let split = node.source != NO_NODE && node.kind == BoxKind.Block
-        if wasStarted || (split && !node.firstForSource) {
+        if (wasStarted && !state.cloneStart) || (split && !node.firstForSource) {
           if !frameAxes.vertical { edges = edges - 1 }
           else if frameAxes.reverseBlock { edges = edges - 2 }
           else { edges = edges - 8 }

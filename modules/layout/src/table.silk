@@ -9,15 +9,15 @@ import silk.num.u32
 import silk.num.u64
 import silk.num.f32
 import geometry { Measure, Layout, Size, Point, Rect, OptionalSize, AvailableSpace, AvailableKind, ResolvedEdges, max, min, clamp }
-import style { Style, Dimension, BoxSizing, DisplayInside, DimensionKind, TableLayout, BorderCollapse, CaptionSide, Visibility }
+import style { Style, Dimension, BoxSizing, DisplayInside, DimensionKind, TableLayout, BorderCollapse, CaptionSide, Visibility, WritingMode }
 import tree { NO_NODE }
 import box_tree { BoxTree, BoxKind }
 import context { Input, ResolvedBox, childrenInput, outOfFlow, resolve, packCellBorders, cellBorders, CELL_BORDERS, UNBOUNDED }
 import engine { layoutNodeInPlace, probeNode }
 import layout_pass { LayoutPass }
 import text { TextMeasure, TextError }
-import fragmentation { FragmentationError, FlowCursor, BoundaryProbe, Fragmentainer }
-import breaks { BreakBoundary, FragmentainerKind }
+import fragmentation { FragmentationError, FlowCursor, BoundaryProbe, Fragmentainer, FragmentInput }
+import breaks { BreakBoundary, FragmentainerKind, FractionalProgress }
 import silk.core.option { Option }
 
 // `fixed` is a specified width and `percent` a specified percentage (a fraction),
@@ -1029,7 +1029,7 @@ pub effect fn layoutTable<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxT
   result.size = Size { width: width, height: height }
   if !input.performLayout { return result }
   let shown = List<bool>.make()
-  run assignSlots(nodes, &mut output, id, &plan, &frame, &shown, gridTop + frame.spacingY, true, gridTop + grid + frame.bottom, true, width)
+  run assignSlots(nodes, &mut output, id, &plan, &frame, &shown, &List<u8>.make(), &List<f32>.make(), gridTop + frame.spacingY, true, gridTop + grid + frame.bottom, true, width)
   run placeChildren(nodes, &mut output, &mut measurer, id, &base, input.performLayout, NO_NODE)
   return result
 }
@@ -1045,25 +1045,6 @@ fn rowsExtent(plan: &Plan, frame: &Frame, first: usize, end: usize) -> f32 {
     row = row + 1
   }
   return size
-}
-
-// The end of the rows from `first` that a page or column may not split: those
-// a cell spanning down from them reaches. Cells are in row order.
-fn unitEnd(plan: &Plan, first: usize, limit: usize) -> usize {
-  let cells = plan.cells.asSlice()
-  let mut low: usize = 0
-  let mut high = cells.length
-  while low < high {
-    let middle = low + (high - low) / 2
-    if cells[middle].row < first { low = middle + 1 } else { high = middle }
-  }
-  let mut end = first + 1
-  while low < cells.length && cells[low].row < end {
-    end = larger(end, cells[low].row + larger(1, cells[low].rows))
-    low = low + 1
-  }
-  if end > limit { end = limit }
-  return end
 }
 
 // Whether a forced break comes before `row`: break-after of the row (or the group it
@@ -1104,10 +1085,12 @@ effect fn showRows(plan: &mut Plan, frame: &Frame, shown: &mut List<bool>, first
   return at
 }
 
-// CSS Fragmentation 3 §3 and CSS Tables 3 §5: a table breaks between its rows. Rows a
-// row-spanning cell joins stay together, as each row stays whole. The header and footer
-// groups repeat on every page when they take at most a quarter of it, as in Chromium.
-// The resume cursor is the next body row.
+// CSS Tables 3 §6.1: a table breaks between its rows, keeping a row whole unless it is
+// freely fragmentable: joined to the next by a row-spanning cell, or at least half the
+// fragmentainer's height or width. Such a row, or any row when none fits, takes the
+// rest of the fragmentainer, and its cells break inside and go on in the next one.
+// The header and footer groups repeat on every page when they take at most a quarter
+// of it, as in Chromium. The cursor is the next body row and how much of it was placed.
 effect fn layoutFragment<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, plan: &mut Plan, frame: &Frame, base: &Input, width: f32, above: f32, below: f32) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let mut state = output.resumes.get(id)
   let mut result = Layout.zero()
@@ -1136,8 +1119,13 @@ effect fn layoutFragment<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
     }
   }
   let mut extent = UNBOUNDED
+  let mut inline = UNBOUNDED
   match output.frames.get(output.frame) {
-    Option<Fragmentainer>.Some { value } => { extent = value.blockExtent }
+    Option<Fragmentainer>.Some { value } => {
+      extent = value.blockExtent
+      inline = value.rect.width
+      if output.frames.writingMode != WritingMode.HorizontalTb { inline = value.rect.height }
+    }
     Option<Fragmentainer>.None => {}
   }
   let headerSize = rowsExtent(&plan, &frame, 0, headEnd)
@@ -1147,51 +1135,279 @@ effect fn layoutFragment<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
   let repeatHeader = pages && header != NO_NODE && headerSize <= extent / 4.0
   let repeatFooter = pages && footer != NO_NODE && footerSize <= extent / 4.0
   let started = state.started
-  let mut next = headEnd
+  let mut start = headEnd
+  let mut startConsumed: f32 = 0.0
   match &state.cursor {
-    FlowCursor.Block { nextChild } => { if started { next = nextChild } }
+    FlowCursor.Grid { row, progress, gap, columnRepeat, rowRepeat, consumed, boundaryHandled } => {
+      drop progress
+      drop gap
+      drop columnRepeat
+      drop rowRepeat
+      drop boundaryHandled
+      if started {
+        start = row
+        startConsumed = consumed
+      }
+    }
     _ => {}
   }
+  // Rows change height below; cells keep their whole heights.
+  let mut heights = List<f32>.make()
+  let mut index: usize = 0
+  while index < rowCount {
+    run heights.append(plan.rows.get(index).height)
+    index = index + 1
+  }
+  // reach[row]: the end of the rows the cells starting at or before `row` span.
+  let mut reach = List<usize>.make()
+  run reach.appendRepeated(0, rowCount)
+  let mut full = List<f32>.make()
+  index = 0
+  while index < plan.cells.length() {
+    let cell = plan.cells.get(index)
+    let end = cellEnd(&cell)
+    let values = reach.asMutSlice()
+    values[cell.row] = larger(values[cell.row], end)
+    run full.append(max(0.0, rowsExtent(&plan, &frame, cell.row, end) - frame.spacingY))
+    index = index + 1
+  }
+  index = 1
+  while index < rowCount {
+    let values = reach.asMutSlice()
+    values[index] = larger(values[index], values[index - 1])
+    index = index + 1
+  }
   let room = input.fragmentation.limit - input.fragmentation.offset
-  let mut shown = List<bool>.make()
-  run shown.appendRepeated(false, rowCount)
-  let mut y = frame.top
-  if !started { y = y + above }
-  let gridTop = y
-  y = y + frame.spacingY
-  if header != NO_NODE && (!started || repeatHeader) { y = run showRows(&mut plan, &frame, &mut shown, 0, headEnd, y) }
   let mut reserve: f32 = 0.0
   if repeatFooter { reserve = footerSize }
-  let bodyStart = next
-  while next < footStart {
-    let end = unitEnd(&plan, next, footStart)
-    let size = rowsExtent(&plan, &frame, next, end)
-    if next > bodyStart && (forcedBefore(nodes, &plan, next, input) || y + size + reserve > room) { break }
-    if next == bodyStart && !started && input.fragmentation.canBreakBefore && y + size + reserve > room {
-      // Not even the first rows fit: the table starts in the next fragmentainer.
-      state.blocked = true
-      run output.resumes.set(id, state)
-      return result
+  // Where the last row's block space ends: border-spacing still follows it.
+  let limit = room - reserve - frame.spacingY
+  let mut shown = List<bool>.make()
+  run shown.appendRepeated(false, rowCount)
+  let mut grown: f32 = 0.0
+  let mut attempt: usize = 0
+  while true {
+    index = 0
+    while index < rowCount {
+      let rows = plan.rows.asMutSlice()
+      rows[index].height = heights.get(index)
+      let values = shown.asMutSlice()
+      values[index] = false
+      index = index + 1
     }
-    y = run showRows(&mut plan, &frame, &mut shown, next, end, y)
-    next = end
+    let mut y = frame.top
+    // Cells going on from a split row have no top border to make room for.
+    if startConsumed > 0.0 && frame.collapse && !state.cloneStart { y = 0.0 }
+    if !started { y = y + above }
+    let gridTop = y
+    y = y + frame.spacingY
+    if header != NO_NODE && (!started || repeatHeader) { y = run showRows(&mut plan, &frame, &mut shown, 0, headEnd, y) }
+    let bodyStart = y
+    let mut next = start
+    let mut consumed: f32 = 0.0
+    let mut placed = false
+    let mut rest: f32 = 0.0
+    if startConsumed > 0.0 {
+      // The row split in the previous fragment goes on with what is left of it.
+      rest = max(heights.get(next) - startConsumed, grown)
+      if y + rest <= limit || limit <= y {
+        setHeight(&mut plan, next, rest)
+        y = run showRows(&mut plan, &frame, &mut shown, next, next + 1, y)
+        next = next + 1
+        placed = true
+      } else {
+        setHeight(&mut plan, next, limit - y)
+        consumed = startConsumed + limit - y
+        y = run showRows(&mut plan, &frame, &mut shown, next, next + 1, y)
+      }
+    }
+    while consumed == 0.0 && next < footStart {
+      let mut end = next + 1
+      if next > 0 { end = larger(end, reach.get(next - 1)) }
+      while end < footStart && reach.get(end - 1) > end { end = reach.get(end - 1) }
+      if end > footStart { end = footStart }
+      if next > start && forcedBefore(nodes, &plan, next, input) { break }
+      let size = rowsExtent(&plan, &frame, next, end)
+      if y + size + reserve <= room {
+        y = run showRows(&mut plan, &frame, &mut shown, next, end, y)
+        next = end
+        placed = true
+        continue
+      }
+      let height = heights.get(next)
+      let free = end > next + 1 || (next > 0 && reach.get(next - 1) > next) || height > extent / 2.0 || height > inline / 2.0
+      if !free && placed { break }
+      if !placed && !started && input.fragmentation.canBreakBefore && (!free || limit <= y) {
+        // The table starts in the next fragmentainer.
+        state.blocked = true
+        run output.resumes.set(id, state)
+        return result
+      }
+      let mut row = next
+      while row < end && y + heights.get(row) <= limit {
+        y = run showRows(&mut plan, &frame, &mut shown, row, row + 1, y)
+        row = row + 1
+      }
+      if limit > y {
+        setHeight(&mut plan, row, limit - y)
+        consumed = limit - y
+        y = run showRows(&mut plan, &frame, &mut shown, row, row + 1, y)
+        next = row
+      } else if row > next {
+        // The break falls between rows a spanning cell joins.
+        next = row
+      } else if !placed {
+        // Nothing fits: the rows overflow whole.
+        y = run showRows(&mut plan, &frame, &mut shown, next, end, y)
+        next = end
+      }
+      break
+    }
+    let complete = next >= footStart && consumed == 0.0
+    if footer != NO_NODE && (complete || repeatFooter) { y = run showRows(&mut plan, &frame, &mut shown, footStart, rowCount, y) }
+    let checkpoint = output.checkpoint()
+    run placeFragment(nodes, &mut output, &mut measurer, id, input, &mut plan, &frame, &base, &mut shown, &full, started, start, startConsumed, next, consumed, headEnd, bodyStart, limit, gridTop, y, complete, width, repeatHeader, header, footer, repeatFooter)
+    // A cell going on in this fragment may need more than its row has left.
+    let mut needed: f32 = 0.0
+    if attempt == 0 && startConsumed > 0.0 {
+      index = 0
+      while index < plan.cells.length() {
+        let cell = plan.cells.get(index)
+        if cell.row <= start && cellEnd(&cell) == start + 1 {
+          let fragment = output.publication(cell.box)
+          if fragment != NO_NODE { needed = max(needed, output.fragments.values.asSlice()[fragment].size.height) }
+        }
+        index = index + 1
+      }
+    }
+    if needed > rest + 0.01 {
+      output.restoreCheckpoint(checkpoint)
+      grown = needed
+      attempt = attempt + 1
+      continue
+    }
+    output.closeCheckpoint(checkpoint)
+    let mut bottom = y
+    if complete { bottom = y + below }
+    state.cursor = FlowCursor.Grid { row: next, progress: FractionalProgress.make(), gap: FractionalProgress.make(), columnRepeat: 0, rowRepeat: 0, consumed: consumed, boundaryHandled: false }
+    state.normalContentComplete = complete
+    state.descendantsComplete = complete
+    state.cloneStart = repeatHeader
+    run output.resumes.set(id, state)
+    // The current box's top inset is in `bottom`; FragmentBox.finish adds the bottom one.
+    result.size = Size { width: width, height: max(bottom, box.inset.top) + box.inset.bottom }
+    return result
   }
-  let complete = next >= footStart
-  if footer != NO_NODE && (complete || repeatFooter) { y = run showRows(&mut plan, &frame, &mut shown, footStart, rowCount, y) }
-  let mut end = y
-  if complete { end = y + below }
-  run assignSlots(nodes, &mut output, id, &plan, &frame, &shown, gridTop + frame.spacingY, !started, y, complete, width)
+  return result
+}
+
+fn setHeight(plan: &mut Plan, row: usize, height: f32) {
+  let rows = plan.rows.asMutSlice()
+  rows[row].height = height
+}
+
+fn cellEnd(cell: &Cell) -> usize { return cell.row + larger(1, cell.rows) }
+
+// Lays out the parts a fragment holds. A cell that began in an earlier fragment or goes
+// on in a later one breaks inside: it gets its whole height and the fragmentainer's
+// limit, and its fragment here is stretched to the rows it covers.
+effect fn placeFragment<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, plan: &mut Plan, frame: &Frame, base: &Input, shown: &mut List<bool>, full: &List<f32>, started: bool, start: usize, startConsumed: f32, next: usize, consumed: f32, headEnd: usize, bodyStart: f32, limit: f32, gridTop: f32, y: f32, complete: bool, width: f32, repeatHeader: bool, header: usize, footer: usize, repeatFooter: bool) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  let mut began = start
+  if startConsumed > 0.0 { began = start + 1 }
+  let mut goes = next
+  if consumed > 0.0 { goes = next + 1 }
+  let mut cut = List<u8>.make()
+  let mut index: usize = 0
+  while index < plan.cells.length() {
+    let cell = plan.cells.get(index)
+    let end = cellEnd(&cell)
+    let before = started && cell.row < began && end > start
+    let after = cell.row < goes && end > next && (before || cell.row >= start)
+    let mut flag: u8 = 0
+    if before || after { flag = CUT }
+    if before && output.resumes.get(cell.box).contentComplete { flag = GONE }
+    // A row of earlier fragments is carried, empty, for the cells going on from it.
+    if cell.row >= headEnd && cell.row < start && flag != CUT { flag = GONE }
+    if flag == CUT && cell.row < start {
+      let mut row = cell.row
+      while row < start {
+        if !shown.get(row) {
+          let values = shown.asMutSlice()
+          values[row] = true
+          let rows = plan.rows.asMutSlice()
+          rows[row].y = bodyStart
+          rows[row].height = 0.0
+        }
+        row = row + 1
+      }
+    }
+    run cut.append(flag)
+    index = index + 1
+  }
+  run assignSlots(nodes, &mut output, id, &plan, &frame, &shown, &cut, &full, gridTop + frame.spacingY, !started, y, complete, width)
+  while output.tableSplits.length() < nodes.boxes.length() { run output.tableSplits.append(FragmentInput.continuous()) }
+  index = 0
+  while index < plan.cells.length() {
+    let cell = plan.cells.get(index)
+    if cut.get(index) == CUT {
+      let mut split = input.fragmentation
+      split.active = true
+      split.offset = input.fragmentation.offset + plan.rows.get(cell.row).y
+      split.limit = input.fragmentation.offset + limit
+      split.canBreakBefore = false
+      split.avoidInside = false
+      split.forcedStart = false
+      split.contextStart = false
+      split.marginStart = false
+      split.marginEnd = false
+      split.marginEndChosen = false
+      split.sourceAdjacent = false
+      split.sourceBoundary = BreakBoundary.none()
+      split.allocatedAutoExtent = true
+      split.boundaryProbe = BoundaryProbe.None
+      let splits = output.tableSplits.asMutSlice()
+      splits[cell.box] = split
+    }
+    index = index + 1
+  }
   let mut repeated = NO_NODE
   if started && header != NO_NODE && repeatHeader { repeated = header }
   run placeChildren(nodes, &mut output, &mut measurer, id, &base, true, repeated)
+  index = 0
+  while index < plan.cells.length() {
+    let cell = plan.cells.get(index)
+    if cut.get(index) == CUT {
+      let splits = output.tableSplits.asMutSlice()
+      splits[cell.box].active = false
+      let top = plan.rows.get(cell.row).y
+      let mut bottom = top
+      let mut row = cell.row
+      while row < cellEnd(&cell) {
+        if shown.get(row) { bottom = max(bottom, plan.rows.get(row).y + plan.rows.get(row).height) }
+        row = row + 1
+      }
+      run stretch(&mut output, cell.box, bottom - top)
+    }
+    index = index + 1
+  }
   if !complete && footer != NO_NODE && repeatFooter { markRepeated(&mut output, footer) }
-  state.cursor = FlowCursor.Block { nextChild: next }
-  state.normalContentComplete = complete
-  state.descendantsComplete = complete
-  run output.resumes.set(id, state)
-  // The current box's top inset is in `end`; FragmentBox.finish adds the bottom one.
-  result.size = Size { width: width, height: max(end, box.inset.top) + box.inset.bottom }
-  return result
+}
+
+const CUT: u8 = 1
+const GONE: u8 = 2
+
+// Grows the fragment this frame published for a split cell to the rows it covers.
+effect fn stretch(output: &mut LayoutPass<'_, '_>, id: usize, height: f32) ! OutOfMemoryError ? &mut Allocator {
+  let first = output.publication(id)
+  if first == NO_NODE { return }
+  let grow = height - output.fragments.values.asSlice()[first].size.height
+  if grow <= 0.0 { return }
+  run output.fragments.edit(first)
+  let values = output.fragments.values.asMutSlice()
+  values[first].size.height = values[first].size.height + grow
+  values[first].contentRect.height = values[first].contentRect.height + grow
+  values[first].paddingRect.height = values[first].paddingRect.height + grow
+  values[first].layoutBounds.height = values[first].layoutBounds.height + grow
 }
 
 // Marks the fragment this frame published for `id` and what it holds as repeated.
@@ -1211,7 +1427,7 @@ fn markRepeated(output: &mut LayoutPass<'_, '_>, id: usize) {
 // it holds (empty: all of them); a part it does not hold gets a slot of negative width,
 // which placeChildren skips. Columns span from `rowsTop` to the last row held. Top captions go only in the first fragment, bottom ones at
 // `captionBottom` only in the last.
-effect fn assignSlots(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, plan: &Plan, frame: &Frame, shown: &List<bool>, rowsTop: f32, first: bool, captionBottom: f32, last: bool, captionWidth: f32) ! OutOfMemoryError ? &mut Allocator {
+effect fn assignSlots(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: usize, plan: &Plan, frame: &Frame, shown: &List<bool>, cut: &List<u8>, full: &List<f32>, rowsTop: f32, first: bool, captionBottom: f32, last: bool, captionWidth: f32) ! OutOfMemoryError ? &mut Allocator {
   let count = plan.columns.length()
   let rowCount = plan.rows.length()
   let all = shown.length() == 0
@@ -1276,12 +1492,15 @@ effect fn assignSlots(nodes: &BoxTree<'_>, output: &mut LayoutPass<'_, '_>, id: 
   index = 0
   while index < plan.cells.length() {
     let cell = plan.cells.get(index)
-    if all || shown.get(cell.row) {
+    let mut flag: u8 = 0
+    if index < cut.length() { flag = cut.get(index) }
+    if (all || shown.get(cell.row)) && flag != GONE {
       let mut rect = Rect { x: frame.left, y: rowsTop, width: 0.0, height: 0.0 }
       if cell.column < count { rect.x = plan.columns.get(cell.column).x }
       rect.y = plan.rows.get(cell.row).y
       rect.width = spanned(&plan, &frame, &cell)
-      rect.height = rowsSpanned(&plan, &cell)
+      // A cell breaking inside keeps its whole height (see placeFragment).
+      if flag == CUT { rect.height = full.get(index) } else { rect.height = rowsSpanned(&plan, &cell) }
       let row = plan.rows.get(cell.row)
       let mut origin = zero
       if row.box != NO_NODE { origin = rowRects.get(cell.row) }
@@ -1381,7 +1600,8 @@ effect fn placeChildren<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTre
       }
       // A part a fragment does not hold (see assignSlots).
       if slot.width >= 0.0 {
-        let request = sized(base, slot.width, slot.height, true, performLayout, plan)
+        let mut request = sized(base, slot.width, slot.height, true, performLayout, plan)
+        if child < output.tableSplits.length() && output.tableSplits.get(child).active { request.fragmentation = output.tableSplits.get(child) }
         run layoutNodeInPlace(nodes, &mut output, &mut measurer, child, &request)
         run output.place(child, Point { x: slot.x, y: slot.y }, ResolvedEdges.zero(), false, performLayout)
         if child == repeated { markRepeated(&mut output, child) }

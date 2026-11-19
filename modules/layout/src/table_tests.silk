@@ -5,7 +5,7 @@ import silk.num.usize
 import silk.num.f32
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Edges, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind, Visibility, CaptionSide, BreakBetween, Direction, WritingMode }
+import style { Style, Edges, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, TableLayout, BorderCollapse, VerticalAlignKind, Visibility, CaptionSide, BreakBetween, BreakInside, Direction, WritingMode }
 import silk.core.option { Option }
 import fragment_flow { computeFragmented }
 import fragmentation { Fragmentainers, FragmentAncestor }
@@ -632,8 +632,7 @@ effect fn pagedRows() ! OutOfMemoryError | TextError | FragmentationError | Inva
   run expectRect(run nth(&output, body, 1), 0.0, 140.0, 40.0, 40.0, "the body's second fragment holds its last two rows")
   run expectRect(run nth(&output, table, 1), 0.0, 120.0, 40.0, 60.0, "and the table's the header and those rows")
 
-  // A cell spanning two rows keeps them on one page: the fourth row moves with the fifth.
-  // The fifth row's own cell moves past the spanning one, into a second column.
+  // A cell spanning two rows; the fifth row's own cell moves past it, into a second column.
   let spanRow = rows.get(3)
   run tree.remove(spanRow)
   let mut joinedStyle = styled(DisplayInside.TableRow)
@@ -642,9 +641,10 @@ effect fn pagedRows() ! OutOfMemoryError | TextError | FragmentationError | Inva
   run tree.insertBefore(body, joined, Option<NodeId>.Some { value: rows.get(4) })
   drop run spanning(&mut tree, joined, 40, 40, 1, 2)
   run paged(&tree, &mut output, rects.asSlice())
+  // CSS Tables 3 §6.1: rows a cell spans are freely fragmentable; the break falls between them.
   run expectRect(run nth(&output, rows.get(2), 0), 0.0, 60.0, 80.0, 20.0, "the third row stays on the first page")
-  run expectRect(run nth(&output, joined, 0), 0.0, 140.0, 80.0, 20.0, "the spanned rows open the second page together")
-  run expectRect(run nth(&output, rows.get(4), 0), 0.0, 160.0, 80.0, 20.0, "the row the cell spans into follows")
+  run expectRect(run nth(&output, joined, 0), 0.0, 80.0, 80.0, 20.0, "the first spanned row ends the first page")
+  run expectRect(run nth(&output, rows.get(4), 0), 0.0, 140.0, 80.0, 20.0, "the row the cell spans into opens the second")
 
   // A header taller than a quarter of the page does not repeat.
   let mut tall = styled(DisplayInside.TableCell)
@@ -653,6 +653,15 @@ effect fn pagedRows() ! OutOfMemoryError | TextError | FragmentationError | Inva
   run paged(&tree, &mut output, rects.asSlice())
   let countheading1 = run fragments(&output, heading)
   run Testing.expect(countheading1 == 1, "a tall header stays on the first page")
+
+  // CSS Tables 3 §6.2: under a repeated header the table's top border is drawn again.
+  run tree.setStyle(title, styled(DisplayInside.TableCell))
+  let mut bordered = styled(DisplayInside.Table)
+  bordered.border = Edges.all(Dimension.px(4.0))
+  run tree.setStyle(table, move bordered)
+  run paged(&tree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, heading, 1), 4.0, 124.0, 80.0, 20.0, "the repeated header sits below the table's top border")
+  run expectRect(run nth(&output, table, 1), 0.0, 120.0, 88.0, 72.0, "which the table's second fragment holds")
 }
 test effect fn tableBreaksBetweenRows() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
@@ -703,6 +712,139 @@ effect fn pagedFooter() ! OutOfMemoryError | TextError | FragmentationError | In
 test effect fn tableFooterRepeatsAndForcedBreaks() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run pagedFooter() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// A 40px-wide cell holding `blocks` blocks 20px tall (a measured word cannot break).
+effect fn stack(tree: &mut Tree, row: NodeId, blocks: usize, rows: usize) -> NodeId ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let mut style = styled(DisplayInside.TableCell)
+  style.width = SizeValue.px(40.0)
+  style.rowSpan = rows
+  let id = run tree.append(row, move style)
+  let mut index: usize = 0
+  while index < blocks {
+    let mut block = Style.make()
+    block.height = SizeValue.px(20.0)
+    drop run tree.append(id, move block)
+    index = index + 1
+  }
+  return id
+}
+effect fn stackRow(tree: &mut Tree, parent: NodeId, blocks: usize) -> NodeId ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let row = run tree.append(parent, styled(DisplayInside.TableRow))
+  drop run stack(&mut tree, row, blocks, 1)
+  return row
+}
+
+// CSS Tables 3 §6.1, checked against Chromium: a row taller than half the page takes
+// the rest of it, and its cells break inside and go on at the top of the next page.
+effect fn splitRows() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut rects = List<Rect>.make()
+  run rects.append(Rect { x: 0.0, y: 0.0, width: 200.0, height: 100.0 })
+  run rects.append(Rect { x: 0.0, y: 120.0, width: 200.0, height: 100.0 })
+  run rects.append(Rect { x: 0.0, y: 240.0, width: 200.0, height: 100.0 })
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let table = run tree.append(root, styled(DisplayInside.Table))
+  let first = run tree.append(table, styled(DisplayInside.TableRow))
+  drop run stack(&mut tree, first, 1, 1)
+  drop run stack(&mut tree, first, 0, 1)
+  let tall = run tree.append(table, styled(DisplayInside.TableRow))
+  let long = run stack(&mut tree, tall, 5, 1)
+  let short = run stack(&mut tree, tall, 1, 1)
+  let after = run tree.append(table, styled(DisplayInside.TableRow))
+  drop run stack(&mut tree, after, 1, 1)
+  drop run stack(&mut tree, after, 0, 1)
+  let mut output = LayoutTree.make()
+  run paged(&tree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, tall, 0), 0.0, 20.0, 80.0, 80.0, "the tall row takes the rest of the first page")
+  run expectRect(run nth(&output, tall, 1), 0.0, 120.0, 80.0, 20.0, "and the rest of its height on the second")
+  run expectRect(run nth(&output, long, 0), 0.0, 20.0, 40.0, 80.0, "its long cell breaks inside")
+  run expectRect(run nth(&output, long, 1), 0.0, 120.0, 40.0, 20.0, "and goes on")
+  run expectRect(run nth(&output, short, 0), 40.0, 20.0, 40.0, 80.0, "its short cell fills the row on each page")
+  run expectRect(run nth(&output, short, 1), 40.0, 120.0, 40.0, 20.0, "and continues with it")
+  run expectRect(run nth(&output, after, 0), 0.0, 140.0, 80.0, 20.0, "the next row follows the split one")
+  let countlong = run fragments(&output, long)
+  run Testing.expect(countlong == 2, "the long cell has two fragments")
+
+  // Rows a cell spans may break between them, the cell going on in the next page,
+  // where the row it began in is carried, empty.
+  let mut spanTree = run Tree.make(Style.make())
+  let spanRoot = spanTree.root()
+  let spanTable = run spanTree.append(spanRoot, styled(DisplayInside.Table))
+  let mut index: usize = 0
+  while index < 4 {
+    drop run stackRow(&mut spanTree, spanTable, 1)
+    index = index + 1
+  }
+  let mut joinedStyle = styled(DisplayInside.TableRow)
+  joinedStyle.height = SizeValue.px(20.0)
+  let joined = run spanTree.append(spanTable, move joinedStyle)
+  let spanCell = run stack(&mut spanTree, joined, 2, 2)
+  let spannedInto = run stackRow(&mut spanTree, spanTable, 1)
+  let last = run stackRow(&mut spanTree, spanTable, 1)
+  run paged(&spanTree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, joined, 0), 0.0, 80.0, 80.0, 20.0, "the first spanned row ends the page")
+  run expectRect(run nth(&output, joined, 1), 0.0, 120.0, 80.0, 0.0, "and is carried, empty, to the next")
+  run expectRect(run nth(&output, spanCell, 0), 0.0, 80.0, 40.0, 20.0, "the spanning cell breaks with it")
+  run expectRect(run nth(&output, spanCell, 1), 0.0, 120.0, 40.0, 20.0, "and goes on beside the row it spans into")
+  run expectRect(run nth(&output, spannedInto, 0), 0.0, 120.0, 80.0, 20.0, "which opens the second page")
+  run expectRect(run nth(&output, last, 0), 0.0, 140.0, 80.0, 20.0, "the last row follows")
+
+  // A row of more than half the page splits even after other rows.
+  let mut halfTree = run Tree.make(Style.make())
+  let halfRoot = halfTree.root()
+  let halfTable = run halfTree.append(halfRoot, styled(DisplayInside.Table))
+  let mut tallFirst = styled(DisplayInside.TableRow)
+  tallFirst.height = SizeValue.px(50.0)
+  let opening = run halfTree.append(halfTable, move tallFirst)
+  drop run stack(&mut halfTree, opening, 0, 1)
+  let half = run stackRow(&mut halfTree, halfTable, 3)
+  run paged(&halfTree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, half, 0), 0.0, 50.0, 40.0, 50.0, "a 60px row after a 50px one splits")
+  run expectRect(run nth(&output, half, 1), 0.0, 120.0, 40.0, 10.0, "its last 10px open the next page")
+
+  // Content a cell pushes past the break makes the rest of its row taller, as in Chromium.
+  let mut pushTree = run Tree.make(Style.make())
+  let pushRoot = pushTree.root()
+  let pushTable = run pushTree.append(pushRoot, styled(DisplayInside.Table))
+  drop run stackRow(&mut pushTree, pushTable, 1)
+  let pushRow = run pushTree.append(pushTable, styled(DisplayInside.TableRow))
+  let pushing = run stack(&mut pushTree, pushRow, 3, 1)
+  let mut whole = Style.make()
+  whole.height = SizeValue.px(50.0)
+  whole.breakInside = BreakInside.Avoid
+  drop run pushTree.append(pushing, move whole)
+  let beside = run stack(&mut pushTree, pushRow, 1, 1)
+  let below = run stackRow(&mut pushTree, pushTable, 1)
+  run paged(&pushTree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, pushRow, 0), 0.0, 20.0, 80.0, 80.0, "the row fills the first page")
+  run expectRect(run nth(&output, pushRow, 1), 0.0, 120.0, 80.0, 50.0, "and holds the pushed block on the next")
+  run expectRect(run nth(&output, beside, 1), 40.0, 120.0, 40.0, 50.0, "the cell beside it is as tall")
+  run expectRect(run nth(&output, below, 0), 0.0, 170.0, 80.0, 20.0, "the next row follows")
+
+  // A row split partway through rows a cell spans goes on with the rest of its height.
+  let mut midTree = run Tree.make(Style.make())
+  let midRoot = midTree.root()
+  let midTable = run midTree.append(midRoot, styled(DisplayInside.Table))
+  index = 0
+  while index < 4 {
+    drop run stackRow(&mut midTree, midTable, 1)
+    index = index + 1
+  }
+  let midRow = run midTree.append(midTable, styled(DisplayInside.TableRow))
+  let midSpan = run stack(&mut midTree, midRow, 3, 2)
+  let midBeside = run stack(&mut midTree, midRow, 1, 1)
+  let midNext = run stackRow(&mut midTree, midTable, 1)
+  run paged(&midTree, &mut output, rects.asSlice())
+  run expectRect(run nth(&output, midRow, 0), 0.0, 80.0, 80.0, 20.0, "the spanned row splits at the page end")
+  run expectRect(run nth(&output, midRow, 1), 0.0, 120.0, 80.0, 10.0, "and goes on with what is left of it")
+  run expectRect(run nth(&output, midSpan, 1), 0.0, 120.0, 40.0, 40.0, "the spanning cell goes on over both rows")
+  run expectRect(run nth(&output, midBeside, 1), 40.0, 120.0, 40.0, 10.0, "the cell beside it with its row")
+  run expectRect(run nth(&output, midNext, 0), 0.0, 130.0, 80.0, 30.0, "the row it spans into follows")
+}
+test effect fn tableSplitsTallRows() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run splitRows() |> Effect.provideMut<Allocator>(&mut allocator)
 }
 
 // In a multi-column container a table balances across the columns, row by row.

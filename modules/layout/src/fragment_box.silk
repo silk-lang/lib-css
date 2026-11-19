@@ -88,7 +88,7 @@ pub fn current(style: &Style, full: &ResolvedBox, state: &ResumeState, input: &F
     box.margin = ResolvedEdges.zero()
   } else {
     if style.boxDecorationBreak == BoxDecorationBreak.Slice {
-      if state.started { box.padding.top = 0.0
+      if state.started && !state.cloneStart { box.padding.top = 0.0
         box.border.top = 0.0
         box.gutter.top = 0.0 }
       box.padding.bottom = 0.0
