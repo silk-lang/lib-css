@@ -1261,6 +1261,49 @@ impl TextMeasure for Words {
   }
 }
 
+test effect fn rowUsesFinalItemsForCrossSize() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut style = Style.make()
+  style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  style.alignItems = Align.FlexEnd
+  style.width = SizeValue.px(100.0)
+  let root = tree.root()
+  let row = run tree.append(root, style) |> Effect.provideMut<Allocator>(&mut allocator)
+  style.flexDirection = FlexDirection.Column
+  style.alignItems = Align.Stretch
+  style.width = SizeValue.px(45.0)
+  style.minWidth = SizeValue.px(0.0)
+  let column = run tree.append(row, style) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut index: usize = 0
+  while index < 24 {
+    let paragraph = run tree.append(column, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let value = run String.copy("alpha beta gamma") |> Effect.provideMut<Allocator>(&mut allocator)
+    drop run tree.appendText(paragraph, move value) |> Effect.provideMut<Allocator>(&mut allocator)
+    index = index + 1
+  }
+  let mut sibling = Style.make()
+  sibling.width = SizeValue.px(10.0)
+  sibling.height = SizeValue.px(10.0)
+  let marker = run tree.append(row, sibling) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut output = LayoutTree.make()
+  let mut words = Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: true, analyses: 0, shapedUnits: 0 }
+  run compute(&tree, &mut output, &mut words, OptionalSize.definite(150.0, 100.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bounds = run output.sourceBounds(column)
+  let aligned = run output.sourceBounds(marker)
+  run Testing.expect(bounds.width == 45.0 && bounds.height == 720.0 && aligned.x == 45.0 && aligned.y + aligned.height == bounds.y + bounds.height, "the wrapped column sets the row height and its sibling aligns to its end")
+  run Testing.expect(output.stats.sizeProbes == 0, "an independent cross size needs no probe of the column or its paragraphs")
+  let last = run tree.append(row, sibling) |> Effect.provideMut<Allocator>(&mut allocator)
+  sibling.alignSelf = Align.Stretch
+  sibling.height = SizeValue.auto()
+  run tree.setStyle(marker, sibling)
+  run compute(&tree, &mut output, &mut words, OptionalSize.definite(150.0, 100.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let stretched = run output.sourceBounds(marker)
+  let middle = output.fragments.first(output.firstBySource.get(marker.index))
+  let end = output.fragments.first(output.firstBySource.get(last.index))
+  run Testing.expect(stretched.height == bounds.height && output.fragments.values.get(middle).nextSibling == end, "an item that needs the line height and its following sibling stay in paint order")
+}
+
 test effect fn plainLinesMatchAnalyzedParagraphs() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut column = Style.make()

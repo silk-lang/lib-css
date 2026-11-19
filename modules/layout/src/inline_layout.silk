@@ -980,36 +980,20 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     text.origins = move normalized.origins
     return false
   }
-  let original = &mut text.original
-  original.clear()
-  run original.reserveExact(tokens.length)
-  index = 0
-  while index < tokens.length {
-    let mut item = raw[0]
-    item.start = TextCursor { unit: index, offset: 0 }
-    run original.append(item)
-    index = index + 1
-  }
   let context = TextContext { tokens: tokens, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: UnicodeBidi.Normal, textJustify: style.textJustify }
   let mut analysis = TextAnalysis.uniform(tokens.length, 0, 0, false)
   run Bidi.normalizeAnalysis(context, &mut analysis)
   let mut plan = Plan.make()
   let fonts = &mut text.fonts
   fonts.clear()
-  let candidate = &mut text.candidate
-  run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, original.asSlice(), scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, false, 0.0, 0.0, &[])
+  let mut candidate = TextCandidate.make()
+  candidate.items = Intrinsic.replace(line.items, List<Item>.make())
+  candidate.texts = Intrinsic.replace(line.texts, List<TextLeaf>.make())
+  run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, raw, scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, false, 0.0, 0.0, &[])
   plain = candidate.real && !candidate.visual.active && candidate.hanging == 0.0 && fonts.length() == 1
   if plain {
-    line.items.clear()
-    line.texts.clear()
-    run line.items.reserveExact(candidate.items.length())
-    run line.texts.reserveExact(candidate.texts.length())
-    index = 0
-    while index < candidate.items.length() { run line.items.append(candidate.items.get(index))
-      index = index + 1 }
-    index = 0
-    while index < candidate.texts.length() { run line.texts.append(candidate.texts.get(index))
-      index = index + 1 }
+    line.items = move candidate.items
+    line.texts = move candidate.texts
     line.advance = candidate.advance
     line.font = fonts.get(0)
     line.refused = false
@@ -1616,7 +1600,7 @@ effect fn tokensFor<'a>(nodes: &BoxTree<'a>, items: &[Item], scopes: &[Scope], r
   }
 }
 
-effect fn textFont<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, fonts: &mut List<TextFont>, scopes: &[Scope], item: Item, key: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
+effect fn textFont<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, fonts: &mut List<TextFont>, scopes: &[Scope], item: &Item, key: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
   let slot = nodes.node(item.id).anonymousStyle
   let mut index: usize = 0
   while index < fonts.length() {
@@ -1633,6 +1617,34 @@ effect fn textFont<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, fonts: &mu
   let font = fontBoxFromMetrics(metrics, style)
   run fonts.append(TextFont { style: slot, key: key, font: font })
   return index
+}
+
+struct RunMetrics { id: usize, scope: usize, key: usize, font: usize, box: usize, before: f32, after: f32, offset: f32 }
+
+effect fn runMetrics<M: Measure>(nodes: &BoxTree<'_>, measurer: &mut M, fonts: &mut List<TextFont>, scopes: &[Scope], item: &Item, key: usize) -> RunMetrics ! OutOfMemoryError ? &mut Allocator {
+  let fontId = run textFont(nodes, &mut measurer, &mut fonts, scopes, item, key)
+  let style = nodes.style(item.id)
+  let mut boxId = fontId
+  if style.fontKey != key { boxId = run textFont(nodes, &mut measurer, &mut fonts, scopes, item, style.fontKey) }
+  let boxFont = &fonts.asSlice()[boxId].font
+  let parent = &scopes[item.scope]
+  let parentStyle = nodes.style(parent.id)
+  let mut before = boxFont.before
+  let mut after = boxFont.after
+  // The primary font sets the box; with line-height: normal a fallback font used
+  // for the run can only grow it (CSS Inline 3 §4.1 and Blink's used-font metrics).
+  if boxId != fontId {
+    match style.lineHeight {
+      LineHeight.Normal => {
+        let font = &fonts.asSlice()[fontId].font
+        before = max(before, font.before)
+        after = max(after, font.after)
+      }
+      _ => {}
+    }
+  }
+  let offset = parent.offset + fontAlignmentOffset(&parent.font, style, parentStyle) - fontAlignmentOffset(boxFont, style, parentStyle)
+  return RunMetrics { id: item.id, scope: item.scope, key: key, font: fontId, box: boxId, before: before, after: after, offset: offset }
 }
 
 fn runUnit(value: TextRun) -> usize {
@@ -1783,18 +1795,28 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
     }
   }
   let mut next: usize = 0
+  let mut metrics = RunMetrics { id: NO_NODE, scope: NO_NODE, key: 0, font: 0, box: 0, before: 0.0, after: 0.0, offset: 0.0 }
+  let hasBoundaries = analysis.levels.length() != 0 || analysis.paragraphs.length() != 0
+  let singleTextSource = original.length == 1 && original[0].kind == ItemKind.Text
+  if singleTextSource {
+    run result.items.reserveExact(shaped.length())
+    run result.texts.reserveExact(shaped.length())
+  }
   unit = start.unit
   while unit < end.unit || (unit == end.unit && end.offset != 0) {
     let token = &context.tokens[unit]
-    let base = original[unit]
+    let mut sourceUnit = unit
+    if singleTextSource { sourceUnit = 0 }
+    let base = &original[sourceUnit]
+    let count = TextFlow.length(token)
     let mut coverage: usize = 0
     let mut limit: usize = 0
     if found && unit >= first.unit && (unit < last.unit || (unit == last.unit && last.offset != 0)) {
-      limit = TextFlow.length(token)
+      limit = count
       if unit == first.unit { coverage = first.offset }
       if unit == last.unit { limit = last.offset }
     }
-    let mut item = base
+    let mut item = base.*
     let mut object = false
     if !shapeText && base.kind == ItemKind.Atomic {
       object = true
@@ -1810,33 +1832,19 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
           if (token.kind == TextTokenKind.Tab || token.kind == TextTokenKind.SegmentBreak) && advance != 0.0 {
             fail TextError { source: token.source, message: "Text service assigned glyph advance to an engine-positioned whitespace token" }
           }
-          drop run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: low })
-          let runEnd = run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: high })
-          if analysis.boundaryAfter(TextCursor { unit: unit, offset: low }).before(runEnd) {
+          if low != 0 { drop run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: low }) }
+          let mut runEnd = TextCursor { unit: unit + 1, offset: 0 }
+          if high != count { runEnd = run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: high }) }
+          if hasBoundaries && analysis.boundaryAfter(TextCursor { unit: unit, offset: low }).before(runEnd) {
             fail TextError { source: token.source, message: "Text service merged across a paragraph analysis boundary" }
           }
-          let fontId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, fontKey)
-          let style = nodes.style(base.id)
-          let mut boxId = fontId
-          if style.fontKey != fontKey { boxId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, style.fontKey) }
-          let font = &fonts.asSlice()[fontId].font
-          let parent = &scopes[base.scope]
-          let parentStyle = nodes.style(parent.id)
-          let boxFont = &fonts.asSlice()[boxId].font
+          if metrics.id != base.id || metrics.scope != base.scope || metrics.key != fontKey {
+            metrics = run runMetrics(nodes, &mut measurer, &mut fonts, scopes, base, fontKey)
+          }
           item.advance = advance
-          // The primary font sets the box; with line-height: normal a fallback font used
-          // for the run can only grow it (CSS Inline 3 §4.1 and Blink's used-font metrics).
-          item.before = boxFont.before
-          item.after = boxFont.after
-          let normalHeight = match style.lineHeight {
-            LineHeight.Normal => true
-            _ => false
-          }
-          if boxId != fontId && normalHeight {
-            item.before = max(item.before, font.before)
-            item.after = max(item.after, font.after)
-          }
-          item.offset = parent.offset + fontAlignmentOffset(&parent.font, style, parentStyle) - fontAlignmentOffset(boxFont, style, parentStyle)
+          item.before = metrics.before
+          item.after = metrics.after
+          item.offset = metrics.offset
           item.level = bidiLevel
           item.start = TextCursor { unit: unit, offset: low }
           item.leaf = result.texts.length()
@@ -1847,7 +1855,7 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
           let mut kind = TextFragmentKind.Glyphs
           if token.kind == TextTokenKind.Tab { kind = TextFragmentKind.Tab }
           else if token.kind == TextTokenKind.SegmentBreak { kind = TextFragmentKind.SegmentBreak }
-          run result.texts.append(TextLeaf { font: fontId, box: boxId, start: sourceStart, end: sourceEnd, key: shapeKey, kind: kind })
+          run result.texts.append(TextLeaf { font: metrics.font, box: metrics.box, start: sourceStart, end: sourceEnd, key: shapeKey, kind: kind })
           run result.items.append(item)
           result.advance = result.advance + advance
           result.real = true
@@ -1883,7 +1891,8 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
   if next != shaped.length() {
     fail TextError { source: NO_NODE, message: "Text service returned out-of-order or out-of-range runs" }
   }
-  let origin = inlineOrigin + textEdge(nodes, original, scopes, start, true, context.direction == Direction.Rtl, visualPlan.active)
+  let mut origin = inlineOrigin
+  if tabs { origin = origin + textEdge(nodes, original, scopes, start, true, context.direction == Direction.Rtl, visualPlan.active) }
   run Visual.fit(&mut visualPlan, nodes, scopes, result.items.asMutSlice(), context, analysis, start, end, tabs, origin, &mut result.visual)
   if result.visual.active || tabs { result.advance = result.visual.advance }
   if result.visual.active { result.real = result.real || result.visual.real }
@@ -2798,9 +2807,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     if input.performLayout || recording {
       let lineStart = finalItems.length()
       let base = finalTexts.length()
-      index = 0
-      while index < accepted.texts.length() { run finalTexts.append(accepted.texts.get(index))
-        index = index + 1 }
+      run finalTexts.appendSlice(accepted.texts.asSlice())
       index = 0
       while index < accepted.items.length() {
         let mut item = accepted.items.get(index)

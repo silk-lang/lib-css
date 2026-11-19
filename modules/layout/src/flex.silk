@@ -253,8 +253,11 @@ fn probeInput(childInput: &Input, horizontal: bool, constraint: AvailableSpace, 
   if crossKnown { setKnown(&mut input, !horizontal, cross) }
   return input
 }
-// The final layout of an unfragmented item of a single-line container with a
-// known cross size, as placeFlexLines requests it, before the lines exist:
+fn stretchesCross(item: &Item) -> bool {
+  return item.crossAuto && item.align == Align.Stretch && !item.autoCrossStart && !item.autoCrossEnd
+}
+// The final layout of an unfragmented item as placeFlexLines requests it,
+// once its cross constraint is known or independent of the line size:
 // with the item's target main size when `mainKnown`, else with none, so the
 // layout finds the content size a probe would. Marks the item `early`.
 effect fn layoutAhead<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, horizontal: bool, mainKnown: bool) -> Probe ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
@@ -263,7 +266,7 @@ effect fn layoutAhead<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<
   if mainKnown { setKnown(&mut finalInput, horizontal, item.target) }
   setIndefinite(&mut finalInput, horizontal, !item.mainDefinite)
   let lineCross = optionalSize(childInput.parent, !horizontal)
-  if item.crossAuto && item.align == Align.Stretch && !item.autoCrossStart && !item.autoCrossEnd {
+  if stretchesCross(&item.*) {
     setKnown(&mut finalInput, !horizontal, clamp(lineCross - item.crossStart - item.crossEnd, item.crossMin, item.crossMax))
   } else if axisDimension(nodes.style(id), !horizontal).kind == DimensionKind.FitContent {
     setAvailable(&mut finalInput, !horizontal, AvailableSpace.definite(lineCross))
@@ -704,6 +707,7 @@ effect fn crossSizes<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       item.lastBaseline = 0.0
     } else if item.early {
       item.cross = item.earlyCross
+      if axis.row && fixedCross(nodes, &item.*, parentStyle) { item.cross = item.knownCross }
       item.baseline = 0.0
       item.lastBaseline = 0.0
       result.cross = max(result.cross, item.cross + item.crossStart + item.crossEnd)
@@ -1530,6 +1534,17 @@ effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
       let line = scratch.lines.get(lineIndex)
       run deferredMinimums(nodes, &mut output, &mut measurer, scratch.items.asMutSlice(), &line, &childInput, &axis, main, mainGap, collapsed, request)
       resolveFlexible(scratch.items.asMutSlice(), &line, main, mainGap, collapsed)
+      if axis.row && inlineHorizontal && mainKnown && !crossKnown && input.performLayout
+        && style.flexWrap == FlexWrap.NoWrap && !hasCollapsed && !input.fragmentation.active && output.frame == NO_NODE {
+        let mut aheadIndex = line.start
+        while aheadIndex < line.end {
+          let item = &mut scratch.items.asMutSlice()[aheadIndex]
+          if item.align == Align.Baseline || item.align == Align.LastBaseline || stretchesCross(&item.*)
+            || nodes.style(item.id).height.kind == DimensionKind.FitContent { break }
+          drop run layoutAhead(nodes, &mut output, &mut measurer, &mut item, &childInput, true, true)
+          aheadIndex = aheadIndex + 1
+        }
+      }
       let mut measuredLine = run crossSizes(nodes, &mut output, &mut measurer, scratch.items.asMutSlice(), &line, &childInput, &axis, style, collapsed, style.flexWrap == FlexWrap.NoWrap && crossKnown && !input.fragmentation.active)
       if style.flexWrap == FlexWrap.NoWrap {
         if crossKnown { measuredLine.cross = cross }
@@ -1694,7 +1709,7 @@ effect fn placeFlexLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
         finalInput.availableHeight = childInput.availableHeight
         setKnown(&mut finalInput, axis.horizontal, item.target)
         setIndefinite(&mut finalInput, axis.horizontal, !item.mainDefinite)
-        if item.crossAuto && item.align == Align.Stretch && !item.autoCrossStart && !item.autoCrossEnd {
+        if stretchesCross(item) {
           childCross = clamp(line.cross - item.crossStart - item.crossEnd, item.crossMin, item.crossMax)
           setKnown(&mut finalInput, !axis.horizontal, childCross)
         } else if axisDimension(nodes.style(item.id), !axis.horizontal).kind == DimensionKind.FitContent {
