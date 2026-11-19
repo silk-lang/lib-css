@@ -102,6 +102,19 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
       id = boxes[id].nextContinuation
     }
   }
+  // Takes source `source`'s style index again for the boxes that read it. A
+  // source may give a restyled node another index (one that interns its
+  // styles does), so a kept box can hold an index the node no longer has.
+  pub fn refreshStyleIndex(self: &mut Self, source: usize) {
+    if source >= self.firstBySource.length() || !self.source.exists(source) || self.source.isText(source) { return }
+    let index = self.source.styleIndex(source)
+    let boxes = self.boxes.asMutSlice()
+    let mut id = self.firstBySource.get(source)
+    while id != NO_NODE {
+      if boxes[id].anonymousStyle == NO_NODE { boxes[id].styleIndex = index }
+      id = boxes[id].nextContinuation
+    }
+  }
   // Recomputes an anonymous style after its origin's style changed.
   pub fn refreshAnonymous(self: &mut Self, slot: usize) {
     let origin = self.anonymousOrigins.get(slot)

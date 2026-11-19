@@ -61,6 +61,7 @@ import geometry {
   abs
 }
 import tree { Tree, LayoutTree, NodeId, InvalidNode, InvalidBox, BoxId, NO_NODE }
+import source as Source
 import engine { compute }
 import fragments { Fragment, FragmentKind }
 
@@ -2553,4 +2554,44 @@ effect fn longEllipsized(plain: bool) -> Shaped
   }
   run compute(&tree, &mut output, &mut provider, OptionalSize.definite(100.0, 100.0))
   return Shaped(run output.sourceBounds(text), provider.shapedUnits)
+}
+
+// A source that interns its styles gives a restyled node another style index;
+// the boxes the next compute keeps must read the new one.
+test effect fn keptBoxesTakeANewStyleIndex()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let mut first = Style.make()
+  first.width = SizeValue.px(40.0)
+  first.height = SizeValue.px(10.0)
+  let a = run tree.append(root, move first) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut second = Style.make()
+  second.width = SizeValue.px(40.0)
+  second.height = SizeValue.px(10.0)
+  let b = run tree.append(root, move second) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut output = LayoutTree.make()
+  let mut content = Content { minimum: 0.0, maximum: 0.0, height: 0.0 }
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(100.0, 100.0))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  // Node `a` moves to a new slot holding a wider style, as an interning source would.
+  let mut wider = Style.make()
+  wider.width = SizeValue.px(70.0)
+  wider.height = SizeValue.px(10.0)
+  let before = tree.nodes.asSlice()[a.index].styleIndex
+  let change = Source.classify(&tree.styles.asSlice()[before], &wider, false, false)
+  run tree.styles.append(move wider) |> Effect.provideMut<Allocator>(&mut allocator)
+  let nodes = tree.nodes.asMutSlice()
+  nodes[a.index].styleIndex = tree.styles.length() - 1
+  drop nodes
+  tree.changes.styleChanged(a.index, root.index, change)
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(100.0, 100.0))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let moved = run output.sourceBounds(a)
+  let kept = run output.sourceBounds(b)
+  run Testing.expect(
+    moved.width == 70.0 && kept.width == 40.0 && kept.y == 10.0,
+    "a kept box reads its node's new style index",
+  )
 }
