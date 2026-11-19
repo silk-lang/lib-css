@@ -598,6 +598,7 @@ effect fn negativeBaselineMargin(last: bool) ! OutOfMemoryError | TextError | Fr
   let mut passState = PassState.make()
   let mut pass = run LayoutPass.make(output.boxes.asMutSlice(), &mut output.fragments, constructed.sources, &mut passState)
   let result = run layoutNode(&constructed, &mut pass, &mut measure, rootBox, &Input.make(OptionalSize.none()))
+  run Testing.expect(pass.stats.sizeProbes == 0, "a baseline-aligned item at its final width supplies the line metrics without a size probe")
   drop pass
   output.fragments.resolveLocations()
   output.adopt(move constructed)
