@@ -300,6 +300,13 @@ pub struct FragmentArena {
   adopted: List<usize>, previousAdopted: List<usize>,
   // How many times this compute moved the previous output.
   shifts: usize,
+  // Moves of the previous output refused because they would write over
+  // fragments or texts of boxes not laid out yet (see shiftUnsafe),
+  // over the arena's life: each makes the ranges after it copied instead.
+  pub shiftsRefused: usize,
+  // Whether this compute refused a move: then the previous output past the
+  // flow cannot stand (see endFlow).
+  refusedNow: bool,
   // Whether every fragment, kept and copied ones included, is a box fragment
   // of a box under the first one (see treeOverflow).
   pub plain: bool,
@@ -354,7 +361,7 @@ impl FragmentArena {
       carried: List<Carry>.make(), carriedKnown: false, mapped: false, shiftLog: List<Shift>.make(), spliced: List<usize>.make(),
       copied: false, copiesStand: true,
       adopted: List<usize>.make(), previousAdopted: List<usize>.make(),
-      shifts: 0,
+      shifts: 0, shiftsRefused: 0, refusedNow: false,
     }
   }
 
@@ -487,6 +494,7 @@ impl FragmentArena {
     self.editedHigh = 0
     self.afterFlow = false
     self.shifts = 0
+    self.refusedNow = false
     let adopted = Intrinsic.replace(self.previousAdopted, List<usize>.make())
     self.previousAdopted = Intrinsic.replace(self.adopted, move adopted)
     self.adopted.clear()
@@ -553,8 +561,8 @@ impl FragmentArena {
     if self.inPlace && !self.damaged {
       let mut texts = self.previousTexts
       if previousEnd < self.previousCount { texts = self.textMarks.get(previousEnd) }
-      stands = self.count == previousEnd && self.textCount == texts
-      if !stands && previousEnd < self.previousCount {
+      stands = self.count == previousEnd && self.textCount == texts && !self.refusedNow
+      if !stands && !self.refusedNow && previousEnd < self.previousCount {
         shift = run self.shiftPrevious(previousEnd)
         stands = shift.by != 0
       }
@@ -1192,7 +1200,6 @@ impl FragmentArena {
   pub effect fn shiftPrevious(self: &mut Self, start: usize) -> Shift ! OutOfMemoryError ? &mut Allocator {
     let none = Shift { start: 0, up: false, by: 0 }
     if !self.inPlace || self.damaged || self.afterFlow || self.shifts == SHIFTS || start == self.count || start >= self.previousCount { return none }
-    self.shifts = self.shifts + 1
     let total = self.previousCount
     // The first text of the moved fragments.
     let mut textStart = self.previousTexts
@@ -1202,6 +1209,12 @@ impl FragmentArena {
       if data != NO_NODE { textStart = data }
       index = index + 1
     }
+    if self.shiftUnsafe(start, textStart) {
+      self.shiftsRefused = self.shiftsRefused + 1
+      self.refusedNow = true
+      return none
+    }
+    self.shifts = self.shifts + 1
     let shift = Shift.between(start, self.count)
     let textShift = Shift.between(textStart, self.textCount)
     let texts = self.previousTexts
@@ -1313,6 +1326,56 @@ impl FragmentArena {
     self.written = self.count
     self.textsWritten = self.textCount
     return shift
+  }
+
+  // Whether moving the previous output from fragment `start`, and its texts from
+  // `textStart`, to the write position would lose what this compute still
+  // needs (shiftPrevious then refuses, and the caller copies ranges instead):
+  //
+  // - Over previous fragments or texts of a box this compute has not laid
+  //   out yet: fragments when the move is down, texts either way. Nothing saves what the move writes over, and the previous
+  //   ranges in the span do not move with it, so such a box, kept or copied
+  //   later (a structure change can put it after the moved ones), would read
+  //   what the move left there. A box this compute laid out has claimed its
+  //   chains (claimBox); a range kept in place lies before the write position.
+  //   Fragments of boxes that are gone (NO_NODE after remapBoxes) count as not
+  //   laid out: letting a move write over them fails the structure fuzz (5
+  //   failures in 400 seeds), though which reader still needs them is not known.
+  // - Up, past a range this compute kept in place: the move takes every
+  //   fragment from `start` as previous output, and renumbers the box chains
+  //   and links that name them, but the kept fragments are this compute's too
+  //   and stay where they are, so their boxes would lose their chains.
+  fn shiftUnsafe(self: &Self, start: usize, textStart: usize) -> bool {
+    let settled = self.settled.asSlice()
+    let mut at = settled.length
+    while start < self.count && at > 0 {
+      at = at - 1
+      if settled[at].end <= start { at = 0 }
+      else if settled[at].kept && settled[at].start < self.count { return true }
+    }
+    let generation = self.generation
+    let stamps = self.boxStamps.asSlice()
+    let mut index = self.count
+    while index < start {
+      let box = self.previous(index).box
+      if box >= stamps.length || stamps[box] != generation { return true }
+      index = index + 1
+    }
+    if textStart <= self.textCount { return false }
+    // Texts in [textCount, textStart) belong to previous fragments before
+    // `start` and before the write position (those between were checked
+    // above): texts are in fragment order, so walk back until a fragment's
+    // texts end before them.
+    index = start
+    if self.count < index { index = self.count }
+    while index > 0 {
+      index = index - 1
+      let value = self.previous(index)
+      if value.textData == NO_NODE { continue }
+      if value.textData + 1 <= self.textCount { return false }
+      if value.box >= stamps.length || stamps[value.box] != generation { return true }
+    }
+    return false
   }
 
   // Whether the previous range [start, end) can stay where it is as the
