@@ -4,7 +4,7 @@ import silk.core.ownership { Copy }
 import silk.core.option { Option }
 import silk.mem.box { Box }
 import silk.text.string { String }
-import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min }
+import geometry { Layout, Measure, FontRequest, FontMetrics, BaselineSet, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, max, min, TRACE_TEXT_PROBE, TRACE_TEXT_LAYOUT, TRACE_EMIT }
 import style { Style, WhiteSpaceCollapse, LineHeight, VerticalAlignKind, BaselineSource, WritingMode, TextOrientation, Direction, UnicodeBidi, TextAlign, TextWrap, TextWrapStyle, BoxDecorationBreak, MarginBreak, Float, DisplayInside, DisplayOutside, DimensionKind, TextBoxTrim, TextEdge, EmphasisSide }
 import tree { Node, NO_NODE }
 import box_tree { BoxTree, BoxKind }
@@ -22,7 +22,7 @@ import inline_bidi as Bidi
 import inline_items { FontBox, Scope, ItemKind, Item }
 import inline_visual as Visual
 import inline_visual { Line, Plan }
-import inline_prepared { PreparedInline, PreparedCore, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText, LineBox, PlainLine }
+import inline_prepared { sameItem, PreparedInline, PreparedCore, TextLeaf, TextFont, TextCandidate, TextMemo, KeptText, LineBox, PlainLine }
 import fragmentation { FlowCursor, FragmentationError, BoundaryProbe }
 import breaks { BreakBoundary, BreakRelaxation, ForcedBreaks, allowsLineBreak }
 import fragment_box as FragmentBox
@@ -981,7 +981,9 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let mut rawTokens = Intrinsic.replace(output.rawTokens, List<TextToken<'source>>.make())
   run tokensFor(nodes, raw, scopes, &mut rawTokens)
   let origins = Intrinsic.replace(text.origins, List<usize>.make())
-  let mut normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins)
+  let mut gathered = Intrinsic.replace(output.normalTokens, List<TextToken<'source>>.make())
+  let mut normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins, &mut gathered)
+  output.normalTokens = move gathered
   output.rawTokens = move rawTokens
   let tokens = normalized.tokens.asSlice()
   let mut plain = tokens.length != 0
@@ -1112,7 +1114,11 @@ pub effect fn layoutInline<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   lists.atomics.clear()
   lists.text.clear()
   let trimmed = trimmedBox(nodes, &mut measurer, id, physicalBox.*)
+  let mut span = TRACE_TEXT_PROBE
+  if input.performLayout { span = TRACE_TEXT_LAYOUT }
+  Measure.traceEnter(&mut measurer, span)
   let result = run layoutInlineWith(nodes, &mut output, &mut measurer, id, &input, &trimmed, &mut bfc, &mut lists.scopes, &mut lists.extents, &mut lists.items, &mut lists.atomics, &mut lists.text)
+  Measure.traceLeave(&mut measurer)
   run output.inlineScratch.append(move scratch)
   return result
 }
@@ -1593,29 +1599,38 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'so
       let size = axes.size(Size { width: max(0.0, item.advance), height: font.height })
       let baseline = extents.get(item.group).baseline + item.offset
       let point = axes.physicalPoint(Point { x: offset + x, y: baseline - font.baseline }, size, physicalSize)
-      let mut value = output.fragment(item.id, nodes.node(item.id).source, FragmentKind.Text)
-      value.parent = parent.fragment
-      value.location = Point { x: point.x - parent.origin.x, y: point.y - parent.origin.y }
-      value.size = size
-      value.contentRect = Rect { x: 0.0, y: 0.0, width: size.width, height: size.height }
-      value.paddingRect = value.contentRect
+      let location = Point { x: point.x - parent.origin.x, y: point.y - parent.origin.y }
+      let contentRect = Rect { x: 0.0, y: 0.0, width: size.width, height: size.height }
       let layoutSize = axes.size(Size { width: max(0.0, item.advance), height: font.lineHeight })
       let layoutPoint = axes.physicalPoint(Point { x: 0.0, y: font.baseline - font.before }, layoutSize, size)
-      value.layoutBounds = Rect { x: layoutPoint.x, y: layoutPoint.y, width: layoutSize.width, height: layoutSize.height }
-      value.scrollableOverflow = value.contentRect
+      let layoutBounds = Rect { x: layoutPoint.x, y: layoutPoint.y, width: layoutSize.width, height: layoutSize.height }
+      let mut fragmentainer: usize = 0
+      if output.frame != NO_NODE { fragmentainer = output.frame }
+      let slot = run output.fragments.appendTextMade(item.id, nodes.node(item.id).source, parent.fragment, fragmentainer, TextFragment { sourceStart: text.start, sourceEnd: text.end, fontKey: fonts[text.font].key, shapeKey: text.key, bidiLevel: item.level, kind: text.kind })
+      let value = &mut output.fragments.values.asMutSlice()[slot]
+      value.location = location
+      value.size = size
+      value.contentRect = contentRect
+      value.paddingRect = contentRect
+      value.layoutBounds = layoutBounds
+      value.scrollableOverflow = contentRect
       value.firstBaselines = fontBaselines(font, style.writingMode)
       value.lastBaselines = value.firstBaselines
       value.hasFirstBaseline = true
       value.hasLastBaseline = true
       value.decorationEdges = 0
-      drop run output.fragments.appendText(value, TextFragment { sourceStart: text.start, sourceEnd: text.end, fontKey: fonts[text.font].key, shapeKey: text.key, bidiLevel: item.level, kind: text.kind })
-      let mut scalar = Layout.zero()
-      scalar.location = value.location
-      scalar.size = size
-      scalar.contentSize = size
-      scalar.setOverflowGeometry(value.contentRect, value.paddingRect, value.layoutBounds)
-      scalar.scrollableOverflow = value.scrollableOverflow
-      run output.store(item.id, &scalar, false)
+      // The box keeps its last fragment's geometry: when the next item is
+      // the same box's next run, that one's store replaces this one's.
+      let replaced = !line.visual.active && output.frame == NO_NODE && index + 1 < limit && items[index + 1].kind == ItemKind.Text && items[index + 1].id == item.id
+      if !replaced {
+        let mut scalar = Layout.zero()
+        scalar.location = location
+        scalar.size = size
+        scalar.contentSize = size
+        scalar.setOverflowGeometry(contentRect, contentRect, layoutBounds)
+        scalar.scrollableOverflow = contentRect
+        run output.store(item.id, &scalar, false)
+      }
     } else if item.kind == ItemKind.Anchor {
       let inlineLevel = nodes.style(item.id).display.outsideIs(DisplayOutside.Inline)
       let mut point = Point { x: offset + x, y: 0.0 }
@@ -1854,6 +1869,20 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
     }
   }
   let mut next: usize = 0
+  // What the last text run's box and font gave, which the next run of the
+  // same box in the same font has too.
+  let mut sameId = NO_NODE
+  let mut sameScope = NO_NODE
+  let mut sameKey: usize = 0
+  let mut fontId: usize = 0
+  let mut boxId: usize = 0
+  let mut runBefore: f32 = 0.0
+  let mut runAfter: f32 = 0.0
+  let mut runOffset: f32 = 0.0
+  // The analysis boundary after `boundaryFrom`, which every cursor from
+  // there to short of it shares.
+  let mut boundaryFrom = TextCursor { unit: 0, offset: 0 }
+  let mut boundary = boundaryFrom
   unit = start.unit
   while unit < end.unit || (unit == end.unit && end.offset != 0) {
     let token = &context.tokens[unit]
@@ -1881,33 +1910,49 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
           if (token.kind == TextTokenKind.Tab || token.kind == TextTokenKind.SegmentBreak) && advance != 0.0 {
             fail TextError { source: token.source, message: "Text service assigned glyph advance to an engine-positioned whitespace token" }
           }
-          drop run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: low })
-          let runEnd = run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: high })
-          if analysis.boundaryAfter(TextCursor { unit: unit, offset: low }).before(runEnd) {
+          // A token's start and end are cursors as they are; `checked` tells
+          // the others.
+          let runStart = TextCursor { unit: unit, offset: low }
+          if low != 0 { drop run TextFlow.checked(context.tokens, runStart) }
+          let mut runEnd = TextCursor { unit: unit + 1, offset: 0 }
+          if high != TextFlow.length(token) { runEnd = run TextFlow.checked(context.tokens, TextCursor { unit: unit, offset: high }) }
+          if runStart.before(boundaryFrom) || !runStart.before(boundary) {
+            boundaryFrom = runStart
+            boundary = analysis.boundaryAfter(runStart)
+          }
+          if boundary.before(runEnd) {
             fail TextError { source: token.source, message: "Text service merged across a paragraph analysis boundary" }
           }
-          let fontId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, fontKey)
-          let style = nodes.style(base.id)
-          let mut boxId = fontId
-          if style.fontKey != fontKey { boxId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, style.fontKey) }
-          let font = &fonts.asSlice()[fontId].font
-          let parent = &scopes[base.scope]
-          let parentStyle = nodes.style(parent.id)
-          let boxFont = &fonts.asSlice()[boxId].font
+          if base.id != sameId || base.scope != sameScope || fontKey != sameKey {
+            fontId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, fontKey)
+            let style = nodes.style(base.id)
+            boxId = fontId
+            if style.fontKey != fontKey { boxId = run textFont(nodes, &mut measurer, &mut fonts, scopes, base, style.fontKey) }
+            let font = &fonts.asSlice()[fontId].font
+            let parent = &scopes[base.scope]
+            let parentStyle = nodes.style(parent.id)
+            let boxFont = &fonts.asSlice()[boxId].font
+            // The primary font sets the box; with line-height: normal a fallback font used
+            // for the run can only grow it (CSS Inline 3 §4.1 and Blink's used-font metrics).
+            runBefore = boxFont.before
+            runAfter = boxFont.after
+            let normalHeight = match style.lineHeight {
+              LineHeight.Normal => true
+              _ => false
+            }
+            if boxId != fontId && normalHeight {
+              runBefore = max(runBefore, font.before)
+              runAfter = max(runAfter, font.after)
+            }
+            runOffset = parent.offset + fontAlignmentOffset(&parent.font, style, parentStyle) - fontAlignmentOffset(boxFont, style, parentStyle)
+            sameId = base.id
+            sameScope = base.scope
+            sameKey = fontKey
+          }
           item.advance = advance
-          // The primary font sets the box; with line-height: normal a fallback font used
-          // for the run can only grow it (CSS Inline 3 §4.1 and Blink's used-font metrics).
-          item.before = boxFont.before
-          item.after = boxFont.after
-          let normalHeight = match style.lineHeight {
-            LineHeight.Normal => true
-            _ => false
-          }
-          if boxId != fontId && normalHeight {
-            item.before = max(item.before, font.before)
-            item.after = max(item.after, font.after)
-          }
-          item.offset = parent.offset + fontAlignmentOffset(&parent.font, style, parentStyle) - fontAlignmentOffset(boxFont, style, parentStyle)
+          item.before = runBefore
+          item.after = runAfter
+          item.offset = runOffset
           item.level = bidiLevel
           item.start = TextCursor { unit: unit, offset: low }
           item.leaf = result.texts.length()
@@ -2100,6 +2145,7 @@ effect fn analyzeAnchors<M: TextMeasure>(nodes: &BoxTree<'_>, measurer: &mut M, 
 // Emits the fragments of a paragraph's fitted lines. `held` lends the span
 // list's storage.
 effect fn emitLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, lines: &[LineBox], items: &[Item], atomics: &[AtomicData], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, held: &mut List<Span>, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, baselineOffsets: &BaselineSet, input: &Input) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  Measure.traceEnter(&mut measurer, TRACE_EMIT)
   let mut spans = Spans { values: Intrinsic.replace(held.*, List<Span>.make()), first: NO_NODE, last: NO_NODE }
   spans.values.clear()
   run spans.values.reserveExact(scopes.length)
@@ -2113,6 +2159,7 @@ effect fn emitLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
     index = index + 1
   }
   held.* = move spans.values
+  Measure.traceLeave(&mut measurer)
 }
 // The box's paragraph as this pass last prepared it, else the core an earlier
 // compute kept, else an empty one.
@@ -2167,7 +2214,9 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     let mut rawTokens = Intrinsic.replace(output.rawTokens, List<TextToken<'source>>.make())
     run tokensFor(nodes, raw, scopes, &mut rawTokens)
     let origins = Intrinsic.replace(normalized.origins, List<usize>.make())
-    normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins)
+    let mut gathered = Intrinsic.replace(output.normalTokens, List<TextToken<'source>>.make())
+    normalized = run TextFlow.normalize(rawTokens.asSlice(), nodes.sources, move origins, &mut gathered)
+    output.normalTokens = move gathered
     output.rawTokens = move rawTokens
   }
   // Kept analysis covers exactly the tokens it was made for.
@@ -2195,21 +2244,44 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let mut hasAtomicMargins = false
   let mut floatMaximum: f32 = 0.0
   let mut floatMinimum: f32 = 0.0
-  while index < normalized.origins.length() {
-    let mut item = raw[normalized.origins.get(index)]
-    item.start = TextCursor { unit: index, offset: 0 }
-    if item.kind == ItemKind.Text { hasText = true }
-    if fragmented && item.kind == ItemKind.Atomic && FragmentBox.applies(nodes.style(item.id), style.writingMode) {
-      let margin = atomics.asSlice()[item.leaf].margin
-      hasAtomicMargins = hasAtomicMargins || margin.top != 0.0 || margin.bottom != 0.0
-    }
-    run original.append(item)
-    if item.kind == ItemKind.Float { hasFloats = true
-      floatMaximum = floatMaximum + item.advance
-      floatMinimum = max(floatMinimum, item.advance) }
+  // The same tokens of the same inline items give the items the memo holds
+  // from the box's last layout in this pass: most layouts of a paragraph are
+  // such, and copy them instead of building and comparing them.
+  let mut known = reuse && haveTokens && !fragmented && memo.holds() && memo.items.length() == normalized.origins.length() && core.raw.length() == raw.length
+  while known && index < raw.length {
+    known = sameItem(&core.raw.asSlice()[index], &raw[index])
     index = index + 1
   }
-  run memo.prepare(original.asSlice(), scopes)
+  if known {
+    run original.appendSlice(memo.items.asSlice())
+    hasText = core.hasText
+    hasFloats = core.hasFloats
+    floatMaximum = core.floatMaximum
+    floatMinimum = core.floatMinimum
+  } else {
+    index = 0
+    while index < normalized.origins.length() {
+      let mut item = raw[normalized.origins.get(index)]
+      item.start = TextCursor { unit: index, offset: 0 }
+      if item.kind == ItemKind.Text { hasText = true }
+      if fragmented && item.kind == ItemKind.Atomic && FragmentBox.applies(nodes.style(item.id), style.writingMode) {
+        let margin = atomics.asSlice()[item.leaf].margin
+        hasAtomicMargins = hasAtomicMargins || margin.top != 0.0 || margin.bottom != 0.0
+      }
+      run original.append(item)
+      if item.kind == ItemKind.Float { hasFloats = true
+        floatMaximum = floatMaximum + item.advance
+        floatMinimum = max(floatMinimum, item.advance) }
+      index = index + 1
+    }
+    core.raw.clear()
+    run core.raw.appendSlice(raw)
+    core.hasText = hasText
+    core.hasFloats = hasFloats
+    core.floatMaximum = floatMaximum
+    core.floatMinimum = floatMinimum
+  }
+  run memo.prepare(original.asSlice(), scopes, known)
   // Plain text fitted before for this request (see FittedLines) keeps its
   // lines: only their fragments are still to emit.
   if reuse && memo.fitted.valid && !input.fragmentation.active && bfc.clearBelow(input.bfcContentOrigin.y) {
@@ -2872,9 +2944,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     if input.performLayout || recording {
       let lineStart = finalItems.length()
       let base = finalTexts.length()
-      index = 0
-      while index < accepted.texts.length() { run finalTexts.append(accepted.texts.get(index))
-        index = index + 1 }
+      run finalTexts.appendSlice(accepted.texts.asSlice())
+      run finalItems.reserve(accepted.items.length())
       index = 0
       while index < accepted.items.length() {
         let mut item = accepted.items.get(index)

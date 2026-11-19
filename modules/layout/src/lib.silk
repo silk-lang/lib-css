@@ -76,8 +76,19 @@ pub import geometry {
   BaselineSet,
   FontMetrics,
   Measure,
-  Layout
+  Layout,
+  TRACE_BOXES,
+  TRACE_LAYOUT,
+  TRACE_POSITION,
+  TRACE_KEEP,
+  TRACE_END,
+  TRACE_TEXT_PROBE,
+  TRACE_TEXT_LAYOUT,
+  TRACE_EMIT,
+  TRACE_FLEX,
+  TRACE_GRID
 }
+pub import layout_cache { ProbeCensus }
 pub import text {
   TextError,
   TextTokenKind,
@@ -118,6 +129,7 @@ pub import fragments {
   TextFragmentKind
 }
 pub import engine { repositionScroll, compute }
+pub import digest { fragmentDigest }
 pub import fragment_flow { computeFragmented }
 pub import fragmentation { Fragmentainers, Fragmentainer, FragmentAncestor, FragmentationError }
 pub import breaks { FragmentainerKind, PageSide }

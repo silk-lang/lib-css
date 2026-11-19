@@ -179,7 +179,30 @@ pub interface Measure {
   fn natural(provider: &mut Self, key: usize) -> NaturalDimensions
   fn scrollbars(provider: &mut Self, request: ScrollbarRequest) -> ScrollbarMetrics
   fn font(provider: &mut Self, request: FontRequest) -> FontMetrics
+  // Where a compute is, for a provider that times it (see bench/first-layout):
+  // tracePhase as each TRACE_ phase of compute begins and at its end,
+  // traceEnter and traceLeave around each TRACE_ span, which nest. They do
+  // nothing by default and cost nothing then.
+  fn tracePhase(provider: &mut Self, phase: usize) {}
+  fn traceEnter(provider: &mut Self, span: usize) {}
+  fn traceLeave(provider: &mut Self) {}
 }
+// compute's phases in order: generating boxes and their facts, layout,
+// positioning, and keeping the result; TRACE_END once it is done.
+pub const TRACE_BOXES: usize = 0
+pub const TRACE_LAYOUT: usize = 1
+pub const TRACE_POSITION: usize = 2
+pub const TRACE_KEEP: usize = 3
+pub const TRACE_END: usize = 4
+// Spans within layout: an inline formatting context sized by a probe or laid
+// out, the emission of its lines' fragments, and a flex or grid container's
+// own algorithm (its items' layouts are spans or untraced time of their own).
+pub const TRACE_TEXT_PROBE: usize = 0
+pub const TRACE_TEXT_LAYOUT: usize = 1
+pub const TRACE_EMIT: usize = 2
+pub const TRACE_FLEX: usize = 3
+pub const TRACE_GRID: usize = 4
+pub const TRACE_SPANS: usize = 5
 // Policy buckets keep collapse associative even when a boundary discards only
 // some contributors. Filtering a scalar max/min cannot recover those margins.
 pub struct MarginStrut {

@@ -39,10 +39,13 @@ fn controlLength(bytes: &[u8], at: usize) -> usize {
   return 0
 }
 
-// `origins` is a spare list whose storage the result's origins take.
-pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: List<usize>) -> NormalizedText<'a> ! OutOfMemoryError ? &mut Allocator {
+// `origins` is a spare list whose storage the result's origins take, and
+// `tokens` one the tokens are gathered in, so the result's list is made at
+// its final size.
+pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: List<usize>, tokens: &mut List<TextToken<'a>>) -> NormalizedText<'a> ! OutOfMemoryError ? &mut Allocator {
   let mut result = NormalizedText { tokens: List<TextToken<'a>>.make(), origins: move origins }
   result.origins.clear()
+  tokens.clear()
   let mut pending = NO_NODE
   let mut segment = false
   let mut localPending = false
@@ -56,7 +59,7 @@ pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: 
       // sequence. Only the later space-collapse step crosses its boundaries.
       localPending = false
       localBreak = false
-      run result.tokens.append(original)
+      run tokens.append(original)
       run result.origins.append(index)
       if original.kind == TextTokenKind.Atomic { pending = NO_NODE
         segment = false }
@@ -88,7 +91,7 @@ pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: 
             // source/offset, not the removed preceding space's. Chrome Range
             // attribution also favors the preceding space in a single DOM
             // Text node; that is not a reason to change normalized ownership.
-            let values = result.tokens.asMutSlice()
+            let values = tokens.asMutSlice()
             values[pending].kind = TextTokenKind.Text
             values[pending].text = ""
             values[pending].sourceEnd = values[pending].sourceStart
@@ -112,7 +115,7 @@ pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: 
             }
             token.sourceStart = original.sourceStart + at
             token.sourceEnd = original.sourceStart + end
-            run result.tokens.append(token)
+            run tokens.append(token)
             run result.origins.append(index)
             // Preserved characters are never collapse partners. In particular,
             // a collapsed space on either side of a preserved space survives.
@@ -128,9 +131,9 @@ pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: 
               token.text = " "
               token.sourceStart = original.sourceStart + at
               token.sourceEnd = token.sourceStart + 1
-              pending = result.tokens.length()
+              pending = tokens.length()
               localPending = true
-              run result.tokens.append(token)
+              run tokens.append(token)
               run result.origins.append(index)
             }
             if newline { segment = true }
@@ -153,7 +156,7 @@ pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: 
           token.text = String.slice(original.text, start, at - start)
           token.sourceStart = original.sourceStart + start
           token.sourceEnd = original.sourceStart + at
-          run result.tokens.append(token)
+          run tokens.append(token)
           run result.origins.append(index)
           if !controls {
             pending = NO_NODE
@@ -165,6 +168,8 @@ pub effect fn normalize<'a>(input: &[TextToken<'a>], sources: &[Node], origins: 
     }
     index = index + 1
   }
+  run result.tokens.reserveExact(tokens.length())
+  run result.tokens.appendSlice(tokens.asSlice())
   return move result
 }
 

@@ -1,0 +1,119 @@
+import fragments { FragmentKind, TextFragmentKind }
+import geometry { BaselineSet, Rect }
+import tree { LayoutTree }
+import silk.num.f32
+import silk.num.u8
+import silk.num.u32
+import silk.num.u64
+import silk.num.usize
+
+// FNV-1a, 64 bits, one whole word at a step.
+struct Digest { state: u64 }
+impl Digest {
+  @inlineAlways
+  fn word(self: &mut Self, value: u64) {
+    self.state = u64.wrappingMultiply(u64.bitXor(self.state, value), 1099511628211)
+  }
+  @inlineAlways
+  fn index(self: &mut Self, value: usize) { self.word(usize.toU64(value)) }
+  // Negative zero and zero are one position.
+  @inlineAlways
+  fn number(self: &mut Self, value: f32) {
+    if value == 0.0 { self.word(0) } else { self.word(u32.toU64(f32.toBits(value))) }
+  }
+  @inlineAlways
+  fn flag(self: &mut Self, value: bool) { self.word(if value { 1 } else { 0 }) }
+  fn rect(self: &mut Self, value: Rect) {
+    self.number(value.x)
+    self.number(value.y)
+    self.number(value.width)
+    self.number(value.height)
+  }
+  fn baselines(self: &mut Self, value: &BaselineSet) {
+    self.number(value.alphabetic)
+    self.number(value.ideographic)
+    self.number(value.central)
+    self.number(value.mathematical)
+    self.number(value.xMiddle)
+    self.number(value.textOver)
+    self.number(value.textUnder)
+  }
+}
+
+fn kindOf(kind: FragmentKind) -> u64 {
+  if kind == FragmentKind.Box { return 1 }
+  if kind == FragmentKind.Inline { return 2 }
+  if kind == FragmentKind.Text { return 3 }
+  return 4
+}
+fn textKindOf(kind: TextFragmentKind) -> u64 {
+  if kind == TextFragmentKind.Glyphs { return 1 }
+  if kind == TextFragmentKind.Tab { return 2 }
+  return 3
+}
+
+// A digest of a compute's whole output: every fragment in arena order with
+// its links, geometry, baselines, margins and flags, the text data of text
+// fragments, and the viewport's overflow. Two outputs with one digest hold
+// the same fragments; an optimisation must leave it as it was. It leaves out
+// world locations, which resolveLocations derives from what is hashed.
+pub fn fragmentDigest(output: &LayoutTree) -> u64 {
+  let mut digest = Digest { state: 14695981039346656037 }
+  let values = output.fragments.values.asSlice()
+  let texts = output.fragments.texts.asSlice()
+  digest.index(values.length)
+  digest.index(texts.length)
+  let mut index: usize = 0
+  while index < values.length {
+    let fragment = &values[index]
+    digest.word(kindOf(fragment.kind))
+    digest.index(fragment.parent)
+    digest.index(fragment.box)
+    digest.index(fragment.source)
+    digest.index(fragment.fragmentainer)
+    digest.index(fragment.firstChild)
+    digest.index(fragment.lastChild)
+    digest.index(fragment.previousSibling)
+    digest.index(fragment.nextSibling)
+    digest.index(fragment.previousForBox)
+    digest.index(fragment.nextForBox)
+    digest.number(fragment.location.x)
+    digest.number(fragment.location.y)
+    digest.number(fragment.visualOffset.x)
+    digest.number(fragment.visualOffset.y)
+    digest.number(fragment.size.width)
+    digest.number(fragment.size.height)
+    digest.rect(fragment.contentRect)
+    digest.rect(fragment.paddingRect)
+    digest.rect(fragment.layoutBounds)
+    digest.rect(fragment.scrollableOverflow)
+    digest.flag(fragment.hasFirstBaseline)
+    digest.flag(fragment.hasLastBaseline)
+    if fragment.hasFirstBaseline { digest.baselines(&fragment.firstBaselines) }
+    if fragment.hasLastBaseline { digest.baselines(&fragment.lastBaselines) }
+    digest.number(fragment.usedMargin.top)
+    digest.number(fragment.usedMargin.right)
+    digest.number(fragment.usedMargin.bottom)
+    digest.number(fragment.usedMargin.left)
+    digest.word(u8.toU64(fragment.decorationEdges))
+    digest.flag(fragment.first)
+    digest.flag(fragment.last)
+    digest.flag(fragment.phantom)
+    digest.flag(fragment.repeated)
+    digest.flag(fragment.overflowOnly)
+    digest.flag(fragment.nonpainting)
+    digest.flag(fragment.positioningShell)
+    if fragment.kind == FragmentKind.Text {
+      let text = &texts[fragment.textData]
+      digest.index(text.sourceStart)
+      digest.index(text.sourceEnd)
+      digest.index(text.fontKey)
+      digest.index(text.shapeKey)
+      digest.word(u8.toU64(text.bidiLevel))
+      digest.word(textKindOf(text.kind))
+    }
+    index = index + 1
+  }
+  digest.rect(output.viewportOverflow)
+  return digest.state
+}

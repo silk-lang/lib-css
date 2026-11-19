@@ -3,10 +3,11 @@ import silk.collections.list { List }
 import silk.core.option { Option }
 import silk.core.ownership { Copy }
 import silk.num.usize
+import silk.num.u32
 import context { Input }
 import style { WritingMode }
 import geometry { Layout, OptionalSize, AvailableSpace, AvailableKind, Rect, Point, ResolvedEdges }
-import fragments { FragmentArena, Shift, one }
+import fragments { FragmentArena, Shift, one, headedFor }
 import bfc { FloatBox }
 import silk.collections.slice { Slice }
 import inline_prepared { KeptText, PlainLine }
@@ -290,7 +291,32 @@ fn withoutBlockSize(input: &Input) -> Input {
   }
   return result
 }
+// What a compute asked of the size-probe cache, for a benchmark (see
+// LayoutCache.census). `byWidth` counts the probes computed by how the
+// request constrained the box's width: known, max-content, min-content, or
+// definite available space; `byHeight` likewise. `perBox` counts the boxes
+// with 0, 1, 2, 3 and 4 or more computed probes, `askedPerBox` those the
+// cache was asked about that often (0, 1, 2, 3 to 4, 5 to 8, more).
+// `repeated` counts computed probes whose request another computed probe of
+// the same box already had.
+pub struct ProbeCensus {
+  pub asked: usize, pub computed: usize, pub repeated: usize,
+  // Probes whose size an earlier probe of the box already gave, and those by
+  // the width class of the earlier probe (rows) and of the later one.
+  pub sameAnswer: usize, pub sameAnswerBy: [usize; 16],
+  pub mostAsked: usize, pub mostComputed: usize,
+  pub byWidth: [usize; 4], pub byHeight: [usize; 4], pub perBox: [usize; 5], pub askedPerBox: [usize; 6],
+}
+impl Copy for ProbeCensus {}
+fn constraintClass(known: bool, available: &AvailableSpace) -> usize {
+  if known { return 0 }
+  if available.kind == AvailableKind.MaxContent { return 1 }
+  if available.kind == AvailableKind.MinContent { return 2 }
+  return 3
+}
 pub struct LayoutCache {
+  // Lookups per box, counted when `counting` (see census).
+  pub counting: bool, asked: List<u32>,
   heads: List<usize>,
   entries: List<Entry>, inputs: List<Input>, layouts: List<Layout>,
   // The storage compact last moved entries out of, kept so that neither list
@@ -354,7 +380,7 @@ const CLEAR_LOG: usize = 16
 
 impl LayoutCache {
   pub fn make() -> LayoutCache {
-    return LayoutCache { heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<Input>.make(), layouts: List<Layout>.make(), spare: List<Entry>.make(), spareInputs: List<Input>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make(), plainSlots: List<usize>.make(), plainLines: List<PlainLine>.make() }
+    return LayoutCache { counting: false, asked: List<u32>.make(), heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<Input>.make(), layouts: List<Layout>.make(), spare: List<Entry>.make(), spareInputs: List<Input>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make(), plainSlots: List<usize>.make(), plainLines: List<PlainLine>.make() }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() - self.dead }
   pub fn clear(self: &mut Self) {
@@ -478,6 +504,10 @@ impl LayoutCache {
   // fresh compute does not grow them a box at a time. A box added here has
   // no range, of this compute or a previous one.
   pub effect fn reserveBoxes(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {
+    if self.counting {
+      self.asked.clear()
+      run self.asked.appendRepeated(0, count)
+    }
     let results = self.results.length()
     if results < count { run self.results.appendRepeated(FinalResult.none(), count - results) }
     // A box the list did not reach may have been cleared unrecorded.
@@ -771,7 +801,72 @@ impl LayoutCache {
     return Option<Layout>.Some { value: self.layouts.asSlice()[index] }
   }
   // The entry index of a cached result, or usize.MAX; read it with layoutAt.
+  // The census of the last compute's probes over `count` boxes; lookups are
+  // counted only for a compute that ran with `counting` set.
+  pub fn census(self: &Self, count: usize) -> ProbeCensus {
+    let mut result = ProbeCensus { asked: 0, computed: 0, repeated: 0, sameAnswer: 0, sameAnswerBy: [0; 16], mostAsked: 0, mostComputed: 0, byWidth: [0; 4], byHeight: [0; 4], perBox: [0; 5], askedPerBox: [0; 6] }
+    let inputs = self.inputs.asSlice()
+    let entries = self.entries.asSlice()
+    let layouts = self.layouts.asSlice()
+    let mut id: usize = 0
+    while id < count {
+      let mut asked: usize = 0
+      if id < self.asked.length() { asked = u32.toUsize(self.asked.get(id)) }
+      result.asked = result.asked + asked
+      if asked > result.mostAsked { result.mostAsked = asked }
+      let mut bucket = asked
+      if asked > 8 { bucket = 5 } else if asked > 4 { bucket = 4 } else if asked > 2 { bucket = 3 }
+      result.askedPerBox[bucket] = result.askedPerBox[bucket] + 1
+      let mut computed: usize = 0
+      let mut index = ABSENT
+      if id < self.heads.length() { index = self.heads.get(id) }
+      while index != ABSENT {
+        let input = &inputs[index]
+        computed = computed + 1
+        let width = constraintClass(input.known.widthDefinite, &input.availableWidth)
+        let height = constraintClass(input.known.heightDefinite, &input.availableHeight)
+        result.byWidth[width] = result.byWidth[width] + 1
+        result.byHeight[height] = result.byHeight[height] + 1
+        let mut other = entries[index].next
+        while other != ABSENT {
+          if entries[other].kind == entries[index].kind && (sameInput(&inputs[other], input) || sameInput(input, &inputs[other])) {
+            result.repeated = result.repeated + 1
+            break
+          }
+          other = entries[other].next
+        }
+        // The chain's head is its newest entry, so `other` was computed first.
+        other = entries[index].next
+        while other != ABSENT {
+          let earlier = &layouts[other].size
+          let later = &layouts[index].size
+          if entries[other].kind == entries[index].kind && earlier.width == later.width && earlier.height == later.height {
+            result.sameAnswer = result.sameAnswer + 1
+            let before = constraintClass(inputs[other].known.widthDefinite, &inputs[other].availableWidth)
+            result.sameAnswerBy[before * 4 + width] = result.sameAnswerBy[before * 4 + width] + 1
+            break
+          }
+          other = entries[other].next
+        }
+        index = entries[index].next
+      }
+      result.computed = result.computed + computed
+      if computed > result.mostComputed { result.mostComputed = computed }
+      if computed > 4 { computed = 4 }
+      result.perBox[computed] = result.perBox[computed] + 1
+      id = id + 1
+    }
+    return result
+  }
+  @inlineAlways
+  fn count(self: &mut Self, id: usize) {
+    if self.counting && id < self.asked.length() {
+      let asked = self.asked.asMutSlice()
+      asked[id] = asked[id] + 1
+    }
+  }
   pub fn find(self: &mut Self, id: usize, input: &Input, kind: CacheKind) -> usize {
+    self.count(id)
     if id >= self.heads.length() { return ABSENT }
     let mut index = self.heads.get(id)
     while index != ABSENT {
@@ -792,6 +887,7 @@ impl LayoutCache {
   // find for a box's size probe at a definite width, answered by its
   // max-content probe under any parent size (see probeText); ABSENT if none.
   pub fn findWidest(self: &mut Self, id: usize, input: &Input) -> usize {
+    self.count(id)
     if id >= self.heads.length() { return ABSENT }
     let mut index = self.heads.get(id)
     while index != ABSENT {
@@ -817,6 +913,7 @@ impl LayoutCache {
   // a width-intrinsic probe of the box that came out that wide (see
   // sameInputAtWidth); ABSENT if there is none.
   pub fn findAtWidth(self: &mut Self, id: usize, input: &Input) -> usize {
+    self.count(id)
     if id >= self.heads.length() { return ABSENT }
     let mut index = self.heads.get(id)
     while index != ABSENT {
@@ -863,6 +960,13 @@ impl LayoutCache {
       }
     }
     let index = self.entries.length()
+    // A first layout's probes come roughly in box order (see headedFor).
+    if index == self.entries.capacity() {
+      let target = headedFor(index, id, self.results.length(), self.emptyAtStart)
+      run self.entries.reserveExact(target - index)
+      if self.inputs.capacity() < target { run self.inputs.reserveExact(target - index) }
+      if self.layouts.capacity() < target { run self.layouts.reserveExact(target - index) }
+    }
     run self.inputs.appendSlice(one<Input>(input))
     run self.layouts.appendSlice(one<Layout>(layout))
     run self.entries.append(Entry { kind: kind, next: previous, generation: self.generation })

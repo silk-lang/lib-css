@@ -1,6 +1,6 @@
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.usize
-import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT }
+import geometry { Layout, Size, Point, Rect, ResolvedEdges, OptionalSize, AvailableSpace, AvailableKind, Measure, MeasureRequest, NaturalDimensions, ScrollbarRequest, BaselineSet, MarginStrut, max, min, clamp, sameOverflow, sameSize, EMPTY_EXTENT, TRACE_BOXES, TRACE_LAYOUT, TRACE_POSITION, TRACE_KEEP, TRACE_END, TRACE_FLEX, TRACE_GRID }
 import style { SizeContainment, Style, Display, Dimension, SizeValue, Edges, DimensionKind, DisplayOutside, DisplayInside, Float, Position, WritingMode, Direction, FlexDirection, FlexWrap, Align, Overflow, ScrollbarWidth, ScrollbarGutter, BoxDecorationBreak, BaselineSource, Visibility, WrapFlow, WrapThrough }
 import tree { Tree, LayoutTree, LayoutStats, CutoffMiss, Measurement, NO_NODE }
 import context { Input, ResolvedBox, resolveBox, resolveBoxEdges, withGutter, scrollbarGutter, edgesIn, isFlex, isGrid, outOfFlow, absolutelyPositioned, containsAbsolute, establishesContext, selfCollapsingSize, scrollable, overflowForAxis, usedOverflowForAxis, blockContentOffset, effectiveDisplay, blockJustification, UNBOUNDED }
@@ -242,8 +242,18 @@ effect fn contentAlgorithm<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   if nodes.node(id).kind == BoxKind.InlineFormatting { return run layoutInline(nodes, &mut output, &mut measurer, id, &request, &resolved, &mut bfc) }
   if nodes.node(id).measurement == Measurement.Content { return measureLeaf(nodes, &mut measurer, id, &request, &resolved, &bfc) }
   if nodes.style(id).replaced { return replacedContents(nodes.style(id), &request, &resolved, natural) }
-  if isFlex(nodes.style(id)) { return run layoutFlex(nodes, &mut output, &mut measurer, id, &request, &resolved) }
-  if isGrid(nodes.style(id)) { return run layoutGrid(nodes, &mut output, &mut measurer, id, &request, &resolved) }
+  if isFlex(nodes.style(id)) {
+    Measure.traceEnter(&mut measurer, TRACE_FLEX)
+    let flex = run layoutFlex(nodes, &mut output, &mut measurer, id, &request, &resolved)
+    Measure.traceLeave(&mut measurer)
+    return flex
+  }
+  if isGrid(nodes.style(id)) {
+    Measure.traceEnter(&mut measurer, TRACE_GRID)
+    let grid = run layoutGrid(nodes, &mut output, &mut measurer, id, &request, &resolved)
+    Measure.traceLeave(&mut measurer)
+    return grid
+  }
   if nodes.node(id).columnSet { return run layoutColumnSet(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if nodes.node(id).kind == BoxKind.Table { return run layoutTable(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if nodes.node(id).kind == BoxKind.TablePart { return run layoutTablePart(nodes, &mut output, &mut measurer, id, &request, &resolved) }
@@ -2922,6 +2932,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     return
   }
   output.scrollReady = false
+  Measure.tracePhase(&mut measurer, TRACE_BOXES)
   // Keep size results from the previous compute of this tree when its boxes
   // are unchanged, minus those that changed sources can affect. Reuse the
   // boxes themselves when no change since could alter them.
@@ -3044,6 +3055,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     output.keep(tree.revision(), true)
     output.keptMarks = tree.markRevision()
     output.adopt(move nodes)
+    Measure.tracePhase(&mut measurer, TRACE_END)
     return
   }
   // When the previous compute of these boxes laid out most of them again,
@@ -3093,9 +3105,11 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   input.known = viewport
   input.blockRoot = true
   while true {
+    Measure.tracePhase(&mut measurer, TRACE_LAYOUT)
     let viewportLayout = run layoutNode(&nodes, &mut boxes, &mut measurer, 0, &input)
     drop viewportLayout
     run boxes.fragments.endFlow()
+    Measure.tracePhase(&mut measurer, TRACE_POSITION)
     let overflow = run positionTree(&nodes, &mut boxes, &mut measurer, viewport, tree.viewportScrollOffset, &mut output.normalOffsets)
     run boxes.fragments.finishInPlace()
     boxes.stats.passes = boxes.stats.passes + 1
@@ -3108,6 +3122,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
         boxes.needsRelayout = true
       }
     }
+    Measure.tracePhase(&mut measurer, TRACE_KEEP)
     if !boxes.needsRelayout {
       output.stats = boxes.stats
       output.relaidMost = sameBoxes && boxes.stats.fullLayouts * 2 > nodes.boxes.length()
@@ -3142,6 +3157,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       // works in place or on other boxes, so it goes.
       if inPlace || !sameBoxes { output.snapshot.releaseSpare() }
       if !inPlace { run output.fragments.trimSlack() }
+      Measure.tracePhase(&mut measurer, TRACE_END)
       return
     }
     run boxes.restart()
