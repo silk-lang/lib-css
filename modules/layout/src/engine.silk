@@ -2328,6 +2328,21 @@ effect fn boxesFor<'source, S: LayoutSource>(tree: &'source S, output: &mut Layo
     nodes.refreshScroll(scrolled.get(at))
     at = at + 1
   }
+  // Restyled nodes may have moved to another style index.
+  let mut touched = List<usize>.make()
+  if run tree.changes().touchedNodes(since, &mut touched) {
+    at = 0
+    while at < touched.length() {
+      nodes.refreshStyleIndex(touched.get(at))
+      at = at + 1
+    }
+  } else {
+    let mut source: usize = 0
+    while source < nodes.firstBySource.length() {
+      nodes.refreshStyleIndex(source)
+      source = source + 1
+    }
+  }
   let mut slot: usize = 0
   while slot < nodes.anonymousOrigins.length() {
     let origin = nodes.anonymousOrigins.get(slot)

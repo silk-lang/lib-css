@@ -31,7 +31,9 @@ pub interface LayoutSource {
   /// The style table. Nodes with the same index share one style, so the boxes generated from
   /// them share it too, with the anonymous and text styles made from it.
   fn styles<'a>(self: &'a Self) -> &'a [Style]
-  /// The index of a node's style in `styles`; a text node's is its parent's.
+  /// The index of a node's style in `styles`; a text node's is its parent's. A restyle may
+  /// give a node another index, as a source that interns its styles does: the index is read
+  /// again for the boxes of every node `changes` lists as touched.
   fn styleIndex(self: &Self, node: usize) -> usize
   fn isText(self: &Self, node: usize) -> bool
   /// A text node's text, all of it (see `textStart`).
