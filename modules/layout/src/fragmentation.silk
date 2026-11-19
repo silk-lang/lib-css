@@ -326,6 +326,8 @@ pub struct ResumeState {
   pub notBeforeFrame: usize, pub beforeHandled: bool,
   pub marginTop: MarginStrut, pub marginBottom: MarginStrut, pub pendingMargin: MarginStrut,
   pub endDecorationDone: bool, pub flexLine: usize,
+  // A table repeating its header redraws its block-start decorations (CSS Tables 3 §6.2).
+  pub cloneStart: bool,
   pub frameLines: usize, pub lineBreak: bool,
   pub size: FractionalProgress,
   pub minimum: FractionalProgress,
@@ -351,7 +353,7 @@ impl ResumeState {
       sourceAfter: BreakBoundary.none(), sourceAfterValid: false, inlineSourceCut: NO_NODE,
       requested: ForcedBreaks.none(), notBeforeFrame: 0, beforeHandled: false,
       marginTop: MarginStrut.zero(), marginBottom: MarginStrut.zero(), pendingMargin: MarginStrut.zero(),
-      endDecorationDone: false, flexLine: NO_NODE,
+      endDecorationDone: false, flexLine: NO_NODE, cloneStart: false,
       frameLines: 0, lineBreak: false,
       size: FractionalProgress.make(), minimum: FractionalProgress.make(), maximum: FractionalProgress.make(),
       alignmentLeading: FractionalProgress.make(), flexTrailing: FractionalProgress.make(),
