@@ -352,6 +352,8 @@ impl Tree {
       || old.rows.subgrid || old.columns.subgrid
       || template.rows.subgrid || template.columns.subgrid
     let same = old.same(&template)
+    // The grid the node already has leaves it clean, as an unchanged style does.
+    if same && !outer { return }
     if handle == 0 && self.freeGrids.length() != 0 {
       let slot = self.freeGrids.get(self.freeGrids.length() - 1)
       let remaining = self.freeGrids.length() - 1
