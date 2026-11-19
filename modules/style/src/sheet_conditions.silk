@@ -1,5 +1,5 @@
 //! Evaluates retained stylesheet conditions once per host-environment change.
-import sheet { Sheet, Condition, ConditionKind, NONE }
+import sheet { Sheet, Condition, ConditionKind, ConditionMemo, NONE }
 import element { ElementTree, MatchContext, PseudoTarget }
 import resolver { RuleFilter }
 import container_queries { Queries }
@@ -36,6 +36,15 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
     run results.append(parent && matches && (starting || condition.kind != ConditionKind.Starting))
     run starts.append(startParent && matches)
     i = i + 1
+  }
+  // Most updates are frames that changed nothing the conditions read: the same results over
+  // the same rules leave every flag as it is.
+  let memo = &sheet.conditionMemo
+  if memo.valid && memo.starting == starting && memo.rules == sheet.ruleConditions.length()
+    && memo.registrations == sheet.registrations.length() && memo.keyframes == sheet.keyframes.length()
+    && memo.fontFaces == sheet.fontFaces.length() && sameFlags(memo.results.asSlice(), results.asSlice())
+    && sameFlags(memo.starts.asSlice(), starts.asSlice()) {
+    return false
   }
   let mut changed = false
   i = 0
@@ -74,7 +83,22 @@ pub effect fn update(sheet: &mut Sheet, environment: &Environment, starting: boo
     faces[i].enabled = enabled
     i = i + 1
   }
+  let rules = sheet.ruleConditions.length()
+  let registrations = sheet.registrations.length()
+  let keyframes = sheet.keyframes.length()
+  let fontFaces = sheet.fontFaces.length()
+  sheet.conditionMemo = ConditionMemo { valid: true, starting: starting, results: move results, starts: move starts, rules: rules, registrations: registrations, keyframes: keyframes, fontFaces: fontFaces }
   return changed
+}
+
+fn sameFlags(a: &[bool], b: &[bool]) -> bool {
+  if a.length != b.length { return false }
+  let mut i: usize = 0
+  while i < a.length {
+    if a[i] != b[i] { return false }
+    i = i + 1
+  }
+  return true
 }
 
 /// Borrowed per-sheet query filter; ordinary and media-only rules need no allocation.
