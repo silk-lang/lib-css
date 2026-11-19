@@ -6,11 +6,11 @@ import silk.core.ownership { Copy }
 import silk.num.usize
 import silk.text.string { String }
 import style { Style, DisplayOutside, DisplayInside, Display, Dimension, SizeValue, DimensionKind, Edges, BoxSizing, WrapFlow }
-import geometry { Layout, Point, Rect, OptionalSize }
+import geometry { Layout, Point, Rect, Size, OptionalSize }
 import exclusions { ExclusionArea }
 import silk.core.option { Option }
-import box_tree { BoxTree, BoxNode }
-import fragments { FragmentArena, FragmentKind, TextFragmentKind }
+import box_tree { BoxTree, BoxNode, BoxKind }
+import fragments { FragmentArena, FragmentKind, TextFragmentKind, TextRuns }
 import scratch_boxes { ScratchBoxes }
 import layout_cache { LayoutCache, Snapshot, BoxFacts, BoxWrites }
 import flex { FlexScratch }
@@ -878,8 +878,25 @@ impl LayoutTree {
     if id.index >= self.firstBySource.length() { fail InvalidNode { index: id.index } }
     let box = self.firstBySource.get(id.index)
     let mut fragment = NO_NODE
-    if box != NO_NODE { fragment = self.fragments.first(box) }
-    return SourceRects { tree: self, source: id.index, box: box, fragment: fragment }
+    let mut lines = NO_NODE
+    let mut text = false
+    if box != NO_NODE {
+      fragment = self.fragments.first(box)
+      let boxes = self.boxNodes.asSlice()
+      text = boxes[box].kind == BoxKind.Text
+      if text {
+        // Its runs on lines of text alone are in fragments of its inline
+        // formatting box (see LineText).
+        let mut above = boxes[box].parent
+        while above != NO_NODE && boxes[above].kind != BoxKind.InlineFormatting { above = boxes[above].parent }
+        if above != NO_NODE { lines = self.fragments.first(above) }
+      }
+    }
+    return SourceRects {
+      tree: self, source: id.index, box: box, fragment: fragment, text: text, lines: lines,
+      runs: self.fragments.noTextRuns(), reading: false, parent: NO_NODE,
+      held: Rect.zero(), holding: false, heldParent: NO_NODE, heldLine: NO_NODE, heldFont: 0, heldLevel: 0, heldGlyphs: false, heldLocation: Point { x: 0.0, y: 0.0 }, heldSize: Size.zero(),
+    }
   }
   // CSSOM-style source bounds are a derived view, never a containing block
   // or replacement for the fragment tree. CSSOM View bounding-box steps 3–4
@@ -913,9 +930,17 @@ impl LayoutTree {
 // shaping request or collapsed-space token. Keep paint fragments separate.
 pub struct SourceRects<'a> {
   tree: &'a LayoutTree, source: usize, box: usize, fragment: usize,
+  // For text: the next fragment of its inline formatting box that may hold
+  // its runs on lines of text alone, the runs of the text fragment being
+  // read (when `reading`) and that fragment's parent, and the rectangle
+  // gathered so far with what the runs joined to it must share.
+  text: bool, lines: usize,
+  runs: TextRuns<'a>, reading: bool, parent: usize,
+  held: Rect, holding: bool, heldParent: usize, heldLine: usize, heldFont: usize, heldLevel: u8, heldGlyphs: bool, heldLocation: Point, heldSize: Size,
 }
 impl<'a> SourceRects<'a> {
   pub fn next(self: &mut Self) -> Option<Rect> {
+    if self.text { return self.nextText() }
     while self.box != NO_NODE {
       if self.fragment == NO_NODE {
         self.box = self.tree.boxNodes.asSlice()[self.box].nextContinuation
@@ -926,26 +951,91 @@ impl<'a> SourceRects<'a> {
       let firstIndex = self.fragment
       let first = &fragments[firstIndex]
       self.fragment = first.nextForBox
-      if first.positioningShell || first.source != self.source || (first.kind != FragmentKind.Box && first.kind != FragmentKind.Inline && first.kind != FragmentKind.Text) { continue }
+      if first.positioningShell || first.source != self.source || (first.kind != FragmentKind.Box && first.kind != FragmentKind.Inline) { continue }
       let origin = self.tree.fragments.worldLocation(firstIndex)
-      let mut rect = Rect { x: origin.x, y: origin.y, width: first.size.width, height: first.size.height }
-      if first.kind == FragmentKind.Text {
-        let text = self.tree.fragments.texts.get(first.textData)
-        while text.kind == TextFragmentKind.Glyphs && self.fragment != NO_NODE {
-          let nextIndex = self.fragment
-          let next = &fragments[nextIndex]
-          if next.source != self.source || next.kind != FragmentKind.Text || next.parent != first.parent { break }
-          let nextText = self.tree.fragments.texts.get(next.textData)
-          if nextText.kind != TextFragmentKind.Glyphs || nextText.fontKey != text.fontKey || nextText.bidiLevel != text.bidiLevel { break }
-          let at = self.tree.fragments.worldLocation(nextIndex)
-          let sameHorizontal = at.y == origin.y && next.size.height == first.size.height
-          let sameVertical = at.x == origin.x && next.size.width == first.size.width
-          if !sameHorizontal && !sameVertical { break }
-          rect = rect.unionWith(Rect { x: at.x, y: at.y, width: next.size.width, height: next.size.height })
-          self.fragment = next.nextForBox
+      return Option<Rect>.Some { value: Rect { x: origin.x, y: origin.y, width: first.size.width, height: first.size.height } }
+    }
+    return Option<Rect>.None
+  }
+  // The next text fragment of the source, in fragment order: of its own
+  // boxes' fragments and of its inline formatting box's.
+  fn nextTextFragment(self: &mut Self) -> usize {
+    let fragments = self.tree.fragments.values.asSlice()
+    while self.box != NO_NODE {
+      if self.fragment == NO_NODE {
+        self.box = self.tree.boxNodes.asSlice()[self.box].nextContinuation
+        if self.box != NO_NODE { self.fragment = self.tree.fragments.first(self.box) }
+        continue
+      }
+      let candidate = &fragments[self.fragment]
+      if candidate.positioningShell || candidate.source != self.source || candidate.kind != FragmentKind.Text {
+        self.fragment = candidate.nextForBox
+        continue
+      }
+      break
+    }
+    while self.lines != NO_NODE {
+      let candidate = &fragments[self.lines]
+      if candidate.kind == FragmentKind.Text && candidate.source == self.source && self.tree.fragments.ownsLines(self.lines) { break }
+      self.lines = candidate.nextForBox
+    }
+    let mut own = NO_NODE
+    if self.box != NO_NODE { own = self.fragment }
+    if own != NO_NODE && (self.lines == NO_NODE || own < self.lines) {
+      self.fragment = fragments[own].nextForBox
+      return own
+    }
+    if self.lines != NO_NODE {
+      let found = self.lines
+      self.lines = fragments[found].nextForBox
+      return found
+    }
+    return NO_NODE
+  }
+  fn nextText(self: &mut Self) -> Option<Rect> {
+    while true {
+      if !self.reading {
+        let index = self.nextTextFragment()
+        if index == NO_NODE {
+          if self.holding {
+            self.holding = false
+            return Option<Rect>.Some { value: self.held }
+          }
+          return Option<Rect>.None
+        }
+        let tree = self.tree
+        self.runs = tree.fragments.textRuns(index)
+        self.parent = tree.fragments.values.asSlice()[index].parent
+        self.reading = true
+      }
+      if !self.runs.next() {
+        self.reading = false
+        continue
+      }
+      let placed = self.runs.current
+      let rect = Rect { x: placed.location.x, y: placed.location.y, width: placed.size.width, height: placed.size.height }
+      let glyphs = placed.kind == TextFragmentKind.Glyphs
+      if self.holding && self.heldGlyphs && glyphs && self.heldParent == self.parent && self.heldLine == placed.line
+        && self.heldFont == placed.fontKey && self.heldLevel == placed.bidiLevel {
+        let sameHorizontal = placed.location.y == self.heldLocation.y && placed.size.height == self.heldSize.height
+        let sameVertical = placed.location.x == self.heldLocation.x && placed.size.width == self.heldSize.width
+        if sameHorizontal || sameVertical {
+          self.held = self.held.unionWith(rect)
+          continue
         }
       }
-      return Option<Rect>.Some { value: rect }
+      let done = self.held
+      let had = self.holding
+      self.held = rect
+      self.holding = true
+      self.heldParent = self.parent
+      self.heldLine = placed.line
+      self.heldFont = placed.fontKey
+      self.heldLevel = placed.bidiLevel
+      self.heldGlyphs = glyphs
+      self.heldLocation = placed.location
+      self.heldSize = placed.size
+      if had { return Option<Rect>.Some { value: done } }
     }
     return Option<Rect>.None
   }

@@ -259,7 +259,7 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
   let fragments = output.fragments.values.asSlice()
   let nodes = output.boxNodes.asSlice()
   let boxes = output.boxes.asSlice()
-  run Writer.writeString("{\"schemaVersion\":3,\"sources\":[")
+  run Writer.writeString("{\"schemaVersion\":4,\"sources\":[")
   let mut source: usize = 0
   while source < tree.nodes.length() {
     if source != 0 {
@@ -426,6 +426,8 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
     run field("overflowOnly", &fragment.overflowOnly)
     run field("positioningShell", &fragment.positioningShell)
     run indexField("textData", fragment.textData)
+    run field("textCount", &fragment.textCount)
+    run field("fontKey", &fragment.fontKey)
     run Writer.writeString("}")
     index = index + 1
   }
@@ -439,7 +441,6 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
     run Writer.writeString("{\"sourceStart\":")
     run Json.serialize(&text.sourceStart, &options)
     run field("sourceEnd", &text.sourceEnd)
-    run field("fontKey", &text.fontKey)
     run field("shapeKey", &text.shapeKey)
     run field("bidiLevel", &text.bidiLevel)
     let kind = match text.kind {
@@ -448,6 +449,10 @@ effect fn writeOutput(tree: &Tree, output: &LayoutTree)
       TextFragmentKind.SegmentBreak => "segment-break"
     }
     run field("kind", &kind)
+    // 0 a run of text; 1 a line box, 2 one an earlier fragment began, 3 a line's overflow.
+    run field("part", &text.part)
+    run pointField("location", text.location)
+    run sizeField("size", text.size)
     run Writer.writeString("}")
     index = index + 1
   }

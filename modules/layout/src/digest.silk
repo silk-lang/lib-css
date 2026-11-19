@@ -1,6 +1,6 @@
 import fragments { FragmentKind, TextFragmentKind }
 import geometry { BaselineSet, Rect }
-import tree { LayoutTree }
+import tree { LayoutTree, NO_NODE }
 import silk.num.f32
 import silk.num.u8
 import silk.num.u32
@@ -103,14 +103,25 @@ pub fn fragmentDigest(output: &LayoutTree) -> u64 {
     digest.flag(fragment.overflowOnly)
     digest.flag(fragment.nonpainting)
     digest.flag(fragment.positioningShell)
-    if fragment.kind == FragmentKind.Text {
-      let text = &texts[fragment.textData]
-      digest.index(text.sourceStart)
-      digest.index(text.sourceEnd)
-      digest.index(text.fontKey)
-      digest.index(text.shapeKey)
-      digest.word(u8.toU64(text.bidiLevel))
-      digest.word(textKindOf(text.kind))
+    if fragment.kind == FragmentKind.Text && fragment.textData != NO_NODE {
+      digest.word(u32.toU64(fragment.fontKey))
+      digest.word(u32.toU64(fragment.textCount))
+      let mut at = fragment.textData
+      let end = at + u32.toUsize(fragment.textCount)
+      while at < end {
+        let text = &texts[at]
+        digest.word(u8.toU64(text.part))
+        digest.number(text.location.x)
+        digest.number(text.location.y)
+        digest.number(text.size.width)
+        digest.number(text.size.height)
+        digest.word(u32.toU64(text.sourceStart))
+        digest.word(u32.toU64(text.sourceEnd))
+        digest.word(u32.toU64(text.shapeKey))
+        digest.word(u8.toU64(text.bidiLevel))
+        digest.word(textKindOf(text.kind))
+        at = at + 1
+      }
     }
     index = index + 1
   }

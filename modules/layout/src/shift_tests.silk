@@ -6,7 +6,7 @@ import silk.num.usize
 import silk.text.string { String }
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import fragments { Fragment, TextFragment }
+import fragments { Fragment, LineText }
 import style { Style, SizeValue, Display, DisplayOutside, DisplayInside }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize }
 import text { TextMeasure, TextError, TextContext, TextTokenKind, TextCursor, TextBreak, TextBreakKind, TextAnalysis, TextShapeRequest, TextRun }
@@ -96,13 +96,14 @@ fn sameFragment(a: &Fragment, b: &Fragment) -> bool {
     && a.firstChild == b.firstChild && a.lastChild == b.lastChild
     && a.previousSibling == b.previousSibling && a.nextSibling == b.nextSibling
     && a.previousForBox == b.previousForBox && a.nextForBox == b.nextForBox
-    && a.textData == b.textData
+    && a.textData == b.textData && a.textCount == b.textCount
     && a.location.x == b.location.x && a.location.y == b.location.y
     && a.size.width == b.size.width && a.size.height == b.size.height
 }
-fn sameText(a: &TextFragment, b: &TextFragment) -> bool {
-  return a.sourceStart == b.sourceStart && a.sourceEnd == b.sourceEnd
-    && a.fontKey == b.fontKey && a.shapeKey == b.shapeKey && a.bidiLevel == b.bidiLevel
+fn sameText(a: &LineText, b: &LineText) -> bool {
+  return a.location.x == b.location.x && a.location.y == b.location.y
+    && a.size.width == b.size.width && a.size.height == b.size.height
+    && a.sourceStart == b.sourceStart && a.sourceEnd == b.sourceEnd && a.part == b.part
 }
 // The retained output holds the fragments, texts and box chains of a fresh one.
 effect fn expectSameAsFresh(tree: &Tree, output: &LayoutTree, viewport: OptionalSize) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
