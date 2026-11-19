@@ -1924,6 +1924,30 @@ impl FragmentArena {
     self.lastByBox = move last
   }
 
+  // remapBoxes for a patch of the box tree that kept every box's id but
+  // those of `ids`, whose fragments now belong to no box, over `count` boxes.
+  pub effect fn forgetBoxes(self: &mut Self, ids: &[usize], count: usize) ! OutOfMemoryError ? &mut Allocator {
+    let mut at: usize = 0
+    while at < ids.length {
+      let id = ids[at]
+      at = at + 1
+      if id >= self.firstByBox.length() { continue }
+      let mut index = self.firstByBox.get(id)
+      let values = self.values.asMutSlice()
+      while index != NO_NODE && index < values.length && values[index].box == id {
+        values[index].box = NO_NODE
+        index = values[index].nextForBox
+      }
+      self.firstByBox.set(id, NO_NODE)
+      self.lastByBox.set(id, NO_NODE)
+    }
+    if self.firstByBox.length() < count {
+      let added = count - self.firstByBox.length()
+      run self.firstByBox.appendRepeated(NO_NODE, added)
+      run self.lastByBox.appendRepeated(NO_NODE, added)
+    }
+  }
+
   pub fn boxCount(self: &Self) -> usize { return self.firstByBox.length() }
   // Whether a whole output stands: between computes, so the next can work
   // in place over it (see beginInPlace).

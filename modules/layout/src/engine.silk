@@ -20,6 +20,8 @@ import incremental as Incremental
 import replaced { layoutReplaced, preferredRatio, borderRatio }
 import box_tree as Boxes
 import box_tree { BoxTree, BoxKind, BoxNode, itemParent }
+import box_patch as Patch
+import box_patch { BoxPatch }
 import table { layoutTable, layoutTablePart }
 import silk.collections.list { List }
 import fragments { FragmentKind, FragmentArena, Fragment }
@@ -862,6 +864,42 @@ fn itemFlags(nodes: &BoxTree<'_>, id: usize) -> u8 {
     if !node.lastForSource { flags = flags | ITEM_CONTINUES_AFTER }
   }
   return flags
+}
+
+// keyShapes for the boxes a patch of the box tree touched, `ids` ascending
+// with the patch's roots among them: their shapes and flags from their
+// styles and children, then the tree bits of the roots' ancestors.
+effect fn patchShapes(nodes: &BoxTree<'_>, facts: &mut BoxFacts, ids: &[usize], roots: &[usize]) ! OutOfMemoryError ? &mut Allocator {
+  let count = nodes.boxes.length()
+  let shapes = facts.keyShapes.length()
+  if shapes < count { run facts.keyShapes.appendRepeated(0, count - shapes) }
+  let flags = facts.itemFlags.length()
+  if flags < count { run facts.itemFlags.appendRepeated(0, count - flags) }
+  let slice = facts.keyShapes.asMutSlice()
+  // Children follow their parents: a reverse pass sees them first.
+  let mut at = ids.length
+  while at > 0 {
+    at = at - 1
+    let id = ids[at]
+    let mut shape = keyShape(nodes, id) & ~(KEY_WIDTH_FREE_TREE | KEY_CONTENT_FREE_TREE)
+    if shape & KEY_WIDTH_FREE != 0 { shape = shape | KEY_WIDTH_FREE_TREE }
+    if shape & KEY_CONTENT_FREE != 0 { shape = shape | KEY_CONTENT_FREE_TREE }
+    let mut child = nodes.node(id).firstChild
+    while child != NO_NODE {
+      shape = shape & ~((KEY_WIDTH_FREE_TREE | KEY_CONTENT_FREE_TREE) & ~slice[child])
+      child = nodes.node(child).nextSibling
+    }
+    slice[id] = shape
+    facts.itemFlags.set(id, itemFlags(nodes, id))
+  }
+  let mut parents = List<usize>.make()
+  at = 0
+  while at < roots.length {
+    let parent = nodes.node(roots[at]).parent
+    if parent != NO_NODE { run parents.append(parent) }
+    at = at + 1
+  }
+  widthFreeTreesAt(nodes, &mut facts.keyShapes, parents.asSlice())
 }
 
 effect fn keyShapes(nodes: &BoxTree<'_>, result: &mut List<u16>, flags: &mut List<u8>) ! OutOfMemoryError ? &mut Allocator {
@@ -2284,6 +2322,8 @@ effect fn boxesFor<'source>(tree: &'source Tree, output: &mut LayoutTree, since:
   let logged = run tree.scrolledNodes(output.keptScrolls, &mut scrolled)
   let mut nodes = BoxTree.restore(tree.nodes.asSlice(), tree.styles.asSlice(), tree.grids.asSlice(), tree.gridNames.asSlice(), move boxes, move styles, move origins, move texts, move first, move last, !logged)
   nodes.columnSets = output.keptColumnSets
+  nodes.freeBoxes = Intrinsic.replace(output.freeBoxes, List<usize>.make())
+  nodes.freeStyles = Intrinsic.replace(output.freeStyles, List<usize>.make())
   nodes.shapes = tree.shapes.asSlice()
   let mut at: usize = 0
   while at < scrolled.length() {
@@ -2977,13 +3017,35 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   let onlyMarked = tree.revision() >= since && tree.revision() - since == tree.markRevision() - output.keptMarks
   let boxesStand = !kept && output.boxNodes.length() != 0 && onlyMarked && tree.scrollRevision() == output.keptScrolls
   output.cache.gridMemos.settle(boxesStand)
-  let mut nodes = run boxesFor(tree, &mut output, since, restoringKept || boxesStand)
+  // Otherwise, with the output complete, the kept boxes are patched where
+  // the changes reach them (box_patch.silk): every other box keeps its id,
+  // with its results, facts and output.
+  let patching = output.patching && kept && !restoringKept && !boxesStand && output.fragments.complete() && !output.keptColumnSets
+  let mut nodes = run boxesFor(tree, &mut output, since, restoringKept || boxesStand || patching)
+  let mut patch = BoxPatch.make()
+  let mut patched = false
+  if patching {
+    patched = run Patch.patch(tree, &mut nodes, since, &mut patch)
+    if patched { output.patches = output.patches + 1 }
+    else { output.patchFallbacks = output.patchFallbacks + 1 }
+    if !patched {
+      // A patch that cannot be made changes nothing: the kept boxes go
+      // back, for matching with boxes generated afresh.
+      output.adopt(move nodes)
+      nodes = run boxesFor(tree, &mut output, since, false)
+    }
+  }
   nodes.prepareColumns()
   let restoring = restoringKept
-  let sameBoxes = restoring || (kept && Incremental.sameBoxes(output.boxNodes.asSlice(), nodes.boxes.asSlice()))
+  let sameBoxes = restoring || (kept && !patched && Incremental.sameBoxes(output.boxNodes.asSlice(), nodes.boxes.asSlice()))
+  // Patched boxes, each box that stands under the id it had: the previous
+  // output stays in place too, as for the same boxes. (Other boxes matched
+  // with the kept ones are laid out from the snapshot: in place over their
+  // previous output renumbered, fuzzing found layouts that differ.)
+  let renumbered = patched && output.fragments.complete()
   // The previous output becomes the snapshot reused subtrees are copied from,
   // except that of the same boxes, which stays in place (see below).
-  output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, sameBoxes)
+  output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, sameBoxes || renumbered)
   let mut facts = Intrinsic.replace(output.facts, BoxFacts.make())
   // The nodes changed since, when the tree still knows them and so do the
   // kept facts' style source index.
@@ -2991,6 +3053,9 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   let mut logged = false
   if restoring && facts.styledOffsets.length() == tree.nodes.length() + 1 && facts.styledBoxes.length() == nodes.boxes.length() {
     logged = run tree.changedNodes(since, &mut changes)
+  } else if patched {
+    // The patch reindexes style sources before they are read (see below).
+    logged = run tree.touchedNodes(since, &mut changes)
   }
   let mut alone = List<usize>.make()
   let mut aloneRanges = List<FinalRange>.make()
@@ -3002,6 +3067,39 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     run output.cache.rotateFinals()
     if logged && output.exclusions.length() == 0 && !tree.exclusionStyles { run cutoffCandidates(tree, since, &nodes, &output, changes.asSlice(), &mut alone, &mut aloneRanges, &mut aloneProbes, &mut aloneEnds, &mut alonePlains) }
     Incremental.invalidateChanged(tree, &nodes, &mut output.cache, since, logged, changes.asSlice(), alone.asSlice())
+    run output.cache.compact()
+  } else if patched {
+    // Only the ids the patch touched lose their results and output; the
+    // roots, whose children changed, and the new boxes are cleared with
+    // the roots' ancestors, as invalidateUnmatched clears changed boxes.
+    run output.cache.rotateFinals()
+    let forgotten = patch.forgotten.asSlice()
+    output.cache.forgetBoxes(forgotten)
+    let count = nodes.boxes.length()
+    let laid = output.boxes.length()
+    if laid < count { run output.boxes.appendRepeated(Layout.zero(), count - laid) }
+    let layouts = output.boxes.asMutSlice()
+    let mut at: usize = 0
+    while at < forgotten.length {
+      if forgotten[at] < layouts.length { layouts[forgotten[at]] = Layout.zero() }
+      at = at + 1
+    }
+    run output.fragments.forgetBoxes(forgotten, count)
+    at = 0
+    while at < patch.fresh.length() {
+      output.cache.clearBox(patch.fresh.get(at))
+      at = at + 1
+    }
+    at = 0
+    while at < patch.roots.length() {
+      let mut box = patch.roots.get(at)
+      while box != NO_NODE {
+        output.cache.clearBox(box)
+        box = nodes.node(box).parent
+      }
+      at = at + 1
+    }
+    Incremental.invalidateChanged(tree, &nodes, &mut output.cache, since, logged, changes.asSlice(), &[])
     run output.cache.compact()
   } else if kept {
     let matched = run Incremental.matchBoxes(output.boxNodes.asSlice(), output.firstBySource.asSlice(), &nodes)
@@ -3020,8 +3118,27 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     }
     output.cache.flexMemos.startFresh()
   }
-  // Style facts of the same boxes need refreshing only where styles changed.
-  if sameBoxes && facts.covers(nodes.boxes.length()) {
+  // Style facts of the same boxes need refreshing only where styles changed;
+  // after a patch, also of the boxes it touched.
+  let patchedFacts = patched && facts.covers(patch.before)
+  if patchedFacts {
+    let mut touched = List<usize>.make()
+    run touched.appendSlice(patch.forgotten.asSlice())
+    run touched.appendSlice(patch.roots.asSlice())
+    run touched.sort()
+    let mut ids = List<usize>.make()
+    let mut at: usize = 0
+    while at < touched.length() {
+      if at == 0 || touched.get(at - 1) != touched.get(at) { run ids.append(touched.get(at)) }
+      at = at + 1
+    }
+    run Incremental.markPatched(&nodes, &mut facts, ids.asSlice())
+    run patchShapes(&nodes, &mut facts, ids.asSlice(), patch.roots.asSlice())
+    if run positionVisits(&nodes, &mut facts.visits) { facts.visitsRevision = facts.visitsRevision + 1 }
+    run autoScrollers(&nodes, &mut facts)
+    run Incremental.indexStyleSources(tree, &nodes, &mut facts.styledOffsets, &mut facts.styledBoxes)
+  }
+  if (sameBoxes || patchedFacts) && facts.covers(nodes.boxes.length()) {
     let restyled = run Incremental.remarkSubtrees(tree, &nodes, since, logged, changes.asSlice(), &mut facts)
     // Whether a box's own KEY_WIDTH_FREE or KEY_CONTENT_FREE changed, which
     // its ancestors' tree bits read.
@@ -3048,7 +3165,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     else if freed { widthFreeTreesAt(&nodes, &mut facts.keyShapes, restyled.asSlice()) }
     // Every style a visit depends on (position, overflow, display) regenerates
     // boxes when it changes; see Tree.setStyle.
-    if !restoring {
+    if !restoring && !patchedFacts {
       if run positionVisits(&nodes, &mut facts.visits) { facts.visitsRevision = facts.visitsRevision + 1 }
       run autoScrollers(&nodes, &mut facts)
       run Incremental.indexStyleSources(tree, &nodes, &mut facts.styledOffsets, &mut facts.styledBoxes)
@@ -3095,9 +3212,9 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   // When the previous compute of these boxes laid out most of them again,
   // this one likely will too: then saving what each write in place
   // overwrites costs more than writing afresh after the previous output.
-  let inPlace = sameBoxes && !output.relaidMost && !output.inPlaceOff
-  output.lastMode = if inPlace { 2 } else if sameBoxes { 3 } else { 4 }
-  if sameBoxes && !inPlace { output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, false) }
+  let inPlace = (sameBoxes || renumbered) && !output.relaidMost && !output.inPlaceOff
+  output.lastMode = if inPlace && sameBoxes { 2 } else if inPlace { 5 } else if sameBoxes { 3 } else { 4 }
+  if (sameBoxes || renumbered) && !inPlace { output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, false) }
   output.relaidMost = false
   let flexScratch = Intrinsic.replace(output.flexScratch, List<FlexScratch>.make())
   let inlineScratch = Intrinsic.replace(output.inlineScratch, List<InlineScratch>.make())

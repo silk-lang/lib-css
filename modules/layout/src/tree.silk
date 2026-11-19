@@ -183,6 +183,11 @@ pub struct Tree {
   // was touched at revision `logRevisions[slot]`. `logLost` is the latest
   // revision overwritten.
   logNodes: List<usize>, logRevisions: List<usize>, logged: usize, logLost: usize,
+  // The last GENERATION_LOG nodes whose children generate boxes anew: the
+  // parent of an inserted or removed node, or of one whose style, text or
+  // measurement changed how its boxes are generated. `genLost` is the latest
+  // revision overwritten, or one whose change the log cannot name.
+  genNodes: List<usize>, genRevisions: List<usize>, genLogged: usize, genLost: usize,
   // Scroll offset changes, which move fragments without a revision: the
   // count so far and the last SCROLL_LOG nodes changed.
   scrolls: usize, scrollNodes: List<usize>,
@@ -199,6 +204,7 @@ pub struct Tree {
   pub exclusionStyles: bool,
 }
 const CHANGE_LOG: usize = 256
+const GENERATION_LOG: usize = 64
 const SCROLL_LOG: usize = 64
 impl Tree {
   pub effect fn make(style: Style) -> Tree ! OutOfMemoryError ? &mut Allocator {
@@ -233,11 +239,15 @@ impl Tree {
     let mut logRevisions = List<usize>.make()
     run logNodes.appendRepeated(NO_NODE, CHANGE_LOG)
     run logRevisions.appendRepeated(0, CHANGE_LOG)
+    let mut genNodes = List<usize>.make()
+    let mut genRevisions = List<usize>.make()
+    run genNodes.appendRepeated(NO_NODE, GENERATION_LOG)
+    run genRevisions.appendRepeated(0, GENERATION_LOG)
     let mut scrollNodes = List<usize>.make()
     run scrollNodes.appendRepeated(NO_NODE, SCROLL_LOG)
     let mut live = List<bool>.make()
     run live.append(true)
-    return Tree { nodes: move nodes, styles: move styles, grids: move grids, gridNames: move gridNames, gridRevisions: move gridRevisions, viewportScrollOffset: Point { x: 0.0, y: 0.0 }, stickyDeferred: false, marks: 0, current: 1, structure: 1, generated: 1, changed: move changed, outer: move outer, insets: move insets, placed: move placed, logNodes: move logNodes, logRevisions: move logRevisions, logged: 0, logLost: 0, scrolls: 0, scrollNodes: move scrollNodes, live: move live, freeNodes: List<usize>.make(), freeStyles: List<usize>.make(), freeGrids: List<usize>.make(), shapes: move shapes, freeShapes: List<usize>.make(), exclusionStyles: exclusionStyles }
+    return Tree { nodes: move nodes, styles: move styles, grids: move grids, gridNames: move gridNames, gridRevisions: move gridRevisions, viewportScrollOffset: Point { x: 0.0, y: 0.0 }, stickyDeferred: false, marks: 0, current: 1, structure: 1, generated: 1, changed: move changed, outer: move outer, insets: move insets, placed: move placed, logNodes: move logNodes, logRevisions: move logRevisions, logged: 0, logLost: 0, genNodes: move genNodes, genRevisions: move genRevisions, genLogged: 0, genLost: 0, scrolls: 0, scrollNodes: move scrollNodes, live: move live, freeNodes: List<usize>.make(), freeStyles: List<usize>.make(), freeGrids: List<usize>.make(), shapes: move shapes, freeShapes: List<usize>.make(), exclusionStyles: exclusionStyles }
   }
   // The current revision; it advances on every change.
   pub fn revision(self: &Self) -> usize { return self.current }
@@ -294,6 +304,61 @@ impl Tree {
     }
     return true
   }
+  // Like changedNodes, but also after insertions: for a compute that finds
+  // the boxes of new nodes itself (see generationChanges).
+  pub effect fn touchedNodes(self: &Self, since: usize, result: &mut List<usize>) -> bool ! OutOfMemoryError ? &mut Allocator {
+    if self.logLost > since { return false }
+    let mut back: usize = 0
+    while back < self.logged && back < CHANGE_LOG {
+      let slot = (self.logged - 1 - back) % CHANGE_LOG
+      let revision = self.logRevisions.get(slot)
+      if revision <= since { return true }
+      let node = self.logNodes.get(slot)
+      if node < self.changed.length() && self.changed.get(node) == revision { run result.append(node) }
+      back = back + 1
+    }
+    return true
+  }
+  // Records that the children of `id` generate boxes anew.
+  fn generates(self: &mut Self, id: usize) {
+    if id == NO_NODE { return }
+    let slot = self.genLogged % GENERATION_LOG
+    if self.genLogged >= GENERATION_LOG && self.genRevisions.get(slot) > self.genLost { self.genLost = self.genRevisions.get(slot) }
+    self.genNodes.set(slot, id)
+    self.genRevisions.set(slot, self.current)
+    self.genLogged = self.genLogged + 1
+  }
+  // Records that how node `id` generates boxes changed: its parent's
+  // children generate boxes anew.
+  fn generatesAround(self: &mut Self, id: usize) {
+    let parent = self.nodes.asSlice()[id].parent
+    if parent != NO_NODE { self.generates(parent) }
+    else if id == 0 { self.generatesAll() }
+  }
+  // Records a change to generated boxes the log cannot name.
+  fn generatesAll(self: &mut Self) { self.genLost = self.current }
+  // Appends, once each, the nodes whose children generate boxes anew after
+  // revision `since` (see `genNodes`), and returns true; or returns false,
+  // appending nothing, when the log no longer holds them all. Every change
+  // since that can change generated boxes is under one of them.
+  pub effect fn generationChanges(self: &Self, since: usize, result: &mut List<usize>) -> bool ! OutOfMemoryError ? &mut Allocator {
+    if self.genLost > since { return false }
+    let mut back: usize = 0
+    while back < self.genLogged && back < GENERATION_LOG {
+      let slot = (self.genLogged - 1 - back) % GENERATION_LOG
+      if self.genRevisions.get(slot) <= since { return true }
+      let node = self.genNodes.get(slot)
+      let mut seen = false
+      let mut at: usize = 0
+      while at < result.length() && !seen {
+        seen = result.get(at) == node
+        at = at + 1
+      }
+      if !seen { run result.append(node) }
+      back = back + 1
+    }
+    return true
+  }
   // The number of scroll offset changes so far.
   pub fn scrollRevision(self: &Self) -> usize { return self.scrolls }
   // Appends each node whose scroll offset changed after `since` scroll
@@ -314,6 +379,7 @@ impl Tree {
     if !self.contains(id) { fail InvalidNode { index: id.index } }
     self.touch(id.index)
     self.generated = self.current
+    self.generatesAll()
     self.marks = self.marks + 1
   }
   // The number of markDirty calls so far: revisions that changed no style,
@@ -541,6 +607,7 @@ impl Tree {
     self.touch(child.index)
     self.structure = self.current
     self.generated = self.current
+    self.generates(parent.index)
   }
   // Takes a node and its subtree out of the tree, keeping them for a later
   // insertBefore. A node outside the tree stays as it is.
@@ -564,6 +631,7 @@ impl Tree {
     nodes[id].previousSibling = NO_NODE
     nodes[id].nextSibling = NO_NODE
     self.touchInner(parent)
+    self.generates(parent)
   }
   // Removes a node and frees it and its subtree. Their ids, element style
   // slots and grid slots go to later creates, last freed first; nodes are
@@ -676,7 +744,10 @@ impl Tree {
       self.outer.set(id.index, self.current)
     }
     if inner && insets { self.insets.set(id.index, self.current) }
-    if generates { self.generated = self.current }
+    if generates {
+      self.generated = self.current
+      self.generatesAround(id.index)
+    }
   }
   pub effect fn setText(self: &mut Self, id: NodeId, value: String) ! InvalidNode {
     if !self.contains(id) || !self.nodes.asSlice()[id.index].isText() { fail InvalidNode { index: id.index } }
@@ -690,7 +761,10 @@ impl Tree {
     nodes[id.index].content = SourceContent.Text { value: move value }
     nodes[id.index].textStart = 0
     self.touch(id.index)
-    if blank != wasBlank { self.generated = self.current }
+    if blank != wasBlank {
+      self.generated = self.current
+      self.generatesAround(id.index)
+    }
   }
   /// Leaves the first `start` bytes of text node `id` to another box: layout reads the rest,
   /// at the same offsets. A host's ::first-letter box lays out the letter it takes.
@@ -702,7 +776,10 @@ impl Tree {
     nodes[id.index].textStart = start
     let blank = match self.nodes.asSlice()[id.index].laidText() { Option<string>.Some { value } => whitespace(value) Option<string>.None => true }
     self.touch(id.index)
-    if blank != wasBlank { self.generated = self.current }
+    if blank != wasBlank {
+      self.generated = self.current
+      self.generatesAround(id.index)
+    }
   }
   pub effect fn setScrollOffset(self: &mut Self, id: NodeId, offset: Point) ! InvalidNode {
     if !self.contains(id) { fail InvalidNode { index: id.index } }
@@ -721,6 +798,7 @@ impl Tree {
     nodes[id.index].measurement = Measurement.Content
     self.touch(id.index)
     self.generated = self.current
+    self.generatesAround(id.index)
   }
   pub effect fn setNaturalMeasurement(self: &mut Self, id: NodeId, key: usize) ! InvalidNode {
     if !self.contains(id) { fail InvalidNode { index: id.index } }
@@ -733,6 +811,7 @@ impl Tree {
     styles[styleIndex].replaced = true
     self.touch(id.index)
     self.generated = self.current
+    self.generatesAround(id.index)
   }
 }
 // Work counters for the most recent compute, summed over its passes.
@@ -769,8 +848,14 @@ pub struct LayoutTree {
   pub inPlaceOff: bool,
   // How the last compute ran, for diagnostics: 0 nothing changed, 1 every change laid out
   // alone and spliced in, 2 in place over the previous output, 3 the same boxes written
-  // afresh, 4 other boxes.
+  // afresh, 4 other boxes, 5 patched boxes in place over the previous output.
   pub lastMode: u8,
+  // Computes so far that patched the kept boxes (box_patch.silk), and that
+  // tried and generated every box afresh instead.
+  pub patches: usize, pub patchFallbacks: usize,
+  // Whether a compute may patch the kept boxes; off, it matches boxes
+  // generated afresh with them, as before patches, to compare the two.
+  pub patching: bool,
   // How many computes in a row laid out most boxes again and copied none
   // (see compute).
   pub reuseIdle: usize,
@@ -779,6 +864,8 @@ pub struct LayoutTree {
   pub anonymousOrigins: List<usize>, pub anonymousText: List<bool>,
   pub firstBySource: List<usize>, pub lastBySource: List<usize>,
   pub keptColumnSets: bool,
+  // Box ids and anonymous style slots no box holds (see BoxTree.freeBoxes).
+  pub freeBoxes: List<usize>, pub freeStyles: List<usize>,
   pub fragments: FragmentArena,
   pub viewportOverflow: Rect,
   // Spare storage for laying out a changed subtree alone (see the early
@@ -803,11 +890,11 @@ impl LayoutTree {
   pub fn make() -> LayoutTree {
     return LayoutTree {
       stats: LayoutStats.zero(),
-      cache: LayoutCache.make(), snapshot: Snapshot.make(), facts: BoxFacts.make(), writes: BoxWrites.make(), keptRevision: 0, keptReusable: false, normalOffsets: List<Point>.make(), normalOffsetsZero: true, scrollReady: false, keptViewport: OptionalSize.none(), keptScroll: Point { x: 0.0, y: 0.0 }, keptScrolls: 0, keptMarks: 0, relaidMost: false, inPlaceOff: false, lastMode: 0, reuseIdle: 0,
+      cache: LayoutCache.make(), snapshot: Snapshot.make(), facts: BoxFacts.make(), writes: BoxWrites.make(), keptRevision: 0, keptReusable: false, normalOffsets: List<Point>.make(), normalOffsetsZero: true, scrollReady: false, keptViewport: OptionalSize.none(), keptScroll: Point { x: 0.0, y: 0.0 }, keptScrolls: 0, keptMarks: 0, relaidMost: false, inPlaceOff: false, lastMode: 0, patches: 0, patchFallbacks: 0, patching: true, reuseIdle: 0,
       boxes: List<Layout>.make(), boxNodes: List<BoxNode>.make(),
       anonymousStyles: List<Style>.make(),
       anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
-      firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), keptColumnSets: false,
+      firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), keptColumnSets: false, freeBoxes: List<usize>.make(), freeStyles: List<usize>.make(),
       fragments: FragmentArena.make(), viewportOverflow: Rect.zero(),
       scratchBoxes: ScratchBoxes.make(), scratchFragments: FragmentArena.make(), cutoffMisses: List<CutoffMiss>.make(), flexScratch: List<FlexScratch>.make(), inlineScratch: List<InlineScratch>.make(), blockScratch: List<BlockScratch>.make(), exclusions: List<ExclusionArea>.make(),
       preparedSlots: List<PreparedSlot>.make(), preparedGeneration: 0,
@@ -873,6 +960,8 @@ impl LayoutTree {
     self.firstBySource = move constructed.firstBySource
     self.lastBySource = move constructed.lastBySource
     self.keptColumnSets = constructed.columnSets
+    self.freeBoxes = move constructed.freeBoxes
+    self.freeStyles = move constructed.freeStyles
   }
   pub effect fn getBox(self: &Self, id: BoxId) -> Layout ! InvalidBox {
     if id.index >= self.boxes.length() { fail InvalidBox { index: id.index } }

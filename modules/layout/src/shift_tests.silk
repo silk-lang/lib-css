@@ -13,6 +13,8 @@ import text { TextMeasure, TextError, TextContext, TextTokenKind, TextCursor, Te
 import tree { Tree, LayoutTree, NodeId, InvalidNode }
 import engine { compute }
 
+const NO_BOX: usize = usize.MAX
+
 // Structural edits after which an in-place compute moves the previous output
 // (FragmentArena.shiftPrevious) or refuses to: each must lay out as a fresh
 // LayoutTree does. Reduced from css update fuzz cases (structure and
@@ -92,7 +94,7 @@ fn wide(width: f32) -> Style {
 }
 
 fn sameFragment(a: &Fragment, b: &Fragment) -> bool {
-  return a.kind == b.kind && a.box == b.box && a.source == b.source && a.parent == b.parent
+  return a.kind == b.kind && a.source == b.source && a.parent == b.parent
     && a.firstChild == b.firstChild && a.lastChild == b.lastChild
     && a.previousSibling == b.previousSibling && a.nextSibling == b.nextSibling
     && a.previousForBox == b.previousForBox && a.nextForBox == b.nextForBox
@@ -113,9 +115,27 @@ effect fn expectSameAsFresh(tree: &Tree, output: &LayoutTree, viewport: Optional
   let kept = output.fragments.values.asSlice()
   let expected = fresh.fragments.values.asSlice()
   run Testing.expect(kept.length == expected.length, "the retained output has as many fragments as a fresh one")
+  // Box ids stay put across a patch, so they need not be a fresh layout's:
+  // pair them through the fragments they own.
+  let keptBoxes = output.fragments.boxCount()
+  let boxes = fresh.fragments.boxCount()
+  let mut toFresh = List<usize>.make()
+  run toFresh.appendRepeated(NO_BOX, keptBoxes)
+  let mut toKept = List<usize>.make()
+  run toKept.appendRepeated(NO_BOX, boxes)
   let mut at: usize = 0
   while at < kept.length {
     run Testing.expect(sameFragment(&kept[at], &expected[at]), "each retained fragment equals the fresh one")
+    let a = kept[at].box
+    let b = expected[at].box
+    run Testing.expect((a == NO_BOX) == (b == NO_BOX), "a fragment has a box when the fresh one does")
+    if a != NO_BOX {
+      run Testing.expect(a < keptBoxes && b < boxes, "fragment boxes are in range")
+      run Testing.expect(toFresh.get(a) == NO_BOX || toFresh.get(a) == b, "each retained box pairs with one fresh box")
+      run Testing.expect(toKept.get(b) == NO_BOX || toKept.get(b) == a, "each fresh box pairs with one retained box")
+      toFresh.set(a, b)
+      toKept.set(b, a)
+    }
     at = at + 1
   }
   let keptTexts = output.fragments.texts.asSlice()
@@ -126,11 +146,21 @@ effect fn expectSameAsFresh(tree: &Tree, output: &LayoutTree, viewport: Optional
     run Testing.expect(sameText(&keptTexts[at], &expectedTexts[at]), "each retained text record equals the fresh one")
     at = at + 1
   }
-  let boxes = fresh.fragments.boxCount()
-  run Testing.expect(output.fragments.boxCount() == boxes, "as many boxes as a fresh layout")
   let mut box: usize = 0
   while box < boxes {
-    run Testing.expect(output.fragments.first(box) == fresh.fragments.first(box) && output.fragments.last(box) == fresh.fragments.last(box), "each box's chain is the fresh one's")
+    let mine = toKept.get(box)
+    if mine == NO_BOX {
+      run Testing.expect(fresh.fragments.first(box) == NO_BOX, "each fresh box with fragments has a retained one")
+    } else {
+      run Testing.expect(output.fragments.first(mine) == fresh.fragments.first(box) && output.fragments.last(mine) == fresh.fragments.last(box), "each box's chain is the fresh one's")
+    }
+    box = box + 1
+  }
+  box = 0
+  while box < keptBoxes {
+    if toFresh.get(box) == NO_BOX {
+      run Testing.expect(output.fragments.first(box) == NO_BOX, "no retained box keeps a chain a fresh layout lacks")
+    }
     box = box + 1
   }
 }

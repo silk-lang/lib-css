@@ -439,6 +439,78 @@ pub effect fn indexStyleSources(tree: &Tree, nodes: &BoxTree<'_>, offsets: &mut 
   }
 }
 
+// Facts of the boxes a patch of the box tree touched (box_patch.silk),
+// `ids` ascending, over a tree that may have grown: their own facts and
+// parents, then reusability and viewport freedom again, children before
+// parents, for them and for each ancestor whose values change. Every child
+// of a touched box is touched or kept with its facts.
+pub effect fn markPatched(nodes: &BoxTree<'_>, facts: &mut BoxFacts, ids: &[usize]) ! OutOfMemoryError ? &mut Allocator {
+  let count = nodes.boxes.length()
+  if facts.own.length() < count {
+    let added = count - facts.own.length()
+    run facts.own.appendRepeated(0, added)
+    run facts.reusable.appendRepeated(REUSE_IN_FLOW, added)
+    run facts.viewportFree.appendRepeated(true, added)
+    run facts.parents.appendRepeated(NO_NODE, added)
+  }
+  let marks = facts.marks.length()
+  if marks < count { run facts.marks.appendRepeated(0, count - marks) }
+  facts.mark = facts.mark + 1
+  let mark = facts.mark
+  let mut pending = List<usize>.make()
+  run pending.reserveExact(ids.length)
+  let mut at: usize = 0
+  while at < ids.length {
+    let box = ids[at]
+    facts.own.set(box, ownFacts(nodes, box))
+    facts.parents.set(box, nodes.node(box).parent)
+    facts.marks.set(box, mark)
+    run pending.append(box)
+    at = at + 1
+  }
+  run settleLevels(nodes, &mut facts, &mut pending, mark)
+}
+
+// Reusability and viewport freedom of the boxes in `pending`, ascending,
+// from their children, and of each ancestor whose values that changes; see
+// remarkSubtrees.
+effect fn settleLevels(nodes: &BoxTree<'_>, facts: &mut BoxFacts, pending: &mut List<usize>, mark: usize) ! OutOfMemoryError ? &mut Allocator {
+  let marked = facts.marks.asMutSlice()
+  let own = facts.own.asSlice()
+  let levels = facts.reusable.asMutSlice()
+  let frees = facts.viewportFree.asMutSlice()
+  // `pending` ascends; its last box has no pending descendant.
+  while pending.length() > 0 {
+    let last = pending.length() - 1
+    let box = pending.get(last)
+    pending.truncate(last)
+    let mut level = own[box] & REUSE_LEVEL
+    let mut free = (own[box] & FACT_FREE) != 0
+    let mut child = nodes.node(box).firstChild
+    while child != NO_NODE {
+      let inherited = passedUp(nodes, child, levels[child] & REUSE_LEVEL)
+      if inherited < level { level = inherited }
+      free = free && frees[child]
+      child = nodes.node(child).nextSibling
+    }
+    let parent = nodes.node(box).parent
+    let same = levels[box] == level && frees[box] == free
+    levels[box] = level
+    frees[box] = free
+    if same || parent == NO_NODE || marked[parent] == mark { continue }
+    marked[parent] = mark
+    // Insert in order.
+    run pending.append(parent)
+    let slots = pending.asMutSlice()
+    let mut to = slots.length - 1
+    while to > 0 && slots[to - 1] > parent {
+      slots[to] = slots[to - 1]
+      to = to - 1
+    }
+    slots[to] = parent
+  }
+}
+
 // Refreshes kept facts for the same boxes after style changes since the
 // compute they reflect: the own facts of every box whose style or parent's
 // style changed, then the subtree facts of those boxes and their ancestors.
@@ -533,38 +605,6 @@ pub effect fn remarkSubtrees(tree: &Tree, nodes: &BoxTree<'_>, since: usize, log
     at = at + 1
   }
   if !ascending { run pending.sort() }
-  let own = facts.own.asSlice()
-  let levels = facts.reusable.asMutSlice()
-  let frees = facts.viewportFree.asMutSlice()
-  // `pending` ascends; its last box has no pending descendant.
-  while pending.length() > 0 {
-    let last = pending.length() - 1
-    let box = pending.get(last)
-    pending.truncate(last)
-    let mut level = own[box] & REUSE_LEVEL
-    let mut free = (own[box] & FACT_FREE) != 0
-    let mut child = nodes.node(box).firstChild
-    while child != NO_NODE {
-      let inherited = passedUp(nodes, child, levels[child] & REUSE_LEVEL)
-      if inherited < level { level = inherited }
-      free = free && frees[child]
-      child = nodes.node(child).nextSibling
-    }
-    let parent = nodes.node(box).parent
-    let same = levels[box] == level && frees[box] == free
-    levels[box] = level
-    frees[box] = free
-    if same || parent == NO_NODE || marked[parent] == mark { continue }
-    marked[parent] = mark
-    // Insert in order.
-    run pending.append(parent)
-    let slots = pending.asMutSlice()
-    let mut to = slots.length - 1
-    while to > 0 && slots[to - 1] > parent {
-      slots[to] = slots[to - 1]
-      to = to - 1
-    }
-    slots[to] = parent
-  }
+  run settleLevels(nodes, &mut facts, &mut pending, mark)
   return move changed
 }

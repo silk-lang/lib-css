@@ -481,12 +481,9 @@ fn elapsed(start: &Instant, end: &Instant) -> i64 {
 
 // Work summed over the timed computes of a benchmark run.
 struct Work {
-  computes: usize,
-  passes: usize,
-  fullLayouts: usize,
-  sizeProbes: usize,
-  cacheHits: usize,
-  reused: usize,
+  computes: usize, passes: usize, fullLayouts: usize, sizeProbes: usize, cacheHits: usize, reused: usize,
+  // Computes that patched the kept boxes and that could not, so far.
+  patches: usize, patchFallbacks: usize,
 }
 
 fn addWork(work: &mut Work, output: &LayoutTree) {
@@ -496,6 +493,8 @@ fn addWork(work: &mut Work, output: &LayoutTree) {
   work.sizeProbes = work.sizeProbes + output.stats.sizeProbes
   work.cacheHits = work.cacheHits + output.stats.cacheHits
   work.reused = work.reused + output.stats.reusedLayouts
+  work.patches = output.patches
+  work.patchFallbacks = output.patchFallbacks
 }
 
 // Benchmark mode: one line on stderr with every compute duration in
@@ -527,6 +526,8 @@ effect fn writeSamples(samples: &List<i64>, work: &Work, fixtures: &Fixtures)
   run field("measureCalls", &measures)
   run field("analyzeCalls", &analyses)
   run field("shapeCalls", &shapes)
+  run field("patches", &work.patches)
+  run field("patchFallbacks", &work.patchFallbacks)
   run Writer.writeString(",\"layoutNs\":[")
   let mut index: usize = 0
   while index < samples.length() {
@@ -826,14 +827,7 @@ effect fn execute(document: &Value)
       fail P.invalid("benchmark.iterations must be positive")
     }
     let mut samples = List<i64>.make()
-    let mut work = Work {
-      computes: 0,
-      passes: 0,
-      fullLayouts: 0,
-      sizeProbes: 0,
-      cacheHits: 0,
-      reused: 0,
-    }
+    let mut work = Work { computes: 0, passes: 0, fullLayouts: 0, sizeProbes: 0, cacheHits: 0, reused: 0, patches: 0, patchFallbacks: 0 }
     resetCounters(&mut fixtures)
     let mut clock = OsMonotonicClock.make()
     let mut iteration: i32 = 0
@@ -876,14 +870,7 @@ effect fn execute(document: &Value)
       fail P.invalid("updates.cycle must not be empty")
     }
     let mut samples = List<i64>.make()
-    let mut work = Work {
-      computes: 0,
-      passes: 0,
-      fullLayouts: 0,
-      sizeProbes: 0,
-      cacheHits: 0,
-      reused: 0,
-    }
+    let mut work = Work { computes: 0, passes: 0, fullLayouts: 0, sizeProbes: 0, cacheHits: 0, reused: 0, patches: 0, patchFallbacks: 0 }
     resetCounters(&mut fixtures)
     let mut clock = OsMonotonicClock.make()
     let mut iteration: usize = 0

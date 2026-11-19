@@ -16,7 +16,7 @@ import silk.text.format { Format }
 import silk.text.string { String }
 import silk.num.i64
 import silk.num.usize
-import task_json { J }
+import task_json { J, CanonicalBoxes }
 import task_update_common { U }
 import task_update_random { Random }
 
@@ -536,7 +536,9 @@ fn position(order: &List<usize>, slot: i64) -> i64 {
 }
 effect fn structureMatches(kept: &[u8], fresh: &[u8], order: &List<usize>) -> bool ! TaskError | OutOfMemoryError ? &mut Allocator {
   let mut a = run J.parse(kept)
-  let b = run J.parse(fresh)
+  let mut b = run J.parse(fresh)
+  run CanonicalBoxes.apply(&mut a)
+  run CanonicalBoxes.apply(&mut b)
   let boxes = J.getMut(&mut a, "boxes")
   let mut i: usize = 0
   while i < J.length(&boxes) {
@@ -611,8 +613,10 @@ pub effect fn fuzzUpdates(options: &FuzzUpdatesOptions) -> ()
           let updates = run U.updated(&case.document, &case.cycle, J.length(&case.cycle) * m.repeat)
           let kept = run U.invoke(cli, &updates, 120)
           let mut failed = kept.code != 0
-          if !failed { let a = run J.parse(Bytes.asSlice(&kept.output))
-          let b = run J.parse(Bytes.asSlice(&fresh.output))
+          if !failed { let mut a = run J.parse(Bytes.asSlice(&kept.output))
+          let mut b = run J.parse(Bytes.asSlice(&fresh.output))
+          run CanonicalBoxes.apply(&mut a)
+          run CanonicalBoxes.apply(&mut b)
           failed = !Json.equal(&a, &b) }
           if failed {
             failures = failures + 1

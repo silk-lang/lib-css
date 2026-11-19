@@ -15,7 +15,7 @@ import silk.text.string { String }
 import silk.num.i64
 import silk.num.i32
 import silk.num.usize
-import task_json { J }
+import task_json { J, CanonicalBoxes }
 import task_update_common { U }
 import task_sources_common { sort }
 
@@ -239,8 +239,10 @@ pub effect fn fixtureUpdates(options: &FixtureUpdatesOptions) -> ()
           let kept = run U.invoke(String.view(&options.cli), &updates, 120)
           checked = checked + 1
           if kept.code != 0 { failed = true }
-          else { let a = run J.parse(Bytes.asSlice(&kept.output))
-          let b = run J.parse(Bytes.asSlice(&fresh.output))
+          else { let mut a = run J.parse(Bytes.asSlice(&kept.output))
+          let mut b = run J.parse(Bytes.asSlice(&fresh.output))
+          run CanonicalBoxes.apply(&mut a)
+          run CanonicalBoxes.apply(&mut b)
           failed = !Json.equal(&a, &b) }
         }
         if failed {
