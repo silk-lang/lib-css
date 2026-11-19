@@ -200,8 +200,7 @@ fn contribution(value: f32, preferred: f32, item: &Item) -> f32 {
 }
 // Sizing §5.1: a box's min-content block size equals its max-content block
 // size, except for a multi-line flex container whose main axis is the block
-// axis (§9.9.1). Probing both under one constraint lets the second reuse the
-// first's cached result.
+// axis (§9.9.1). One probe then supplies both contributions.
 fn blockAxisConstraint(style: &Style, horizontal: bool, constraint: AvailableSpace) -> AvailableSpace {
   if constraint.kind != AvailableKind.MinContent { return constraint }
   let inlineHorizontal = style.writingMode == WritingMode.HorizontalTb
@@ -253,8 +252,11 @@ fn probeInput(childInput: &Input, horizontal: bool, constraint: AvailableSpace, 
   if crossKnown { setKnown(&mut input, !horizontal, cross) }
   return input
 }
-// The final layout of an unfragmented item of a single-line container with a
-// known cross size, as placeFlexLines requests it, before the lines exist:
+fn stretchesCross(item: &Item) -> bool {
+  return item.crossAuto && item.align == Align.Stretch && !item.autoCrossStart && !item.autoCrossEnd
+}
+// The final layout of an unfragmented item as placeFlexLines requests it,
+// once its cross constraint is known or independent of the line size:
 // with the item's target main size when `mainKnown`, else with none, so the
 // layout finds the content size a probe would. Marks the item `early`.
 effect fn layoutAhead<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, item: &mut Item, childInput: &Input, horizontal: bool, mainKnown: bool) -> Probe ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
@@ -263,7 +265,7 @@ effect fn layoutAhead<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<
   if mainKnown { setKnown(&mut finalInput, horizontal, item.target) }
   setIndefinite(&mut finalInput, horizontal, !item.mainDefinite)
   let lineCross = optionalSize(childInput.parent, !horizontal)
-  if item.crossAuto && item.align == Align.Stretch && !item.autoCrossStart && !item.autoCrossEnd {
+  if stretchesCross(&item.*) {
     setKnown(&mut finalInput, !horizontal, clamp(lineCross - item.crossStart - item.crossEnd, item.crossMin, item.crossMax))
   } else if axisDimension(nodes.style(id), !horizontal).kind == DimensionKind.FitContent {
     setAvailable(&mut finalInput, !horizontal, AvailableSpace.definite(lineCross))
@@ -361,7 +363,7 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
   let mut minContent = item.inset
   let mut minimumCross = crossSize
   let mut minProbe = Probe { size: Size.zero(), preferredRatio: 0.0, ratioBorderBox: false }
-  let mut minProbed = false
+  let mut haveMaxProbe = false
   // An item whose block-axis content size is its laid out size is laid out
   // once, with its final request less the main size, in place of the probe.
   let ahead = early && !horizontal && style.writingMode == WritingMode.HorizontalTb && style.aspectRatio == 0.0 && !style.replaced && nodes.node(id).measurement != Measurement.Natural
@@ -393,22 +395,25 @@ effect fn prepareFresh<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree
     } else {
       let mut measured = minProbe
       if ahead { measured = run layoutAhead(nodes, &mut output, &mut measurer, &mut item, &childInput, horizontal, false) }
-      else { measured = run probe(nodes, &mut output, &mut measurer, id, &childInput, horizontal, blockAxisConstraint(style, horizontal, AvailableSpace.minContent()), crossDefinite, crossSize) }
+      else {
+        let constraint = blockAxisConstraint(style, horizontal, AvailableSpace.minContent())
+        measured = run probe(nodes, &mut output, &mut measurer, id, &childInput, horizontal, constraint, crossDefinite, crossSize)
+        haveMaxProbe = constraint.kind == AvailableKind.MaxContent
+      }
       minContent = axisSize(measured.size, horizontal)
       minimumCross = axisSize(measured.size, !horizontal)
       ratio = measured.preferredRatio
       borderRatio = measured.ratioBorderBox
       minProbe = measured
     }
-    minProbed = true
+    haveMaxProbe = haveMaxProbe || constraintFreeProbe(output.keyShape(id))
   }
   let mut maxContent = minContent
   let mut contentCross = crossSize
   if !basisDefinite || (intrinsic && !deferMinimum) || minimumDimension.kind == DimensionKind.MaxContent || maximumDimension.kind == DimensionKind.MaxContent || minimumDimension.kind == DimensionKind.FitContent || maximumDimension.kind == DimensionKind.FitContent {
-    // An empty box's max-content probe has its min-content probe's key.
     let mut measured = minProbe
     if ahead { if !item.early { measured = run layoutAhead(nodes, &mut output, &mut measurer, &mut item, &childInput, horizontal, false) } }
-    else if !minProbed || !constraintFreeProbe(output.keyShape(id)) { measured = run probe(nodes, &mut output, &mut measurer, id, &childInput, horizontal, AvailableSpace.maxContent(), crossDefinite, crossSize) }
+    else if !haveMaxProbe { measured = run probe(nodes, &mut output, &mut measurer, id, &childInput, horizontal, AvailableSpace.maxContent(), crossDefinite, crossSize) }
     maxContent = axisSize(measured.size, horizontal)
     contentCross = axisSize(measured.size, !horizontal)
     if !horizontal && !crossDefinite && crossIgnoresMain(nodes, &output, id) { item.probedCross = contentCross }
@@ -702,8 +707,9 @@ effect fn crossSizes<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       item.cross = item.crossMin
       item.baseline = 0.0
       item.lastBaseline = 0.0
-    } else if item.early {
+    } else if item.early && item.align != Align.Baseline && item.align != Align.LastBaseline {
       item.cross = item.earlyCross
+      if axis.row && fixedCross(nodes, &item.*, parentStyle) { item.cross = item.knownCross }
       item.baseline = 0.0
       item.lastBaseline = 0.0
       result.cross = max(result.cross, item.cross + item.crossStart + item.crossEnd)
@@ -721,20 +727,21 @@ effect fn crossSizes<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
       item.lastBaseline = 0.0
       result.cross = max(result.cross, item.cross + item.crossStart + item.crossEnd)
     } else if active(&item.*, collapsed) {
-      // probeNode, with the request built again only on a cache miss.
-      let mut key = crossProbeInput(input, &item.*, axis)
-      normalizeKey(output.keyShape(item.id), &mut key, output.viewportFree(item.id))
-      // Fragmented placement reads the probe back from boxes[id].
       let mut cached = usize.MAX
-      let mut stored = false
-      if !input.fragmentation.active && output.frame == NO_NODE { cached = output.findProbe(item.id, &key, CacheKind.IndependentBox) }
-      else { stored = run output.storeCached(item.id, &key, CacheKind.IndependentBox) }
-      if cached == usize.MAX && !stored {
-        let request = crossProbeInput(input, &item.*, axis)
-        // A measured item whose base size probe came out at its target size
-        // has its hypothetical cross size already (see Measure).
-        if axis.horizontal && !input.fragmentation.active && output.frame == NO_NODE && plainMeasuredBox(nodes, &output, item.id, &request) { cached = output.cache.findAtWidth(item.id, &key) }
-        if cached == usize.MAX { run probeFresh(nodes, &mut output, &mut measurer, item.id, &request, &key) }
+      if !item.early {
+        let mut key = crossProbeInput(input, &item.*, axis)
+        normalizeKey(output.keyShape(item.id), &mut key, output.viewportFree(item.id))
+        // Fragmented placement reads the probe back from boxes[id].
+        let mut stored = false
+        if !input.fragmentation.active && output.frame == NO_NODE { cached = output.findProbe(item.id, &key, CacheKind.IndependentBox) }
+        else { stored = run output.storeCached(item.id, &key, CacheKind.IndependentBox) }
+        if cached == usize.MAX && !stored {
+          let request = crossProbeInput(input, &item.*, axis)
+          // A measured item whose base size probe came out at its target size
+          // has its hypothetical cross size already (see Measure).
+          if axis.horizontal && !input.fragmentation.active && output.frame == NO_NODE && plainMeasuredBox(nodes, &output, item.id, &request) { cached = output.cache.findAtWidth(item.id, &key) }
+          if cached == usize.MAX { run probeFresh(nodes, &mut output, &mut measurer, item.id, &request, &key) }
+        }
       }
       let layout = output.probed(item.id, cached)
       item.cross = axisSize(layout.size, !axis.horizontal)
@@ -1530,6 +1537,17 @@ effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
       let line = scratch.lines.get(lineIndex)
       run deferredMinimums(nodes, &mut output, &mut measurer, scratch.items.asMutSlice(), &line, &childInput, &axis, main, mainGap, collapsed, request)
       resolveFlexible(scratch.items.asMutSlice(), &line, main, mainGap, collapsed)
+      if axis.row && inlineHorizontal && mainKnown && !crossKnown && input.performLayout
+        && style.flexWrap == FlexWrap.NoWrap && !hasCollapsed && !input.fragmentation.active && output.frame == NO_NODE {
+        let mut aheadIndex = line.start
+        while aheadIndex < line.end {
+          let item = &mut scratch.items.asMutSlice()[aheadIndex]
+          if (!childInput.baselines && (item.align == Align.Baseline || item.align == Align.LastBaseline)) || stretchesCross(&item.*)
+            || nodes.style(item.id).height.kind == DimensionKind.FitContent { break }
+          drop run layoutAhead(nodes, &mut output, &mut measurer, &mut item, &childInput, true, true)
+          aheadIndex = aheadIndex + 1
+        }
+      }
       let mut measuredLine = run crossSizes(nodes, &mut output, &mut measurer, scratch.items.asMutSlice(), &line, &childInput, &axis, style, collapsed, style.flexWrap == FlexWrap.NoWrap && crossKnown && !input.fragmentation.active)
       if style.flexWrap == FlexWrap.NoWrap {
         if crossKnown { measuredLine.cross = cross }
@@ -1694,7 +1712,7 @@ effect fn placeFlexLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTr
         finalInput.availableHeight = childInput.availableHeight
         setKnown(&mut finalInput, axis.horizontal, item.target)
         setIndefinite(&mut finalInput, axis.horizontal, !item.mainDefinite)
-        if item.crossAuto && item.align == Align.Stretch && !item.autoCrossStart && !item.autoCrossEnd {
+        if stretchesCross(item) {
           childCross = clamp(line.cross - item.crossStart - item.crossEnd, item.crossMin, item.crossMax)
           setKnown(&mut finalInput, !axis.horizontal, childCross)
         } else if axisDimension(nodes.style(item.id), !axis.horizontal).kind == DimensionKind.FitContent {
