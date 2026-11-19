@@ -1007,36 +1007,20 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     text.origins = move normalized.origins
     return false
   }
-  let original = &mut text.original
-  original.clear()
-  run original.reserveExact(tokens.length)
-  index = 0
-  while index < tokens.length {
-    let mut item = raw[0]
-    item.start = TextCursor { unit: index, offset: 0 }
-    run original.append(item)
-    index = index + 1
-  }
   let context = TextContext { tokens: tokens, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: UnicodeBidi.Normal, textJustify: style.textJustify }
   let mut analysis = TextAnalysis.uniform(tokens.length, 0, 0, false)
   run Bidi.normalizeAnalysis(context, &mut analysis)
   let mut plan = Plan.make()
   let fonts = &mut text.fonts
   fonts.clear()
-  let candidate = &mut text.candidate
-  run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, original.asSlice(), scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, false, 0.0, 0.0, &[])
+  let mut candidate = TextCandidate.make()
+  candidate.items = Intrinsic.replace(line.items, List<Item>.make())
+  candidate.texts = Intrinsic.replace(line.texts, List<TextLeaf>.make())
+  run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, raw, scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, false, 0.0, 0.0, &[])
   plain = candidate.real && !candidate.visual.active && candidate.hanging == 0.0 && fonts.length() == 1
   if plain {
-    line.items.clear()
-    line.texts.clear()
-    run line.items.reserveExact(candidate.items.length())
-    run line.texts.reserveExact(candidate.texts.length())
-    index = 0
-    while index < candidate.items.length() { run line.items.append(candidate.items.get(index))
-      index = index + 1 }
-    index = 0
-    while index < candidate.texts.length() { run line.texts.append(candidate.texts.get(index))
-      index = index + 1 }
+    line.items = move candidate.items
+    line.texts = move candidate.texts
     line.advance = candidate.advance
     line.font = fonts.get(0)
     line.refused = false
@@ -1049,9 +1033,9 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
 // shapePlain) fitting one line, beside no floats and unfragmented: the line
 // layoutText fits, without its preparation, analysis and line fitting. The
 // shaped line is kept in the cache (PlainLine), so a later probe or compute
-// of the box shapes nothing. False, with nothing written, where layoutText
-// is needed: other text, a min-content request, or a line too long.
-effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &[AtomicData], scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+// can reuse it. When it overflows, layoutText uses the same whole-paragraph
+// advances for fitting, but still shapes the chosen lines at their boundaries.
+effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   if !plainLineStyle(style) || !plainLineStyle(nodes.style(raw[0].id)) { return false }
   // A long line cut by an ellipsis is shaped by layoutText only as far as it can show.
@@ -1067,18 +1051,18 @@ effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
   let current = line.valid && line.item == raw[0].id && line.fontSize == scopes[0].font.metrics.fontSize && line.lineHeight == scopes[0].font.lineHeight
   let mut plain = current && !line.refused
   if !current { plain = run shapePlain(nodes, &mut output, &mut measurer, id, raw, scopes, &mut text, &mut line) }
-  if !offered { width = max(0.0, line.advance) }
-  let axes = Axes.make(style.writingMode)
-  let mut metrics = Size.zero()
-  let mut band = Band { left: 0.0, right: width, nextBottom: 0.0, occupied: false, more: false }
-  if plain {
-    metrics = lineExtents(line.items.asSlice(), scopes, extents.asMutSlice(), 0, line.items.length(), true)
-    band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, 0.0, metrics.height), 0.0, false)
-    plain = line.advance <= band.right - band.left
-  }
   if !plain {
     run output.cache.keepPlain(id, move line)
     return false
+  }
+  if !offered { width = max(0.0, line.advance) }
+  let axes = Axes.make(style.writingMode)
+  let metrics = lineExtents(line.items.asSlice(), scopes, extents.asMutSlice(), 0, line.items.length(), true)
+  let band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, 0.0, metrics.height), 0.0, false)
+  if !(line.advance <= band.right - band.left) {
+    result.* = run layoutText(nodes, &mut output, &mut measurer, id, UnicodeBidi.Normal, true, &input, &box, &mut bfc, raw, &mut atomics, scopes, &mut extents, &mut text, line.items.asSlice())
+    run output.cache.keepPlain(id, move line)
+    return true
   }
   let baselineOffsets = fontBaselines(&scopes[0].font, style.writingMode).translated(-scopes[0].font.baseline)
   let exported = baselineOffsets.translated(box.inset.top + metrics.width)
@@ -1095,7 +1079,7 @@ effect fn plainLine<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
     run text.lines.append(LineBox { start: 0, end: line.items.length(), y: 0.0, left: band.left, width: band.right - band.left, advance: line.advance, hangingStart: 0.0, height: metrics.height, baseline: metrics.width, real: true, last: true, direction: style.usedDirection(), visual: Line.make() })
     text.fonts.clear()
     run text.fonts.append(line.font)
-    run emitLines(nodes, &mut output, &mut measurer, text.lines.asSlice(), line.items.asSlice(), atomics, line.texts.asSlice(), text.fonts.asSlice(), scopes, &mut extents, &mut text.spans, id, style, &axes, &box, result.size, &baselineOffsets, &input)
+    run emitLines(nodes, &mut output, &mut measurer, text.lines.asSlice(), line.items.asSlice(), atomics.asSlice(), line.texts.asSlice(), text.fonts.asSlice(), scopes, &mut extents, &mut text.spans, id, style, &axes, &box, result.size, &baselineOffsets, &input)
   }
   run output.cache.keepPlain(id, move line)
   return true
@@ -1181,7 +1165,7 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
   let rootBidi = paragraphBidi(nodes, id)
   if items.length() == 1 && items.get(0).kind == ItemKind.Text && rootBidi == UnicodeBidi.Normal && TextMeasure.plainText(&measurer) {
     let mut plain = Layout.zero()
-    if run plainLine(nodes, &mut output, &mut measurer, id, &input, &box, &mut bfc, items.asSlice(), atomics.asSlice(), scopes.asSlice(), &mut extents, &mut text, &mut plain) {
+    if run plainLine(nodes, &mut output, &mut measurer, id, &input, &box, &mut bfc, items.asSlice(), &mut atomics, scopes.asSlice(), &mut extents, &mut text, &mut plain) {
       return plain
     }
   }
@@ -1203,7 +1187,7 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure>(nodes: &Box
     textIndex = textIndex + 1
   }
   if needsAnalysis || needsVisual || (input.fragmentation.active && input.performLayout) {
-    return run layoutText(nodes, &mut output, &mut measurer, id, rootBidi, needsAnalysis, &input, &box, &mut bfc, items.asSlice(), &mut atomics, scopes.asSlice(), &mut extents, &mut text)
+    return run layoutText(nodes, &mut output, &mut measurer, id, rootBidi, needsAnalysis, &input, &box, &mut bfc, items.asSlice(), &mut atomics, scopes.asSlice(), &mut extents, &mut text, &[])
   }
   let chunks = run chunksFor(nodes, items.asSlice(), scopes.asSlice())
   let mut maximum: f32 = 0.0
@@ -1883,10 +1867,19 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
   // there to short of it shares.
   let mut boundaryFrom = TextCursor { unit: 0, offset: 0 }
   let mut boundary = boundaryFrom
+  let singleTextSource = original.length == 1 && original[0].kind == ItemKind.Text
+  // Its line keeps the lists shaped here (see shapePlain): they take their final size at once.
+  if singleTextSource {
+    run result.items.reserveExact(shaped.length())
+    run result.texts.reserveExact(shaped.length())
+  }
   unit = start.unit
   while unit < end.unit || (unit == end.unit && end.offset != 0) {
     let token = &context.tokens[unit]
-    let base = original[unit]
+    // A paragraph that is one text box may pass its one item for every token.
+    let mut sourceUnit = unit
+    if singleTextSource { sourceUnit = 0 }
+    let base = original[sourceUnit]
     let mut coverage: usize = 0
     let mut limit: usize = 0
     if found && unit >= first.unit && (unit < last.unit || (unit == last.unit && last.offset != 0)) {
@@ -1999,7 +1992,8 @@ effect fn shapeCandidate<M: Measure + TextMeasure>(nodes: &BoxTree<'_>, measurer
   if next != shaped.length() {
     fail TextError { source: NO_NODE, message: "Text service returned out-of-order or out-of-range runs" }
   }
-  let origin = inlineOrigin + textEdge(nodes, original, scopes, start, true, context.direction == Direction.Rtl, visualPlan.active)
+  let mut origin = inlineOrigin
+  if tabs { origin = origin + textEdge(nodes, original, scopes, start, true, context.direction == Direction.Rtl, visualPlan.active) }
   run Visual.fit(&mut visualPlan, nodes, scopes, result.items.asMutSlice(), context, analysis, start, end, tabs, origin, &mut result.visual)
   if result.visual.active || tabs { result.advance = result.visual.advance }
   if result.visual.active { result.real = result.real || result.visual.real }
@@ -2164,7 +2158,7 @@ effect fn emitLines<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'s
 // The box's paragraph as this pass last prepared it, else the core an earlier
 // compute kept, else an empty one.
 effect fn takePrepared<'pass, 'source>(output: &mut LayoutPass<'pass, 'source>, id: usize) -> PreparedInline<'source> ! OutOfMemoryError ? &mut Allocator {
-  match move output.inlinePrepared.asMutSlice()[id].pop() {
+  match move output.takeHeld(id) {
     Option<PreparedInline<'source>>.Some { value } => { return move value }
     Option<PreparedInline<'source>>.None => {}
   }
@@ -2180,9 +2174,14 @@ effect fn takePrepared<'pass, 'source>(output: &mut LayoutPass<'pass, 'source>, 
     }
     Option<KeptText>.None => {}
   }
+  // A core this compute let go lends its lists, as a stale one does.
+  match output.spareCores.pop() {
+    Option<Box<PreparedCore>>.Some { value } => { return PreparedInline { tokens: List<TextToken<'source>>.make(), core: move value, hasTokens: false } }
+    Option<Box<PreparedCore>>.None => {}
+  }
   return PreparedInline { tokens: List<TextToken<'source>>.make(), core: run Box.make(PreparedCore.make()), hasTokens: false }
 }
-effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, unicodeBidi: UnicodeBidi, externalAnalysis: bool, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, unicodeBidi: UnicodeBidi, externalAnalysis: bool, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, wholeItems: &[Item]) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let axes = Axes.make(style.writingMode)
   let rtl = style.usedDirection() == Direction.Rtl
@@ -2305,8 +2304,7 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
         run emitLines(nodes, &mut output, &mut measurer, memo.fitted.lines.asSlice(), memo.fitted.items.asSlice(), atomics.asSlice(), memo.fitted.texts.asSlice(), memo.fonts.asSlice(), scopes, &mut extents, &mut text.spans, id, style, &axes, &box, result.size, &baselineOffsets, &input)
       }
       core.origins = move normalized.origins
-      run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
-      run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
+      run output.putPrepared(id, PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
       return result
     }
   }
@@ -2541,13 +2539,16 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   let lineEnds = &mut text.lineEnds
   if fastFit && memoFirst == NO_NODE && memo.prefix.length() != context.tokens.length + 1 {
     memo.prefix.clear()
-    run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, terminal, false, 0.0, wholeReusable, segmentLimit)
+    if wholeItems.length == 0 {
+      run shapeRange(nodes, &mut measurer, context, &analysis, &mut visualPlan, hasText, original.asSlice(), scopes, &mut memo, &mut shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, terminal, false, 0.0, wholeReusable, segmentLimit)
+    }
+    let advances = if wholeItems.length == 0 { candidate.items.asSlice() } else { wholeItems }
     run memo.prefix.reserveExact(context.tokens.length + 1)
     while memo.prefix.length() <= context.tokens.length { run memo.prefix.append(0.0) }
     let prefix = memo.prefix.asMutSlice()
     index = 0
-    while index < candidate.items.length() {
-      let item = candidate.items.get(index)
+    while index < advances.length {
+      let item = advances[index]
       if item.kind != ItemKind.Float && item.kind != ItemKind.Anchor && item.start.unit < context.tokens.length {
         prefix[item.start.unit + 1] = prefix[item.start.unit + 1] + item.advance
       }
@@ -3027,7 +3028,6 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
     run output.resumes.set(id, state)
   }
   if fitsMemo && memoFirst == NO_NODE && !blocked && next == points.length() { run memo.record(fitWidth, lineEnds.asSlice()) }
-  run output.inlinePrepared.asMutSlice()[id].reserveExact(1)
   if recording && !blocked && next == points.length() {
     memo.fitted.valid = true
     memo.fitted.width = width
@@ -3046,6 +3046,6 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure>(nodes: &BoxTree<'
   }
   core.ready = true
   core.origins = move normalized.origins
-  run output.inlinePrepared.asMutSlice()[id].append(PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
+  run output.putPrepared(id, PreparedInline { tokens: move normalized.tokens, core: move boxed, hasTokens: true })
   return result
 }

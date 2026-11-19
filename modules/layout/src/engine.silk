@@ -23,6 +23,7 @@ import box_tree { BoxTree, BoxKind, BoxNode, itemParent }
 import table { layoutTable, layoutTablePart }
 import silk.collections.list { List }
 import fragments { FragmentKind, FragmentArena, Fragment }
+import scratch_boxes { ScratchBoxes }
 import inline_layout { layoutInline, InlineScratch }
 import text { TextMeasure, TextError }
 import fragment_box as FragmentBox
@@ -2249,6 +2250,19 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure>(nodes: &Bo
   return result
 }
 
+// Lists the boxes whose overflow is auto on an axis (see BoxFacts.scrollers).
+effect fn autoScrollers(nodes: &BoxTree<'_>, facts: &mut BoxFacts) ! OutOfMemoryError ? &mut Allocator {
+  facts.scrollers.clear()
+  let count = nodes.boxes.length()
+  let mut id: usize = 0
+  while id < count {
+    let style = nodes.style(id)
+    if overflowForAxis(style, true) == Overflow.Auto || overflowForAxis(style, false) == Overflow.Auto { run facts.scrollers.append(id) }
+    id = id + 1
+  }
+  facts.scrollersFor = count
+}
+
 fn sameViewport(a: &OptionalSize, b: &OptionalSize) -> bool {
   return a.widthDefinite == b.widthDefinite && a.heightDefinite == b.heightDefinite && a.width == b.width && a.height == b.height
 }
@@ -2788,6 +2802,17 @@ fn adoptSubtree(nodes: &BoxTree<'_>, output: &mut LayoutTree, scratch: &[Layout]
   }
 }
 
+// Gives each box of the subtree a zero layout in `scratch`, which holds
+// whatever an earlier cutoff left, or zero bytes (see ScratchBoxes).
+fn resetSubtree(nodes: &BoxTree<'_>, scratch: &mut [Layout], id: usize) {
+  scratch[id] = Layout.zero()
+  let mut child = nodes.node(id).firstChild
+  while child != NO_NODE {
+    resetSubtree(nodes, &mut scratch, child)
+    child = nodes.node(child).nextSibling
+  }
+}
+
 // Unsets the box chains of a subtree laid out alone in the scratch arena.
 fn unsetSubtree(nodes: &BoxTree<'_>, fragments: &mut FragmentArena, id: usize) {
   fragments.unsetChains(id)
@@ -2803,9 +2828,9 @@ fn unsetSubtree(nodes: &BoxTree<'_>, fragments: &mut FragmentArena, id: usize) {
 effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>, output: &mut LayoutTree, facts: &mut BoxFacts, measurer: &mut M, id: usize, range: FinalRange, probes: &[CachedProbe], first: usize, end: usize, plain: f32) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let final = output.cache.result(id).*
   let count = nodes.boxes.length()
-  let mut scratchBoxes = Intrinsic.replace(output.scratchBoxes, List<Layout>.make())
-  let have = scratchBoxes.length()
-  if have < count { run scratchBoxes.appendRepeated(Layout.zero(), count - have) }
+  let mut scratchBoxes = Intrinsic.replace(output.scratchBoxes, ScratchBoxes.make())
+  run scratchBoxes.reserve(count)
+  resetSubtree(nodes, scratchBoxes.asMutSlice(), id)
   let mut scratchFragments = Intrinsic.replace(output.scratchFragments, FragmentArena.make())
   run scratchFragments.prepareUnset(count)
   let mut same = true
@@ -2878,6 +2903,7 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure>(nodes: &BoxTree<'source>,
   facts.keyShapes = Intrinsic.replace(state.facts.keyShapes, List<u16>.make())
   facts.itemFlags = Intrinsic.replace(state.facts.itemFlags, List<u8>.make())
   if same {
+    run output.fragments.reserveSplice()
     let root = &mut output.fragments.values.asMutSlice()[range.start]
     root.location = Point { x: root.location.x + moved.x, y: root.location.y + moved.y }
     output.fragments.spliceFrom(range.start, range.end, &scratchFragments)
@@ -2929,6 +2955,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   let since = output.treeRevision()
   if output.reusable() && tree.revision() == since && sameViewport(&output.keptViewport, &viewport) && output.keptScroll.x == tree.viewportScrollOffset.x && output.keptScroll.y == tree.viewportScrollOffset.y && tree.scrollRevision() == output.keptScrolls {
     output.stats = LayoutStats.zero()
+    output.lastMode = 0
     return
   }
   output.scrollReady = false
@@ -3019,6 +3046,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     // boxes when it changes; see Tree.setStyle.
     if !restoring {
       if run positionVisits(&nodes, &mut facts.visits) { facts.visitsRevision = facts.visitsRevision + 1 }
+      run autoScrollers(&nodes, &mut facts)
       run Incremental.indexStyleSources(tree, &nodes, &mut facts.styledOffsets, &mut facts.styledBoxes)
     }
   } else if boxesStand && facts.covers(nodes.boxes.length()) && facts.styledOffsets.length() == tree.nodes.length() + 1 && facts.styledBoxes.length() == nodes.boxes.length() {
@@ -3027,6 +3055,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     run Incremental.markSubtrees(&nodes, &mut facts)
     run keyShapes(&nodes, &mut facts.keyShapes, &mut facts.itemFlags)
     if run positionVisits(&nodes, &mut facts.visits) { facts.visitsRevision = facts.visitsRevision + 1 }
+      run autoScrollers(&nodes, &mut facts)
     run Incremental.indexStyleSources(tree, &nodes, &mut facts.styledOffsets, &mut facts.styledBoxes)
   }
   // Changed boxes laid out alone first; see cutoffCandidates.
@@ -3052,6 +3081,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     && allAlone(&nodes, changes.asSlice(), alone.asSlice()) && output.cache.undoRotate() {
     output.facts = move facts
     output.stats = LayoutStats.zero()
+    output.lastMode = 1
     output.keep(tree.revision(), true)
     output.keptMarks = tree.markRevision()
     output.adopt(move nodes)
@@ -3062,6 +3092,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
   // this one likely will too: then saving what each write in place
   // overwrites costs more than writing afresh after the previous output.
   let inPlace = sameBoxes && !output.relaidMost
+  output.lastMode = if inPlace { 2 } else if sameBoxes { 3 } else { 4 }
   if sameBoxes && !inPlace { output.snapshot.takeOutput(&mut output.fragments, &mut output.boxes, false) }
   output.relaidMost = false
   let flexScratch = Intrinsic.replace(output.flexScratch, List<FlexScratch>.make())
@@ -3108,9 +3139,10 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
     Measure.tracePhase(&mut measurer, TRACE_LAYOUT)
     let viewportLayout = run layoutNode(&nodes, &mut boxes, &mut measurer, 0, &input)
     drop viewportLayout
-    run boxes.fragments.endFlow()
+    let flowShift = run boxes.fragments.endFlow()
+    if flowShift.by != 0 { boxes.cache.shiftRanges(flowShift) }
     Measure.tracePhase(&mut measurer, TRACE_POSITION)
-    let overflow = run positionTree(&nodes, &mut boxes, &mut measurer, viewport, tree.viewportScrollOffset, &mut output.normalOffsets)
+    let overflow = run positionTree(&nodes, &mut boxes, &mut measurer, viewport, tree.viewportScrollOffset, &mut output.normalOffsets, &mut output.normalOffsetsZero)
     run boxes.fragments.finishInPlace()
     boxes.stats.passes = boxes.stats.passes + 1
     if !boxes.needsRelayout && tree.exclusionStyles && boxes.exclusionPasses == 0 {
@@ -3148,6 +3180,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure>(tree: &'source Tree, ou
       output.keptViewport = viewport
       output.keptScroll = tree.viewportScrollOffset
       output.keptScrolls = tree.scrollRevision()
+      output.fragments.releaseSaved()
       output.fragments.deferLocations()
       output.viewportOverflow = overflow
       output.scrollReady = output.normalOffsets.length() != 0 && output.normalOffsets.length() == output.fragments.values.length()

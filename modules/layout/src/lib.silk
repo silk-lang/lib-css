@@ -124,6 +124,7 @@ pub import fragments {
   FragmentId,
   Fragment,
   FragmentArena,
+  Carry,
   ArenaStorage,
   TextFragment,
   TextFragmentKind

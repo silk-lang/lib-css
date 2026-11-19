@@ -1,0 +1,274 @@
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.collections.list { List }
+import silk.core.effect { Effect }
+import silk.core.option { Option }
+import silk.num.usize
+import silk.text.string { String }
+import silk.testing.testing { Testing, AssertionError }
+import fragmentation { FragmentationError }
+import fragments { Fragment, TextFragment }
+import style { Style, SizeValue, Display, DisplayOutside, DisplayInside }
+import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, OptionalSize }
+import text { TextMeasure, TextError, TextContext, TextTokenKind, TextCursor, TextBreak, TextBreakKind, TextAnalysis, TextShapeRequest, TextRun }
+import tree { Tree, LayoutTree, NodeId, InvalidNode }
+import engine { compute }
+
+// Structural edits after which an in-place compute moves the previous output
+// (FragmentArena.shiftPrevious) or refuses to: each must lay out as a fresh
+// LayoutTree does. Reduced from css update fuzz cases (structure and
+// gridstructure modes).
+
+// Text breaks after every space; each byte is 5 wide.
+struct WordHost {}
+impl Measure for WordHost {
+  fn font(provider: &mut Self, request: FontRequest) -> FontMetrics {
+    drop provider
+    drop request
+    return FontMetrics.zero()
+  }
+  fn scrollbars(provider: &mut Self, request: ScrollbarRequest) -> ScrollbarMetrics {
+    drop provider
+    drop request
+    return ScrollbarMetrics.zero()
+  }
+  fn natural(provider: &mut Self, key: usize) -> NaturalDimensions {
+    drop provider
+    drop key
+    return NaturalDimensions.none()
+  }
+  fn measure(provider: &mut Self, key: usize, request: MeasureRequest<'_>) -> Measured {
+    drop provider
+    drop key
+    drop request
+    return Measured { size: Size { width: 0.0, height: 0.0 }, scrollableOverflow: Rect.zero(), contentBlockSize: 0.0, firstBaselines: BaselineSet.zero(), lastBaselines: BaselineSet.zero(), hasBaseline: false, hasLineBoxes: false }
+  }
+}
+impl TextMeasure for WordHost {
+  fn beginTextLayout(provider: &mut Self) { drop provider }
+  effect fn analyze(provider: &mut Self, context: TextContext<'_, '_>, output: &mut List<TextBreak>) -> TextAnalysis ! OutOfMemoryError | TextError ? &mut Allocator {
+    drop provider
+    let mut unit: usize = 0
+    while unit < context.tokens.length {
+      if context.tokens[unit].kind == TextTokenKind.Space && unit + 1 < context.tokens.length {
+        run output.append(TextBreak { at: TextCursor { unit: unit + 1, offset: 0 }, kind: TextBreakKind.Soft })
+      }
+      unit = unit + 1
+    }
+    run output.append(TextBreak { at: TextCursor { unit: context.tokens.length, offset: 0 }, kind: TextBreakKind.Soft })
+    return TextAnalysis.uniform(context.tokens.length, 0, 0, true)
+  }
+  effect fn shape(provider: &mut Self, request: TextShapeRequest<'_, '_>, output: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator {
+    drop provider
+    let mut unit = request.start.unit
+    while unit < request.end.unit || (unit == request.end.unit && request.end.offset != 0) {
+      let token = request.context.tokens[unit]
+      if token.kind == TextTokenKind.Text || token.kind == TextTokenKind.Space {
+        let mut start: usize = 0
+        let mut end = String.byteLength(token.text)
+        if token.kind == TextTokenKind.Space { end = 1 }
+        if unit == request.start.unit { start = request.start.offset }
+        if unit == request.end.unit { end = request.end.offset }
+        run output.append(TextRun.Text { unit: unit, start: start, end: end, advance: usize.toF32(end - start) * 5.0, fontKey: token.fontKey, bidiLevel: request.analysis.level, shapeKey: 0 })
+      }
+      unit = unit + 1
+    }
+  }
+}
+
+fn inlineBox() -> Style {
+  let mut result = Style.make()
+  result.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flow }
+  return move result
+}
+fn flexBox() -> Style {
+  let mut result = Style.make()
+  result.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+  return move result
+}
+fn wide(width: f32) -> Style {
+  let mut result = Style.make()
+  result.width = SizeValue.px(width)
+  return move result
+}
+
+fn sameFragment(a: &Fragment, b: &Fragment) -> bool {
+  return a.kind == b.kind && a.box == b.box && a.source == b.source && a.parent == b.parent
+    && a.firstChild == b.firstChild && a.lastChild == b.lastChild
+    && a.previousSibling == b.previousSibling && a.nextSibling == b.nextSibling
+    && a.previousForBox == b.previousForBox && a.nextForBox == b.nextForBox
+    && a.textData == b.textData
+    && a.location.x == b.location.x && a.location.y == b.location.y
+    && a.size.width == b.size.width && a.size.height == b.size.height
+}
+fn sameText(a: &TextFragment, b: &TextFragment) -> bool {
+  return a.sourceStart == b.sourceStart && a.sourceEnd == b.sourceEnd
+    && a.fontKey == b.fontKey && a.shapeKey == b.shapeKey && a.bidiLevel == b.bidiLevel
+}
+// The retained output holds the fragments, texts and box chains of a fresh one.
+effect fn expectSameAsFresh(tree: &Tree, output: &LayoutTree, viewport: OptionalSize) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut fresh = LayoutTree.make()
+  let mut host = WordHost {}
+  run compute(tree, &mut fresh, &mut host, viewport)
+  let kept = output.fragments.values.asSlice()
+  let expected = fresh.fragments.values.asSlice()
+  run Testing.expect(kept.length == expected.length, "the retained output has as many fragments as a fresh one")
+  let mut at: usize = 0
+  while at < kept.length {
+    run Testing.expect(sameFragment(&kept[at], &expected[at]), "each retained fragment equals the fresh one")
+    at = at + 1
+  }
+  let keptTexts = output.fragments.texts.asSlice()
+  let expectedTexts = fresh.fragments.texts.asSlice()
+  run Testing.expect(keptTexts.length == expectedTexts.length, "the retained output has as many text records as a fresh one")
+  at = 0
+  while at < keptTexts.length {
+    run Testing.expect(sameText(&keptTexts[at], &expectedTexts[at]), "each retained text record equals the fresh one")
+    at = at + 1
+  }
+  let boxes = fresh.fragments.boxCount()
+  run Testing.expect(output.fragments.boxCount() == boxes, "as many boxes as a fresh layout")
+  let mut box: usize = 0
+  while box < boxes {
+    run Testing.expect(output.fragments.first(box) == fresh.fragments.first(box) && output.fragments.last(box) == fresh.fragments.last(box), "each box's chain is the fresh one's")
+    box = box + 1
+  }
+}
+
+// Lays the tree out into `output`, in place over what it holds.
+effect fn relaid(tree: &Tree, output: &mut LayoutTree) ! OutOfMemoryError | TextError | FragmentationError | InvalidNode ? &mut Allocator {
+  let mut host = WordHost {}
+  run compute(tree, &mut output, &mut host, OptionalSize.definite(800.0, 600.0))
+}
+
+// A box moved into an inline box splits it around a block, so the output has
+// more fragments before the boxes after it. A move of the previous output
+// down to the write position must not write over the previous fragments of
+// boxes not laid out yet: the moved box's own, here, which follow the inline
+// box in the new tree but stood before it in the previous output.
+effect fn moveDownKeepsUnvisited() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let n0 = tree.root()
+  let n1 = run tree.append(n0, Style.make())
+  let n2 = run tree.append(n1, inlineBox())
+  let n3 = run tree.append(n2, Style.make())
+  let n4 = run tree.append(n0, Style.make())
+  let n5 = run tree.append(n3, Style.make())
+  let n6 = run tree.append(n4, Style.make())
+  let n7 = run tree.append(n6, Style.make())
+  let n8 = run tree.append(n7, flexBox())
+  let n9 = run tree.append(n8, Style.make())
+  let n10 = run tree.append(n9, Style.make())
+  drop n10
+  let mut output = LayoutTree.make()
+  run relaid(&tree, &mut output)
+  run tree.insertBefore(n5, n8, Option<NodeId>.None)
+  run relaid(&tree, &mut output)
+  run expectSameAsFresh(&tree, &output, OptionalSize.definite(800.0, 600.0))
+}
+test effect fn aMoveDownKeepsRangesNotLaidOutYet() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run moveDownKeepsUnvisited() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// A flex box moved after its old parent's siblings: one of them is kept in
+// place before the write position, then the flex box's previous range, from
+// before them, is moved up after it. The kept box's chain names its kept
+// fragment, not the moved copy of it.
+effect fn moveUpKeepsKeptChains() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let n0 = tree.root()
+  let n1 = run tree.append(n0, Style.make())
+  let n2 = run tree.append(n1, Style.make())
+  let n3 = run tree.append(n2, flexBox())
+  let n4 = run tree.append(n1, Style.make())
+  let n5 = run tree.appendText(n2, run String.copy("word"))
+  let n6 = run tree.append(n4, Style.make())
+  let n7 = run tree.append(n3, inlineBox())
+  let n8 = run tree.append(n4, Style.make())
+  drop n5
+  drop n6
+  drop n7
+  let mut output = LayoutTree.make()
+  run relaid(&tree, &mut output)
+  run tree.insertBefore(n8, n3, Option<NodeId>.None)
+  run relaid(&tree, &mut output)
+  run expectSameAsFresh(&tree, &output, OptionalSize.definite(800.0, 600.0))
+}
+test effect fn aMoveUpKeepsTheChainsOfKeptBoxes() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run moveUpKeepsKeptChains() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// Removing a subtree whose inline boxes split around blocks: the continuation
+// fragments after the flow link into it. Once a move is refused, ranges are
+// copied rather than moved, so those after-flow fragments no longer name the
+// right parents and cannot stand.
+effect fn refusedMoveRewritesTail() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let n0 = tree.root()
+  let n1 = run tree.append(n0, Style.make())
+  let n2 = run tree.appendText(n1, run String.copy("longer x ab x word x word longer"))
+  let n3 = run tree.append(n0, Style.make())
+  let n4 = run tree.append(n3, Style.make())
+  let n5 = run tree.append(n1, Style.make())
+  let n6 = run tree.append(n4, Style.make())
+  let n7 = run tree.append(n4, Style.make())
+  let n8 = run tree.append(n4, Style.make())
+  let n9 = run tree.append(n8, Style.make())
+  let n10 = run tree.append(n5, inlineBox())
+  let n11 = run tree.append(n9, inlineBox())
+  let n12 = run tree.append(n10, Style.make())
+  let n13 = run tree.append(n11, Style.make())
+  let n14 = run tree.appendText(n6, run String.copy("x longer ab word ab x x"))
+  let n15 = run tree.appendText(n7, run String.copy("longer"))
+  drop n2
+  drop n12
+  drop n13
+  drop n14
+  drop n15
+  let mut output = LayoutTree.make()
+  run relaid(&tree, &mut output)
+  run tree.remove(n1)
+  run relaid(&tree, &mut output)
+  run expectSameAsFresh(&tree, &output, OptionalSize.definite(800.0, 600.0))
+}
+test effect fn afterARefusedMoveTheFlowTailIsWrittenAgain() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run refusedMoveRewritesTail() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// Two moves: a move of the previous output up must not write over the text
+// records of a box not laid out yet, here the wrapped text in the 20px box,
+// whose records lie between the write position's and the moved ones.
+effect fn moveUpKeepsUnvisitedTexts() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let n0 = tree.root()
+  let n1 = run tree.append(n0, Style.make())
+  let n2 = run tree.append(n1, Style.make())
+  let n3 = run tree.append(n0, Style.make())
+  let n4 = run tree.append(n3, Style.make())
+  let n5 = run tree.append(n2, Style.make())
+  let n6 = run tree.appendText(n1, run String.copy("x"))
+  let n7 = run tree.append(n2, Style.make())
+  let n8 = run tree.append(n2, Style.make())
+  let n9 = run tree.append(n8, Style.make())
+  let n10 = run tree.append(n9, inlineBox())
+  let n11 = run tree.append(n10, Style.make())
+  let n12 = run tree.append(n5, wide(20.0))
+  let n13 = run tree.append(n4, Style.make())
+  let n14 = run tree.appendText(n12, run String.copy("ab x longer longer x word x"))
+  let n15 = run tree.append(n13, flexBox())
+  drop n6
+  drop n11
+  drop n14
+  let mut output = LayoutTree.make()
+  run relaid(&tree, &mut output)
+  run tree.insertBefore(n2, n8, Option<NodeId>.Some { value: n7 })
+  run tree.insertBefore(n15, n5, Option<NodeId>.None)
+  run relaid(&tree, &mut output)
+  run expectSameAsFresh(&tree, &output, OptionalSize.definite(800.0, 600.0))
+}
+test effect fn aMoveUpKeepsTheTextsOfBoxesNotLaidOutYet() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run moveUpKeepsUnvisitedTexts() |> Effect.provideMut<Allocator>(&mut allocator)
+}
