@@ -645,7 +645,8 @@ pub effect fn captureContributionEdges<'pass, 'source, M: Measure + TextMeasure,
     if cached == usize.MAX {
       run probeFresh(nodes, &mut output, &mut measurer, id, &probe, &key)
     }
-    let layout = output.probed(id, cached)
+    let probedLayout = output.probed(id, cached)
+    let layout = &probedLayout
     capture(
       axisStateMut(&mut scratch, columns),
       index,

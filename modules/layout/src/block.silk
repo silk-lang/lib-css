@@ -591,7 +591,8 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
         bfc.sourceFloor = max(bfc.sourceFloor, origin.y + startY - item.margin.top)
         if !item.input.performLayout {
           let probe = run probeRead(nodes, &mut output, &mut measurer, item.id, &item.input)
-          readStored(&mut childLayout, output.probed(item.id, probe))
+          let stored = output.probed(item.id, probe)
+          readStored(&mut childLayout, &stored)
           cachedProbe = probe != NO_NODE
         } else {
           run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &item.input)
@@ -879,7 +880,8 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
         } else {
           if independent && !item.input.performLayout {
             let index = run probeRead(nodes, &mut output, &mut measurer, item.id, &item.input)
-            readStored(&mut childLayout, output.probed(item.id, index))
+            let stored = output.probed(item.id, index)
+            readStored(&mut childLayout, &stored)
             cachedProbe = index != NO_NODE
           } else if independent {
             if !reusedAsBefore { run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &item.input) }

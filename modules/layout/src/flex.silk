@@ -14,7 +14,7 @@ import box_tree { BoxTree }
 import context { Input, ResolvedBox, resolveBox, childrenInput, resolveGap, resolveSize, sizeResolves, outOfFlow, isFlex, scrollable, overflowForAxis, UNBOUNDED }
 import engine { plainWidth, widthIgnoresHeight, crossIgnoresMain, layoutNode, layoutNodeInPlace, layoutEmptyLeafInPlace, plainMeasuredBox, probeFresh, normalizeKey, constraintFreeProbe, sizeEmptyBox, emptyIntrinsicWidth, shapedBox, ITEM_OUT_OF_FLOW, ITEM_ORDERED }
 import layout_pass { LayoutPass, CacheKind }
-import layout_cache { LayoutCache }
+import stored_input { StoredInput, RARE_NONE, sameStored }
 import text { TextMeasure, TextError }
 import fragmentation { FlowCursor, FragmentationError, BoundaryProbe }
 import breaks { BreakBoundary, ForcedBreaks, FractionalProgress, BreakRelaxation }
@@ -236,8 +236,8 @@ effect fn probe<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes
   let index = output.cache.find(id, &key, CacheKind.IndependentBox)
   if index != usize.MAX {
     output.stats.cacheHits = output.stats.cacheHits + 1
-    let cached = output.cache.layoutAt(index)
-    return Probe { size: cached.size, preferredRatio: cached.preferredRatio, ratioBorderBox: cached.ratioBorderBox }
+    let cached = output.cache.coreAt(index)
+    return Probe { size: cached.sizes(), preferredRatio: cached.ratio(), ratioBorderBox: cached.ratioBorderBox() }
   }
   run probeFresh(nodes, &mut output, &mut measurer, id, &input, &key)
   let layout = &output.boxes[id]
@@ -745,7 +745,8 @@ effect fn crossSizes<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
           if cached == usize.MAX { run probeFresh(nodes, &mut output, &mut measurer, item.id, &request, &key) }
         }
       }
-      let layout = output.probed(item.id, cached)
+      let probedLayout = output.probed(item.id, cached)
+      let layout = &probedLayout
       item.cross = axisSize(layout.size, !axis.horizontal)
       item.baseline = baselineDistance(layout, nodes.style(item.id), input.parentWritingMode, input.parentTextOrientation, &axis, false)
       item.lastBaseline = baselineDistance(layout, nodes.style(item.id), input.parentWritingMode, input.parentTextOrientation, &axis, true)
@@ -1163,8 +1164,10 @@ pub struct FlexMemos {
 // What a container pass gives every item's prepare besides the item. `id`
 // numbers distinct requests, never reused; an item memo names the request
 // it was made under.
+// The request is kept packed (see StoredInput) with its grid context and
+// table plan beside it; fragmenting passes keep no requests.
 struct FlexRequest {
-  id: usize, input: Input, main: AvailableSpace, axis: Axes,
+  id: usize, input: StoredInput, gridContext: usize, tablePlan: u64, main: AvailableSpace, axis: Axes,
   align: Align, wrap: FlexWrap, intrinsic: bool, mainDefinite: bool,
 }
 impl Copy for FlexRequest {}
@@ -1226,7 +1229,7 @@ impl FlexMemos {
     let mut first = self.requestHeads.get(container)
     if first == NO_NODE {
       first = self.requests.length()
-      let none = FlexRequest { id: 0, input: input.*, main: main, axis: axis.*, align: parentStyle.alignItems, wrap: parentStyle.flexWrap, intrinsic: intrinsic, mainDefinite: mainDefinite }
+      let none = FlexRequest { id: 0, input: StoredInput.pack(input, RARE_NONE), gridContext: input.gridContext, tablePlan: input.tablePlan, main: main, axis: axis.*, align: parentStyle.alignItems, wrap: parentStyle.flexWrap, intrinsic: intrinsic, mainDefinite: mainDefinite }
       run self.requests.appendRepeated(none, REQUESTS_PER_BOX)
       self.requestHeads.set(container, first)
     }
@@ -1241,12 +1244,13 @@ impl FlexMemos {
       slot = slot + 1
     }
     self.earlier = earlier
+    let packed = StoredInput.pack(input, RARE_NONE)
     slot = first
     while slot < first + REQUESTS_PER_BOX {
       let known = &requests[slot]
       if known.id != 0 && known.main.kind == main.kind && known.main.value == main.value && known.intrinsic == intrinsic && known.mainDefinite == mainDefinite
         && known.align == parentStyle.alignItems && known.wrap == parentStyle.flexWrap && sameAxes(&known.axis, axis)
-        && LayoutCache.sameRequest(&known.input, input) {
+        && sameStored(&known.input, known.gridContext, known.tablePlan, &packed, input.gridContext, input.tablePlan) {
         return known.id
       }
       if known.id < requests[oldest].id { oldest = slot }
@@ -1255,7 +1259,7 @@ impl FlexMemos {
     // A new request displaces the oldest.
     let id = self.nextRequest
     self.nextRequest = id + 1
-    requests[oldest] = FlexRequest { id: id, input: input.*, main: main, axis: axis.*, align: parentStyle.alignItems, wrap: parentStyle.flexWrap, intrinsic: intrinsic, mainDefinite: mainDefinite }
+    requests[oldest] = FlexRequest { id: id, input: packed, gridContext: input.gridContext, tablePlan: input.tablePlan, main: main, axis: axis.*, align: parentStyle.alignItems, wrap: parentStyle.flexWrap, intrinsic: intrinsic, mainDefinite: mainDefinite }
     return id
   }
   // Counts a container pass's items toward the hit rate, when the container
