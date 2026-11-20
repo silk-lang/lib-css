@@ -44,7 +44,7 @@ fn boxChild<S: LayoutSource>(nodes: &BoxTree<'_, S>, candidate: usize) -> usize 
   let mut item = candidate
   while item != NO_NODE {
     if !outOfFlow(nodes.style(item)) { return item }
-    item = nodes.node(item).nextSibling
+    item = nodes.node(item).nextSibling()
   }
   return NO_NODE
 }
@@ -52,7 +52,7 @@ fn normalChild<S: LayoutSource>(nodes: &BoxTree<'_, S>, candidate: usize) -> usi
   let mut item = boxChild(nodes, candidate)
   while item != NO_NODE {
     if nodes.style(item).float == Float.None { return item }
-    item = boxChild(nodes, nodes.node(item).nextSibling)
+    item = boxChild(nodes, nodes.node(item).nextSibling())
   }
   return NO_NODE
 }
@@ -183,7 +183,7 @@ pub effect fn layoutBlock<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
     // Leaves skip layoutBlockPass and its large frame entirely.
     let afterProbe = input.performLayout && input.fragmentation.boundaryProbe == BoundaryProbe.After && nodes.node(id).dynamicAfter
     if afterProbe { return run layoutBlockPass(nodes, &mut output, &mut measurer, id, style, &input, &physicalBox, &mut bfc, NO_NODE, ForcedBreaks.none(), true) }
-    if boxChild(nodes, nodes.node(id).firstChild) == NO_NODE { return leafBlock(style, &input, &physicalBox, &bfc) }
+    if boxChild(nodes, nodes.node(id).firstChild()) == NO_NODE { return leafBlock(style, &input, &physicalBox, &bfc) }
     return run layoutBlockPass(nodes, &mut output, &mut measurer, id, style, &input, &physicalBox, &mut bfc, NO_NODE, ForcedBreaks.none(), false)
   }
   return run layoutFragmentedBlock(nodes, &mut output, &mut measurer, id, style, &input, &physicalBox, &mut bfc)
@@ -204,10 +204,10 @@ effect fn layoutFragmentedBlock<'pass, 'source, M: Measure + TextMeasure, S: Lay
   }
   let mut previous = NO_NODE
   if !state.blocked && !state.skipped && cut != NO_NODE && output.publication(cut) == NO_NODE {
-    let mut child = boxChild(nodes, nodes.node(id).firstChild)
+    let mut child = boxChild(nodes, nodes.node(id).firstChild())
     while child != NO_NODE && child != cut {
       if output.publication(child) != NO_NODE { previous = child }
-      child = boxChild(nodes, nodes.node(child).nextSibling)
+      child = boxChild(nodes, nodes.node(child).nextSibling())
     }
   }
   if !state.blocked && !state.skipped && cut != NO_NODE && previous != NO_NODE
@@ -282,7 +282,7 @@ pub fn textLeafChild<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, style: 
     parent.heightDefinite = axes.vertical || !input.indefiniteHeight
   }
   let childBase = childrenInput(&input, style, &physicalBox, parent)
-  let childId = nodes.node(id).firstChild
+  let childId = nodes.node(id).firstChild()
   prepareChildInto(nodes, childId, &childBase, axes, &box, input.availableWidth, false, &mut leaf.child)
   let childStyle = nodes.style(childId)
   return childStyle.float == Float.None && !leaf.child.input.blockRoot && !establishesContext(childStyle, &leaf.child.input) && !childStyle.replaced
@@ -442,7 +442,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
   if axes.vertical { availableInline = input.availableHeight }
   let mut intrinsicWidth: f32 = 0.0
   let mut floatRun: f32 = 0.0
-  let mut nextChild = boxChild(nodes, nodes.node(id).firstChild)
+  let mut nextChild = boxChild(nodes, nodes.node(id).firstChild())
   let mut pendingTail = NO_NODE
   if fragmented {
     let state = output.resumes.get(id)
@@ -498,7 +498,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
       if childId == pendingTail { parallel = false
         childId = nextChild }
       else { childId = run output.popPending(id) }
-    } else { childId = boxChild(nodes, nodes.node(childId).nextSibling) }
+    } else { childId = boxChild(nodes, nodes.node(childId).nextSibling()) }
   }
   let mut width = clamp(intrinsicWidth + box.inset.horizontal(), box.min.width, box.max.width)
   if box.size.widthDefinite { width = box.size.width }
@@ -549,7 +549,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
     if streaming {
       reusedAsBefore = asBefore != BASE_CHANGED && bfc.count == 0 && run reuseAsBefore(nodes, &mut output, id, childId, &childBase, axes, &box, availableInline, rtl, probing, &mut asBefore, &mut current)
       if !reusedAsBefore { prepareChildInto(nodes, childId, &childBase, axes, &box, availableInline, false, &mut current) }
-      childId = boxChild(nodes, nodes.node(childId).nextSibling)
+      childId = boxChild(nodes, nodes.node(childId).nextSibling())
     } else {
       if index == children.length() {
         if stopped && !parallel { break }
@@ -560,7 +560,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
           if childId == pendingTail { parallel = false
             childId = nextChild }
           else { childId = run output.popPending(id) }
-        } else { childId = boxChild(nodes, nodes.node(childId).nextSibling) }
+        } else { childId = boxChild(nodes, nodes.node(childId).nextSibling()) }
       }
       current = children.get(index)
     }
@@ -591,7 +591,8 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
         bfc.sourceFloor = max(bfc.sourceFloor, origin.y + startY - item.margin.top)
         if !item.input.performLayout {
           let probe = run probeRead(nodes, &mut output, &mut measurer, item.id, &item.input)
-          readStored(&mut childLayout, output.probed(item.id, probe))
+          let stored = output.probed(item.id, probe)
+          readStored(&mut childLayout, &stored)
           cachedProbe = probe != NO_NODE
         } else {
           run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &item.input)
@@ -684,7 +685,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
         continue
       }
       item.input.fragmentation.marginStart = input.fragmentation.marginStart && leading && box.inset.top == 0.0 && !item.parallel
-      let next = boxChild(nodes, nodes.node(item.id).nextSibling)
+      let next = boxChild(nodes, nodes.node(item.id).nextSibling())
       item.input.fragmentation.marginEnd = (input.fragmentation.marginEnd && box.inset.bottom == 0.0 && next == NO_NODE || endBefore != NO_NODE && next == endBefore) && !item.parallel
       item.input.fragmentation.marginEndChosen = item.input.fragmentation.marginEnd && (input.fragmentation.marginEndChosen || endBefore != NO_NODE && next == endBefore)
       item.input.fragmentation.sourceAdjacent = !item.parallel && (normalSeen || floatSeen)
@@ -843,7 +844,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
           run output.enqueuePending(id, item.id)
           bfc.defer(childStyle.float)
           bfc.pendingFloat = bfc.pendingFloat || !output.resumes.get(item.id).normalComplete
-          if !item.parallel { nextChild = boxChild(nodes, nodes.node(item.id).nextSibling) }
+          if !item.parallel { nextChild = boxChild(nodes, nodes.node(item.id).nextSibling()) }
         }
         index = index + 1
         continue
@@ -879,7 +880,8 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
         } else {
           if independent && !item.input.performLayout {
             let index = run probeRead(nodes, &mut output, &mut measurer, item.id, &item.input)
-            readStored(&mut childLayout, output.probed(item.id, index))
+            let stored = output.probed(item.id, index)
+            readStored(&mut childLayout, &stored)
             cachedProbe = index != NO_NODE
           } else if independent {
             if !reusedAsBefore { run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &item.input) }
@@ -1172,7 +1174,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
       }
       if !item.parallel {
         if childStyle.float != Float.None || state.normalComplete {
-          nextChild = boxChild(nodes, nodes.node(item.id).nextSibling)
+          nextChild = boxChild(nodes, nodes.node(item.id).nextSibling())
         } else { nextChild = item.id
           stopped = true }
         if childStyle.float == Float.None {
@@ -1241,13 +1243,13 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
   if result.hasFirstBaseline { result.firstBaselines = result.firstBaselines.translated(alignmentOffset) }
   if result.hasLastBaseline { result.lastBaselines = result.lastBaselines.translated(alignmentOffset) }
   if (axes.vertical || alignmentOffset != 0.0) && streaming {
-    let mut childIndex = boxChild(nodes, nodes.node(id).firstChild)
+    let mut childIndex = boxChild(nodes, nodes.node(id).firstChild())
     while childIndex != NO_NODE {
       let mut child = output.boxes[childIndex]
       let point = Point { x: child.location.x, y: child.location.y + alignmentOffset }
       child.location = axes.physicalPoint(point, child.size, result.size)
       run output.store(childIndex, &child, input.performLayout)
-      childIndex = boxChild(nodes, nodes.node(childIndex).nextSibling)
+      childIndex = boxChild(nodes, nodes.node(childIndex).nextSibling())
     }
   } else if axes.vertical || alignmentOffset != 0.0 {
     index = 0

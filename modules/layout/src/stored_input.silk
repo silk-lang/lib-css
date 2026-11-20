@@ -7,6 +7,7 @@ import silk.num.u32
 import silk.num.u64
 import silk.num.u8
 import silk.num.usize
+import silk.num.f32
 import context { Input }
 import geometry { OptionalSize, AvailableSpace, AvailableKind, Size, Point }
 import style { WritingMode, TextOrientation, Align, OverflowAlignment }
@@ -177,6 +178,32 @@ impl StoredInput {
     }
     return result
   }
+  // Whether `a` and `b` hold the same sizes, bit for bit, all but the BFC
+  // content origin, and neither has rare parts: then a request differing
+  // from `a` only in flags and origin is `a` with those (see withOwn).
+  pub fn sameSizes(a: &StoredInput, b: &StoredInput) -> bool {
+    return a.rare == RARE_NONE && b.rare == RARE_NONE
+      && f32.toBits(a.parentWidth) == f32.toBits(b.parentWidth) && f32.toBits(a.parentHeight) == f32.toBits(b.parentHeight)
+      && f32.toBits(a.initialWidth) == f32.toBits(b.initialWidth) && f32.toBits(a.initialHeight) == f32.toBits(b.initialHeight)
+      && f32.toBits(a.maxWidth) == f32.toBits(b.maxWidth) && f32.toBits(a.maxHeight) == f32.toBits(b.maxHeight)
+      && f32.toBits(a.scrollportWidth) == f32.toBits(b.scrollportWidth) && f32.toBits(a.scrollportHeight) == f32.toBits(b.scrollportHeight)
+      && f32.toBits(a.knownWidth) == f32.toBits(b.knownWidth) && f32.toBits(a.knownHeight) == f32.toBits(b.knownHeight)
+      && f32.toBits(a.minimumWidth) == f32.toBits(b.minimumWidth) && f32.toBits(a.minimumHeight) == f32.toBits(b.minimumHeight)
+      && f32.toBits(a.availableWidth) == f32.toBits(b.availableWidth) && f32.toBits(a.availableHeight) == f32.toBits(b.availableHeight)
+  }
+  // This request with another's flags and origin.
+  @inlineAlways
+  pub fn withOwn(self: &Self, flags: u32, originX: f32, originY: f32) -> StoredInput {
+    let mut result = self.*
+    result.flags = flags
+    result.originX = originX
+    result.originY = originY
+    return result
+  }
+  @inlineAlways
+  pub fn originXValue(self: &Self) -> f32 { return self.originX }
+  @inlineAlways
+  pub fn originYValue(self: &Self) -> f32 { return self.originY }
   @inlineAlways
   pub fn parent(self: &Self) -> OptionalSize {
     return OptionalSize { width: self.parentWidth, height: self.parentHeight, widthDefinite: self.flags & PARENT_WIDTH != 0, heightDefinite: self.flags & PARENT_HEIGHT != 0 }

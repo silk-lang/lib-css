@@ -17,11 +17,11 @@ pub fn sameBoxes(previous: &[BoxNode], next: &[BoxNode]) -> bool {
   while index < next.length {
     let a = &previous[index]
     let b = &next[index]
-    if a.source != b.source || a.styleOwner != b.styleOwner || a.anonymousStyle != b.anonymousStyle || a.kind != b.kind
-      || a.parent != b.parent || a.firstChild != b.firstChild || a.lastChild != b.lastChild || a.nextSibling != b.nextSibling
-      || a.previousContinuation != b.previousContinuation || a.nextContinuation != b.nextContinuation
+    if a.source() != b.source() || a.styleOwner() != b.styleOwner() || a.anonymousStyle() != b.anonymousStyle() || a.kind != b.kind
+      || a.parent() != b.parent() || a.firstChild() != b.firstChild() || a.lastChild() != b.lastChild() || a.nextSibling() != b.nextSibling()
+      || a.previousContinuation() != b.previousContinuation() || a.nextContinuation() != b.nextContinuation()
       || a.firstForSource != b.firstForSource || a.lastForSource != b.lastForSource
-      || a.interruptionFirst != b.interruptionFirst || a.interruptionLast != b.interruptionLast
+      || a.interruptionFirst() != b.interruptionFirst() || a.interruptionLast() != b.interruptionLast()
       || a.anonymousBlock != b.anonymousBlock || a.blockify != b.blockify || a.independentRoot != b.independentRoot
       || a.firstFormattedRun != b.firstFormattedRun || a.needsFragmentGeometry != b.needsFragmentGeometry
       || a.fragmentMonolithic != b.fragmentMonolithic
@@ -35,10 +35,10 @@ pub fn sameBoxes(previous: &[BoxNode], next: &[BoxNode]) -> bool {
 
 fn clearSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, root: usize) {
   cache.clearBox(root)
-  let mut child = nodes.node(root).firstChild
+  let mut child = nodes.node(root).firstChild()
   while child != NO_NODE {
     clearSubtree(nodes, &mut cache, child)
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
 }
 
@@ -56,28 +56,28 @@ fn clearSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &mut LayoutCache
 // cleared alone.
 fn clearInFlow<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, root: usize) {
   cache.clearBox(root)
-  let mut child = nodes.node(root).firstChild
+  let mut child = nodes.node(root).firstChild()
   while child != NO_NODE {
     if !outOfFlow(nodes.style(child)) {
       if keepsChildren(nodes, child) { cache.clearBox(child) }
       else { clearInFlow(nodes, &mut cache, child) }
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
 }
 
 fn clearChanged<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, source: usize, root: usize) {
   if !tree.changes().gridChangedSince(source, since) && !Subgrid.eligible(nodes, root) { cache.clearPlaced(root) }
   else { cache.clearBox(root) }
-  let styleIndex = nodes.node(root).styleIndex
-  let mut child = nodes.node(root).firstChild
+  let styleIndex = nodes.node(root).styleIndex()
+  let mut child = nodes.node(root).firstChild()
   while child != NO_NODE {
     let node = nodes.node(child)
-    if node.kind == BoxKind.Text || node.kind == BoxKind.Inline || node.kind == BoxKind.InlineFormatting || node.anonymousStyle != NO_NODE || node.styleIndex == styleIndex
-      || node.nextContinuation != NO_NODE || node.previousContinuation != NO_NODE || node.interruptionFirst != NO_NODE || Subgrid.eligible(nodes, child) {
+    if node.kind == BoxKind.Text || node.kind == BoxKind.Inline || node.kind == BoxKind.InlineFormatting || node.anonymousStyle() != NO_NODE || node.styleIndex() == styleIndex
+      || node.nextContinuation() != NO_NODE || node.previousContinuation() != NO_NODE || node.interruptionFirst() != NO_NODE || Subgrid.eligible(nodes, child) {
       clearSubtree(nodes, &mut cache, child)
     }
-    child = node.nextSibling
+    child = node.nextSibling()
   }
 }
 
@@ -125,19 +125,19 @@ fn invalidateSource<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxTree<'_,
     let placed = tree.changes().placedChangedAt(source) <= since
     while ancestor != NO_NODE && !contains(alone, ancestor) {
       let below = ancestor
-      ancestor = nodes.node(ancestor).parent
+      ancestor = nodes.node(ancestor).parent()
       if below != box { nested = nested || Subgrid.eligible(nodes, below) }
       if ancestor != NO_NODE && (below != box || placed) && !nested && !Subgrid.eligible(nodes, ancestor) { cache.clearPlaced(ancestor) }
       else if ancestor != NO_NODE { cache.clearBox(ancestor) }
     }
-    box = nodes.node(box).nextContinuation
+    box = nodes.node(box).nextContinuation()
   }
 }
 fn keepsChildren<S: LayoutSource>(nodes: &BoxTree<'_, S>, box: usize) -> bool {
   let node = nodes.node(box)
   if !node.independentRoot || node.kind == BoxKind.Grid || Subgrid.eligible(nodes, box) { return false }
-  if node.nextContinuation != NO_NODE || node.previousContinuation != NO_NODE { return false }
-  return node.parent == NO_NODE || nodes.node(node.parent).kind != BoxKind.Grid
+  if node.nextContinuation() != NO_NODE || node.previousContinuation() != NO_NODE { return false }
+  return node.parent() == NO_NODE || nodes.node(node.parent()).kind != BoxKind.Grid
 }
 fn contains(values: &[usize], value: usize) -> bool {
   let mut at: usize = 0
@@ -151,10 +151,10 @@ fn contains(values: &[usize], value: usize) -> bool {
 pub fn invalidateBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &mut LayoutCache, box: usize, ancestors: bool) {
   clearSubtree(nodes, &mut cache, box)
   if !ancestors { return }
-  let mut ancestor = nodes.node(box).parent
+  let mut ancestor = nodes.node(box).parent()
   while ancestor != NO_NODE {
     cache.clearBox(ancestor)
-    ancestor = nodes.node(ancestor).parent
+    ancestor = nodes.node(ancestor).parent()
   }
 }
 
@@ -173,7 +173,7 @@ fn nonNegative(edges: &Edges) -> bool {
 pub struct BoxMatch { pub toOld: List<usize>, pub toNew: List<usize>, pub changed: List<bool> }
 
 fn anonymousLike(a: &BoxNode, b: &BoxNode) -> bool {
-  return a.source == NO_NODE && b.source == NO_NODE && a.kind == b.kind && a.styleOwner == b.styleOwner
+  return a.source() == NO_NODE && b.source() == NO_NODE && a.kind == b.kind && a.styleOwner() == b.styleOwner()
 }
 
 fn mapped(map: &[usize], id: usize) -> usize {
@@ -199,20 +199,20 @@ pub effect fn matchBoxes<S: LayoutSource>(previous: &[BoxNode], previousFirst: &
   let mut id: usize = 0
   while id < count {
     let node = next.node(id)
-    if id != 0 && node.source != NO_NODE {
+    if id != 0 && node.source() != NO_NODE {
       let mut ordinal: usize = 0
-      let mut before = node.previousContinuation
+      let mut before = node.previousContinuation()
       while before != NO_NODE {
         ordinal = ordinal + 1
-        before = next.node(before).previousContinuation
+        before = next.node(before).previousContinuation()
       }
       let mut old = NO_NODE
-      if node.source < previousFirst.length { old = previousFirst[node.source] }
+      if node.source() < previousFirst.length { old = previousFirst[node.source()] }
       while old != NO_NODE && ordinal > 0 {
-        old = previous[old].nextContinuation
+        old = previous[old].nextContinuation()
         ordinal = ordinal - 1
       }
-      if old != NO_NODE && toNew.get(old) == NO_NODE && previous[old].kind == node.kind && previous[old].styleOwner == node.styleOwner {
+      if old != NO_NODE && toNew.get(old) == NO_NODE && previous[old].kind == node.kind && previous[old].styleOwner() == node.styleOwner() {
         toOld.set(id, old)
         toNew.set(old, id)
       }
@@ -220,22 +220,22 @@ pub effect fn matchBoxes<S: LayoutSource>(previous: &[BoxNode], previousFirst: &
     // Anonymous children pair up in order among those alike.
     let parent = toOld.get(id)
     if parent != NO_NODE {
-      let mut cursor = previous[parent].firstChild
-      let mut child = node.firstChild
+      let mut cursor = previous[parent].firstChild()
+      let mut child = node.firstChild()
       while child != NO_NODE {
         let item = next.node(child)
-        if item.source == NO_NODE {
+        if item.source() == NO_NODE {
           let mut scan = cursor
-          while scan != NO_NODE && !anonymousLike(&previous[scan], item) { scan = previous[scan].nextSibling }
+          while scan != NO_NODE && !anonymousLike(&previous[scan], item) { scan = previous[scan].nextSibling() }
           if scan != NO_NODE {
             if toNew.get(scan) == NO_NODE {
               toOld.set(child, scan)
               toNew.set(scan, child)
             }
-            cursor = previous[scan].nextSibling
+            cursor = previous[scan].nextSibling()
           }
         }
-        child = item.nextSibling
+        child = item.nextSibling()
       }
     }
     id = id + 1
@@ -247,25 +247,25 @@ pub effect fn matchBoxes<S: LayoutSource>(previous: &[BoxNode], previousFirst: &
     if old != NO_NODE {
       let a = &previous[old]
       let b = next.node(id)
-      let mut same = a.kind == b.kind && a.source == b.source && a.styleOwner == b.styleOwner
-        && (a.anonymousStyle == NO_NODE) == (b.anonymousStyle == NO_NODE)
-        && a.parent == mapped(map, b.parent)
-        && a.previousContinuation == mapped(map, b.previousContinuation) && a.nextContinuation == mapped(map, b.nextContinuation)
+      let mut same = a.kind == b.kind && a.source() == b.source() && a.styleOwner() == b.styleOwner()
+        && (a.anonymousStyle() == NO_NODE) == (b.anonymousStyle() == NO_NODE)
+        && a.parent() == mapped(map, b.parent())
+        && a.previousContinuation() == mapped(map, b.previousContinuation()) && a.nextContinuation() == mapped(map, b.nextContinuation())
         && a.firstForSource == b.firstForSource && a.lastForSource == b.lastForSource
-        && a.interruptionFirst == mapped(map, b.interruptionFirst) && a.interruptionLast == mapped(map, b.interruptionLast)
+        && a.interruptionFirst() == mapped(map, b.interruptionFirst()) && a.interruptionLast() == mapped(map, b.interruptionLast())
         && a.anonymousBlock == b.anonymousBlock && a.blockify == b.blockify && a.independentRoot == b.independentRoot
         && a.firstFormattedRun == b.firstFormattedRun && a.needsFragmentGeometry == b.needsFragmentGeometry
         && a.fragmentMonolithic == b.fragmentMonolithic
         && a.beforeControl == b.beforeControl && a.dynamicBefore == b.dynamicBefore
         && a.afterControl == b.afterControl && a.dynamicAfter == b.dynamicAfter
         && a.measureKey == b.measureKey && a.measurement == b.measurement
-      let mut oldChild = a.firstChild
-      let mut newChild = b.firstChild
+      let mut oldChild = a.firstChild()
+      let mut newChild = b.firstChild()
       while same && (oldChild != NO_NODE || newChild != NO_NODE) {
         if oldChild == NO_NODE || newChild == NO_NODE || map[newChild] != oldChild { same = false }
         else {
-          oldChild = previous[oldChild].nextSibling
-          newChild = next.node(newChild).nextSibling
+          oldChild = previous[oldChild].nextSibling()
+          newChild = next.node(newChild).nextSibling()
         }
       }
       if same { changed.set(id, false) }
@@ -283,7 +283,7 @@ pub fn invalidateUnmatched<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &mut 
       let mut box = id
       while box != NO_NODE {
         cache.clearBox(box)
-        box = nodes.node(box).parent
+        box = nodes.node(box).parent()
       }
     }
     id = id + 1
@@ -323,7 +323,7 @@ pub effect fn markSubtrees<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut 
   run facts.parents.reserveExact(count)
   index = 0
   while index < count {
-    run facts.parents.append(nodes.node(index).parent)
+    run facts.parents.append(nodes.node(index).parent())
     index = index + 1
   }
   let own = facts.own.asSlice()
@@ -338,7 +338,7 @@ pub effect fn markSubtrees<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut 
     let free = frees[index] && (own[index] & FACT_FREE) != 0
     levels[index] = level
     frees[index] = free
-    let parent = nodes.node(index).parent
+    let parent = nodes.node(index).parent()
     if parent != NO_NODE {
       if !free { frees[parent] = false }
       let inherited = passedUp(nodes, index, level)
@@ -361,13 +361,13 @@ fn ownFacts<S: LayoutSource>(nodes: &BoxTree<'_, S>, index: usize) -> u8 {
   let node = nodes.node(index)
   let style = nodes.style(index)
   let mut facts = REUSE_IN_FLOW
-  if node.interruptionFirst != NO_NODE { facts = REUSE_NONE }
+  if node.interruptionFirst() != NO_NODE { facts = REUSE_NONE }
   else if outOfFlow(style) { facts = REUSE_INDEPENDENT }
   else if !nonNegative(&style.margin) { facts = REUSE_INDEPENDENT }
   let horizontal = style.writingMode == WritingMode.HorizontalTb
   let mut free = !style.replaced && style.position != Position.Fixed
-  if node.parent == NO_NODE { free = free && horizontal }
-  else { free = free && horizontal == (nodes.style(node.parent).writingMode == WritingMode.HorizontalTb) }
+  if node.parent() == NO_NODE { free = free && horizontal }
+  else { free = free && horizontal == (nodes.style(node.parent()).writingMode == WritingMode.HorizontalTb) }
   if free { facts = facts | FACT_FREE }
   if insetAnchored(style) { facts = facts | FACT_ANCHORED }
   return facts
@@ -391,7 +391,7 @@ pub fn insetAnchored(style: &Style) -> bool {
 // The tree node whose style a box takes: text shares its parent's, and an
 // anonymous box takes its owner's (see BoxTree.anonymousOrigin).
 fn styleSource<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, id: usize) -> usize {
-  let owner = nodes.node(id).styleOwner
+  let owner = nodes.node(id).styleOwner()
   if owner != NO_NODE && tree.isText(owner) { return tree.parent(owner) }
   return owner
 }
@@ -463,7 +463,7 @@ pub effect fn markPatched<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut B
   while at < ids.length {
     let box = ids[at]
     facts.own.set(box, ownFacts(nodes, box))
-    facts.parents.set(box, nodes.node(box).parent)
+    facts.parents.set(box, nodes.node(box).parent())
     facts.marks.set(box, mark)
     run pending.append(box)
     at = at + 1
@@ -486,14 +486,14 @@ effect fn settleLevels<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut BoxF
     pending.truncate(last)
     let mut level = own[box] & REUSE_LEVEL
     let mut free = (own[box] & FACT_FREE) != 0
-    let mut child = nodes.node(box).firstChild
+    let mut child = nodes.node(box).firstChild()
     while child != NO_NODE {
       let inherited = passedUp(nodes, child, levels[child] & REUSE_LEVEL)
       if inherited < level { level = inherited }
       free = free && frees[child]
-      child = nodes.node(child).nextSibling
+      child = nodes.node(child).nextSibling()
     }
-    let parent = nodes.node(box).parent
+    let parent = nodes.node(box).parent()
     let same = levels[box] == level && frees[box] == free
     levels[box] = level
     frees[box] = free
@@ -550,7 +550,7 @@ pub effect fn remarkSubtrees<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, 
             marked[box] = mark
             run changed.append(box)
           }
-          box = nodes.node(box).nextContinuation
+          box = nodes.node(box).nextContinuation()
         }
       }
       at = at + 1
@@ -559,13 +559,13 @@ pub effect fn remarkSubtrees<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, 
     let direct = changed.length()
     at = 0
     while at < direct {
-      let mut child = nodes.node(changed.get(at)).firstChild
+      let mut child = nodes.node(changed.get(at)).firstChild()
       while child != NO_NODE {
         if marked[child] != mark {
           marked[child] = mark
           run changed.append(child)
         }
-        child = nodes.node(child).nextSibling
+        child = nodes.node(child).nextSibling()
       }
       at = at + 1
     }
@@ -573,10 +573,10 @@ pub effect fn remarkSubtrees<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, 
     let mut id: usize = 0
     while id < count {
       let node = nodes.node(id)
-      let mut restyled = changedSince(tree, styleSource(tree, nodes, id), since) || changedSince(tree, node.source, since)
-      if !restyled && node.parent != NO_NODE && marked[node.parent] == mark {
-        let parent = nodes.node(node.parent)
-        restyled = changedSince(tree, styleSource(tree, nodes, node.parent), since) || changedSince(tree, parent.source, since)
+      let mut restyled = changedSince(tree, styleSource(tree, nodes, id), since) || changedSince(tree, node.source(), since)
+      if !restyled && node.parent() != NO_NODE && marked[node.parent()] == mark {
+        let parent = nodes.node(node.parent())
+        restyled = changedSince(tree, styleSource(tree, nodes, node.parent()), since) || changedSince(tree, parent.source(), since)
       }
       if restyled {
         run changed.append(id)

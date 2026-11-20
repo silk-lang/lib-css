@@ -46,7 +46,7 @@ fn rootBox<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, s: usize, since: u
   let id = nodes.firstBySource.get(s)
   if id == NO_NODE || id != nodes.lastBySource.get(s) || id >= nodes.boxes.length() { return NO_NODE }
   let node = nodes.node(id)
-  if node.source != s || node.nextContinuation != NO_NODE || node.previousContinuation != NO_NODE || node.measurement != Measurement.None || node.columnSet || node.columnFlow { return NO_NODE }
+  if node.source() != s || node.nextContinuation() != NO_NODE || node.previousContinuation() != NO_NODE || node.measurement != Measurement.None || node.columnSet || node.columnFlow { return NO_NODE }
   if node.kind != BoxKind.Block && node.kind != BoxKind.Flex && node.kind != BoxKind.Grid { return NO_NODE }
   let style = &nodes.styles[tree.styleIndex(s)]
   if style.replaced || style.multicol() || style.display.isNone() || style.display.isContents() { return NO_NODE }
@@ -60,7 +60,7 @@ fn rootBox<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, s: usize, since: u
 // below the root.
 fn keepable<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, since: usize, root: usize, s: usize, id: usize, unkept: &[usize]) -> bool {
   let node = nodes.node(id)
-  let source = node.source
+  let source = node.source()
   if source == NO_NODE || node.kind == BoxKind.Text || !node.firstForSource || !node.lastForSource { return false }
   // A change to the node its parent may see covers every change to how it
   // generates its own box; changes below it are patched at roots of their own.
@@ -135,10 +135,10 @@ pub effect fn patch<S: LayoutSource>(tree: &S, nodes: &mut BoxTree<'_, S>, since
     at = at + 1
     if sortedContains(dead.asSlice(), root) { continue }
     run live.append(root)
-    let s = nodes.node(root).source
+    let s = nodes.node(root).source()
     let items = nodes.node(root).kind == BoxKind.Flex || nodes.node(root).kind == BoxKind.Grid
     let before = dead.length()
-    let mut child = nodes.node(root).firstChild
+    let mut child = nodes.node(root).firstChild()
     while child != NO_NODE {
       if items && keepable(tree, &nodes, since, root, s, child, unkept.asSlice()) { run kept.append(child) }
       else {
@@ -148,14 +148,14 @@ pub effect fn patch<S: LayoutSource>(tree: &S, nodes: &mut BoxTree<'_, S>, since
           let id = stack.get(top)
           stack.truncate(top)
           run dead.append(id)
-          let mut below = nodes.node(id).firstChild
+          let mut below = nodes.node(id).firstChild()
           while below != NO_NODE {
             run stack.append(below)
-            below = nodes.node(below).nextSibling
+            below = nodes.node(below).nextSibling()
           }
         }
       }
-      child = nodes.node(child).nextSibling
+      child = nodes.node(child).nextSibling()
     }
     if dead.length() != before { run dead.sort() }
     if dead.length() * 2 > count { return false }
@@ -171,8 +171,8 @@ pub effect fn patch<S: LayoutSource>(tree: &S, nodes: &mut BoxTree<'_, S>, since
   at = 0
   while at < dead.length() {
     let id = dead.get(at)
-    let source = nodes.node(id).source
-    let style = nodes.node(id).anonymousStyle
+    let source = nodes.node(id).source()
+    let style = nodes.node(id).anonymousStyle()
     if source != NO_NODE && source < nodes.firstBySource.length() {
       nodes.firstBySource.set(source, NO_NODE)
       nodes.lastBySource.set(source, NO_NODE)

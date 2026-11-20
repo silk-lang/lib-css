@@ -208,7 +208,7 @@ effect fn fragmentedContents<'pass, 'source, M: Measure + TextMeasure, S: Layout
     let style = nodes.style(id)
     // The synthetic frame root supplies available space, not an authored CSS
     // size tail separating the document's contents from the context endpoint.
-    if id != 0 && nodes.node(id).firstChild != NO_NODE && !isFlex(style) && !isGrid(style) && (request.fragmentation.marginStart || request.fragmentation.marginEnd)
+    if id != 0 && nodes.node(id).firstChild() != NO_NODE && !isFlex(style) && !isGrid(style) && (request.fragmentation.marginStart || request.fragmentation.marginEnd)
       && (full.size.heightDefinite || full.min.height > full.inset.vertical() || blockContentOffset(style, 1.0) != 0.0) {
       // Break4 §5.2 does not define adjacency through alignment free space.
       // Conservatively use the retained margin envelope (Align3 §5.1.1),
@@ -263,7 +263,7 @@ effect fn contentAlgorithm<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
   if nodes.node(id).kind == BoxKind.Table { return run layoutTable(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   if nodes.node(id).kind == BoxKind.TablePart { return run layoutTablePart(nodes, &mut output, &mut measurer, id, &request, &resolved) }
   let result = run layoutBlock(nodes, &mut output, &mut measurer, id, nodes.style(id), &request, &resolved, &mut bfc)
-  let first = nodes.node(id).firstChild
+  let first = nodes.node(id).firstChild()
   if first != NO_NODE && nodes.style(first).outsideMarker { run placeMarker(nodes, &mut output, &mut measurer, id, &request, &resolved, &result) }
   return result
 }
@@ -380,7 +380,7 @@ fn plainWidthOf<S: LayoutSource>(nodes: &BoxTree<'_, S>, shapes: &[u16], widths:
     let column = node.kind == BoxKind.Flex && isFlex(style) && style.flexWrap == FlexWrap.NoWrap && (style.flexDirection == FlexDirection.Column || style.flexDirection == FlexDirection.ColumnReverse)
     let mut plain = true
     let mut widest: f32 = 0.0
-    let mut child = node.firstChild
+    let mut child = node.firstChild()
     while plain && child != NO_NODE {
       let childStyle = nodes.style(child)
       if !outOfFlow(childStyle) {
@@ -397,7 +397,7 @@ fn plainWidthOf<S: LayoutSource>(nodes: &BoxTree<'_, S>, shapes: &[u16], widths:
           }
         }
       }
-      child = nodes.node(child).nextSibling
+      child = nodes.node(child).nextSibling()
     }
     if plain { result = resolveBoxEdges(style, base, shape & KEY_ZERO_EDGES != 0).inset.horizontal() + widest }
   }
@@ -410,11 +410,11 @@ fn plainWidthOf<S: LayoutSource>(nodes: &BoxTree<'_, S>, shapes: &[u16], widths:
 // as if childless. Its final layout still places them. An outside marker is
 // placed by the box's own layout, so it keeps the box off the empty paths.
 fn noInFlowChildren<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     let node = nodes.node(child)
     if node.kind == BoxKind.Text || node.kind == BoxKind.Inline || node.kind == BoxKind.InlineFormatting || !absolutelyPositioned(nodes.style(child)) { return false }
-    child = node.nextSibling
+    child = node.nextSibling()
   }
   return true
 }
@@ -515,11 +515,11 @@ fn overflowGeometry<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass
   if (measured && external.width >= EMPTY_EXTENT && external.height >= EMPTY_EXTENT)
     || (grid && (external.width >= EMPTY_EXTENT || external.height >= EMPTY_EXTENT)) { flow = flow.unionWith(external) }
   let margins = FlowMargins.of(nodes.style(id), &result)
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     let rect = flowMarginIn(nodes, &margins, child, &output.boxes[child])
     if rect.width >= EMPTY_EXTENT && rect.height >= EMPTY_EXTENT { flow = flow.unionWith(rect) }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   flow = padFlow(flow, box.padding)
   let content = Rect { x: box.inset.left, y: box.inset.top, width: result.contentSize.width, height: result.contentSize.height }
@@ -533,7 +533,7 @@ fn overflowGeometry<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass
     // inline formatting places its children, and lines carry their overflow.
     if output.frame == NO_NODE && id != 0 && !measured {
       let unlimited = ResolvedEdges { left: -UNBOUNDED, right: UNBOUNDED, top: -UNBOUNDED, bottom: UNBOUNDED }
-      child = nodes.node(id).firstChild
+      child = nodes.node(id).firstChild()
       while child != NO_NODE {
         let layout = &output.boxes[child]
         let own = layout.scrollableOverflow
@@ -543,7 +543,7 @@ fn overflowGeometry<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass
             overflow = addOverflow(overflow, propagatedOverflow(childStyle, own, layout.paddingRect()).translated(layout.location), unlimited)
           }
         }
-        child = nodes.node(child).nextSibling
+        child = nodes.node(child).nextSibling()
       }
     }
     result.scrollableOverflow = overflow
@@ -568,11 +568,11 @@ fn overflowGeometry<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass
   }
   // Scrollable axes require clipping each source before rectangular union.
   // Revisit only direct generated children, without layout or measurement.
-  child = nodes.node(id).firstChild
+  child = nodes.node(id).firstChild()
   while child != NO_NODE {
     let rect = flowMarginIn(nodes, &margins, child, &output.boxes[child])
     overflow = addFlow(overflow, rect, box.padding, limits)
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   result.scrollableOverflow = overflow
 }
@@ -787,7 +787,7 @@ fn widthFreeTrees<S: LayoutSource>(nodes: &BoxTree<'_, S>, shapes: &mut List<u16
   id = count
   while id > 0 {
     id = id - 1
-    let parent = nodes.node(id).parent
+    let parent = nodes.node(id).parent()
     if parent != NO_NODE && parent < count {
       let missing = (KEY_WIDTH_FREE_TREE | KEY_CONTENT_FREE_TREE) & ~slice[id]
       slice[parent] = slice[parent] & ~missing
@@ -822,13 +822,13 @@ fn widthFreeTreesAt<S: LayoutSource>(nodes: &BoxTree<'_, S>, shapes: &mut List<u
       let mut shape = slice[id] & ~(KEY_WIDTH_FREE_TREE | KEY_CONTENT_FREE_TREE)
       if shape & KEY_WIDTH_FREE != 0 { shape = shape | KEY_WIDTH_FREE_TREE }
       if shape & KEY_CONTENT_FREE != 0 { shape = shape | KEY_CONTENT_FREE_TREE }
-      let mut child = nodes.node(id).firstChild
+      let mut child = nodes.node(id).firstChild()
       while child != NO_NODE {
         if child < count { shape = shape & ~((KEY_WIDTH_FREE_TREE | KEY_CONTENT_FREE_TREE) & ~slice[child]) }
-        child = nodes.node(child).nextSibling
+        child = nodes.node(child).nextSibling()
       }
       slice[id] = shape
-      id = nodes.node(id).parent
+      id = nodes.node(id).parent()
     }
     at = at + 1
   }
@@ -861,7 +861,7 @@ fn itemFlags<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> u8 {
   if measuredWidthLeaf(nodes, id) { flags = flags | ITEM_MEASURED_WIDTH }
   if textLeafShape(nodes, id) { flags = flags | ITEM_TEXT_LEAF }
   let node = nodes.node(id)
-  if node.kind == BoxKind.Block && node.source != NO_NODE {
+  if node.kind == BoxKind.Block && node.source() != NO_NODE {
     if !node.firstForSource { flags = flags | ITEM_CONTINUES_BEFORE }
     if !node.lastForSource { flags = flags | ITEM_CONTINUES_AFTER }
   }
@@ -886,10 +886,10 @@ effect fn patchShapes<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut BoxFa
     let mut shape = keyShape(nodes, id) & ~(KEY_WIDTH_FREE_TREE | KEY_CONTENT_FREE_TREE)
     if shape & KEY_WIDTH_FREE != 0 { shape = shape | KEY_WIDTH_FREE_TREE }
     if shape & KEY_CONTENT_FREE != 0 { shape = shape | KEY_CONTENT_FREE_TREE }
-    let mut child = nodes.node(id).firstChild
+    let mut child = nodes.node(id).firstChild()
     while child != NO_NODE {
       shape = shape & ~((KEY_WIDTH_FREE_TREE | KEY_CONTENT_FREE_TREE) & ~slice[child])
-      child = nodes.node(child).nextSibling
+      child = nodes.node(child).nextSibling()
     }
     slice[id] = shape
     facts.itemFlags.set(id, itemFlags(nodes, id))
@@ -897,7 +897,7 @@ effect fn patchShapes<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut BoxFa
   let mut parents = List<usize>.make()
   at = 0
   while at < roots.length {
-    let parent = nodes.node(roots[at]).parent
+    let parent = nodes.node(roots[at]).parent()
     if parent != NO_NODE { run parents.append(parent) }
     at = at + 1
   }
@@ -1031,7 +1031,7 @@ pub effect fn layoutNodeInPlace<'pass, 'source, M: Measure + TextMeasure, S: Lay
 // False, doing nothing, for any other request.
 pub effect fn layoutEmptyLeafInPlace<'pass, 'source, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, id: usize, input: &Input) -> bool ! OutOfMemoryError ? &mut Allocator {
   if !input.performLayout || output.frame != NO_NODE || input.bfcContentOrigin.x != 0.0 || input.bfcContentOrigin.y != 0.0 || !output.freshCompute() { return false }
-  if nodes.node(id).firstChild != NO_NODE || !keptEmptyBox(nodes, &output, id, &input) { return false }
+  if nodes.node(id).firstChild() != NO_NODE || !keptEmptyBox(nodes, &output, id, &input) { return false }
   drop run layoutEmptyBox(nodes, &mut output, id, &input, &BfcState.make())
   return true
 }
@@ -1258,11 +1258,11 @@ effect fn layoutEmptyBox<'pass, 'source, S: LayoutSource>(nodes: &BoxTree<'sourc
   output.boxes[id].location = Point { x: 0.0, y: 0.0 }
   let mut first = true
   let mut last = true
-  if node.source != NO_NODE {
+  if node.source() != NO_NODE {
     first = node.firstForSource
     last = node.lastForSource
   }
-  let emitted = run output.fragments.appendBox(id, node.source, FragmentKind.Box, previousParent, 0, first, last)
+  let emitted = run output.fragments.appendBox(id, node.source(), FragmentKind.Box, previousParent, 0, first, last)
   output.fragmentParent = emitted.index
   let style = nodes.style(id)
   let mut box = shapedBox(&output, style, id, &input)
@@ -1293,11 +1293,11 @@ fn textLeafShape<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let node = nodes.node(id)
   let style = nodes.style(id)
   if node.kind != BoxKind.Block || node.measurement != Measurement.None || !plainLeafStyle(style) || outOfFlow(style) { return false }
-  let child = node.firstChild
+  let child = node.firstChild()
   if child == NO_NODE { return false }
   let childNode = nodes.node(child)
   let childStyle = nodes.style(child)
-  return childNode.nextSibling == NO_NODE && childNode.anonymousStyle != NO_NODE && !childNode.independentRoot && textOnly(nodes, child)
+  return childNode.nextSibling() == NO_NODE && childNode.anonymousStyle() != NO_NODE && !childNode.independentRoot && textOnly(nodes, child)
     && childStyle.writingMode == WritingMode.HorizontalTb && childStyle.float == Float.None && !childStyle.replaced
 }
 
@@ -1354,11 +1354,11 @@ effect fn layoutTextLeaf<'pass, 'source, M: Measure + TextMeasure, S: LayoutSour
     output.boxes[id].location = Point { x: 0.0, y: 0.0 }
     let mut first = true
     let mut last = true
-    if node.source != NO_NODE {
+    if node.source() != NO_NODE {
       first = node.firstForSource
       last = node.lastForSource
     }
-    let emitted = run output.fragments.appendBox(id, node.source, FragmentKind.Box, previousParent, 0, first, last)
+    let emitted = run output.fragments.appendBox(id, node.source(), FragmentKind.Box, previousParent, 0, first, last)
     output.fragmentParent = emitted.index
   } else {
     output.stats.sizeProbes = output.stats.sizeProbes + 1
@@ -1378,7 +1378,7 @@ effect fn layoutTextLeaf<'pass, 'source, M: Measure + TextMeasure, S: LayoutSour
 @inlineAlways
 fn textRunBox<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, input: &Input) -> bool {
   let node = nodes.node(id)
-  if node.kind != BoxKind.InlineFormatting || node.anonymousStyle == NO_NODE || node.anonymousBlock || node.measurement != Measurement.None { return false }
+  if node.kind != BoxKind.InlineFormatting || node.anonymousStyle() == NO_NODE || node.anonymousBlock || node.measurement != Measurement.None { return false }
   let style = nodes.style(id)
   if !plainLeafStyle(style) || outOfFlow(style) || input.gridContext != 0 { return false }
   if input.parentWritingMode != WritingMode.HorizontalTb || input.fragmentation.active || input.fragmentation.boundaryProbe != BoundaryProbe.None || boxInputChanges(nodes, id, &input) { return false }
@@ -1422,11 +1422,11 @@ effect fn layoutMeasuredBox<'pass, 'source, M: Measure, S: LayoutSource>(nodes: 
     output.boxes[id].location = Point { x: 0.0, y: 0.0 }
     let mut first = true
     let mut last = true
-    if node.source != NO_NODE {
+    if node.source() != NO_NODE {
       first = node.firstForSource
       last = node.lastForSource
     }
-    let emitted = run output.fragments.appendBox(id, node.source, FragmentKind.Box, previousParent, 0, first, last)
+    let emitted = run output.fragments.appendBox(id, node.source(), FragmentKind.Box, previousParent, 0, first, last)
     output.fragmentParent = emitted.index
   } else {
     output.stats.sizeProbes = output.stats.sizeProbes + 1
@@ -1491,7 +1491,7 @@ fn plainTextProbe<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'
 // Whether a box is an anonymous run of text alone, with no box edges of its
 // own and no size that depends on its parent's (see probeText).
 fn widthFreeText<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
-  if nodes.node(id).anonymousStyle == NO_NODE { return false }
+  if nodes.node(id).anonymousStyle() == NO_NODE { return false }
   let indent = nodes.style(id).textIndent.value.kind
   return indent != DimensionKind.Percent && indent != DimensionKind.Calc
 }
@@ -1502,8 +1502,8 @@ fn textContents<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   if textOnly(nodes, id) { return true }
   let node = nodes.node(id)
   if node.kind != BoxKind.Block || node.measurement != Measurement.None || nodes.style(id).aspectRatio > 0.0 { return false }
-  let child = node.firstChild
-  return child != NO_NODE && nodes.node(child).nextSibling == NO_NODE && nodes.node(child).anonymousStyle != NO_NODE && textOnly(nodes, child)
+  let child = node.firstChild()
+  return child != NO_NODE && nodes.node(child).nextSibling() == NO_NODE && nodes.node(child).anonymousStyle() != NO_NODE && textOnly(nodes, child)
 }
 
 // Whether a box is an inline formatting context of text runs alone. Its
@@ -1512,11 +1512,11 @@ fn textContents<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
 fn textOnly<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let node = nodes.node(id)
   if node.kind != BoxKind.InlineFormatting { return false }
-  let mut child = node.firstChild
+  let mut child = node.firstChild()
   while child != NO_NODE {
     let childNode = nodes.node(child)
     if childNode.kind != BoxKind.Text { return false }
-    child = childNode.nextSibling
+    child = childNode.nextSibling()
   }
   return true
 }
@@ -1536,7 +1536,7 @@ effect fn probeText<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(n
     widest.availableWidth = AvailableSpace.maxContent()
     let widestKey = cacheKey(output.keyShape(id), &widest, output.viewportFree(id))
     let found = output.cache.findWidest(id, &widestKey)
-    if found != usize.MAX && output.cache.layoutAt(found).size.width <= request.availableWidth.value {
+    if found != usize.MAX && output.cache.coreAt(found).sizes().width <= request.availableWidth.value {
       let result = output.cache.layoutAt(found).widenedTo(request.availableWidth.value, !request.indefiniteWidth)
       output.stats.cacheHits = output.stats.cacheHits + 1
       // Stored as a cache hit stores it (see storeCached).
@@ -1836,7 +1836,7 @@ fn boxInputChanges<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, input: &I
   let style = nodes.style(id)
   let node = nodes.node(id)
   if !input.blockRoot && node.independentRoot { return true }
-  if !input.blockify && node.parent != NO_NODE && itemParent(nodes.node(node.parent).kind) { return true }
+  if !input.blockify && node.parent() != NO_NODE && itemParent(nodes.node(node.parent()).kind) { return true }
   if node.kind == BoxKind.Table && !input.shrinkToFit { return true }
   let atomicInline = node.kind == BoxKind.Block && !style.replaced && style.display.outsideIs(DisplayOutside.Inline) && style.display.insideIs(DisplayInside.Flow)
   return input.atomicInline != atomicInline
@@ -1846,7 +1846,7 @@ fn adjustBoxInput<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, input: &mu
   let style = nodes.style(id)
   let node = nodes.node(id)
   input.blockRoot = input.blockRoot || node.independentRoot
-  if node.parent != NO_NODE && itemParent(nodes.node(node.parent).kind) { input.blockify = true }
+  if node.parent() != NO_NODE && itemParent(nodes.node(node.parent()).kind) { input.blockify = true }
   // CSS 2 §17.5.2: an auto-width table is as wide as its contents ask, within the space it has.
   if node.kind == BoxKind.Table { input.shrinkToFit = true }
   input.atomicInline = node.kind == BoxKind.Block && !style.replaced && style.display.outsideIs(DisplayOutside.Inline) && style.display.insideIs(DisplayInside.Flow)
@@ -1980,13 +1980,13 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutS
     } else if node.kind != BoxKind.InlineFormatting || node.anonymousBlock {
       let mut first = true
       let mut last = true
-      if node.source != NO_NODE {
+      if node.source() != NO_NODE {
         first = node.firstForSource
         last = node.lastForSource
       }
       let mut fragmentainer: usize = 0
       if output.frame != NO_NODE { fragmentainer = output.frame }
-      let emitted = run output.fragments.appendBox(id, node.source, FragmentKind.Box, previousParent, fragmentainer, first, last)
+      let emitted = run output.fragments.appendBox(id, node.source(), FragmentKind.Box, previousParent, fragmentainer, first, last)
       output.fragmentParent = emitted.index
     }
   }
@@ -2191,7 +2191,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutS
       if shift.x != 0.0 || shift.y != 0.0 {
         // Final CSS extent and per-fragment block alignment affect only this
         // fragment's children; flex alignment is resolved by its own algorithm.
-        let mut child = node.firstChild
+        let mut child = node.firstChild()
         while child != NO_NODE {
           if output.publication(child) != NO_NODE {
             let mut layout = output.boxes[child]
@@ -2199,7 +2199,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutS
             layout.location.y = layout.location.y + shift.y
             run output.store(child, &layout, true)
           }
-          child = nodes.node(child).nextSibling
+          child = nodes.node(child).nextSibling()
         }
       }
     }
@@ -2213,7 +2213,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutS
       else if style.boxDecorationBreak == BoxDecorationBreak.Slice && id != 0 {
         let mut edges: u8 = 15
         // A block a spanner split continues in another box (see sliceSplit).
-        let split = node.source != NO_NODE && node.kind == BoxKind.Block
+        let split = node.source() != NO_NODE && node.kind == BoxKind.Block
         if (wasStarted && !state.cloneStart) || (split && !node.firstForSource) {
           if !frameAxes.vertical { edges = edges - 1 }
           else if frameAxes.reverseBlock { edges = edges - 2 }
@@ -2344,7 +2344,7 @@ effect fn boxesFor<'source, S: LayoutSource>(tree: &'source S, output: &mut Layo
   // Anonymous boxes take their styles again from restyled origins.
   let mut id: usize = 1
   while id < nodes.boxes.length() {
-    if nodes.node(id).anonymousStyle != NO_NODE {
+    if nodes.node(id).anonymousStyle() != NO_NODE {
       let origin = nodes.anonymousOrigin(id)
       if origin != NO_NODE && tree.changes().changedAt(origin) > since { run nodes.refreshAnonymous(id) }
     }
@@ -2377,11 +2377,11 @@ fn staticWithin<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, seen: &mut u
   let node = nodes.node(id)
   let style = nodes.style(id)
   if style.position != Position.Static || style.float != Float.None || style.overflowX != Overflow.Visible || style.overflowY != Overflow.Visible { return false }
-  if node.nextContinuation != NO_NODE || node.previousContinuation != NO_NODE || node.interruptionFirst != NO_NODE { return false }
-  let mut child = node.firstChild
+  if node.nextContinuation() != NO_NODE || node.previousContinuation() != NO_NODE || node.interruptionFirst() != NO_NODE { return false }
+  let mut child = node.firstChild()
   while child != NO_NODE {
     if !staticWithin(nodes, child, &mut seen, limit) { return false }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   return true
 }
@@ -2415,10 +2415,10 @@ fn fixedTracks(tracks: &[GridTrack]) -> bool {
 // Whether a box is absolutely positioned in its parent, a block or flex box,
 // in one piece.
 fn placedAlone<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
-  let parent = nodes.node(id).parent
+  let parent = nodes.node(id).parent()
   if parent == NO_NODE || nodes.style(id).position != Position.Absolute || absoluteContainingBlock(nodes, id) != parent { return false }
   let kind = nodes.node(parent).kind
-  return (kind == BoxKind.Block || kind == BoxKind.Flex) && nodes.node(id).nextContinuation == NO_NODE && nodes.node(id).previousContinuation == NO_NODE
+  return (kind == BoxKind.Block || kind == BoxKind.Flex) && nodes.node(id).nextContinuation() == NO_NODE && nodes.node(id).previousContinuation() == NO_NODE
 }
 // staticSubtree for the box's children, and the rest of its conditions on
 // the box itself but its position.
@@ -2426,20 +2426,20 @@ fn staticBelow<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, seen: &mut us
   seen.* = seen.* + 1
   let node = nodes.node(id)
   let style = nodes.style(id)
-  if style.float != Float.None || style.overflowX != Overflow.Visible || style.overflowY != Overflow.Visible || node.interruptionFirst != NO_NODE { return false }
+  if style.float != Float.None || style.overflowX != Overflow.Visible || style.overflowY != Overflow.Visible || node.interruptionFirst() != NO_NODE { return false }
   let limit = cutoffLimit(style)
-  let mut child = node.firstChild
+  let mut child = node.firstChild()
   while child != NO_NODE {
     if !staticWithin(nodes, child, &mut seen, limit) { return false }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   return true
 }
 
 // The block or flex box that lays out a text box's lines.
 fn textContainer<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
-  let mut box = nodes.node(id).parent
-  while box != NO_NODE && nodes.node(box).kind != BoxKind.Block && nodes.node(box).kind != BoxKind.Flex && nodes.node(box).kind != BoxKind.Grid { box = nodes.node(box).parent }
+  let mut box = nodes.node(id).parent()
+  while box != NO_NODE && nodes.node(box).kind != BoxKind.Block && nodes.node(box).kind != BoxKind.Flex && nodes.node(box).kind != BoxKind.Grid { box = nodes.node(box).parent() }
   return box
 }
 // Whether every changed source with a box inside `container` is text it
@@ -2450,8 +2450,8 @@ fn textOnlyInside<S: LayoutSource>(nodes: &BoxTree<'_, S>, changes: &[usize], co
     let box = nodes.firstBySource.get(changes[at])
     at = at + 1
     if box == NO_NODE || box == container { continue }
-    let mut ancestor = nodes.node(box).parent
-    while ancestor != NO_NODE && ancestor != container { ancestor = nodes.node(ancestor).parent }
+    let mut ancestor = nodes.node(box).parent()
+    while ancestor != NO_NODE && ancestor != container { ancestor = nodes.node(ancestor).parent() }
     if ancestor == NO_NODE { continue }
     if nodes.node(box).kind != BoxKind.Text || textContainer(nodes, box) != container { return false }
   }
@@ -2472,10 +2472,10 @@ fn allAlone<S: LayoutSource>(nodes: &BoxTree<'_, S>, changes: &[usize], alone: &
   while at < changes.length {
     let box = nodes.firstBySource.get(changes[at])
     at = at + 1
-    if box == NO_NODE || nodes.node(box).nextContinuation != NO_NODE { return false }
+    if box == NO_NODE || nodes.node(box).nextContinuation() != NO_NODE { return false }
     // Laid out alone, or inside a box that was.
     let mut ancestor = box
-    while ancestor != NO_NODE && !contains(alone, ancestor) { ancestor = nodes.node(ancestor).parent }
+    while ancestor != NO_NODE && !contains(alone, ancestor) { ancestor = nodes.node(ancestor).parent() }
     if ancestor == NO_NODE { return false }
   }
   return true
@@ -2484,14 +2484,14 @@ fn allAlone<S: LayoutSource>(nodes: &BoxTree<'_, S>, changes: &[usize], alone: &
 // Whether a block container lays out the box in flow, horizontally.
 fn blockPlaced<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let style = nodes.style(id)
-  let parent = nodes.style(nodes.node(id).parent)
+  let parent = nodes.style(nodes.node(id).parent())
   return style.display.outsideIs(DisplayOutside.Block) && !style.replaced && style.writingMode == WritingMode.HorizontalTb && parent.writingMode == WritingMode.HorizontalTb
     && (parent.display.insideIs(DisplayInside.Flow) || parent.display.insideIs(DisplayInside.FlowRoot))
 }
 
 fn inheritedGridItem<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let node = nodes.node(id)
-  if node.kind != BoxKind.Grid || node.parent == NO_NODE || nodes.node(node.parent).kind != BoxKind.Grid { return false }
+  if node.kind != BoxKind.Grid || node.parent() == NO_NODE || nodes.node(node.parent()).kind != BoxKind.Grid { return false }
   let style = nodes.style(id)
   if outOfFlow(style) { return false }
   let template = &nodes.grids[style.grid]
@@ -2519,7 +2519,7 @@ effect fn cutoffCandidates<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxT
       id = textContainer(nodes, id)
       if id == NO_NODE || id == 0 || contains(boxes.asSlice(), id) || !textOnlyInside(nodes, changes, id) { continue }
       let mut other: usize = 0
-      while other < changes.length && changes[other] != nodes.node(id).source { other = other + 1 }
+      while other < changes.length && changes[other] != nodes.node(id).source() { other = other + 1 }
       if other < changes.length { continue }
     } else {
       // A block parent places the box by its padding and border, which come
@@ -2529,23 +2529,23 @@ effect fn cutoffCandidates<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxT
       insets = tree.changes().insetsChangedAt(changes[at - 1]) > since
       // Its parent reads its outer style: a change there needs the parent,
       // laid out alone in its place (see cutoffAncestor).
-      if tree.changes().outerChangedAt(changes[at - 1]) > since || insets && !blockPlaced(nodes, id) && nodes.node(nodes.node(id).parent).kind != BoxKind.Flex {
+      if tree.changes().outerChangedAt(changes[at - 1]) > since || insets && !blockPlaced(nodes, id) && nodes.node(nodes.node(id).parent()).kind != BoxKind.Flex {
         // An absolutely positioned box is placed after its parent's layout,
         // which reads none of it: by itself, from its size, insets and
         // margins, and laid out alone when only its padding or border changed.
         // So is an item of a grid whose tracks are all fixed: the grid sizes
         // no track by its items, so it reads only their styles' placement,
         // margins, sizes and alignment, and their layouts.
-        if !((placedAlone(nodes, id) || fixedGrid(nodes, &output.cache, nodes.node(id).parent)) && tree.changes().placedChangedAt(changes[at - 1]) <= since) {
+        if !((placedAlone(nodes, id) || fixedGrid(nodes, &output.cache, nodes.node(id).parent())) && tree.changes().placedChangedAt(changes[at - 1]) <= since) {
           id = cutoffAncestor(nodes, changes, boxes.asSlice(), id)
           if id == NO_NODE { continue }
         }
         insets = false
-      } else { insets = insets && nodes.node(nodes.node(id).parent).kind != BoxKind.Flex }
+      } else { insets = insets && nodes.node(nodes.node(id).parent()).kind != BoxKind.Flex }
     }
     if inheritedGridItem(nodes, id) { continue }
     // A table sizes its columns and rows from every cell's contributions.
-    if nodes.node(id).parent != NO_NODE && (nodes.node(nodes.node(id).parent).kind == BoxKind.Table || nodes.node(nodes.node(id).parent).kind == BoxKind.TablePart) { continue }
+    if nodes.node(id).parent() != NO_NODE && (nodes.node(nodes.node(id).parent()).kind == BoxKind.Table || nodes.node(nodes.node(id).parent()).kind == BoxKind.TablePart) { continue }
     let range = output.cache.keptRange(id)
     if !range.valid || range.floatCount != 0 || range.end > output.fragments.values.length() || output.fragments.values.get(range.start).box != id { continue }
     let mut seen: usize = 0
@@ -2554,14 +2554,14 @@ effect fn cutoffCandidates<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxT
     // through cached probes (an independent box), all of them reproduced.
     let mut eligible = true
     let mut probed = false
-    let mut ancestor = nodes.node(id).parent
+    let mut ancestor = nodes.node(id).parent()
     while ancestor != NO_NODE && eligible {
       if inheritedGridItem(nodes, ancestor) {
         // Equal outer size does not prove equal contributions to shared tracks.
         eligible = false
         break
       }
-      let source = nodes.node(ancestor).source
+      let source = nodes.node(ancestor).source()
       let mut other: usize = 0
       while other < changes.length {
         if changes[other] == source { eligible = false }
@@ -2570,7 +2570,7 @@ effect fn cutoffCandidates<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxT
       let ages = output.cache.entryAges(ancestor, previous)
       if ages == AGES_OLDER { eligible = false }
       if ages != AGES_NONE { probed = true }
-      ancestor = nodes.node(ancestor).parent
+      ancestor = nodes.node(ancestor).parent()
     }
     if !eligible { continue }
     let mut plain = PLAIN_UNKNOWN
@@ -2597,11 +2597,11 @@ effect fn cutoffCandidates<S: LayoutSource>(tree: &S, since: usize, nodes: &BoxT
 // one around or inside another box laid out alone.
 fn cutoffAncestor<S: LayoutSource>(nodes: &BoxTree<'_, S>, changes: &[usize], boxes: &[usize], id: usize) -> usize {
   let mut found = NO_NODE
-  let mut box = nodes.node(id).parent
-  while box != NO_NODE && box != 0 && nodes.node(box).parent != 0 {
+  let mut box = nodes.node(id).parent()
+  while box != NO_NODE && box != 0 && nodes.node(box).parent() != 0 {
     let node = nodes.node(box)
     if node.kind != BoxKind.Block && node.kind != BoxKind.Flex { break }
-    if contains(changes, node.source) { break }
+    if contains(changes, node.source()) { break }
     let mut seen: usize = 0
     if !staticSubtree(nodes, box, &mut seen) { break }
     if found == NO_NODE { found = box }
@@ -2609,7 +2609,7 @@ fn cutoffAncestor<S: LayoutSource>(nodes: &BoxTree<'_, S>, changes: &[usize], bo
       found = box
       break
     }
-    box = node.parent
+    box = node.parent()
   }
   if found == NO_NODE { return NO_NODE }
   let mut at: usize = 0
@@ -2630,7 +2630,7 @@ fn inside<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, ancestor: usize) -
   let mut box = id
   while box != NO_NODE {
     if box == ancestor { return true }
-    box = nodes.node(box).parent
+    box = nodes.node(box).parent()
   }
   return false
 }
@@ -2682,7 +2682,7 @@ const CUTOFF_MISSES: usize = 32
 // between in-flow siblings that have baselines of their own, which the
 // parent's first and last baselines would come from instead.
 fn baselinesMatter<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &LayoutCache, fragments: &FragmentArena, id: usize, fragment: usize) -> bool {
-  let parent = nodes.node(id).parent
+  let parent = nodes.node(id).parent()
   if parent == NO_NODE { return true }
   // An absolutely positioned box gives its parent no baseline.
   if placedAlone(nodes, id) { return false }
@@ -2720,7 +2720,7 @@ fn baselinesMatter<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &LayoutCache,
 fn overflowStays<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutTree, cache: &LayoutCache, id: usize, overflow: Rect, previous: Rect, moved: Point, size: Size) -> bool {
   let layout = &output.boxes.asSlice()[id]
   if moved.x == 0.0 && moved.y == 0.0 && sameSize(size, layout.size) && sameOverflow(overflow, previous, layout.size) { return true }
-  let parent = nodes.node(id).parent
+  let parent = nodes.node(id).parent()
   if parent == NO_NODE { return false }
   let kind = nodes.node(parent).kind
   let padding = output.boxes.asSlice()[parent].paddingRect()
@@ -2783,7 +2783,7 @@ fn sideStays(now: f32, before: f32, padding: f32, area: f32, counted: bool, was:
 // its alignment and static position play no part.
 fn relocation<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &LayoutCache, id: usize, old: Size, new: Size, moved: &mut Point) -> bool {
   moved.* = Point { x: 0.0, y: 0.0 }
-  if fixedGrid(nodes, cache, nodes.node(id).parent) {
+  if fixedGrid(nodes, cache, nodes.node(id).parent()) {
     return (old.width == new.width || gridStart(nodes, id, true)) && (old.height == new.height || gridStart(nodes, id, false))
   }
   if !placedAlone(nodes, id) { return false }
@@ -2804,7 +2804,7 @@ fn relocation<S: LayoutSource>(nodes: &BoxTree<'_, S>, cache: &LayoutCache, id: 
 // size there: aligned to the start of its area, horizontal and left to
 // right, without automatic margins (Grid §11.1, Box Alignment §6).
 fn gridStart<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, horizontal: bool) -> bool {
-  let grid = nodes.style(nodes.node(id).parent)
+  let grid = nodes.style(nodes.node(id).parent())
   let style = nodes.style(id)
   if grid.writingMode != WritingMode.HorizontalTb || grid.usedDirection() != Direction.Ltr || style.writingMode != WritingMode.HorizontalTb || style.usedDirection() != Direction.Ltr { return false }
   if horizontal {
@@ -2823,10 +2823,10 @@ fn gridStart<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, horizontal: boo
 // position there whatever its size: its parent, horizontal and left to
 // right, puts it at the start of that axis (see positioned.absolute).
 fn staticStart<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, horizontal: bool) -> bool {
-  let parent = nodes.style(nodes.node(id).parent)
+  let parent = nodes.style(nodes.node(id).parent())
   let style = nodes.style(id)
   if parent.writingMode != WritingMode.HorizontalTb || parent.usedDirection() != Direction.Ltr { return false }
-  if nodes.node(nodes.node(id).parent).kind == BoxKind.Block {
+  if nodes.node(nodes.node(id).parent()).kind == BoxKind.Block {
     if !horizontal { return true }
     let mut align = style.justifySelf
     if align == Align.Auto { align = parent.justifyItems }
@@ -2849,10 +2849,10 @@ fn adoptSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutTree
     boxes[id].location = location
   } else { boxes[id] = scratch[id] }
   output.cache.adoptRange(id, shift)
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     adoptSubtree(nodes, &mut output, scratch, child, root, shift)
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
 }
 
@@ -2860,20 +2860,20 @@ fn adoptSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutTree
 // whatever an earlier cutoff left, or zero bytes (see ScratchBoxes).
 fn resetSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, scratch: &mut [Layout], id: usize) {
   scratch[id] = Layout.zero()
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     resetSubtree(nodes, &mut scratch, child)
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
 }
 
 // Unsets the box chains of a subtree laid out alone in the scratch arena.
 fn unsetSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, fragments: &mut FragmentArena, id: usize) {
   fragments.unsetChains(id)
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     unsetSubtree(nodes, &mut fragments, child)
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
 }
 
@@ -3110,7 +3110,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure, S: LayoutSource>(tree: 
       let mut box = patch.roots.get(at)
       while box != NO_NODE {
         output.cache.clearBox(box)
-        box = nodes.node(box).parent
+        box = nodes.node(box).parent()
       }
       at = at + 1
     }
@@ -3167,7 +3167,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure, S: LayoutSource>(tree: 
       // A parent's shape and flags read its children's positioning
       // (noInFlowChildren), from the styles, which stand by now: once for a
       // run of siblings does.
-      let parent = nodes.node(id).parent
+      let parent = nodes.node(id).parent()
       if parent != NO_NODE && parent != refreshed {
         freed = refreshShape(&nodes, facts.keyShapes.asMutSlice(), parent) || freed
         facts.itemFlags.set(parent, itemFlags(&nodes, parent))

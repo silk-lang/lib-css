@@ -369,7 +369,7 @@ fn ownerOffset<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, 
   while at != owner && at != NO_NODE {
     result.x = result.x + output.boxes[at].location.x
     result.y = result.y + output.boxes[at].location.y
-    at = nodes.node(at).parent
+    at = nodes.node(at).parent()
   }
   return result
 }

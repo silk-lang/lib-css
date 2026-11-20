@@ -1,4 +1,10 @@
 import silk.core.ownership { Copy }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.collections.list { List }
+import silk.collections.slice { Slice }
+import silk.num.f32
+import silk.num.u32
+import silk.num.usize
 import silk.geometry.point { Point2 }
 import silk.geometry.size { Size2 }
 import silk.geometry.insets { Insets }
@@ -365,4 +371,323 @@ pub fn sameEdges(a: ResolvedEdges, b: ResolvedEdges) -> bool { return a.top == b
 pub fn sameBaselines(a: BaselineSet, b: BaselineSet) -> bool {
   return a.alphabetic == b.alphabetic && a.ideographic == b.ideographic && a.central == b.central && a.mathematical == b.mathematical
     && a.xMiddle == b.xMiddle && a.textOver == b.textOver && a.textUnder == b.textUnder
+}
+
+// Cached layouts, stored compactly: most of a Layout's groups of fields are
+// zero in most results (no gutter, no baselines, no margins), so each entry
+// keeps its sizes, overflow, ratio and flags in a LayoutCore and only its
+// nonzero groups in `words`, in a fixed order. Storing is lossless: a group
+// counts as zero only when every value is +0.0 bit for bit.
+pub struct LayoutCore {
+  size: Size, contentSize: Size, scrollableOverflow: Rect, preferredRatio: f32,
+  flags: u32,
+  // Where the entry's groups start in LayoutStore.words.
+  extra: u32,
+}
+impl Copy for LayoutCore {}
+impl LayoutCore {
+  @inlineAlways
+  pub fn sizes(self: &Self) -> Size { return self.size }
+  @inlineAlways
+  pub fn ratio(self: &Self) -> f32 { return self.preferredRatio }
+  @inlineAlways
+  pub fn ratioBorderBox(self: &Self) -> bool { return self.flags & L_RATIO_BORDER_BOX != 0 }
+}
+const L_HORIZONTAL_SCROLLBAR: u32 = 1
+const L_VERTICAL_SCROLLBAR: u32 = 2
+const L_SCROLLBARS_APPLICABLE: u32 = 4
+const L_WIDTH_DEFINITE: u32 = 8
+const L_HEIGHT_DEFINITE: u32 = 16
+const L_HAS_FIRST_BASELINE: u32 = 32
+const L_HAS_LAST_BASELINE: u32 = 64
+const L_GENERATED: u32 = 128
+const L_RATIO_BORDER_BOX: u32 = 256
+const L_COLLAPSES_THROUGH: u32 = 512
+const L_HAS_CLEARANCE: u32 = 1024
+const L_OVERLAY: u32 = 2048
+const L_HORIZONTAL_ON_TOP: u32 = 4096
+const L_VERTICAL_ON_LEFT: u32 = 8192
+// Groups present in `words`, in this order, with their word counts.
+const G_LOCATION: u32 = 65536
+const G_GUTTER: u32 = 131072
+const G_METRICS: u32 = 262144
+const G_FIRST: u32 = 524288
+const G_LAST: u32 = 1048576
+const G_OFFSET: u32 = 2097152
+const G_FLOW: u32 = 4194304
+const G_PADDING: u32 = 8388608
+const G_CONTENT: u32 = 16777216
+const G_MARGIN: u32 = 33554432
+const G_COLLAPSE: u32 = 67108864
+const GROUP_WORDS: usize = 46
+
+// Words of the groups `flags` names.
+fn groupWords(flags: u32) -> usize {
+  let mut count: usize = 0
+  if flags & G_LOCATION != 0 { count = count + 2 }
+  if flags & G_GUTTER != 0 { count = count + 4 }
+  if flags & G_METRICS != 0 { count = count + 2 }
+  if flags & G_FIRST != 0 { count = count + 7 }
+  if flags & G_LAST != 0 { count = count + 7 }
+  if flags & G_OFFSET != 0 { count = count + 2 }
+  if flags & G_FLOW != 0 { count = count + 4 }
+  if flags & G_PADDING != 0 { count = count + 4 }
+  if flags & G_CONTENT != 0 { count = count + 4 }
+  if flags & G_MARGIN != 0 { count = count + 4 }
+  if flags & G_COLLAPSE != 0 { count = count + 4 }
+  return count
+}
+
+// Collects a layout's nonzero groups.
+struct GroupWriter { words: [f32; 46], length: usize, flags: u32 }
+impl GroupWriter {
+  fn make(flags: u32) -> GroupWriter { return GroupWriter { words: [0.0; 46], length: 0, flags: flags } }
+  fn group(self: &mut Self, bit: u32, values: &[f32]) {
+    let mut zero = true
+    let mut at: usize = 0
+    while at < values.length {
+      if f32.toBits(values[at]) != 0 { zero = false }
+      at = at + 1
+    }
+    if zero { return }
+    self.flags = self.flags | bit
+    at = 0
+    while at < values.length {
+      self.words[self.length + at] = values[at]
+      at = at + 1
+    }
+    self.length = self.length + values.length
+  }
+}
+
+// Reads groups back in order.
+struct GroupReader<'a> { words: &'a [f32], at: usize, flags: u32 }
+impl<'a> GroupReader<'a> {
+  @inlineAlways
+  fn has(self: &Self, bit: u32) -> bool { return self.flags & bit != 0 }
+  @inlineAlways
+  fn next(self: &mut Self) -> f32 {
+    let value = self.words[self.at]
+    self.at = self.at + 1
+    return value
+  }
+}
+
+pub struct LayoutStore { cores: List<LayoutCore>, words: List<f32>, unused: usize }
+impl LayoutStore {
+  pub fn make() -> LayoutStore { return LayoutStore { cores: List<LayoutCore>.make(), words: List<f32>.make(), unused: 0 } }
+  @inlineAlways
+  pub fn length(self: &Self) -> usize { return self.cores.length() }
+  @inlineAlways
+  pub fn capacity(self: &Self) -> usize { return self.cores.capacity() }
+  pub fn clear(self: &mut Self) {
+    self.cores.clear()
+    self.words.clear()
+    self.unused = 0
+  }
+  pub fn clearAndFree(self: &mut Self) {
+    self.cores.clearAndFree()
+    self.words.clearAndFree()
+    self.unused = 0
+  }
+  pub effect fn reserveExact(self: &mut Self, more: usize) ! OutOfMemoryError ? &mut Allocator { run self.cores.reserveExact(more) }
+  pub effect fn reserve(self: &mut Self, more: usize) ! OutOfMemoryError ? &mut Allocator { run self.cores.reserve(more) }
+  // Bytes held, for memory reports.
+  pub fn storageBytes(self: &Self) -> usize {
+    return self.cores.capacity() * Intrinsic.layoutOf<LayoutCore>().bytes + self.words.capacity() * 4
+  }
+  // Bytes the entries use.
+  pub fn usedBytes(self: &Self) -> usize {
+    return self.cores.length() * Intrinsic.layoutOf<LayoutCore>().bytes + (self.words.length() - self.unused) * 4
+  }
+  // Groups no entry reads any more, which a copy into a fresh store drops.
+  pub fn unusedWords(self: &Self) -> usize { return self.unused }
+  pub fn wordCount(self: &Self) -> usize { return self.words.length() }
+  @inlineAlways
+  pub fn core(self: &Self, index: usize) -> &LayoutCore { return &self.cores.asSlice()[index] }
+  @inlineAlways
+  pub fn size(self: &Self, index: usize) -> Size { return self.cores.asSlice()[index].size }
+  pub fn get(self: &Self, index: usize) -> Layout {
+    let core = &self.cores.asSlice()[index]
+    let flags = core.flags
+    let mut layout = Layout.zero()
+    layout.size = core.size
+    layout.contentSize = core.contentSize
+    layout.scrollableOverflow = core.scrollableOverflow
+    layout.preferredRatio = core.preferredRatio
+    layout.horizontalScrollbar = flags & L_HORIZONTAL_SCROLLBAR != 0
+    layout.verticalScrollbar = flags & L_VERTICAL_SCROLLBAR != 0
+    layout.scrollbarsApplicable = flags & L_SCROLLBARS_APPLICABLE != 0
+    layout.widthDefinite = flags & L_WIDTH_DEFINITE != 0
+    layout.heightDefinite = flags & L_HEIGHT_DEFINITE != 0
+    layout.hasFirstBaseline = flags & L_HAS_FIRST_BASELINE != 0
+    layout.hasLastBaseline = flags & L_HAS_LAST_BASELINE != 0
+    layout.generated = flags & L_GENERATED != 0
+    layout.ratioBorderBox = flags & L_RATIO_BORDER_BOX != 0
+    layout.collapsesThrough = flags & L_COLLAPSES_THROUGH != 0
+    layout.hasClearance = flags & L_HAS_CLEARANCE != 0
+    layout.scrollbarMetrics.overlay = flags & L_OVERLAY != 0
+    layout.scrollbarMetrics.horizontalOnTop = flags & L_HORIZONTAL_ON_TOP != 0
+    layout.scrollbarMetrics.verticalOnLeft = flags & L_VERTICAL_ON_LEFT != 0
+    if flags < G_LOCATION { return layout }
+    let mut read = GroupReader { words: self.words.asSlice(), at: u32.toUsize(core.extra), flags: flags }
+    if read.has(G_LOCATION) {
+      let x = read.next()
+      layout.location = Point { x: x, y: read.next() }
+    }
+    if read.has(G_GUTTER) { layout.scrollbarGutter = readEdges(&mut read) }
+    if read.has(G_METRICS) {
+      layout.scrollbarMetrics.horizontal = read.next()
+      layout.scrollbarMetrics.vertical = read.next()
+    }
+    if read.has(G_FIRST) { layout.firstBaselines = readBaselines(&mut read) }
+    if read.has(G_LAST) { layout.lastBaselines = readBaselines(&mut read) }
+    if read.has(G_OFFSET) {
+      let x = read.next()
+      layout.measurementOffset = Point { x: x, y: read.next() }
+    }
+    if read.has(G_FLOW) { layout.flowOverflow = readRect(&mut read) }
+    if read.has(G_PADDING) { layout.paddingBox = readRect(&mut read) }
+    if read.has(G_CONTENT) { layout.contentBox = readRect(&mut read) }
+    if read.has(G_MARGIN) { layout.usedMargin = readEdges(&mut read) }
+    if read.has(G_COLLAPSE) {
+      layout.marginTopPositive = read.next()
+      layout.marginTopNegative = read.next()
+      layout.marginBottomPositive = read.next()
+      layout.marginBottomNegative = read.next()
+    }
+    return layout
+  }
+  // Appends `layout` as the last entry.
+  pub effect fn append(self: &mut Self, layout: &Layout) ! OutOfMemoryError ? &mut Allocator {
+    let write = encode(layout)
+    let mut core = coreOf(layout, write.flags)
+    core.extra = usize.toU32(self.words.length())
+    if write.length != 0 { run self.words.appendSlice(Slice.view<f32>(&write.words, 0, write.length)) }
+    run self.cores.append(core)
+  }
+  // Replaces entry `index`, in place when its groups fit where the old ones were.
+  pub effect fn set(self: &mut Self, index: usize, layout: &Layout) ! OutOfMemoryError ? &mut Allocator {
+    let write = encode(layout)
+    let mut core = coreOf(layout, write.flags)
+    let old = self.cores.asSlice()[index]
+    let room = groupWords(old.flags)
+    if write.length <= room {
+      core.extra = old.extra
+      let words = self.words.asMutSlice()
+      let start = u32.toUsize(old.extra)
+      let mut at: usize = 0
+      while at < write.length {
+        words[start + at] = write.words[at]
+        at = at + 1
+      }
+      self.unused = self.unused + room - write.length
+    } else {
+      core.extra = usize.toU32(self.words.length())
+      run self.words.appendSlice(Slice.view<f32>(&write.words, 0, write.length))
+      self.unused = self.unused + room
+    }
+    let cores = self.cores.asMutSlice()
+    cores[index] = core
+  }
+  // Appends entry `index` of `from`.
+  pub effect fn appendFrom(self: &mut Self, from: &LayoutStore, index: usize) ! OutOfMemoryError ? &mut Allocator {
+    let mut core = from.cores.asSlice()[index]
+    let count = groupWords(core.flags)
+    let start = u32.toUsize(core.extra)
+    core.extra = usize.toU32(self.words.length())
+    if count != 0 { run self.words.appendSlice(Slice.view<f32>(from.words.asSlice(), start, count)) }
+    run self.cores.append(core)
+  }
+}
+
+fn coreOf(layout: &Layout, groups: u32) -> LayoutCore {
+  let mut flags = groups
+  if layout.horizontalScrollbar { flags = flags | L_HORIZONTAL_SCROLLBAR }
+  if layout.verticalScrollbar { flags = flags | L_VERTICAL_SCROLLBAR }
+  if layout.scrollbarsApplicable { flags = flags | L_SCROLLBARS_APPLICABLE }
+  if layout.widthDefinite { flags = flags | L_WIDTH_DEFINITE }
+  if layout.heightDefinite { flags = flags | L_HEIGHT_DEFINITE }
+  if layout.hasFirstBaseline { flags = flags | L_HAS_FIRST_BASELINE }
+  if layout.hasLastBaseline { flags = flags | L_HAS_LAST_BASELINE }
+  if layout.generated { flags = flags | L_GENERATED }
+  if layout.ratioBorderBox { flags = flags | L_RATIO_BORDER_BOX }
+  if layout.collapsesThrough { flags = flags | L_COLLAPSES_THROUGH }
+  if layout.hasClearance { flags = flags | L_HAS_CLEARANCE }
+  if layout.scrollbarMetrics.overlay { flags = flags | L_OVERLAY }
+  if layout.scrollbarMetrics.horizontalOnTop { flags = flags | L_HORIZONTAL_ON_TOP }
+  if layout.scrollbarMetrics.verticalOnLeft { flags = flags | L_VERTICAL_ON_LEFT }
+  return LayoutCore { size: layout.size, contentSize: layout.contentSize, scrollableOverflow: layout.scrollableOverflow, preferredRatio: layout.preferredRatio, flags: flags, extra: 0 }
+}
+
+fn encode(layout: &Layout) -> GroupWriter {
+  let mut write = GroupWriter.make(0)
+  write.group(G_LOCATION, &[layout.location.x, layout.location.y])
+  let gutter = &layout.scrollbarGutter
+  write.group(G_GUTTER, &[gutter.top, gutter.right, gutter.bottom, gutter.left])
+  write.group(G_METRICS, &[layout.scrollbarMetrics.horizontal, layout.scrollbarMetrics.vertical])
+  let first = &layout.firstBaselines
+  write.group(G_FIRST, &[first.alphabetic, first.ideographic, first.central, first.mathematical, first.xMiddle, first.textOver, first.textUnder])
+  let last = &layout.lastBaselines
+  write.group(G_LAST, &[last.alphabetic, last.ideographic, last.central, last.mathematical, last.xMiddle, last.textOver, last.textUnder])
+  write.group(G_OFFSET, &[layout.measurementOffset.x, layout.measurementOffset.y])
+  let flow = &layout.flowOverflow
+  write.group(G_FLOW, &[flow.x, flow.y, flow.width, flow.height])
+  let padding = &layout.paddingBox
+  write.group(G_PADDING, &[padding.x, padding.y, padding.width, padding.height])
+  let content = &layout.contentBox
+  write.group(G_CONTENT, &[content.x, content.y, content.width, content.height])
+  let margin = &layout.usedMargin
+  write.group(G_MARGIN, &[margin.top, margin.right, margin.bottom, margin.left])
+  write.group(G_COLLAPSE, &[layout.marginTopPositive, layout.marginTopNegative, layout.marginBottomPositive, layout.marginBottomNegative])
+  return move write
+}
+
+fn readEdges(read: &mut GroupReader<'_>) -> ResolvedEdges {
+  let top = read.next()
+  let right = read.next()
+  let bottom = read.next()
+  let left = read.next()
+  return ResolvedEdges { top: top, right: right, bottom: bottom, left: left }
+}
+fn readRect(read: &mut GroupReader<'_>) -> Rect {
+  let x = read.next()
+  let y = read.next()
+  let width = read.next()
+  let height = read.next()
+  return Rect { x: x, y: y, width: width, height: height }
+}
+fn readBaselines(read: &mut GroupReader<'_>) -> BaselineSet {
+  let alphabetic = read.next()
+  let ideographic = read.next()
+  let central = read.next()
+  let mathematical = read.next()
+  let xMiddle = read.next()
+  let textOver = read.next()
+  let textUnder = read.next()
+  return BaselineSet { alphabetic: alphabetic, ideographic: ideographic, central: central, mathematical: mathematical, xMiddle: xMiddle, textOver: textOver, textUnder: textUnder }
+}
+
+// Whether two layouts store the same, bit for bit (every field of Layout is
+// in a LayoutCore or one of its groups).
+pub fn sameStoredLayout(a: &Layout, b: &Layout) -> bool {
+  let left = encode(a)
+  let right = encode(b)
+  let coreA = coreOf(a, left.flags)
+  let coreB = coreOf(b, right.flags)
+  if coreA.flags != coreB.flags || left.length != right.length { return false }
+  if f32.toBits(coreA.preferredRatio) != f32.toBits(coreB.preferredRatio) { return false }
+  let sizesA = [coreA.size.width, coreA.size.height, coreA.contentSize.width, coreA.contentSize.height, coreA.scrollableOverflow.x, coreA.scrollableOverflow.y, coreA.scrollableOverflow.width, coreA.scrollableOverflow.height]
+  let sizesB = [coreB.size.width, coreB.size.height, coreB.contentSize.width, coreB.contentSize.height, coreB.scrollableOverflow.x, coreB.scrollableOverflow.y, coreB.scrollableOverflow.width, coreB.scrollableOverflow.height]
+  let mut at: usize = 0
+  while at < 8 {
+    if f32.toBits(sizesA[at]) != f32.toBits(sizesB[at]) { return false }
+    at = at + 1
+  }
+  at = 0
+  while at < left.length {
+    if f32.toBits(left.words[at]) != f32.toBits(right.words[at]) { return false }
+    at = at + 1
+  }
+  return true
 }

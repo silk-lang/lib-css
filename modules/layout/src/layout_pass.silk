@@ -6,6 +6,7 @@ import silk.mem.box { Box }
 import silk.core.option { Option }
 import silk.core.ownership { Copy }
 import silk.num.usize
+import silk.num.u32
 import silk.num.u64
 import context { Input, ResolvedBox, overflowForAxis, scrollbarGutter }
 import geometry { Layout, Point, Rect, OptionalSize, ScrollbarMetrics, ResolvedEdges, Size, max, sameEdges }
@@ -14,7 +15,7 @@ import tree { NO_NODE, LayoutStats }
 import bfc { FloatBox }
 import exclusions { ExclusionArea }
 import box_tree { BoxTree }
-import fragments { Fragment, FragmentArena, FragmentKind, LineText, one }
+import fragments { Fragment, FragmentArena, FragmentKind, LineText }
 import fragmentation { ResumeStore, ResumeCheckpoint, StaticAnchor, Fragmentainers, Fragmentainer, FragmentAncestor, FragmentationError, FragmentInput }
 import breaks { ForcedBreaks, PageSide, BreakKinds }
 import inline_prepared { PreparedInline, PreparedCore, KeptText }
@@ -459,7 +460,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
       if self.writes.marks.asSlice()[id].partial == self.writes.generation { run self.savePlaced(id) }
       return
     }
-    run self.writes.saved.appendSlice(one<Layout>(&self.boxes[id]))
+    run self.writes.saved.append(&self.boxes[id])
     self.writes.markSaved(id)
   }
   // touch for a write of only the box's placement (see Placement): an
@@ -480,21 +481,21 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   // A box saved by placement is about to be written whole: saves its whole
   // previous layout.
   effect fn savePlaced(self: &mut Self, id: usize) ! OutOfMemoryError ? &mut Allocator {
-    run self.writes.saved.appendSlice(one<Layout>(&self.boxes[id]))
-    let last = self.writes.saved.length() - 1
-    self.writes.placed.asSlice()[self.writes.marks.asSlice()[id].slot].restore(&mut self.writes.saved.asMutSlice()[last])
+    let mut previous = self.boxes[id]
+    self.writes.placed.asSlice()[u32.toUsize(self.writes.marks.asSlice()[id].slot)].restore(&mut previous)
+    run self.writes.saved.append(&previous)
     self.writes.markSaved(id)
   }
   // Puts back a rewritten box's previous layout, or, for `top`, its location.
   fn restoreSaved(self: &mut Self, id: usize, top: bool) {
-    let slot = self.writes.marks.asSlice()[id].slot
+    let slot = u32.toUsize(self.writes.marks.asSlice()[id].slot)
     if self.writes.marks.asSlice()[id].partial == self.writes.generation {
       let placed = self.writes.placed.asSlice()[slot]
       if top { self.boxes[id].location = placed.location } else { placed.restore(&mut self.boxes[id]) }
       return
     }
-    let saved = &self.writes.saved.asSlice()[slot]
-    if top { self.boxes[id].location = saved.location } else { self.boxes[id] = saved.* }
+    let saved = self.writes.saved.get(slot)
+    if top { self.boxes[id].location = saved.location } else { self.boxes[id] = saved }
   }
   // Moves the lines of an inline formatting box by `delta`, from its fragment
   // `first` on: its line fragments, and the line boxes its text fragments
@@ -811,12 +812,12 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
         self.cache.keepRange(id)
       }
       if self.writes.marks.asSlice()[id].below != generation { return }
-      let mut child = nodes.node(id).firstChild
+      let mut child = nodes.node(id).firstChild()
       while child != NO_NODE {
         if self.writes.marks.asSlice()[child].below == generation || self.writes.marks.asSlice()[child].written == generation || self.writes.marks.asSlice()[child].relaid == generation {
           run self.restoreBoxes(nodes, child, from, base, kept, false)
         }
-        child = nodes.node(child).nextSibling
+        child = nodes.node(child).nextSibling()
       }
       return
     }
@@ -830,7 +831,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
       self.fragments.keepBox(id, from.start, from.end)
       self.cache.keepRange(id)
     }
-    let mut child = nodes.node(id).firstChild
+    let mut child = nodes.node(id).firstChild()
     while child != NO_NODE {
       if !kept {
         let range = self.cache.keptRange(child)
@@ -839,7 +840,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
         } else { run self.cache.beginLayout(child) }
       }
       run self.restoreBoxes(nodes, child, from, base, kept, false)
-      child = nodes.node(child).nextSibling
+      child = nodes.node(child).nextSibling()
     }
   }
   // Blink LayoutNG / Servo style result reuse: a clean box laid out with the
@@ -956,7 +957,8 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
       self.boxes[id].horizontalScrollbar = horizontal
       self.boxes[id].verticalScrollbar = vertical
     } else {
-      let layout = self.cache.result(id).layout(self.keptLayout(id))
+      let kept = self.keptLayout(id)
+      let layout = self.cache.result(id).layout(&kept)
       run self.store(id, &layout, true)
     }
     run self.cache.carryFinal(id, slot, base, self.fragments.checkpoint())
@@ -965,10 +967,10 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   }
   // The box's layout at the end of the previous compute, but for its
   // placement (see Placement), which FinalResult.layout replaces.
-  fn keptLayout(self: &Self, id: usize) -> &Layout {
-    if !self.inPlace { return &self.previous.boxes.asSlice()[id] }
-    if self.writes.marks.asSlice()[id].stamp == self.writes.generation && self.writes.marks.asSlice()[id].partial != self.writes.generation { return &self.writes.saved.asSlice()[self.writes.marks.asSlice()[id].slot] }
-    return &self.boxes[id]
+  fn keptLayout(self: &Self, id: usize) -> Layout {
+    if !self.inPlace { return self.previous.boxes.asSlice()[id] }
+    if self.writes.marks.asSlice()[id].stamp == self.writes.generation && self.writes.marks.asSlice()[id].partial != self.writes.generation { return self.writes.saved.get(u32.toUsize(self.writes.marks.asSlice()[id].slot)) }
+    return self.boxes[id]
   }
   // `store` for a box whose layout from this compute is already stored, after
   // its parent placed it: only its location, used margins and clearance change,
@@ -1020,7 +1022,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   pub fn lookupSize(self: &mut Self, id: usize, input: &Input, kind: CacheKind) -> Option<Size> {
     let index = self.cache.find(id, input, kind)
     if index == usize.MAX { return Option<Size>.None }
-    return Option<Size>.Some { value: self.cache.layoutAt(index).size }
+    return Option<Size>.Some { value: self.cache.coreAt(index).sizes() }
   }
   // Stores a cached intrinsic result (see store) straight from its cache entry
   // and returns it, if the cache has one for this request.
@@ -1029,7 +1031,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
     if index == usize.MAX { return false }
     run self.preserveLayout(id)
     run self.touch(id)
-    self.boxes[id] = self.cache.layoutAt(index).*
+    self.boxes[id] = self.cache.layoutAt(index)
     self.stats.cacheHits = self.stats.cacheHits + 1
     return true
   }
@@ -1042,8 +1044,8 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   }
   // A probe's result: the cache entry `index` from findProbe, else the layout
   // a fresh probe stored.
-  pub fn probed(self: &Self, id: usize, index: usize) -> &Layout {
-    if index == usize.MAX { return &self.boxes[id] }
+  pub fn probed(self: &Self, id: usize, index: usize) -> Layout {
+    if index == usize.MAX { return self.boxes[id] }
     return self.cache.layoutAt(index)
   }
   // Caches the layout last stored for the box.

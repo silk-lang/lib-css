@@ -3,11 +3,12 @@ import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
 import silk.num.usize
 import context { Input }
-import geometry { OptionalSize, AvailableSpace, Size, Point }
+import geometry { OptionalSize, AvailableSpace, Size, Point, Layout, LayoutStore, LayoutCore, BaselineSet, ResolvedEdges, Rect, sameStoredLayout }
 import style { WritingMode, TextOrientation, Align, OverflowAlignment }
 import fragmentation { BoundaryProbe }
-import layout_cache { LayoutCache }
 import stored_input { StoredInput, RarePool, RARE_NONE, sameStored }
+import box_tree { BoxNode }
+import layout_cache { LayoutCache, BoxMark }
 
 // Requests that differ from Input.make in one field each, and one that
 // differs in all of them.
@@ -75,6 +76,8 @@ effect fn storedInputsUnpackToTheirRequestBody() ! OutOfMemoryError | AssertionE
     which = which + 1
   }
   run Testing.expect(Intrinsic.layoutOf<StoredInput>().bytes == 72, "a stored request is 72 bytes")
+  run Testing.expect(Intrinsic.layoutOf<BoxNode>().bytes == 80, "a box is 80 bytes")
+  run Testing.expect(Intrinsic.layoutOf<BoxMark>().bytes == 24, "a box's marks are 24 bytes")
 }
 
 effect fn storedComparisonMatchesSameRequestBody() ! OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
@@ -120,4 +123,61 @@ test effect fn aStoredComparisonAgreesWithSameRequest() ! OutOfMemoryError | Ass
 test effect fn rareSlotsAreReused() ! OutOfMemoryError | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run rareSlotsAreReusedBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// Layouts with different groups set, for the compact layout store.
+fn sampleLayout(which: usize) -> Layout {
+  let mut layout = Layout.zero()
+  let w = usize.toF32(which)
+  layout.size = Size { width: 10.0 + w, height: 5.0 }
+  if which % 2 == 1 { layout.location = Point { x: w, y: -0.0 } }
+  if which % 3 == 1 { layout.firstBaselines = BaselineSet.synthesized(1.0, w) }
+  if which % 3 == 2 { layout.lastBaselines = BaselineSet.uniform(w) }
+  if which % 4 == 3 { layout.usedMargin = ResolvedEdges { top: 1.0, right: 0.0, bottom: w, left: 0.0 } }
+  if which % 5 == 4 { layout.setOverflowGeometry(Rect { x: 0.0, y: 0.0, width: w, height: 2.0 }, Rect.zero(), Rect { x: 1.0, y: 1.0, width: 1.0, height: w }) }
+  if which % 6 == 5 { layout.marginBottomNegative = -3.0 }
+  layout.hasFirstBaseline = which % 3 == 1
+  layout.collapsesThrough = which % 7 == 0
+  layout.horizontalScrollbar = which % 2 == 0
+  layout.preferredRatio = w / 3.0
+  return layout
+}
+
+effect fn layoutStoreBody() ! OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
+  let mut store = LayoutStore.make()
+  let mut which: usize = 0
+  while which < 40 {
+    run store.append(&sampleLayout(which))
+    which = which + 1
+  }
+  which = 0
+  while which < 40 {
+    let back = store.get(which)
+    run Testing.expect(sameStoredLayout(&back, &sampleLayout(which)), "a stored layout reads back the same")
+    run Testing.expect(store.core(which).sizes().width == 10.0 + usize.toF32(which), "its sizes are in the core")
+    which = which + 1
+  }
+  // Overwrites, larger and smaller, then a copy into a fresh store.
+  which = 0
+  while which < 40 {
+    run store.set(which, &sampleLayout((which * 7 + 3) % 40))
+    which = which + 1
+  }
+  let mut copy = LayoutStore.make()
+  which = 0
+  while which < 40 {
+    let expected = sampleLayout((which * 7 + 3) % 40)
+    let back = store.get(which)
+    run Testing.expect(sameStoredLayout(&back, &expected), "an overwritten layout reads back the new one")
+    run copy.appendFrom(&store, which)
+    let copied = copy.get(which)
+    run Testing.expect(sameStoredLayout(&copied, &expected), "and so does its copy")
+    which = which + 1
+  }
+  run Testing.expect(copy.unusedWords() == 0, "a copy holds no unused groups")
+  run Testing.expect(Intrinsic.layoutOf<LayoutCore>().bytes == 44, "a stored layout's core is 44 bytes")
+}
+test effect fn aCompactLayoutReadsBackTheSame() ! OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run layoutStoreBody() |> Effect.provideMut<Allocator>(&mut allocator)
 }
