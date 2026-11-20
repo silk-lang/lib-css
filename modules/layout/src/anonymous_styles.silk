@@ -14,6 +14,7 @@ import silk.num.u32
 import silk.num.u64
 import silk.num.usize
 import style { Style }
+import properties.census { Census }
 
 const NONE: u32 = 4294967295
 const FREE: u32 = 4294967294
@@ -52,6 +53,16 @@ impl AnonymousStyles {
   pub fn held(self: &Self) -> usize { return self.styles.length() - self.free.length() }
   /// Boxes holding `slot`.
   pub fn holds(self: &Self, slot: usize) -> u32 { return self.refs.get(slot) }
+
+  // What the slots hold, for the bench census: styles in use (`held`) against the slots made,
+  // and the counts, hashes, chains, buckets and free list beside them.
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    run out.held("css.out.anonymous-styles", self.held(), self.styles.capacity(), Intrinsic.layoutOf<Style>().bytes)
+    let side = self.refs.length() + self.chains.length() + self.buckets.length() + self.free.length()
+    let sideCapacity = self.refs.capacity() + self.chains.capacity() + self.buckets.capacity() + self.free.capacity()
+    run out.held("css.out.anonymous-style-index", side, sideCapacity, 4)
+    run out.held("css.out.anonymous-style-hashes", self.hashes.length(), self.hashes.capacity(), 8)
+  }
 
   /// Makes slot 0, the viewport's style. The slots must be empty.
   pub effect fn viewport(self: &mut Self, style: Style) ! OutOfMemoryError ? &mut Allocator {

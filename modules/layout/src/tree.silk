@@ -681,9 +681,7 @@ impl LayoutTree {
     let layout = Intrinsic.layoutOf<Layout>().bytes
     run out.held("css.out.boxes(Layout)", self.boxes.length(), self.boxes.capacity(), layout)
     run out.held("css.out.box-nodes", self.boxNodes.length(), self.boxNodes.capacity(), Intrinsic.layoutOf<BoxNode>().bytes)
-    run out.held("css.out.anonymous-styles", self.anonymousStyles.length(), self.anonymousStyles.capacity(), Intrinsic.layoutOf<Style>().bytes)
-    run out.held("css.out.anonymous-origins", self.anonymousOrigins.length(), self.anonymousOrigins.capacity(), u)
-    run out.held("css.out.anonymous-text", self.anonymousText.length(), self.anonymousText.capacity(), 1)
+    run self.anonymousStyles.census(&mut out)
     run out.held("css.out.by-source", self.firstBySource.length() + self.lastBySource.length(), self.firstBySource.capacity() + self.lastBySource.capacity(), u)
     run out.held("css.out.normal-offsets", self.normalOffsets.length(), self.normalOffsets.capacity(), Intrinsic.layoutOf<Point>().bytes)
     run out.held("css.out.cutoff-misses", self.cutoffMisses.length(), self.cutoffMisses.capacity(), Intrinsic.layoutOf<CutoffMiss>().bytes)
