@@ -1,3 +1,4 @@
+import properties.census { Census }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
 import grid_absolute { GridGeometry }
@@ -27,6 +28,11 @@ pub struct GridGeometryStore {
 }
 
 impl GridGeometryStore {
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    let u = Intrinsic.layoutOf<usize>().bytes
+    run out.held("css.grid-geometry.indexes", self.heads.length() + self.fragments.length() + self.journal.length(), self.heads.capacity() + self.fragments.capacity() + self.journal.capacity(), u)
+    run out.held("css.grid-geometry.slots", self.slots.length(), self.slots.capacity(), Intrinsic.layoutOf<Slot>().bytes)
+  }
   pub fn make() -> GridGeometryStore {
     return GridGeometryStore {
       heads: List<usize>.make(),

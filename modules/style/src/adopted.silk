@@ -1,5 +1,8 @@
 //! Root-owned compiled sheets: adoption order, cross-sheet layers and indexed matching.
 //! This module consumes compiled data and never calls the stylesheet compiler or lexer.
+import tokens { Token }
+import silk.collections.bytes { Bytes }
+import css_properties.census { Census }
 import silk.num.u32
 import sheet { Sheet, Declaration }
 import sheet_conditions
@@ -65,6 +68,79 @@ fn important(declaration: &Declaration) -> bool {
 }
 
 impl StyleSheets {
+  /// For the bench census: the conditions `environment` evaluates and the rules it then
+  /// walks, each time it is called.
+  pub fn censusConditions(self: &Self) -> usize {
+    let mut total: usize = 0
+    let mut i: usize = 0
+    while i < self.entries.length() {
+      total = total + self.entries.asSlice()[i].sheet.conditions.length()
+      i = i + 1
+    }
+    return total
+  }
+  pub fn censusConditionRules(self: &Self) -> usize {
+    let mut total: usize = 0
+    let mut i: usize = 0
+    while i < self.entries.length() {
+      total = total + self.entries.asSlice()[i].sheet.ruleConditions.length()
+      i = i + 1
+    }
+    return total
+  }
+
+  /// What the adopted sheets hold and the matching they did, for the bench census. Rows of
+  /// several sheets carry the same names: the reader sums them.
+  pub effect fn census(self: &Self, out: &mut Census) -> () ! OutOfMemoryError ? &mut Allocator {
+    run out.unit("sheets", self.entries.length())
+    let mut i: usize = 0
+    while i < self.entries.length() {
+      let sheet = &self.entries.asSlice()[i].sheet
+      let mut data: usize = 0
+      let mut dataRoom: usize = 0
+      let mut tokens: usize = 0
+      let mut tokenRoom: usize = 0
+      let mut b: usize = 0
+      while b < sheet.buffers.length() {
+        let buffer = &sheet.buffers.asSlice()[b]
+        data = data + Bytes.asSlice(&buffer.data).length
+        dataRoom = dataRoom + Bytes.capacity(&buffer.data)
+        tokens = tokens + buffer.tokens.length()
+        tokenRoom = tokenRoom + buffer.tokens.capacity()
+        b = b + 1
+      }
+      run out.unit("sheet.token-buffers", sheet.buffers.length())
+      run out.bytes("sheet.source-text", data, dataRoom)
+      run out.held("sheet.tokens", tokens, tokenRoom, Intrinsic.layoutOf<Token>().bytes)
+      run out.held("sheet.declarations", sheet.declarations.length(), sheet.declarations.capacity(), Intrinsic.layoutOf<Declaration>().bytes)
+      let mut typed: usize = 0
+      let mut pending: usize = 0
+      let mut custom: usize = 0
+      let mut d: usize = 0
+      while d < sheet.declarations.length() {
+        match &sheet.declarations.asSlice()[d] {
+          Declaration.Typed { .. } => { typed = typed + 1 }
+          Declaration.Pending { .. } => { pending = pending + 1 }
+          Declaration.Custom { .. } => { custom = custom + 1 }
+          Declaration.ColorExpression { .. } => { pending = pending + 1 }
+        }
+        d = d + 1
+      }
+      run out.unit("sheet.declarations.typed", typed)
+      run out.unit("sheet.declarations.pending(var or expression)", pending)
+      run out.unit("sheet.declarations.custom-properties", custom)
+      run out.held("sheet.conditions", sheet.conditions.length() + sheet.ruleConditions.length(), sheet.conditions.capacity() + sheet.ruleConditions.capacity(), 8)
+      run out.unit("sheet.keyframes", sheet.keyframes.length())
+      run out.unit("sheet.font-faces", sheet.fontFaces.length())
+      run out.unit("sheet.registrations", sheet.registrations.length())
+      run sheet.resolver.census(&mut out)
+      i = i + 1
+    }
+    if let Option<Box<Inputs>>.Some { value } = &self.variables {
+      run value.get()[0].census(&mut out)
+    }
+  }
+
   pub fn make() -> StyleSheets {
     return StyleSheets { entries: List<AdoptedSheet>.make(), layers: Layers.make(),
       output: List<Candidate>.make(), matched: List<MatchedRule>.make(), selectedStates: 0, variables: Option<Box<Inputs>>.None, current: Option<Environment>.None }

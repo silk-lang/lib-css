@@ -1,3 +1,4 @@
+import properties.census { Census }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.ownership { Copy }
 import silk.collections.list { List }
@@ -214,6 +215,12 @@ impl TrackArea {
 }
 
 impl ContributionMemos {
+  // Entries in use and room for them, and the same for the per-track and per-item lists.
+  pub fn censusEntries(self: &Self) -> usize { return self.entries.length() }
+  pub fn censusRoom(self: &Self) -> usize { return self.entries.capacity() }
+  pub fn censusSideBytes(self: &Self) -> usize {
+    return (self.changed.capacity() + self.crossChanged.capacity()) * Intrinsic.layoutOf<usize>().bytes + self.marks.capacity() * Intrinsic.layoutOf<ItemMark>().bytes
+  }
   pub fn make() -> ContributionMemos {
     return ContributionMemos {
       base: Input.make(OptionalSize.none()), entries: List<ContributionMemo>.make(), stamp: 0, previous: 0,
@@ -554,6 +561,49 @@ pub struct GridMemos {
 }
 
 impl GridMemos {
+  // One GridScratch is kept for every grid box: its size, and what its lists hold.
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    let u = Intrinsic.layoutOf<usize>().bytes
+    run out.held("css.grid-memos.index", self.index.length(), self.index.capacity(), u)
+    run out.held("css.grid-memos.slots", self.slots.length(), self.slots.capacity(), Intrinsic.layoutOf<GridMemoSlot>().bytes)
+    let mut held: usize = 0
+    let mut valid: usize = 0
+    let mut items: usize = 0
+    let mut itemRoom: usize = 0
+    let mut memos: usize = 0
+    let mut memoRoom: usize = 0
+    let mut side: usize = 0
+    let mut templates: usize = 0
+    let mut baselines: usize = 0
+    let mut policies: usize = 0
+    let mut at: usize = 0
+    while at < self.slots.length() {
+      let slot = &self.slots.asSlice()[at]
+      if slot.valid { valid = valid + 1 }
+      if let Option<Box<GridScratch>>.Some { value } = &slot.value {
+        held = held + 1
+        let scratch = value.get()
+        items = items + scratch[0].items.length()
+        itemRoom = itemRoom + scratch[0].items.capacity()
+        memos = memos + scratch[0].finalMemos.censusEntries() + scratch[0].finals.censusEntries()
+        memoRoom = memoRoom + scratch[0].finalMemos.censusRoom() + scratch[0].finals.censusRoom()
+        side = side + scratch[0].finalMemos.censusSideBytes() + scratch[0].finals.censusSideBytes() + scratch[0].trackWork.capacity() * u
+        templates = templates + scratch[0].template.capacity()
+        baselines = baselines + scratch[0].baselines.capacity()
+        policies = policies + scratch[0].finalColumns.capacity() + scratch[0].finalRows.capacity()
+      }
+      at = at + 1
+    }
+    run out.unit("css.grid-memos.valid", valid)
+    run out.held("css.grid-memos.scratch(GridScratch)", held, held, Intrinsic.layoutOf<GridScratch>().bytes)
+    run out.held("css.grid-memos.scratch.items", items, itemRoom, Intrinsic.layoutOf<GridItem>().bytes)
+    run out.held("css.grid-memos.scratch.contribution-memos", memos, memoRoom, Intrinsic.layoutOf<ContributionMemo>().bytes)
+    run out.bytes("css.grid-memos.scratch.memo-side", side, side)
+    run out.held("css.grid-memos.scratch.templates", templates, templates, Intrinsic.layoutOf<GridTemplateScratch>().bytes)
+    run out.held("css.grid-memos.scratch.baselines", baselines, baselines, Intrinsic.layoutOf<GridBaselines>().bytes)
+    run out.held("css.grid-memos.scratch.final-policies", policies, policies, Intrinsic.layoutOf<TrackPolicy>().bytes)
+    run out.held("css.grid-memos.fragment-scratch", self.fragmentScratch.length(), self.fragmentScratch.capacity(), Intrinsic.layoutOf<GridFragmentScratch>().bytes)
+  }
   pub fn make() -> GridMemos {
     return GridMemos {
       index: List<usize>.make(),
