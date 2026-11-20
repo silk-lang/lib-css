@@ -152,7 +152,7 @@ impl Copy for Line {}
 // Reads the items' styles only without facts' itemFlags.
 effect fn collect<S: LayoutSource>(nodes: &BoxTree<'_, S>, flags: &[u8], id: usize, items: &mut List<Item>) -> bool ! OutOfMemoryError ? &mut Allocator {
   let mut ordered = false
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   if flags.length == nodes.boxes.length() {
     while child != NO_NODE {
       let item = flags[child]
@@ -160,7 +160,7 @@ effect fn collect<S: LayoutSource>(nodes: &BoxTree<'_, S>, flags: &[u8], id: usi
         run items.append(Item.make(child))
         ordered = ordered || item & ITEM_ORDERED != 0
       }
-      child = nodes.node(child).nextSibling
+      child = nodes.node(child).nextSibling()
     }
     return ordered
   }
@@ -170,7 +170,7 @@ effect fn collect<S: LayoutSource>(nodes: &BoxTree<'_, S>, flags: &[u8], id: usi
       run items.append(Item.make(child))
       ordered = ordered || style.order != 0
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   return ordered
 }
@@ -829,9 +829,9 @@ fn selfStartReverse(style: &Style, horizontal: bool) -> bool {
 }
 effect fn zeroSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize) ! OutOfMemoryError ? &mut Allocator {
   run output.store(id, &Layout.zero(), false)
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE { run zeroSubtree(nodes, &mut output, child)
-    child = nodes.node(child).nextSibling }
+    child = nodes.node(child).nextSibling() }
 }
 // Layout baselines use each node's logical block axis, not physical y.
 struct BaselinePick { chosen: usize, rank: usize, useLast: bool, position: f32 }
@@ -1122,7 +1122,7 @@ pub fn emptyFlexSize(style: &Style, box: &ResolvedBox) -> Size {
   return result
 }
 pub effect fn layoutFlex<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
-  if nodes.node(id).firstChild == NO_NODE && !input.fragmentation.active && input.fragmentation.boundaryProbe == BoundaryProbe.None { return emptyFlex(nodes.style(id), &box) }
+  if nodes.node(id).firstChild() == NO_NODE && !input.fragmentation.active && input.fragmentation.boundaryProbe == BoundaryProbe.None { return emptyFlex(nodes.style(id), &box) }
   // placeFlexLines hands the scratch lists back, so the pass result is
   // returned straight into the caller's slot.
   let mut scratch = FlexScratch { items: List<Item>.make(), lines: List<Line>.make() }

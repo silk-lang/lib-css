@@ -274,17 +274,17 @@ pub effect fn collectSubgridItems<'source, S: LayoutSource>(
   let parentHorizontal = nodes.style(id).writingMode == WritingMode.HorizontalTb
 
   let mut count: usize = 0
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     if !outOfFlow(nodes.style(child)) {
       count = count + 1
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   run items.reserveExact(count)
   let mut ordered = false
   let mut automatic = false
-  child = nodes.node(id).firstChild
+  child = nodes.node(id).firstChild()
   while child != NO_NODE {
     let style = nodes.style(child)
     if !outOfFlow(style) {
@@ -339,7 +339,7 @@ pub effect fn collectSubgridItems<'source, S: LayoutSource>(
       ordered = ordered || style.order != 0
       run items.append(item)
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   let values = items.asMutSlice()
   if ordered {

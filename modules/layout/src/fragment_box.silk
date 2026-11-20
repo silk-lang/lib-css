@@ -18,14 +18,14 @@ pub fn boundary<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, before: bool
   if before { value = style.breakBefore }
   let mut result = BreakBoundary.make(value, kind, rectoOnRight)
   if node.kind != BoxKind.Block || node.fragmentMonolithic { return result }
-  let mut child = node.firstChild
+  let mut child = node.firstChild()
   let mut edge = NO_NODE
   while child != NO_NODE {
     if !outOfFlow(nodes.style(child)) && nodes.style(child).float == Float.None {
       edge = child
       if before { break }
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   if edge != NO_NODE { result.merge(boundary(nodes, edge, before, kind, rectoOnRight)) }
   return result

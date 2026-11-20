@@ -2606,7 +2606,7 @@ effect fn expectSharedAnonymousStyles(tree: &Tree, output: &LayoutTree) ! OutOfM
     let mut holders: u32 = 0
     let mut id: usize = 0
     while id < nodes.length {
-      if nodes[id].anonymousStyle == slot { holders = holders + 1 }
+      if nodes[id].anonymousStyle() == slot { holders = holders + 1 }
       id = id + 1
     }
     run Testing.expect(holders == styles.holds(slot), "each anonymous style counts the boxes that hold it")
@@ -2622,7 +2622,7 @@ effect fn expectSharedAnonymousStyles(tree: &Tree, output: &LayoutTree) ! OutOfM
 fn textFont(output: &LayoutTree, text: NodeId) -> usize {
   let nodes = output.boxNodes.asSlice()
   let id = output.firstBySource.get(text.index)
-  return output.anonymousStyles.get(nodes[id].anonymousStyle).fontKey
+  return output.anonymousStyles.get(nodes[id].anonymousStyle()).fontKey
 }
 
 test effect fn equalAnonymousStylesShareOneSlot()

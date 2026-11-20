@@ -6,8 +6,9 @@ import context { Input }
 import geometry { OptionalSize, AvailableSpace, Size, Point }
 import style { WritingMode, TextOrientation, Align, OverflowAlignment }
 import fragmentation { BoundaryProbe }
-import layout_cache { LayoutCache }
 import stored_input { StoredInput, RarePool, RARE_NONE, sameStored }
+import box_tree { BoxNode }
+import layout_cache { LayoutCache, BoxMark }
 
 // Requests that differ from Input.make in one field each, and one that
 // differs in all of them.
@@ -75,6 +76,8 @@ effect fn storedInputsUnpackToTheirRequestBody() ! OutOfMemoryError | AssertionE
     which = which + 1
   }
   run Testing.expect(Intrinsic.layoutOf<StoredInput>().bytes == 72, "a stored request is 72 bytes")
+  run Testing.expect(Intrinsic.layoutOf<BoxNode>().bytes == 80, "a box is 80 bytes")
+  run Testing.expect(Intrinsic.layoutOf<BoxMark>().bytes == 24, "a box's marks are 24 bytes")
 }
 
 effect fn storedComparisonMatchesSameRequestBody() ! OutOfMemoryError | AssertionError<'static> ? &mut Allocator {

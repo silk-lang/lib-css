@@ -95,12 +95,12 @@ fn subtreeEnd<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
   let mut at = id
   while true {
     if at + 1 > end { end = at + 1 }
-    let first = nodes.node(at).firstChild
+    let first = nodes.node(at).firstChild()
     if first != NO_NODE { at = first
       continue }
-    while at != id && nodes.node(at).nextSibling == NO_NODE { at = nodes.node(at).parent }
+    while at != id && nodes.node(at).nextSibling() == NO_NODE { at = nodes.node(at).parent() }
     if at == id { break }
-    at = nodes.node(at).nextSibling
+    at = nodes.node(at).nextSibling()
   }
   return end
 }
@@ -109,7 +109,7 @@ fn subtreeEnd<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
 // A size probe lays the columns out and takes them back.
 pub effect fn layoutColumnSet<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
-  let flow = nodes.node(id).firstChild
+  let flow = nodes.node(id).firstChild()
   let mut result = Layout.zero()
   if flow == NO_NODE {
     result.size = Size { width: box.size.width, height: box.inset.vertical() }

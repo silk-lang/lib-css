@@ -103,11 +103,12 @@ impl Placement {
 // whose `relaid` entry is had its subtree laid out again, and one whose
 // `below` entry is has a descendant with either.
 // What a compute did to a box, as the generation it last did each in.
-pub struct BoxMark { pub stamp: usize, pub slot: usize, pub partial: usize, pub written: usize, pub relaid: usize, pub below: usize }
+// Generations and the slot are u32s: 24 bytes a box.
+pub struct BoxMark { pub stamp: u32, pub slot: u32, pub partial: u32, pub written: u32, pub relaid: u32, pub below: u32 }
 impl Copy for BoxMark {}
 // The marks of a box sit together, so the checks a reuse makes of one box
 // read one cache line.
-pub struct BoxWrites { pub generation: usize, pub marks: List<BoxMark>, pub saved: List<Layout>, pub placed: List<Placement> }
+pub struct BoxWrites { pub generation: u32, pub marks: List<BoxMark>, pub saved: List<Layout>, pub placed: List<Placement> }
 impl BoxWrites {
   pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
     run out.held("css.writes.marks", self.marks.length(), self.marks.capacity(), Intrinsic.layoutOf<BoxMark>().bytes)
@@ -148,7 +149,7 @@ impl BoxWrites {
   @inlineAlways
   pub fn markSaved(self: &mut Self, id: usize) {
     let generation = self.generation
-    let slot = self.saved.length() - 1
+    let slot = usize.toU32(self.saved.length() - 1)
     let marks = self.marks.asMutSlice()
     marks[id].stamp = generation
     marks[id].partial = 0
@@ -158,7 +159,7 @@ impl BoxWrites {
   @inlineAlways
   pub fn markPlaced(self: &mut Self, id: usize) {
     let generation = self.generation
-    let slot = self.placed.length() - 1
+    let slot = usize.toU32(self.placed.length() - 1)
     let marks = self.marks.asMutSlice()
     marks[id].stamp = generation
     marks[id].partial = generation
@@ -176,7 +177,9 @@ pub const AGES_OLDER: u8 = 2
 // request and layout are at the same index of `inputs` and `layouts`, which
 // appendSlice fills straight from the caller's values: building one large
 // entry first would copy both through the stack.
-struct Entry { kind: CacheKind, next: usize, generation: usize }
+// `next` and `generation` are u32s (LINK_NONE for no next entry), so an entry
+// is 12 bytes.
+struct Entry { kind: CacheKind, next: u32, generation: u32 }
 impl Copy for Entry {}
 
 // The last full layout of a reusable box: its request, and the contiguous
@@ -221,11 +224,48 @@ impl FinalRange {
 
 // A box's range of this compute and, once `stamp` is this compute, the
 // previous compute's range it replaced.
-struct BoxRanges { range: FinalRange, kept: FinalRange, stamp: usize }
+// Both are kept as StoredRanges and the stamp as a u32 (STAMP_NONE for
+// none), 36 bytes for the 88 of two FinalRanges and a usize.
+struct BoxRanges { range: StoredRange, kept: StoredRange, stamp: u32 }
 impl Copy for BoxRanges {}
 impl BoxRanges {
-  fn none() -> BoxRanges { return BoxRanges { range: FinalRange.none(), kept: FinalRange.none(), stamp: usize.MAX } }
+  fn none() -> BoxRanges { return BoxRanges { range: NO_RANGE, kept: NO_RANGE, stamp: STAMP_NONE } }
 }
+// A FinalRange in u32s; the top bit of `floatCount` says it is valid.
+struct StoredRange { start: u32, end: u32, floats: u32, floatCount: u32 }
+impl Copy for StoredRange {}
+const VALID_RANGE: u32 = 2147483648
+const NO_RANGE: StoredRange = StoredRange { start: 0, end: 0, floats: 0, floatCount: 0 }
+const STAMP_NONE: u32 = u32.MAX
+impl StoredRange {
+  @inlineAlways
+  fn of(range: FinalRange) -> StoredRange {
+    if !range.valid { return NO_RANGE }
+    return StoredRange { start: usize.toU32(range.start), end: usize.toU32(range.end), floats: usize.toU32(range.floats), floatCount: usize.toU32(range.floatCount) | VALID_RANGE }
+  }
+  @inlineAlways
+  fn valid(self: &Self) -> bool { return self.floatCount & VALID_RANGE != 0 }
+  @inlineAlways
+  fn load(self: &Self) -> FinalRange {
+    if !self.valid() { return FinalRange.none() }
+    return FinalRange { valid: true, start: u32.toUsize(self.start), end: u32.toUsize(self.end), floats: u32.toUsize(self.floats), floatCount: u32.toUsize(self.floatCount & (VALID_RANGE - 1)) }
+  }
+}
+// An entry index as a `next` link, and back.
+const LINK_NONE: u32 = u32.MAX
+@inlineAlways
+fn link(index: usize) -> u32 {
+  if index == ABSENT { return LINK_NONE }
+  return usize.toU32(index)
+}
+@inlineAlways
+fn follow(next: u32) -> usize {
+  if next == LINK_NONE { return ABSENT }
+  return u32.toUsize(next)
+}
+// The cache's generation as a range stamp or entry generation.
+@inlineAlways
+fn stamp(generation: usize) -> u32 { return usize.toU32(generation) }
 
 fn sameOptional(a: &OptionalSize, b: &OptionalSize) -> bool {
   return a.widthDefinite == b.widthDefinite && a.heightDefinite == b.heightDefinite && (!a.widthDefinite || a.width == b.width) && (!a.heightDefinite || a.height == b.height)
@@ -431,7 +471,7 @@ impl LayoutCache {
     let mut valid: usize = 0
     let mut at: usize = 0
     while at < self.ranges.length() {
-      if self.ranges.asSlice()[at].range.valid { valid = valid + 1 }
+      if self.ranges.asSlice()[at].range.valid() { valid = valid + 1 }
       at = at + 1
     }
     run out.unit("css.cache.final-ranges.valid", valid)
@@ -561,7 +601,7 @@ impl LayoutCache {
       at = 0
       while at < self.ranges.length() {
         let ranges = &self.ranges.asSlice()[at]
-        if ranges.range.valid || ranges.kept.valid {
+        if ranges.range.valid() || ranges.kept.valid() {
           self.subgrids.mark(self.resultRares.gridContext(self.results.asSlice()[at].input.rare))
         }
         at = at + 1
@@ -594,10 +634,11 @@ impl LayoutCache {
     let ranges = self.ranges.asMutSlice()
     let mut id: usize = 0
     while id < ranges.length {
-      if ranges[id].range.valid && ranges[id].range.floatCount != 0 {
+      let range = ranges[id].range.load()
+      if range.valid && range.floatCount != 0 {
         let first = floats.length()
-        run floats.appendSlice(Slice.view(self.floats.asSlice(), ranges[id].range.floats, ranges[id].range.floatCount))
-        ranges[id].range.floats = first
+        run floats.appendSlice(Slice.view(self.floats.asSlice(), range.floats, range.floatCount))
+        ranges[id].range.floats = usize.toU32(first)
       }
       id = id + 1
     }
@@ -608,22 +649,22 @@ impl LayoutCache {
   pub fn keptRange(self: &Self, id: usize) -> FinalRange {
     if id >= self.ranges.length() { return FinalRange.none() }
     let ranges = &self.ranges.asSlice()[id]
-    if ranges.stamp == self.generation { return ranges.kept }
-    return ranges.range
+    if ranges.stamp == stamp(self.generation) { return ranges.kept.load() }
+    return ranges.range.load()
   }
   pub fn result(self: &Self, id: usize) -> &FinalResult { return &self.results.asSlice()[id] }
   // Saves a box's previous range before its first write in this compute.
   @inlineAlways
   effect fn writeRange(self: &mut Self, id: usize, range: FinalRange) ! OutOfMemoryError ? &mut Allocator {
     if id >= self.ranges.length() { run self.growRanges(id) }
-    let generation = self.generation
+    let generation = stamp(self.generation)
     let ranges = self.ranges.asMutSlice()
     if ranges[id].stamp != generation {
       ranges[id].kept = ranges[id].range
       ranges[id].stamp = generation
       self.stamped = self.stamped + 1
     }
-    ranges[id].range = range
+    ranges[id].range = StoredRange.of(range)
   }
   effect fn growRanges(self: &mut Self, id: usize) ! OutOfMemoryError ? &mut Allocator {
     let missing = id + 1 - self.ranges.length()
@@ -649,7 +690,7 @@ impl LayoutCache {
     if self.ranges.length() < count {
       let length = self.ranges.length()
       let added = count - length
-      let fresh = BoxRanges { range: FinalRange.none(), kept: FinalRange.none(), stamp: self.generation }
+      let fresh = BoxRanges { range: NO_RANGE, kept: NO_RANGE, stamp: stamp(self.generation) }
       run self.ranges.appendRepeated(fresh, added)
       self.stamped = self.stamped + added
     }
@@ -675,13 +716,13 @@ impl LayoutCache {
   pub effect fn beginLayout(self: &mut Self, id: usize) ! OutOfMemoryError ? &mut Allocator {
     if self.skipping || id >= self.ranges.length() { return }
     let ranges = &self.ranges.asSlice()[id]
-    if ranges.stamp == self.generation && !ranges.range.valid { return }
+    if ranges.stamp == stamp(self.generation) && !ranges.range.valid() { return }
     run self.writeRange(id, FinalRange.none())
   }
   // A box of a subtree kept in place has its previous range again.
   pub fn keepRange(self: &mut Self, id: usize) {
     if id >= self.ranges.length() { return }
-    let generation = self.generation
+    let generation = stamp(self.generation)
     let ranges = self.ranges.asMutSlice()
     if ranges[id].stamp == generation { ranges[id].range = ranges[id].kept }
   }
@@ -689,12 +730,12 @@ impl LayoutCache {
   // FragmentArena.shiftPrevious); a range across the shift's start grows or
   // shrinks with it.
   pub fn shiftRanges(self: &mut Self, shift: Shift) {
-    let generation = self.generation
+    let generation = stamp(self.generation)
     let ranges = self.ranges.asMutSlice()
     let mut id: usize = 0
     while id < ranges.length {
-      if ranges[id].stamp == generation { ranges[id].kept = shiftedRange(ranges[id].kept, shift) }
-      else { ranges[id].range = shiftedRange(ranges[id].range, shift) }
+      if ranges[id].stamp == generation { ranges[id].kept = StoredRange.of(shiftedRange(ranges[id].kept.load(), shift)) }
+      else { ranges[id].range = StoredRange.of(shiftedRange(ranges[id].range.load(), shift)) }
       id = id + 1
     }
   }
@@ -705,14 +746,14 @@ impl LayoutCache {
       return
     }
     // writeRange of a range without floats, in lists sized for the box.
-    let generation = self.generation
+    let generation = stamp(self.generation)
     let ranges = self.ranges.asMutSlice()
     if ranges[id].stamp != generation {
       ranges[id].stamp = generation
       self.stamped = self.stamped + 1
     }
-    ranges[id].range = FinalRange { valid: true, start: start, end: end, floats: self.floats.length(), floatCount: 0 }
-    ranges[id].kept = FinalRange.none()
+    ranges[id].range = StoredRange { start: usize.toU32(start), end: usize.toU32(end), floats: usize.toU32(self.floats.length()), floatCount: VALID_RANGE }
+    ranges[id].kept = NO_RANGE
     run self.writeResult(id, input, layout, beside)
   }
   effect fn recordFinalGrowing(self: &mut Self, id: usize, input: &Input, layout: &Layout, start: usize, end: usize, floats: &[FloatBox], beside: bool) ! OutOfMemoryError ? &mut Allocator {
@@ -725,7 +766,7 @@ impl LayoutCache {
     if floats.length != 0 { run self.floats.appendSlice(floats) }
     run self.writeRange(id, FinalRange { valid: true, start: start, end: end, floats: first, floatCount: floats.length })
     let ranges = self.ranges.asMutSlice()
-    ranges[id].kept = FinalRange.none()
+    ranges[id].kept = NO_RANGE
     run self.writeResult(id, input, layout, beside)
   }
   @inlineAlways
@@ -812,14 +853,14 @@ impl LayoutCache {
     }
     if id < self.ranges.length() {
       let ranges = self.ranges.asMutSlice()
-      ranges[id].range = FinalRange.none()
-      ranges[id].kept = FinalRange.none()
+      ranges[id].range = NO_RANGE
+      ranges[id].kept = NO_RANGE
     }
     if id >= self.heads.length() { return }
     let mut index = self.heads.get(id)
     while index != ABSENT {
       self.dead = self.dead + 1
-      index = self.entries.get(index).next
+      index = follow(self.entries.get(index).next)
     }
     self.heads.set(id, ABSENT)
   }
@@ -918,8 +959,8 @@ impl LayoutCache {
     let entries = self.entries.asSlice()
     let mut index = self.heads.get(id)
     while index != ABSENT {
-      if entries[index].generation < generation { return AGES_OLDER }
-      index = entries[index].next
+      if u32.toUsize(entries[index].generation) < generation { return AGES_OLDER }
+      index = follow(entries[index].next)
     }
     return AGES_RECENT
   }
@@ -933,28 +974,28 @@ impl LayoutCache {
       let entry = self.entries.get(index)
       if entry.kind == CacheKind.ContainerAllocation { return false }
       if entry.kind == CacheKind.IndependentBox {
-        if entry.generation < generation { return false }
+        if u32.toUsize(entry.generation) < generation { return false }
         run result.append(CachedProbe { input: self.entryRares.unpack(&self.inputs.asSlice()[index]), layout: self.layouts.asSlice()[index] })
       }
-      index = entry.next
+      index = follow(entry.next)
     }
     return true
   }
   // The range a box recorded in this compute, if any.
   pub fn recordedRange(self: &Self, id: usize) -> FinalRange {
-    if id >= self.ranges.length() || self.ranges.asSlice()[id].stamp != self.generation { return FinalRange.none() }
-    return self.ranges.asSlice()[id].range
+    if id >= self.ranges.length() || self.ranges.asSlice()[id].stamp != stamp(self.generation) { return FinalRange.none() }
+    return self.ranges.asSlice()[id].range.load()
   }
   // Makes the range a box recorded in this compute, at fragments `shift`
   // earlier than where they now lie, its range of the previous compute.
   pub fn adoptRange(self: &mut Self, id: usize, shift: usize) {
-    if id >= self.ranges.length() || self.ranges.asSlice()[id].stamp != self.generation { return }
+    if id >= self.ranges.length() || self.ranges.asSlice()[id].stamp != stamp(self.generation) { return }
     let ranges = self.ranges.asMutSlice()
-    if ranges[id].range.valid {
-      ranges[id].range.start = ranges[id].range.start + shift
-      ranges[id].range.end = ranges[id].range.end + shift
+    if ranges[id].range.valid() {
+      ranges[id].range.start = ranges[id].range.start + usize.toU32(shift)
+      ranges[id].range.end = ranges[id].range.end + usize.toU32(shift)
     }
-    ranges[id].stamp = usize.MAX
+    ranges[id].stamp = STAMP_NONE
     self.stamped = self.stamped - 1
   }
   pub fn lookup(self: &mut Self, id: usize, input: &Input, kind: CacheKind) -> Option<Layout> {
@@ -990,17 +1031,17 @@ impl LayoutCache {
         let height = constraintClass(input.known.heightDefinite, &input.availableHeight)
         result.byWidth[width] = result.byWidth[width] + 1
         result.byHeight[height] = result.byHeight[height] + 1
-        let mut other = entries[index].next
+        let mut other = follow(entries[index].next)
         while other != ABSENT {
           let otherInput = self.entryRares.unpack(&inputs[other])
           if entries[other].kind == entries[index].kind && (sameInput(&otherInput, input) || sameInput(input, &otherInput)) {
             result.repeated = result.repeated + 1
             break
           }
-          other = entries[other].next
+          other = follow(entries[other].next)
         }
         // The chain's head is its newest entry, so `other` was computed first.
-        other = entries[index].next
+        other = follow(entries[index].next)
         while other != ABSENT {
           let earlier = &layouts[other].size
           let later = &layouts[index].size
@@ -1011,9 +1052,9 @@ impl LayoutCache {
             result.sameAnswerBy[before * 4 + width] = result.sameAnswerBy[before * 4 + width] + 1
             break
           }
-          other = entries[other].next
+          other = follow(entries[other].next)
         }
-        index = entries[index].next
+        index = follow(entries[index].next)
       }
       result.computed = result.computed + computed
       if computed > result.mostComputed { result.mostComputed = computed }
@@ -1040,14 +1081,14 @@ impl LayoutCache {
       let entries = self.entries.asSlice()
       let entry = &entries[index]
       if entry.kind == kind && sameAgainst(&self.inputs.asSlice()[index], &self.entryRares, input, &packed) {
-        if entry.generation != self.generation {
+        if entry.generation != stamp(self.generation) {
           let mutable = self.entries.asMutSlice()
-          mutable[index].generation = self.generation
+          mutable[index].generation = stamp(self.generation)
           self.touched = self.touched + 1
         }
         return index
       }
-      index = entry.next
+      index = follow(entry.next)
     }
     return ABSENT
   }
@@ -1065,15 +1106,15 @@ impl LayoutCache {
         request.availableWidth = AvailableSpace.maxContent()
         request.parent = stored.parent()
         if sameAgainst(stored, &self.entryRares, &request, &StoredInput.pack(&request, RARE_NONE)) {
-          if entry.generation != self.generation {
+          if entry.generation != stamp(self.generation) {
             let mutable = self.entries.asMutSlice()
-            mutable[index].generation = self.generation
+            mutable[index].generation = stamp(self.generation)
             self.touched = self.touched + 1
           }
           return index
         }
       }
-      index = entry.next
+      index = follow(entry.next)
     }
     return ABSENT
   }
@@ -1088,14 +1129,14 @@ impl LayoutCache {
       let entry = self.entries.get(index)
       let stored = &self.inputs.asSlice()[index]
       if entry.kind == CacheKind.IndependentBox && stored.intrinsicWidth() && !stored.knownWidthDefinite() && sameInputAtWidth(&self.entryRares.unpack(stored), input, self.layouts.asSlice()[index].size.width) {
-        if entry.generation != self.generation {
+        if entry.generation != stamp(self.generation) {
           let mutable = self.entries.asMutSlice()
-          mutable[index].generation = self.generation
+          mutable[index].generation = stamp(self.generation)
           self.touched = self.touched + 1
         }
         return index
       }
-      index = entry.next
+      index = follow(entry.next)
     }
     return ABSENT
   }
@@ -1116,8 +1157,8 @@ impl LayoutCache {
       let mut at = previous
       while at != ABSENT {
         let entry = self.entries.get(at)
-        if entry.generation + 1 < self.generation {
-          self.entries.set(at, Entry { kind: kind, next: entry.next, generation: self.generation })
+        if u32.toUsize(entry.generation) + 1 < self.generation {
+          self.entries.set(at, Entry { kind: kind, next: entry.next, generation: stamp(self.generation) })
           let rare = run self.entryRares.put(self.inputs.asSlice()[at].rare, input)
           let inputs = self.inputs.asMutSlice()
           inputs[at] = StoredInput.pack(input, rare)
@@ -1126,7 +1167,7 @@ impl LayoutCache {
           self.touched = self.touched + 1
           return
         }
-        at = entry.next
+        at = follow(entry.next)
       }
     }
     let index = self.entries.length()
@@ -1140,7 +1181,7 @@ impl LayoutCache {
     let rare = run self.entryRares.put(RARE_NONE, input)
     run self.inputs.append(StoredInput.pack(input, rare))
     run self.layouts.appendSlice(one<Layout>(layout))
-    run self.entries.append(Entry { kind: kind, next: previous, generation: self.generation })
+    run self.entries.append(Entry { kind: kind, next: link(previous), generation: stamp(self.generation) })
     self.touched = self.touched + 1
     self.heads.set(id, index)
   }
@@ -1168,7 +1209,7 @@ impl LayoutCache {
         let mut index = self.heads.get(old)
         while index != ABSENT {
           self.dead = self.dead + 1
-          index = self.entries.get(index).next
+          index = follow(self.entries.get(index).next)
         }
       }
       old = old + 1
@@ -1188,7 +1229,7 @@ impl LayoutCache {
       if from != ABSENT && from < self.heads.length() { head = self.heads.get(from) }
       if from != ABSENT && from < self.ranges.length() { range = self.keptRange(from) }
       run heads.append(head)
-      run kept.append(BoxRanges { range: range, kept: FinalRange.none(), stamp: usize.MAX })
+      run kept.append(BoxRanges { range: StoredRange.of(range), kept: NO_RANGE, stamp: STAMP_NONE })
       if from != ABSENT && from < self.results.length() {
         let mut result = self.results.asSlice()[from]
         if result.input.rare != RARE_NONE { result.input.rare = run resultRares.put(RARE_NONE, &self.resultRares.unpack(&result.input)) }
@@ -1321,8 +1362,8 @@ impl LayoutCache {
       chain.clear()
       let mut index = self.heads.get(id)
       while index != ABSENT {
-        if self.entries.get(index).generation >= oldest { run chain.append(index) }
-        index = self.entries.get(index).next
+        if u32.toUsize(self.entries.get(index).generation) >= oldest { run chain.append(index) }
+        index = follow(self.entries.get(index).next)
       }
       let mut next = ABSENT
       let mut at = chain.length()
@@ -1330,7 +1371,7 @@ impl LayoutCache {
         at = at - 1
         let from = chain.get(at)
         let mut entry = self.entries.get(from)
-        entry.next = next
+        entry.next = link(next)
         next = kept.length()
         run kept.append(entry)
         let mut stored = self.inputs.asSlice()[from]
