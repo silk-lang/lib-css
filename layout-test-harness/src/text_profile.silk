@@ -786,11 +786,11 @@ effect fn justifyCharacters(request: TextShapeRequest<'_, '_>, runs: &mut List<J
     let item = runs.get(index)
     if item.weight > 0.0 {
       match output.get(item.output) {
-        TextRun.Text { unit: runUnit, start: runStart, end: runEnd, advance, fontKey, bidiLevel, shapeKey } => {
+        TextRun.Text { unit: runUnit, start: runStart, end: runEnd, advance, fontKey, bidiLevel, shapeKey, unsafeBefore } => {
           let expanded = advance + (item.weight / total) * request.justificationSpace
           if expanded - expanded != 0.0 { fail P.invalidText(request.context.tokens[runUnit].source, "fixture glyph advance is not finite") }
           output.set(item.output, TextRun.Text { unit: runUnit, start: runStart, end: runEnd, advance: expanded,
-            fontKey: fontKey, bidiLevel: bidiLevel, shapeKey: shapeKey })
+            fontKey: fontKey, bidiLevel: bidiLevel, shapeKey: shapeKey, unsafeBefore: unsafeBefore })
         }
         TextRun.Object { unit: runUnit, bidiLevel, lineLeftSpacing: _, lineRightSpacing: _ } => {
           output.set(item.output, TextRun.Object { unit: runUnit, bidiLevel: bidiLevel,
@@ -961,7 +961,7 @@ pub effect fn shape(request: TextShapeRequest<'_, '_>, fonts: &[FontMetrics], ou
           if advance - advance != 0.0 { fail P.invalidText(token.source, "fixture glyph advance is not finite") }
           run output.append(TextRun.Text {
             unit: unit, start: start, end: at, advance: advance,
-            fontKey: token.fontKey, bidiLevel: level, shapeKey: token.fontKey,
+            fontKey: token.fontKey, bidiLevel: level, shapeKey: token.fontKey, unsafeBefore: false,
           })
           start = at
         }

@@ -712,7 +712,7 @@ impl LayoutTree {
         BoxKind.TablePart => 7
       }
       kinds[slot] = kinds[slot] + 1
-      if box.anonymousStyle != NO_NODE { anonymous = anonymous + 1 }
+      if box.anonymousStyle() != NO_NODE { anonymous = anonymous + 1 }
       at = at + 1
     }
     run out.unit("css.boxes", self.boxNodes.length())
@@ -824,8 +824,8 @@ impl LayoutTree {
       if text {
         // Its runs on lines of text alone are in fragments of its inline
         // formatting box (see LineText).
-        let mut above = boxes[box].parent
-        while above != NO_NODE && boxes[above].kind != BoxKind.InlineFormatting { above = boxes[above].parent }
+        let mut above = boxes[box].parent()
+        while above != NO_NODE && boxes[above].kind != BoxKind.InlineFormatting { above = boxes[above].parent() }
         if above != NO_NODE { lines = self.fragments.first(above) }
       }
     }
@@ -880,7 +880,7 @@ impl<'a> SourceRects<'a> {
     if self.text { return self.nextText() }
     while self.box != NO_NODE {
       if self.fragment == NO_NODE {
-        self.box = self.tree.boxNodes.asSlice()[self.box].nextContinuation
+        self.box = self.tree.boxNodes.asSlice()[self.box].nextContinuation()
         if self.box != NO_NODE { self.fragment = self.tree.fragments.first(self.box) }
         continue
       }
@@ -900,7 +900,7 @@ impl<'a> SourceRects<'a> {
     let fragments = self.tree.fragments.values.asSlice()
     while self.box != NO_NODE {
       if self.fragment == NO_NODE {
-        self.box = self.tree.boxNodes.asSlice()[self.box].nextContinuation
+        self.box = self.tree.boxNodes.asSlice()[self.box].nextContinuation()
         if self.box != NO_NODE { self.fragment = self.tree.fragments.first(self.box) }
         continue
       }

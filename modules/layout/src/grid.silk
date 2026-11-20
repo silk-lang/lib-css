@@ -61,7 +61,7 @@ import grid_tracks {
 
 fn nestedBaselines<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
   let parent = nodes.style(id)
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     let style = nodes.style(child)
     let inline = selfAlignment(style, parent, true)
@@ -69,7 +69,7 @@ fn nestedBaselines<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
     if inline == Align.Baseline || inline == Align.LastBaseline
       || block == Align.Baseline || block == Align.LastBaseline { return true }
     if Subgrid.eligible(nodes, child) && nestedBaselines(nodes, child) { return true }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   return false
 }
@@ -410,12 +410,12 @@ effect fn collectContributions<'pass, 'source, M: Measure + TextMeasure, S: Layo
     && own.contributions.length() == items.length
     && output.cache.clearsLoggedSince(own.memos.previousClearClock()) && output.cache.clearsCover(nodes.boxes.length()) {
     onlyCleared = true
-    let grid = nodes.node(items[0].id).parent
+    let grid = nodes.node(items[0].id).parent()
     let since = own.memos.previousClearClock()
     let mut at: usize = 0
     while at < output.cache.clearLogLength() {
       let box = output.cache.clearLogged(at)
-      if output.cache.clearLoggedAt(at) > since && box < nodes.boxes.length() && nodes.node(box).parent == grid {
+      if output.cache.clearLoggedAt(at) > since && box < nodes.boxes.length() && nodes.node(box).parent() == grid {
         // Items usually follow their boxes in order; else they are searched.
         let mut found = items.length
         if box >= items[0].id { found = box - items[0].id }

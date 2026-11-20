@@ -125,6 +125,8 @@ effect fn appendBreak(output: &mut List<TextBreak>, unit: usize, kind: TextBreak
 impl TextMeasure for FixedAdvance {
   fn beginTextLayout(provider: &mut Self) {}
   fn plainText(provider: &Self) -> bool { return true }
+  // Advances are per byte, whatever is shaped beside them.
+  fn reportsBreakSafety(provider: &Self) -> bool { return true }
 
   effect fn analyze(provider: &mut Self, context: TextContext<'_, '_>, output: &mut List<TextBreak>) -> TextAnalysis
     ! OutOfMemoryError | TextError ? &mut Allocator {
@@ -178,7 +180,7 @@ impl TextMeasure for FixedAdvance {
           if token.kind == TextTokenKind.SegmentBreak { glyphs = 0 }
           run output.append(TextRun.Text {
             unit: unit, start: start, end: end, advance: usize.toF32(glyphs) * advanceOf(token.fontKey),
-            fontKey: token.fontKey, bidiLevel: 0, shapeKey: token.fontKey,
+            fontKey: token.fontKey, bidiLevel: 0, shapeKey: token.fontKey, unsafeBefore: false,
           })
         }
       }

@@ -301,10 +301,10 @@ effect fn collect<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nod
       if edgeRtl { item.advance = resolved.inset.right + resolved.margin.right }
     }
     run items.append(item)
-    let mut child = node.firstChild
+    let mut child = node.firstChild()
     while child != NO_NODE {
       run collect(nodes, &mut output, &mut measurer, &mut items, &mut atomics, &mut scopes, &mut extents, child, index, input, axes, mode)
-      child = nodes.node(child).nextSibling
+      child = nodes.node(child).nextSibling()
     }
     item.kind = ItemKind.Close
     item.advance = 0.0
@@ -864,7 +864,7 @@ fn suppressPhantomClones<S: LayoutSource>(nodes: &BoxTree<'_, S>, items: &mut [I
     if item.kind == ItemKind.Atomic { return }
     if item.kind == ItemKind.Float || item.kind == ItemKind.Anchor { retainGeometry = true }
     if item.kind == ItemKind.Text {
-      match nodes.source.text(nodes.node(item.id).source) {
+      match nodes.source.text(nodes.node(item.id).source()) {
         Option<string>.Some { value } => {
           if !TextFlow.isCollapsibleWhitespace(value, nodes.style(item.id).whiteSpaceCollapse) { return }
         }
@@ -963,7 +963,7 @@ const PLAIN_ELLIPSIS_BYTES: usize = 1024
 
 fn textBytes<S: LayoutSource>(nodes: &BoxTree<'_, S>, item: Item) -> usize {
   if item.kind != ItemKind.Text { return 0 }
-  return match nodes.source.text(nodes.node(item.id).source) {
+  return match nodes.source.text(nodes.node(item.id).source()) {
     Option<string<'_>>.Some { value } => String.byteLength(value)
     Option<string<'_>>.None => 0
   }
@@ -1121,8 +1121,8 @@ fn trimmedBox<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mu
   if style.textBoxTrim == TextBoxTrim.None || style.writingMode != WritingMode.HorizontalTb { return box }
   let node = nodes.node(id)
   let start = (style.textBoxTrim == TextBoxTrim.Start || style.textBoxTrim == TextBoxTrim.Both)
-    && node.parent != NO_NODE && nodes.node(node.parent).firstChild == id
-  let end = (style.textBoxTrim == TextBoxTrim.End || style.textBoxTrim == TextBoxTrim.Both) && node.nextSibling == NO_NODE
+    && node.parent() != NO_NODE && nodes.node(node.parent()).firstChild() == id
+  let end = (style.textBoxTrim == TextBoxTrim.End || style.textBoxTrim == TextBoxTrim.Both) && node.nextSibling() == NO_NODE
   if !start && !end { return box }
   let font = fontBox(&mut measurer, style)
   let mut result = box
@@ -1161,10 +1161,10 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
   childInput.availableHeight = input.availableHeight
   if physicalBox.size.widthDefinite { childInput.availableWidth = AvailableSpace.definite(max(0.0, physicalBox.size.width - physicalBox.inset.horizontal())) }
   if physicalBox.size.heightDefinite { childInput.availableHeight = AvailableSpace.definite(max(0.0, physicalBox.size.height - physicalBox.inset.vertical())) }
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     run collect(nodes, &mut output, &mut measurer, &mut items, &mut atomics, &mut scopes, &mut extents, child, 0, &childInput, axes, style.writingMode)
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   suppressPhantomClones(nodes, items.asMutSlice(), scopes.asMutSlice())
   let rootBidi = paragraphBidi(nodes, id)
@@ -1467,7 +1467,7 @@ effect fn emitTextLine<'pass, 'source, S: LayoutSource>(nodes: &BoxTree<'source,
   while at < placed.length() {
     let item = items[owners.asSlice()[at]]
     let text = texts[item.leaf]
-    let source = nodes.node(item.id).source
+    let source = nodes.node(item.id).source()
     let fontKey = fonts[text.font].key
     let count = output.fragments.checkpoint()
     // The fragment that takes the run: the one the run before went to, or
@@ -1638,7 +1638,7 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(no
       let size = axes.size(logicalSize)
       let origin = axes.physicalPoint(Point { x: offset + left + margin.left, y: top }, size, physicalSize)
       let parent = spans.values.get(parentIndex)
-      let mut value = output.fragment(scope.id, node.source, FragmentKind.Inline)
+      let mut value = output.fragment(scope.id, node.source(), FragmentKind.Inline)
       value.parent = parent.fragment
       value.location = Point { x: origin.x - parent.origin.x, y: origin.y - parent.origin.y }
       value.size = size
@@ -1768,7 +1768,7 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(no
       let layoutPoint = axes.physicalPoint(Point { x: 0.0, y: font.baseline - font.before }, layoutSize, size)
       let bounds = Rect { x: layoutPoint.x, y: layoutPoint.y, width: layoutSize.width, height: layoutSize.height }
       let record = LineText.make(location, size, text.start, text.end, text.key, item.level, text.kind)
-      let source = nodes.node(item.id).source
+      let source = nodes.node(item.id).source()
       let fontKey = fonts[text.font].key
       // A run joins the text fragment before it when that holds the runs of
       // the same text box in the same font under the same parent, and nothing
@@ -1835,7 +1835,7 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(no
 fn paragraphBidi<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> UnicodeBidi {
   // Flow runs keep the originating block's root policy. An anonymous flex
   // item's computed style is Normal, rather than the flex container's policy.
-  let parent = nodes.node(id).parent
+  let parent = nodes.node(id).parent()
   if parent != NO_NODE { return nodes.style(parent).unicodeBidi }
   return nodes.style(id).unicodeBidi
 }
@@ -1868,20 +1868,20 @@ effect fn tokensFor<'a, S: LayoutSource>(nodes: &BoxTree<'a, S>, items: &[Item],
     let mut start: usize = 0
     if item.kind == ItemKind.Text {
       let source: &'a S = nodes.source
-      start = source.textStart(node.source)
-      value = match move laidText<'a, S>(source, node.source) {
+      start = source.textStart(node.source())
+      value = match move laidText<'a, S>(source, node.source()) {
         Option<string<'a>>.Some { value: content } => content
-        Option<string<'a>>.None => { fail TextError { source: node.source, message: "Generated text box has no source text" } }
+        Option<string<'a>>.None => { fail TextError { source: node.source(), message: "Generated text box has no source text" } }
       }
     }
     let barrier = shapingBarrier(nodes, &item, scopes)
-    run result.append(TextToken { kind: kind, text: value, source: node.source, sourceStart: start, sourceEnd: start + String.byteLength(value), fontKey: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: style.unicodeBidi, replacedInline: inlineReplaced(style), whiteSpaceCollapse: style.whiteSpaceCollapse, textJustify: style.textJustify, shapingBarrier: barrier })
+    run result.append(TextToken { kind: kind, text: value, source: node.source(), sourceStart: start, sourceEnd: start + String.byteLength(value), fontKey: style.fontKey, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: style.unicodeBidi, replacedInline: inlineReplaced(style), whiteSpaceCollapse: style.whiteSpaceCollapse, textJustify: style.textJustify, shapingBarrier: barrier })
     index = index + 1
   }
 }
 
 effect fn textFont<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, fonts: &mut List<TextFont>, scopes: &[Scope], item: Item, key: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
-  let slot = nodes.node(item.id).anonymousStyle
+  let slot = nodes.node(item.id).anonymousStyle()
   let mut index: usize = 0
   while index < fonts.length() {
     let entry = &fonts.asSlice()[index]
@@ -1901,7 +1901,7 @@ effect fn textFont<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer
 
 fn runUnit(value: TextRun) -> usize {
   return match value {
-    TextRun.Text { unit, start: _, end: _, advance: _, fontKey: _, bidiLevel: _, shapeKey: _ } => unit
+    TextRun.Text { unit, .. } => unit
     TextRun.Object { unit, bidiLevel: _, lineLeftSpacing: _, lineRightSpacing: _ } => unit
   }
 }
@@ -1910,6 +1910,12 @@ fn runUnit(value: TextRun) -> usize {
 // shaping does not depend on its inline origin, so each range is shaped once
 // and copied when a later line, probe or compute covers it again.
 effect fn shapeRange<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], memo: &mut TextMemo, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, inlineOrigin: f32, reusable: bool, limit: usize) ! OutOfMemoryError | TextError ? &mut Allocator {
+  if reusable && !hyphenated && shapeText {
+    if memo.slicing == 0 { run prepareSlicing(nodes, &mut measurer, context, analysis, &mut visualPlan, original, scopes, &mut memo, &mut shaped) }
+    if memo.slicing == 1 {
+      if run sliceWhole(context, scopes, &mut memo, &mut result, start, end) { return }
+    }
+  }
   if reusable && !hyphenated {
     let found = memo.segment(start, end)
     if found != NO_NODE {
@@ -1919,6 +1925,109 @@ effect fn shapeRange<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<
   }
   run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut memo.fonts, &mut shaped, &mut result, start, end, hyphenated, false, 0.0, inlineOrigin, &[])
   if reusable && !hyphenated { run memo.addSegment(start, end, &result, limit) }
+}
+
+// Decides whether ranges of this paragraph are cut from one shaping of it (see sliceWhole),
+// and shapes it whole when they are. That needs a provider that reports break safety and
+// plain text: no tabs, preserved spaces, segment breaks, atomics or floats, whose shaping
+// would depend on the line it is on, and no visual plan (the caller's `reusable`).
+effect fn prepareSlicing<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, original: &[Item], scopes: &[Scope], memo: &mut TextMemo, shaped: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator {
+  memo.slicing = 2
+  if !TextMeasure.reportsBreakSafety(&measurer) || context.tokens.length == 0 { return }
+  let mut unit: usize = 0
+  while unit < context.tokens.length {
+    let kind = context.tokens[unit].kind
+    if kind != TextTokenKind.Text && kind != TextTokenKind.Space && kind != TextTokenKind.Open && kind != TextTokenKind.Close && kind != TextTokenKind.Anchor { return }
+    unit = unit + 1
+  }
+  let terminal = TextCursor { unit: context.tokens.length, offset: 0 }
+  run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, true, original, scopes, &mut memo.fonts, &mut shaped, &mut memo.whole, TextCursor { unit: 0, offset: 0 }, terminal, false, false, 0.0, 0.0, &[])
+  if memo.whole.visual.active || memo.whole.hanging != 0.0 { return }
+  memo.unsafeAt.clear()
+  run memo.unsafeAt.reserveExact(context.tokens.length + 1)
+  while memo.unsafeAt.length() <= context.tokens.length { run memo.unsafeAt.append(false) }
+  let mut index: usize = 0
+  while index < shaped.length() {
+    match shaped.get(index) {
+      TextRun.Text { unit: at, start: low, unsafeBefore, .. } => {
+        if low == 0 && unsafeBefore { memo.unsafeAt.set(at, true) }
+      }
+      _ => {}
+    }
+    index = index + 1
+  }
+  memo.firstItem.clear()
+  run memo.firstItem.reserveExact(context.tokens.length + 1)
+  let items = memo.whole.items.asSlice()
+  index = 0
+  unit = 0
+  while unit <= context.tokens.length {
+    while index < items.length && items[index].start.unit < unit { index = index + 1 }
+    run memo.firstItem.append(index)
+    unit = unit + 1
+  }
+  memo.slicing = 1
+}
+
+// Gives `result` what shapeCandidate gives for [start, end) without shaping: the items and
+// text leaves of the paragraph's whole shaping in that range, less the spaces at its two
+// ends, which a line's shaping leaves out. False, with `result` untouched, when a cut is
+// inside a unit or the provider marked one unsafe.
+effect fn sliceWhole(context: TextContext<'_, '_>, scopes: &[Scope], memo: &mut TextMemo, result: &mut TextCandidate, start: TextCursor, end: TextCursor) -> bool ! OutOfMemoryError ? &mut Allocator {
+  if start.offset != 0 || end.offset != 0 || end.unit < start.unit { return false }
+  // The first and last unit the line shapes, as shapeCandidate finds them.
+  let mut first = NO_NODE
+  let mut last = NO_NODE
+  let mut unit = start.unit
+  while unit < end.unit {
+    let token = &context.tokens[unit]
+    if token.kind != TextTokenKind.Space && TextFlow.length(token) > 0 {
+      if first == NO_NODE { first = unit }
+      last = unit
+    }
+    unit = unit + 1
+  }
+  if first != NO_NODE {
+    if memo.unsafeAt.get(first) { return false }
+    if last + 1 < context.tokens.length && memo.unsafeAt.get(last + 1) { return false }
+  }
+  result.items.clear()
+  result.texts.clear()
+  result.advance = 0.0
+  result.hanging = 0.0
+  result.hangingItems = 0
+  result.real = false
+  result.visual.active = false
+  result.visual.order.clear()
+  result.visual.positions.clear()
+  result.visual.spans.clear()
+  result.visual.firstSpan = NO_NODE
+  result.visual.advance = 0.0
+  result.visual.real = false
+  let items = memo.whole.items.asSlice()
+  let texts = memo.whole.texts.asSlice()
+  let mut index = memo.firstItem.get(start.unit)
+  let stop = memo.firstItem.get(end.unit)
+  while index < stop {
+    let mut item = items[index]
+    if item.kind == ItemKind.Text {
+      let at = item.start.unit
+      if first != NO_NODE && at >= first && at <= last {
+        let leaf = texts[item.leaf]
+        item.leaf = result.texts.length()
+        run result.texts.append(leaf)
+        run result.items.append(item)
+        result.advance = result.advance + item.advance
+        result.real = true
+      }
+    } else {
+      run result.items.append(item)
+      if item.kind != ItemKind.Float && item.kind != ItemKind.Anchor { result.advance = result.advance + item.advance }
+      if item.kind == ItemKind.Atomic || ((item.kind == ItemKind.Open || item.kind == ItemKind.Close) && item.advance != 0.0 && !scopes[item.scope].phantomClone) { result.real = true }
+    }
+    index = index + 1
+  }
+  return true
 }
 
 // The cursor `bytes` bytes of text after `start`, moved on to a UTF-8 scalar boundary, or
@@ -2090,7 +2199,7 @@ effect fn shapeCandidate<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxT
     }
     while next < shaped.length() && runUnit(shaped.get(next)) == unit {
       match shaped.get(next) {
-        TextRun.Text { unit: _, start: low, end: high, advance, fontKey, bidiLevel, shapeKey } => {
+        TextRun.Text { unit: _, start: low, end: high, advance, fontKey, bidiLevel, shapeKey, unsafeBefore: _ } => {
           if base.kind != ItemKind.Text || low != coverage || high <= low || high > limit || bidiLevel > 126 || advance - advance != 0.0 {
             fail TextError { source: token.source, message: "Text service returned an invalid attributed run" }
           }

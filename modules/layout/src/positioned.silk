@@ -66,9 +66,9 @@ fn scrollOffset<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_,
   return clampScroll(request, layout.paddingRect(), layout.scrollableOverflow)
 }
 fn generatedParent<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
-  let mut parent = nodes.node(id).parent
+  let mut parent = nodes.node(id).parent()
   while parent != NO_NODE && (nodes.node(parent).kind == BoxKind.Inline || nodes.node(parent).kind == BoxKind.InlineFormatting) {
-    parent = nodes.node(parent).parent
+    parent = nodes.node(parent).parent()
   }
   if parent == 0 { return NO_NODE }
   return parent
@@ -77,7 +77,7 @@ fn generatedParent<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize 
 // ancestor (CSS Containment 2 §3.2), else the viewport.
 pub fn absoluteContainingBlock<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> usize {
   let fixed = nodes.style(id).position == Position.Fixed
-  let source = nodes.node(id).source
+  let source = nodes.node(id).source()
   if source == NO_NODE { return NO_NODE }
   let mut parent = nodes.source.parent(source)
   while parent != NO_NODE {
@@ -96,7 +96,7 @@ pub fn viewportFixed<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool
   return nodes.style(id).position == Position.Fixed && absoluteContainingBlock(nodes, id) == NO_NODE
 }
 fn fixedTree<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
-  let mut source = nodes.node(id).source
+  let mut source = nodes.node(id).source()
   while source != NO_NODE {
     let box = nodes.firstBySource.get(source)
     if box != NO_NODE && viewportFixed(nodes, box) { return true }
@@ -110,8 +110,8 @@ fn fixedTree<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
 // the CSSOM iterator. The preceding piece owns it, preserving source order.
 effect fn interruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize, last: usize) ! OutOfMemoryError ? &mut Allocator {
   let node = nodes.node(id)
-  let first = node.interruptionFirst
-  let container = nodes.node(first).parent
+  let first = node.interruptionFirst()
+  let container = nodes.node(first).parent()
   if output.frame != NO_NODE {
     run fragmentedInterruption(nodes, &mut output, id, last, container)
     return
@@ -133,7 +133,7 @@ effect fn interruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut Lay
       rect.width = max(0.0, firstBox.location.x + firstBox.size.width - lastBox.location.x)
     }
   }
-  let mut fragment = output.fragment(id, node.source, FragmentKind.Inline)
+  let mut fragment = output.fragment(id, node.source(), FragmentKind.Inline)
   fragment.parent = parent
   fragment.location = Point { x: rect.x, y: rect.y }
   fragment.size = Size { width: rect.width, height: rect.height }
@@ -159,7 +159,7 @@ effect fn fragmentedInterruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output
       let parentOrigin = fragmentPosition(&output, parent, false)
       let mut rect = Rect.zero()
       let mut found = false
-      let mut child = nodes.node(id).interruptionFirst
+      let mut child = nodes.node(id).interruptionFirst()
       while child != NO_NODE {
         let fragmentId = instance(&output, child, frame)
         if fragmentId != NO_NODE {
@@ -170,7 +170,7 @@ effect fn fragmentedInterruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output
           found = true
         }
         if child == last { break }
-        child = nodes.node(child).nextSibling
+        child = nodes.node(child).nextSibling()
       }
       if found {
         if nodes.style(container).writingMode == WritingMode.HorizontalTb {
@@ -180,7 +180,7 @@ effect fn fragmentedInterruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output
           rect.y = parentFragment.contentRect.y
           rect.height = parentFragment.contentRect.height
         }
-        let mut fragment = output.fragment(id, nodes.node(id).source, FragmentKind.Inline)
+        let mut fragment = output.fragment(id, nodes.node(id).source(), FragmentKind.Inline)
         fragment.fragmentainer = frame
         fragment.parent = parent
         fragment.location = Point { x: rect.x, y: rect.y }
@@ -204,19 +204,19 @@ effect fn fragmentedInterruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output
   }
 }
 fn textOnlyContinuation<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize) -> bool {
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     let node = nodes.node(child)
     if node.kind != BoxKind.Text {
       if node.kind != BoxKind.Inline || (node.firstForSource && node.lastForSource)
         || !textOnlyContinuation(nodes, child) { return false }
     }
-    child = node.nextSibling
+    child = node.nextSibling()
   }
   return true
 }
 fn phantomInterruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize) -> bool {
-  if id == NO_NODE || nodes.node(id).interruptionFirst == NO_NODE || !textOnlyContinuation(nodes, id) { return false }
+  if id == NO_NODE || nodes.node(id).interruptionFirst() == NO_NODE || !textOnlyContinuation(nodes, id) { return false }
   let mut current = output.fragments.first(id)
   if current == NO_NODE { return false }
   while current != NO_NODE {
@@ -229,14 +229,14 @@ fn phantomInterruption<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutP
 effect fn interruptions<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, first: usize) ! OutOfMemoryError ? &mut Allocator {
   let mut id = first
   while id != NO_NODE {
-    let mut next = nodes.node(id).nextContinuation
-    if nodes.node(id).interruptionFirst != NO_NODE {
-      let mut last = nodes.node(id).interruptionLast
+    let mut next = nodes.node(id).nextContinuation()
+    if nodes.node(id).interruptionFirst() != NO_NODE {
+      let mut last = nodes.node(id).interruptionLast()
       // An actual phantom continuation between consumed block ranges is not
       // a new inline fragment boundary. Retain its structural anchor ancestry,
       // but do not turn collapsed whitespace/OOF-only content into a box.
       while phantomInterruption(nodes, &output, next) {
-        last = nodes.node(next).interruptionLast
+        last = nodes.node(next).interruptionLast()
         let mut current = output.fragments.first(next)
         while current != NO_NODE {
           let values = output.fragments.values.asMutSlice()
@@ -251,7 +251,7 @@ effect fn interruptions<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut La
           values[current].scrollableOverflow = Rect.zero()
           current = values[current].nextForBox
         }
-        next = nodes.node(next).nextContinuation
+        next = nodes.node(next).nextContinuation()
       }
       run interruption(nodes, &mut output, id, last)
     }
@@ -274,7 +274,7 @@ fn inlineContainingRect<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &Layout
       firstId = candidate.nextForBox
     }
     if firstId != NO_NODE { break }
-    firstBox = nodes.node(firstBox).nextContinuation
+    firstBox = nodes.node(firstBox).nextContinuation()
   }
   let first = &output.fragments.values.asSlice()[firstId]
   let firstRect = first.contentRect.translated(flowPosition(output, firstId))
@@ -323,7 +323,7 @@ fn inlineContainingRect<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &Layout
       }
       current = fragment.nextForBox
     }
-    box = nodes.node(box).nextContinuation
+    box = nodes.node(box).nextContinuation()
   }
   let mut x = startX
   let mut y = startY
@@ -526,7 +526,7 @@ fn sticky<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '
   let mut scrollSize = viewport
   let mut foundX = false
   let mut foundY = false
-  let mut ancestor = nodes.node(id).parent
+  let mut ancestor = nodes.node(id).parent()
   while ancestor != NO_NODE && ancestor != 0 && (!foundX || !foundY) {
     let ancestorStyle = nodes.style(ancestor)
     if nodes.node(ancestor).kind != BoxKind.Inline && nodes.node(ancestor).kind != BoxKind.InlineFormatting {
@@ -550,7 +550,7 @@ fn sticky<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '
         }
       }
     }
-    ancestor = nodes.node(ancestor).parent
+    ancestor = nodes.node(ancestor).parent()
   }
   let fragment = output.fragments.values.get(fragmentId)
   let x = stickyAxis(nodes.style(id), containingStyle, true, position.x, fragment.size.width, containingOrigin.x, containing.width, fragment.usedMargin.left, fragment.usedMargin.right, scrollOrigin.x, scrollSize.width, scrollSize.widthDefinite)
@@ -562,8 +562,8 @@ fn sticky<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '
 fn nextGenerated<S: LayoutSource>(nodes: &BoxTree<'_, S>, root: usize, id: usize) -> usize {
   let mut current = id
   while current != root && current != NO_NODE {
-    if nodes.node(current).nextSibling != NO_NODE { return nodes.node(current).nextSibling }
-    current = nodes.node(current).parent
+    if nodes.node(current).nextSibling() != NO_NODE { return nodes.node(current).nextSibling() }
+    current = nodes.node(current).parent()
   }
   return NO_NODE
 }
@@ -702,7 +702,7 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(no
       output.absoluteLimitsSet = true
     }
   }
-  let scrollParent = nodes.node(id).parent
+  let scrollParent = nodes.node(id).parent()
   if shared && output.absoluteScrollParent == scrollParent {
     if output.absoluteScrolled { input.scrollportSize = output.absoluteScrollport }
   } else {
@@ -717,7 +717,7 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(no
         scrolled = true
         break
       }
-      scrollAncestor = ancestor.parent
+      scrollAncestor = ancestor.parent()
     }
     if shared {
       output.absoluteScrollParent = scrollParent
@@ -890,11 +890,11 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(no
       } else {
         x = absoluteAlignment(x, x + innerWidth, result.size.width + box.margin.horizontal(), limits.left, limits.right, reverseX, reverseX, inlineAlign, inlineSafety, startReverse(style, true), true)
       }
-      let mut previous = nodes.node(staticRoot).firstChild
+      let mut previous = nodes.node(staticRoot).firstChild()
       while previous != NO_NODE && previous != id {
         let previousStyle = nodes.style(previous)
-        if nodes.node(previous).kind == BoxKind.InlineFormatting && !nodes.node(previous).anonymousBlock && nodes.node(previous).firstChild != NO_NODE {
-          previous = nodes.node(previous).firstChild
+        if nodes.node(previous).kind == BoxKind.InlineFormatting && !nodes.node(previous).anonymousBlock && nodes.node(previous).firstChild() != NO_NODE {
+          previous = nodes.node(previous).firstChild()
         } else {
           if !outOfFlow(previousStyle) && previousStyle.float == Float.None {
             let previousBox = usedBox(nodes, &output, previous, viewport)
@@ -993,7 +993,7 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(no
   // Scalar layout remains normal and generated-parent-relative. The physical
   // fragment is CB-owned, so publish its final placement in that coordinate space.
   // layoutNode stored `result`; only its location changes.
-  let generatedOrigin = normalPosition(nodes, &output, nodes.node(id).parent)
+  let generatedOrigin = normalPosition(nodes, &output, nodes.node(id).parent())
   run output.touch(id)
   output.boxes[id].location = Point { x: x - generatedOrigin.x, y: y - generatedOrigin.y }
   let physicalOrigin = fragmentPosition(&output, physicalParent, false)
@@ -1046,7 +1046,7 @@ fn containingExisting<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPa
   while box != NO_NODE {
     let found = instance(output, box, frame)
     if found != NO_NODE { return found }
-    box = nodes.node(box).nextContinuation
+    box = nodes.node(box).nextContinuation()
   }
   return NO_NODE
 }
@@ -1088,7 +1088,7 @@ effect fn containerShellAllocation<'pass, 'source, M: Measure + TextMeasure, S: 
     // first-frame descriptor or the latest speculative request for the child.
     gridContext.* = run shellContext(nodes, &mut output, parentBox, id)
   }
-  let mut child = nodes.node(parentBox).firstChild
+  let mut child = nodes.node(parentBox).firstChild()
   while child != NO_NODE {
     if nodes.node(child).needsFragmentGeometry && !outOfFlow(nodes.style(child)) {
       let mut allocation = output.boxes[child]
@@ -1096,7 +1096,7 @@ effect fn containerShellAllocation<'pass, 'source, M: Measure + TextMeasure, S: 
       allocation.location.y = allocation.location.y - box.inset.top
       run output.remember(child, &input, CacheKind.ContainerAllocation, &allocation)
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   let mut result = output.boxes[id]
   result.location.x = result.location.x - box.inset.left
@@ -1358,7 +1358,7 @@ fn placedInline<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_,
   let mut cbStyle = &viewportStyle
   if cb != NO_NODE { cbStyle = nodes.style(cb) }
   let box = resolveBox(style, &input)
-  let directGrid = cb != NO_NODE && nodes.node(id).parent == cb && GridPositioned.isContainer(nodes, cb)
+  let directGrid = cb != NO_NODE && nodes.node(id).parent() == cb && GridPositioned.isContainer(nodes, cb)
   let mut point = desired
   let mut firstOrigin = Point { x: 0.0, y: 0.0 }
   if cb != NO_NODE {
@@ -1435,7 +1435,7 @@ fn containingSegment<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPas
       }
       current = fragment.nextForBox
     }
-    box = nodes.node(box).nextContinuation
+    box = nodes.node(box).nextContinuation()
   }
   if found { return Option<Rect>.Some { value: result } }
   return Option<Rect>.None
@@ -1489,7 +1489,7 @@ effect fn locateAbsolute<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &Layou
         if !fragment.overflowOnly && fragment.fragmentainer > last { last = fragment.fragmentainer }
         current = fragment.nextForBox
       }
-      box = nodes.node(box).nextContinuation
+      box = nodes.node(box).nextContinuation()
     }
     while frame <= last {
       match containingSegment(nodes, output, cb, frame) {
@@ -2340,7 +2340,7 @@ pub effect fn positionVisits<S: LayoutSource>(nodes: &BoxTree<'_, S>, result: &m
       let node = nodes.node(id)
       let style = nodes.style(id)
       let mut visit = id == 0 || absolutelyPositioned(style) || style.position == Position.Relative || style.position == Position.Sticky
-        || (node.firstForSource && node.interruptionFirst != NO_NODE)
+        || (node.firstForSource && node.interruptionFirst() != NO_NODE)
       if !visit && node.kind != BoxKind.Inline {
         visit = scrollable(usedOverflowForAxis(style, true)) || scrollable(usedOverflowForAxis(style, false)) || generatedParent(nodes, id) == NO_NODE
       }
@@ -2356,7 +2356,7 @@ pub effect fn positionVisits<S: LayoutSource>(nodes: &BoxTree<'_, S>, result: &m
         }
         count = count + 1
       }
-      id = node.nextContinuation
+      id = node.nextContinuation()
     }
     source = nextPositionSource(nodes, source)
   }
@@ -2388,8 +2388,8 @@ effect fn keepAnchored<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut Lay
 // leaves in `anchored`.
 fn anchorBlock<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, '_>, id: usize, anchored: &mut AnchoredBlock) -> bool {
   if (output.facts.own.get(id) & FACT_ANCHORED) == 0 || !output.facts.viewportFree.get(id) || !output.keptAsBefore(id, REUSE_INDEPENDENT) { return false }
-  let cb = nodes.node(id).parent
-  let source = nodes.node(id).source
+  let cb = nodes.node(id).parent()
+  let source = nodes.node(id).source()
   if cb == NO_NODE || source == NO_NODE { return false }
   // Siblings of one source parent share their containing block.
   let sourceParent = nodes.source.parent(source)
@@ -2407,7 +2407,8 @@ fn anchorBlock<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, 
     anchored.padding = Point { x: padding.x, y: padding.y }
   }
   let cbStyle = nodes.style(cb)
-  let request = &output.cache.result(id).input
+  let recorded = output.cache.resultInput(id)
+  let request = &recorded
   if request.parentWritingMode != cbStyle.writingMode || request.parentTextOrientation != cbStyle.textOrientation
     || request.parentJustifyItems != cbStyle.justifyItems || request.parentJustifyItemsSafety != cbStyle.justifyItemsSafety { return false }
   return true
@@ -2435,7 +2436,7 @@ effect fn gatherRun<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass
   let node = nodes.node(id)
   let start = output.fragments.first(id)
   let end = output.fragments.checkpoint()
-  let mut fits = start != NO_NODE && start < end && node.interruptionFirst == NO_NODE
+  let mut fits = start != NO_NODE && start < end && node.interruptionFirst() == NO_NODE
     && style.position != Position.Fixed && !scrollable(usedOverflowForAxis(style, true)) && !scrollable(usedOverflowForAxis(style, false))
   let mut border = Rect.zero()
   if fits {
@@ -2486,7 +2487,7 @@ effect fn keepRun<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPa
     while logged < output.cache.clearLogLength() {
       if output.cache.clearLoggedAt(logged) > saved.clock {
         let box = output.cache.clearLogged(logged)
-        if box >= nodes.boxes.length() || nodes.node(box).parent == saved.cb { return false }
+        if box >= nodes.boxes.length() || nodes.node(box).parent() == saved.cb { return false }
       }
       logged = logged + 1
     }
@@ -2547,11 +2548,11 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
     }
     let id = output.facts.visits.get(at)
     let style = nodes.style(id)
-    if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst != NO_NODE {
+    if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst() != NO_NODE {
       plainParents = false
       run interruptions(nodes, &mut output, id)
     }
-    if nodes.node(id).firstChild != NO_NODE && (scrollable(usedOverflowForAxis(style, true)) || scrollable(usedOverflowForAxis(style, false))) { plainParents = false }
+    if nodes.node(id).firstChild() != NO_NODE && (scrollable(usedOverflowForAxis(style, true)) || scrollable(usedOverflowForAxis(style, false))) { plainParents = false }
     if absolutelyPositioned(style) {
       if style.position == Position.Fixed { plainParents = false }
       let word = u64.bitOr(output.outOfFlowBoxes.get(id / 64), u64.shiftLeft(1, usize.toU64(id % 64)))
@@ -2721,7 +2722,7 @@ fn stickyFragment<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPa
   }
   let mut foundX = false
   let mut foundY = false
-  let mut ancestor = nodes.node(id).parent
+  let mut ancestor = nodes.node(id).parent()
   while ancestor != NO_NODE && ancestor != 0 && (!foundX || !foundY) {
     let ancestorId = instance(&output, ancestor, frame)
     if ancestorId != NO_NODE && nodes.node(ancestor).kind != BoxKind.Inline && nodes.node(ancestor).kind != BoxKind.InlineFormatting {
@@ -2738,7 +2739,7 @@ fn stickyFragment<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPa
         foundY = true
       }
     }
-    ancestor = nodes.node(ancestor).parent
+    ancestor = nodes.node(ancestor).parent()
   }
   let point = fragmentPosition(&output, fragmentId, true)
   let x = stickyAxis(nodes.style(id), containingStyle, true, point.x, fragment.size.width, containing.x, containing.width, fragment.usedMargin.left, fragment.usedMargin.right, port.x, port.width, viewport.widthDefinite)
@@ -2761,10 +2762,10 @@ pub effect fn positionFragmentedTree<'pass, 'source, M: Measure + TextMeasure, S
     let mut id = nodes.firstBySource.get(source)
     while id != NO_NODE {
       if !fixedTree(nodes, id) {
-        if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst != NO_NODE { run interruptions(nodes, &mut output, id) }
+        if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst() != NO_NODE { run interruptions(nodes, &mut output, id) }
         if absolutelyPositioned(nodes.style(id)) { run absolute(nodes, &mut output, &mut measurer, id, viewport, true, &viewportStyle) }
       }
-      id = nodes.node(id).nextContinuation
+      id = nodes.node(id).nextContinuation()
     }
     source = nextPositionSource(nodes, source)
   }
@@ -2794,10 +2795,10 @@ pub effect fn positionFragmentedTree<'pass, 'source, M: Measure + TextMeasure, S
       let mut id = nodes.firstBySource.get(source)
       while id != NO_NODE {
         if fixedTree(nodes, id) {
-          if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst != NO_NODE { run interruptions(nodes, &mut output, id) }
+          if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst() != NO_NODE { run interruptions(nodes, &mut output, id) }
           if absolutelyPositioned(nodes.style(id)) { run absolute(nodes, &mut output, &mut measurer, id, pageViewport, true, &viewportStyle) }
         }
-        id = nodes.node(id).nextContinuation
+        id = nodes.node(id).nextContinuation()
       }
       source = nextPositionSource(nodes, source)
     }

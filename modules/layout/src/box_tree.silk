@@ -10,6 +10,7 @@ import source { LayoutSource, laidText }
 import context { outOfFlow, scrollable, overflowForAxis, containsAbsolute }
 import grid_style { GridTemplate }
 import silk.num.u32
+import silk.num.usize
 import shapes { FloatShape }
 import anonymous_styles { AnonymousStyles }
 
@@ -19,11 +20,19 @@ import anonymous_styles { AnonymousStyles }
 pub enum BoxKind { Block, Flex, Grid, Inline, InlineFormatting, Text, Table, TablePart }
 pub struct BoxNode {
   // Fields read on every visit come first so they share one cache line.
-  pub anonymousStyle: usize,
+  // Box, source and style indexes are u32s, NONE_INDEX for NO_NODE; read
+  // and write them through the methods named after them (anonymousStyle(),
+  // setParent(), ...), which keep NO_NODE.
+  anonymousStyleAt: u32,
   // styleOwner's index in styles, so style() needs no source lookup;
   // NO_NODE with anonymousStyle.
-  pub styleIndex: usize,
-  pub parent: usize, pub firstChild: usize, pub nextSibling: usize,
+  styleIndexAt: u32,
+  parentAt: u32, firstChildAt: u32, nextSiblingAt: u32,
+  sourceAt: u32, styleOwnerAt: u32,
+  lastChildAt: u32,
+  previousContinuationAt: u32, nextContinuationAt: u32,
+  // Lifted in-flow blocks consumed between this inline piece and its successor.
+  interruptionFirstAt: u32, interruptionLastAt: u32,
   pub kind: BoxKind, pub measurement: Measurement,
   pub firstForSource: bool, pub lastForSource: bool,
   pub anonymousBlock: bool, pub blockify: bool, pub independentRoot: bool,
@@ -36,15 +45,73 @@ pub struct BoxNode {
   // Propagation can depend on a descendant's computed flex lines.
   pub beforeControl: bool, pub dynamicBefore: bool,
   pub afterControl: bool, pub dynamicAfter: bool,
-  pub source: usize, pub styleOwner: usize,
-  pub lastChild: usize,
-  pub previousContinuation: usize, pub nextContinuation: usize,
-  // Lifted in-flow blocks consumed between this inline piece and its successor.
-  pub interruptionFirst: usize, pub interruptionLast: usize,
+  // The host's key, any usize.
   pub measureKey: usize,
   pub scrollOffset: Point,
 }
 impl Copy for BoxNode {}
+// NO_NODE as a u32 index of a BoxNode, and back.
+pub const NONE_INDEX: u32 = u32.MAX
+@inlineAlways
+pub fn narrowIndex(value: usize) -> u32 {
+  if value == NO_NODE { return NONE_INDEX }
+  return usize.toU32(value)
+}
+@inlineAlways
+pub fn wideIndex(value: u32) -> usize {
+  if value == NONE_INDEX { return NO_NODE }
+  return u32.toUsize(value)
+}
+impl BoxNode {
+  @inlineAlways
+  pub fn anonymousStyle(self: &Self) -> usize { return wideIndex(self.anonymousStyleAt) }
+  @inlineAlways
+  pub fn setAnonymousStyle(self: &mut Self, value: usize) { self.anonymousStyleAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn styleIndex(self: &Self) -> usize { return wideIndex(self.styleIndexAt) }
+  @inlineAlways
+  pub fn setStyleIndex(self: &mut Self, value: usize) { self.styleIndexAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn parent(self: &Self) -> usize { return wideIndex(self.parentAt) }
+  @inlineAlways
+  pub fn setParent(self: &mut Self, value: usize) { self.parentAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn firstChild(self: &Self) -> usize { return wideIndex(self.firstChildAt) }
+  @inlineAlways
+  pub fn setFirstChild(self: &mut Self, value: usize) { self.firstChildAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn nextSibling(self: &Self) -> usize { return wideIndex(self.nextSiblingAt) }
+  @inlineAlways
+  pub fn setNextSibling(self: &mut Self, value: usize) { self.nextSiblingAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn source(self: &Self) -> usize { return wideIndex(self.sourceAt) }
+  @inlineAlways
+  pub fn setSource(self: &mut Self, value: usize) { self.sourceAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn styleOwner(self: &Self) -> usize { return wideIndex(self.styleOwnerAt) }
+  @inlineAlways
+  pub fn setStyleOwner(self: &mut Self, value: usize) { self.styleOwnerAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn lastChild(self: &Self) -> usize { return wideIndex(self.lastChildAt) }
+  @inlineAlways
+  pub fn setLastChild(self: &mut Self, value: usize) { self.lastChildAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn previousContinuation(self: &Self) -> usize { return wideIndex(self.previousContinuationAt) }
+  @inlineAlways
+  pub fn setPreviousContinuation(self: &mut Self, value: usize) { self.previousContinuationAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn nextContinuation(self: &Self) -> usize { return wideIndex(self.nextContinuationAt) }
+  @inlineAlways
+  pub fn setNextContinuation(self: &mut Self, value: usize) { self.nextContinuationAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn interruptionFirst(self: &Self) -> usize { return wideIndex(self.interruptionFirstAt) }
+  @inlineAlways
+  pub fn setInterruptionFirst(self: &mut Self, value: usize) { self.interruptionFirstAt = narrowIndex(value) }
+  @inlineAlways
+  pub fn interruptionLast(self: &Self) -> usize { return wideIndex(self.interruptionLastAt) }
+  @inlineAlways
+  pub fn setInterruptionLast(self: &mut Self, value: usize) { self.interruptionLastAt = narrowIndex(value) }
+}
 
 pub struct BoxTree<'a, S> {
   pub boxes: List<BoxNode>,
@@ -84,7 +151,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     let values = result.boxes.asMutSlice()
     let mut index: usize = 0
     while index < values.length {
-      let owner = values[index].source
+      let owner = values[index].source()
       if owner != NO_NODE { values[index].scrollOffset = source.scrollOffset(owner) }
       index = index + 1
     }
@@ -98,7 +165,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     let mut id = self.firstBySource.get(source)
     while id != NO_NODE {
       boxes[id].scrollOffset = offset
-      id = boxes[id].nextContinuation
+      id = boxes[id].nextContinuation()
     }
   }
   // Takes source `source`'s style index again for the boxes that read it. A
@@ -110,16 +177,16 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     let boxes = self.boxes.asMutSlice()
     let mut id = self.firstBySource.get(source)
     while id != NO_NODE {
-      if boxes[id].anonymousStyle == NO_NODE { boxes[id].styleIndex = index }
-      id = boxes[id].nextContinuation
+      if boxes[id].anonymousStyle() == NO_NODE { boxes[id].setStyleIndex(index) }
+      id = boxes[id].nextContinuation()
     }
   }
   // The source node anonymous box `id` takes its style from: its owner, or
   // a text box's parent. NO_NODE for the viewport.
   pub fn anonymousOrigin(self: &Self, id: usize) -> usize {
     let node = self.node(id)
-    if node.kind == BoxKind.Text && node.styleOwner != NO_NODE { return self.source.parent(node.styleOwner) }
-    return node.styleOwner
+    if node.kind == BoxKind.Text && node.styleOwner() != NO_NODE { return self.source.parent(node.styleOwner()) }
+    return node.styleOwner()
   }
   // Takes anonymous box `id`'s style again from its origin, after the
   // origin's style changed.
@@ -129,13 +196,13 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     let parent = &self.styles[self.source.styleIndex(origin)]
     let mut style = runStyle(parent)
     if self.node(id).kind == BoxKind.Text { style = textStyle(parent) }
-    let previous = self.node(id).anonymousStyle
+    let previous = self.node(id).anonymousStyle()
     if self.anonymous.get(previous) == &style { return }
     let slot = run self.anonymous.intern(move style)
     self.anonymous.take(slot)
     run self.anonymous.release(previous)
     let boxes = self.boxes.asMutSlice()
-    boxes[id].anonymousStyle = slot
+    boxes[id].setAnonymousStyle(slot)
   }
   @inlineAlways
   pub fn node(self: &Self, id: usize) -> &BoxNode { return &self.boxes.asSlice()[id] }
@@ -148,8 +215,8 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   }
   pub fn style(self: &Self, id: usize) -> &Style {
     let node = self.node(id)
-    if node.anonymousStyle != NO_NODE { return self.anonymous.get(node.anonymousStyle) }
-    return &self.styles[node.styleIndex]
+    if node.anonymousStyle() != NO_NODE { return self.anonymous.get(node.anonymousStyle()) }
+    return &self.styles[node.styleIndex()]
   }
 
   // Column flows break with the fragmentation code, which reads what
@@ -172,7 +239,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
       // Against the parent's mode, so a vertical column flow's own content
       // is not orthogonal to its columns.
       let mut reference = frameMode
-      if node.parent != NO_NODE { reference = self.style(node.parent).writingMode }
+      if node.parent() != NO_NODE { reference = self.style(node.parent()).writingMode }
       let orthogonal = node.kind != BoxKind.Flex && (style.writingMode == WritingMode.HorizontalTb) != (reference == WritingMode.HorizontalTb)
       let x = overflowForAxis(style, true)
       let y = overflowForAxis(style, false)
@@ -195,7 +262,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
       let mut after = ownAfter
       let mut dynamicAfter = false
       if applicable && !monolithic && node.kind != BoxKind.Table {
-        let mut child = node.firstChild
+        let mut child = node.firstChild()
         let mut first = true
         while child != NO_NODE {
           let item = self.node(child)
@@ -217,7 +284,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
               dynamicAfter = item.dynamicAfter
             }
           }
-          child = item.nextSibling
+          child = item.nextSibling()
         }
       }
       let boxes = self.boxes.asMutSlice()
@@ -227,8 +294,8 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
       boxes[index].dynamicBefore = dynamicBefore
       boxes[index].afterControl = after
       boxes[index].dynamicAfter = dynamicAfter
-      if node.parent != NO_NODE && needed {
-        boxes[node.parent].needsFragmentGeometry = true
+      if node.parent() != NO_NODE && needed {
+        boxes[node.parent()].needsFragmentGeometry = true
       }
     }
   }
@@ -236,9 +303,9 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   effect fn append(self: &mut Self, node: BoxNode, parent: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
     let mut id = self.boxes.length()
     let mut value = move node
-    value.parent = parent
-    let source = value.source
-    if value.anonymousStyle != NO_NODE { self.anonymous.take(value.anonymousStyle) }
+    value.setParent(parent)
+    let source = value.source()
+    if value.anonymousStyle() != NO_NODE { self.anonymous.take(value.anonymousStyle()) }
     // A patch takes free ids first, in ascending order, so that a box still
     // follows its parent and every box made before it.
     if self.slotsTaken < self.slots.length() {
@@ -250,10 +317,10 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
       run self.boxes.append(move value)
     }
     if parent != NO_NODE {
-      let last = self.node(parent).lastChild
+      let last = self.node(parent).lastChild()
       let boxes = self.boxes.asMutSlice()
-      if last == NO_NODE { boxes[parent].firstChild = id } else { boxes[last].nextSibling = id }
-      boxes[parent].lastChild = id
+      if last == NO_NODE { boxes[parent].setFirstChild(id) } else { boxes[last].setNextSibling(id) }
+      boxes[parent].setLastChild(id)
     }
     if source != NO_NODE {
       let previous = self.lastBySource.get(source)
@@ -261,9 +328,9 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
         self.firstBySource.set(source, id)
       } else {
         let boxes = self.boxes.asMutSlice()
-        boxes[previous].nextContinuation = id
+        boxes[previous].setNextContinuation(id)
         boxes[previous].lastForSource = false
-        boxes[id].previousContinuation = previous
+        boxes[id].setPreviousContinuation(previous)
         boxes[id].firstForSource = false
       }
       self.lastBySource.set(source, id)
@@ -301,7 +368,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   // CSS2 9.2.1.1: inherit from the enclosing box, not a split inline ancestor.
   effect fn ensureRun(self: &mut Self, flow: &mut Flow) -> usize ! OutOfMemoryError ? &mut Allocator {
     if flow.inlineRun != NO_NODE { return flow.inlineRun }
-    let owner = self.node(flow.container).styleOwner
+    let owner = self.node(flow.container).styleOwner()
     drop run self.ensureAnonymousStyle(&mut flow)
     let mut node = anonymous(BoxKind.InlineFormatting, owner, flow.anonymousStyle)
     node.anonymousBlock = flow.hasBlock
@@ -324,7 +391,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
       }
     }
     let mut node = anonymous(BoxKind.Text, source, slot)
-    node.source = source
+    node.setSource(source)
     node.firstForSource = true
     node.lastForSource = true
     drop run self.append(node, parent)
@@ -336,7 +403,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     if flow.flexText.length() == 0 { return }
     if flow.flexTextVisible {
       let slot = run self.ensureAnonymousStyle(&mut flow)
-      let owner = self.node(flow.container).styleOwner
+      let owner = self.node(flow.container).styleOwner()
       let mut item = anonymous(BoxKind.Block, owner, slot)
       item.anonymousBlock = true
       item.blockify = true
@@ -359,24 +426,24 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   effect fn inlineParent(self: &mut Self, flow: &mut Flow, inline: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
     let runId = run self.ensureRun(&mut flow)
     if inline == NO_NODE { return runId }
-    let source = self.node(inline).source
+    let source = self.node(inline).source()
     let latest = self.lastBySource.get(source)
     if latest > runId { return latest }
-    let oldParent = self.node(inline).parent
+    let oldParent = self.node(inline).parent()
     let mut ancestor = NO_NODE
     if self.node(oldParent).kind == BoxKind.Inline { ancestor = oldParent }
     let parent = run self.inlineParent(&mut flow, ancestor)
     let mut piece = self.boxes.get(latest)
-    piece.parent = NO_NODE
-    piece.firstChild = NO_NODE
-    piece.lastChild = NO_NODE
-    piece.nextSibling = NO_NODE
-    piece.previousContinuation = NO_NODE
-    piece.nextContinuation = NO_NODE
+    piece.setParent(NO_NODE)
+    piece.setFirstChild(NO_NODE)
+    piece.setLastChild(NO_NODE)
+    piece.setNextSibling(NO_NODE)
+    piece.setPreviousContinuation(NO_NODE)
+    piece.setNextContinuation(NO_NODE)
     piece.firstForSource = false
     piece.lastForSource = true
-    piece.interruptionFirst = NO_NODE
-    piece.interruptionLast = NO_NODE
+    piece.setInterruptionFirst(NO_NODE)
+    piece.setInterruptionLast(NO_NODE)
     return run self.append(piece, parent)
   }
 
@@ -459,11 +526,11 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     let multicol = kind == BoxKind.Block && !measured && style.multicol()
     let independent = kind != BoxKind.Inline && (multicol || style.sizeContainment != SizeContainment.None || style.layoutContainment || replaced || flexChild || positioned || floating || differentWritingMode || display.insideIs(DisplayInside.FlowRoot) || kind == BoxKind.Flex || kind == BoxKind.Grid || kind == BoxKind.Table || display.insideIs(DisplayInside.TableCell) || display.insideIs(DisplayInside.TableCaption) || style.alignContent != Align.Normal || scrollable(style.overflowX) || scrollable(style.overflowY) || source == 0)
     let node = BoxNode {
-      source: source, styleOwner: source, anonymousStyle: NO_NODE, styleIndex: self.source.styleIndex(source), kind: kind,
-      parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE,
-      previousContinuation: NO_NODE, nextContinuation: NO_NODE,
+      sourceAt: narrowIndex(source), styleOwnerAt: narrowIndex(source), anonymousStyleAt: NONE_INDEX, styleIndexAt: narrowIndex(self.source.styleIndex(source)), kind: kind,
+      parentAt: NONE_INDEX, firstChildAt: NONE_INDEX, lastChildAt: NONE_INDEX, nextSiblingAt: NONE_INDEX,
+      previousContinuationAt: NONE_INDEX, nextContinuationAt: NONE_INDEX,
       firstForSource: true, lastForSource: true,
-      interruptionFirst: NO_NODE, interruptionLast: NO_NODE,
+      interruptionFirstAt: NONE_INDEX, interruptionLastAt: NONE_INDEX,
       anonymousBlock: false, blockify: blockify, independentRoot: independent,
       firstFormattedRun: false,
       columnSet: false, columnFlow: false,
@@ -506,11 +573,11 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     if !positioned && !floating && !inlineLevel && !flexChild {
       let mut ancestor = inline
       while ancestor != NO_NODE {
-        let piece = self.lastBySource.get(self.node(ancestor).source)
+        let piece = self.lastBySource.get(self.node(ancestor).source())
         let boxes = self.boxes.asMutSlice()
-        if boxes[piece].interruptionFirst == NO_NODE { boxes[piece].interruptionFirst = id }
-        boxes[piece].interruptionLast = id
-        ancestor = self.node(ancestor).parent
+        if boxes[piece].interruptionFirst() == NO_NODE { boxes[piece].setInterruptionFirst(id) }
+        boxes[piece].setInterruptionLast(id)
+        ancestor = self.node(ancestor).parent()
         if self.node(ancestor).kind != BoxKind.Inline { ancestor = NO_NODE }
       }
     }
@@ -614,7 +681,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   }
   // Appends a column set and its column flow to `container`; returns the flow.
   effect fn columnSet(self: &mut Self, container: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
-    let owner = self.node(container).styleOwner
+    let owner = self.node(container).styleOwner()
     let style = runStyle(self.style(container))
     let slot = run self.newStyle(move style)
     self.columnSets = true
@@ -635,11 +702,11 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   // they are; only the children of flex and grid boxes, which are
   // independent items, may be kept.
   pub effect fn reconstruct(self: &mut Self, root: usize, kept: &[usize]) ! OutOfMemoryError ? &mut Allocator {
-    let source = self.node(root).source
+    let source = self.node(root).source()
     let writingMode = self.style(root).writingMode
     let boxes = self.boxes.asMutSlice()
-    boxes[root].firstChild = NO_NODE
-    boxes[root].lastChild = NO_NODE
+    boxes[root].setFirstChild(NO_NODE)
+    boxes[root].setLastChild(NO_NODE)
     let mut flow = Flow.make(root)
     let mut child = self.source.firstChild(source)
     while child != NO_NODE {
@@ -649,11 +716,11 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
       if keep != NO_NODE && sortedContains(kept, keep) {
         run self.flushFlexText(&mut flow)
         let values = self.boxes.asMutSlice()
-        values[keep].nextSibling = NO_NODE
-        values[keep].parent = root
-        let last = values[root].lastChild
-        if last == NO_NODE { values[root].firstChild = keep } else { values[last].nextSibling = keep }
-        values[root].lastChild = keep
+        values[keep].setNextSibling(NO_NODE)
+        values[keep].setParent(root)
+        let last = values[root].lastChild()
+        if last == NO_NODE { values[root].setFirstChild(keep) } else { values[last].setNextSibling(keep) }
+        values[root].setLastChild(keep)
       } else {
         run self.construct(child, &mut flow, NO_NODE, writingMode)
       }
@@ -665,9 +732,9 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   effect fn finishFlow(self: &mut Self, flow: &mut Flow) ! OutOfMemoryError ? &mut Allocator {
     run self.flushFlexText(&mut flow)
     if !flow.hasBlock { return }
-    let mut child = self.node(flow.container).firstChild
+    let mut child = self.node(flow.container).firstChild()
     while child != NO_NODE {
-      let next = self.node(child).nextSibling
+      let next = self.node(child).nextSibling()
       if self.node(child).kind == BoxKind.InlineFormatting {
         let boxes = self.boxes.asMutSlice()
         boxes[child].anonymousBlock = true
@@ -781,11 +848,11 @@ fn tablePartOf(display: &Display, parentKind: BoxKind, parent: &Display) -> bool
 }
 pub fn anonymous(kind: BoxKind, owner: usize, slot: usize) -> BoxNode {
   return BoxNode {
-    source: NO_NODE, styleOwner: owner, anonymousStyle: slot, styleIndex: NO_NODE, kind: kind,
-    parent: NO_NODE, firstChild: NO_NODE, lastChild: NO_NODE, nextSibling: NO_NODE,
-    previousContinuation: NO_NODE, nextContinuation: NO_NODE,
+    sourceAt: NONE_INDEX, styleOwnerAt: narrowIndex(owner), anonymousStyleAt: narrowIndex(slot), styleIndexAt: NONE_INDEX, kind: kind,
+    parentAt: NONE_INDEX, firstChildAt: NONE_INDEX, lastChildAt: NONE_INDEX, nextSiblingAt: NONE_INDEX,
+    previousContinuationAt: NONE_INDEX, nextContinuationAt: NONE_INDEX,
     firstForSource: false, lastForSource: false,
-    interruptionFirst: NO_NODE, interruptionLast: NO_NODE,
+    interruptionFirstAt: NONE_INDEX, interruptionLastAt: NONE_INDEX,
     anonymousBlock: false, blockify: false, independentRoot: false,
     firstFormattedRun: kind == BoxKind.InlineFormatting,
     columnSet: false, columnFlow: false,

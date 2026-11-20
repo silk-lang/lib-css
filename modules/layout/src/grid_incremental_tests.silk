@@ -145,6 +145,7 @@ impl TextMeasure for TextHost {
             fontKey: token.fontKey,
             bidiLevel: request.analysis.level,
             shapeKey: 0,
+            unsafeBefore: false,
           },
         )
       }
