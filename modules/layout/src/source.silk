@@ -5,6 +5,7 @@
 //! data. The owner keeps the nodes in whatever form suits it and records each change in a
 //! `Changes` it holds, which tells an incremental compute what changed since the last one.
 //! `Tree` is the bundled implementation.
+import properties.census { Census }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
 import silk.core.option { Option }
@@ -234,6 +235,16 @@ pub struct Changes {
 }
 
 impl Changes {
+  // What the change record holds, for the bench census.
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    let u = Intrinsic.layoutOf<usize>().bytes
+    run out.held("css.tree.per-node-revisions", self.changed.length() + self.outer.length() + self.insets.length() + self.placed.length(),
+      self.changed.capacity() + self.outer.capacity() + self.insets.capacity() + self.placed.capacity(), u)
+    run out.held("css.tree.change-log", self.logNodes.length() + self.logRevisions.length() + self.genNodes.length() + self.genRevisions.length() + self.scrollNodes.length() + self.gridNodes.length() + self.gridRevisions.length(),
+      self.logNodes.capacity() + self.logRevisions.capacity() + self.genNodes.capacity() + self.genRevisions.capacity() + self.scrollNodes.capacity() + self.gridNodes.capacity() + self.gridRevisions.capacity(), u)
+    run out.work("css.tree.revision", self.current)
+    run out.work("css.tree.mark-dirty-calls", self.marks)
+  }
   /// Changes of a source whose only node is its root, node 0.
   pub effect fn make() -> Changes ! OutOfMemoryError ? &mut Allocator {
     let mut changed = List<usize>.make()

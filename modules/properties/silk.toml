@@ -2,6 +2,6 @@
 name = "css-properties"
 version = "0.1.0"
 kind = "library"
-exports = ["computed", "catalog", "keywords", "keyword_enums", "values", "convert", "declare", "shorthands"]
+exports = ["computed", "catalog", "keywords", "keyword_enums", "values", "convert", "declare", "shorthands", "census"]
 license = "MIT"
 description = "CSS properties and their value types, shared by css-style, css-layout and their clients"

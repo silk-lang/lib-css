@@ -1,4 +1,5 @@
 //! Sparse inherited custom-property scopes and bounded token-reference substitution.
+import css_properties.census { Census }
 import registration { Registration, Syntax }
 import registration
 import cascade { Name, Declaration, Candidate, Target, Specified, Origin, Priority, Rollback }
@@ -203,6 +204,12 @@ effect fn push(
 }
 
 impl VariableStore {
+  pub effect fn census(self: &Self, out: &mut Census) -> () ! OutOfMemoryError ? &mut Allocator {
+    run out.held("variables.scopes", self.scopes.length(), self.scopes.capacity(), Intrinsic.layoutOf<Scope>().bytes)
+    run out.held("variables.entries", self.entries.length(), self.entries.capacity(), Intrinsic.layoutOf<Entry>().bytes)
+    run out.held("variables.token-refs", self.refs.length(), self.refs.capacity(), Intrinsic.layoutOf<TokenRef>().bytes)
+  }
+
   pub fn make(closingBuffer: usize) -> VariableStore {
     return VariableStore {
       closingBuffer: closingBuffer,

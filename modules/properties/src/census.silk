@@ -1,0 +1,62 @@
+//! Rows of a census: what the engine holds and how much work it did, counted so that it can be
+//! compared with what the document warrants. Every package of the engine adds its own rows to
+//! one [`Census`]; the windowless bench prints them (`SILK_UI_BENCH_CENSUS`). Nothing here
+//! changes what the engine does.
+import silk.collections.list { List }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+
+/// A container: `entries` in use, room for `capacity`, `each` bytes an entry.
+pub const HELD: usize = 0
+/// A natural unit of the document (nodes, lines, glyphs...): `entries` of them.
+pub const UNIT: usize = 1
+/// Work done since the start: `entries` times.
+pub const WORK: usize = 2
+
+pub struct Census {
+  pub names: List<string<'static>>,
+  /// Four a row: kind, entries, capacity, bytes each.
+  pub values: List<usize>,
+}
+
+impl Census {
+  pub fn make() -> Census {
+    return Census { names: List<string<'static>>.make(), values: List<usize>.make() }
+  }
+
+  pub fn length(self: &Self) -> usize {
+    return self.names.length()
+  }
+
+  effect fn add(self: &mut Self, name: string<'static>, kind: usize, entries: usize, capacity: usize, each: usize) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    run self.names.append(name)
+    run self.values.append(kind)
+    run self.values.append(entries)
+    run self.values.append(capacity)
+    run self.values.append(each)
+  }
+
+  /// A container holding `entries` of `each` bytes with room for `capacity`.
+  pub effect fn held(self: &mut Self, name: string<'static>, entries: usize, capacity: usize, each: usize) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    run self.add(name, HELD, entries, capacity, each)
+  }
+
+  /// Bytes on the heap behind other entries (texts, nested lists): `used` of `reserved`.
+  pub effect fn bytes(self: &mut Self, name: string<'static>, used: usize, reserved: usize) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    run self.add(name, HELD, used, reserved, 1)
+  }
+
+  /// A natural unit of the document.
+  pub effect fn unit(self: &mut Self, name: string<'static>, count: usize) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    run self.add(name, UNIT, count, 0, 0)
+  }
+
+  /// Work done since the start.
+  pub effect fn work(self: &mut Self, name: string<'static>, count: usize) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    run self.add(name, WORK, count, 0, 0)
+  }
+}

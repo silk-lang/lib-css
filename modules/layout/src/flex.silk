@@ -1,3 +1,4 @@
+import properties.census { Census }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import source { LayoutSource }
 import silk.collections.list { List }
@@ -1176,6 +1177,14 @@ const MEMOS: usize = 131072
 const SAMPLE: usize = 8
 const REQUESTS_PER_BOX: usize = 4
 impl FlexMemos {
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    let u = Intrinsic.layoutOf<usize>().bytes
+    run out.held("css.flex-memos.heads", self.heads.length() + self.requestHeads.length(), self.heads.capacity() + self.requestHeads.capacity(), u)
+    run out.held("css.flex-memos.entries", self.entries.length(), self.entries.capacity(), Intrinsic.layoutOf<FlexMemo>().bytes)
+    run out.held("css.flex-memos.requests", self.requests.length(), self.requests.capacity(), Intrinsic.layoutOf<FlexRequest>().bytes)
+    run out.work("css.flex-memos.lookups(last compute)", self.lookups)
+    run out.work("css.flex-memos.hits(last compute)", self.hits)
+  }
   pub fn make() -> FlexMemos { return FlexMemos { heads: List<usize>.make(), entries: List<FlexMemo>.make(), free: NO_NODE, enabled: true, fresh: false, lookups: 0, hits: 0, skipped: 0, requestHeads: List<usize>.make(), requests: List<FlexRequest>.make(), nextRequest: 1, computeStart: 1, earlier: false, found: 0 } }
   // Starts a compute that keeps the previous one's cache.
   pub fn rotate(self: &mut Self) {

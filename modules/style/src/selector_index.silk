@@ -1,6 +1,7 @@
 //! Conservative subject indexing; complete selectors still determine matches and specificity.
 //! Sorted fingerprints keep lookup logarithmic even for adversarial collisions. Every collision
 //! remains a candidate, and discovery shares the exact matcher's document-wide work budget.
+import css_properties.census { Census }
 import selectors { SelectorList, SubjectKind, SubjectKey }
 import element { ElementTree, MatchContext, PseudoTarget }
 import tokens { TokenBuffer, CssError }
@@ -84,6 +85,13 @@ pub struct CandidateIndex {
 }
 
 impl CandidateIndex {
+  pub effect fn census(self: &Self, out: &mut Census) -> () ! OutOfMemoryError ? &mut Allocator {
+    run out.held("sheet.index.keyed-entries", self.entries.length(), self.entries.capacity(), Intrinsic.layoutOf<Entry>().bytes)
+    run out.held("sheet.index.fallback-rules(offered to every element)", self.fallback.length(), self.fallback.capacity(), Intrinsic.layoutOf<usize>().bytes)
+    run out.held("sheet.index.pseudo-only-rules", self.pseudo.length(), self.pseudo.capacity(), Intrinsic.layoutOf<usize>().bytes)
+    run out.held("sheet.index.seen+selected", self.seen.length(), self.seen.capacity() + self.selected.capacity() * 8, 1)
+  }
+
   pub fn make() -> CandidateIndex {
     return CandidateIndex {
       entries: List<Entry>.make(),
