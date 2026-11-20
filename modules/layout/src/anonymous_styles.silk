@@ -1,0 +1,181 @@
+//! The styles of anonymous boxes, shared by value.
+//!
+//! An anonymous box (an inline formatting run, an anonymous block, a column set and its flow,
+//! a text box) takes its style from its parent's: the inherited text properties and a few the
+//! container passes down (see `runStyle` and `textStyle` in box_tree.silk). Most of them are
+//! equal, so boxes hold a slot here and boxes with equal styles hold the same slot. Each slot
+//! counts the boxes that hold it; one no box holds is free for the next new style.
+//!
+//! Slot 0 is the viewport's, made first by every construction and never shared or freed.
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.collections.hash { Hash }
+import silk.collections.list { List }
+import silk.num.u32
+import silk.num.u64
+import silk.num.usize
+import style { Style }
+import properties.census { Census }
+
+const NONE: u32 = 4294967295
+const FREE: u32 = 4294967294
+
+pub struct AnonymousStyles {
+  styles: List<Style>,
+  // How many boxes hold each slot; 0 for a free one (and for the viewport's, which no count
+  // frees). A free slot's chain is FREE.
+  refs: List<u32>,
+  hashes: List<u64>,
+  // Chains of the slots whose hashes share a bucket: the first of each, then the next.
+  buckets: List<u32>, chains: List<u32>,
+  free: List<u32>,
+}
+impl AnonymousStyles {
+  pub fn make() -> AnonymousStyles {
+    return AnonymousStyles {
+      styles: List<Style>.make(), refs: List<u32>.make(), hashes: List<u64>.make(),
+      buckets: List<u32>.make(), chains: List<u32>.make(), free: List<u32>.make(),
+    }
+  }
+  pub fn clear(self: &mut Self) {
+    self.styles.clear()
+    self.refs.clear()
+    self.hashes.clear()
+    self.buckets.clear()
+    self.chains.clear()
+    self.free.clear()
+  }
+  @inlineAlways
+  pub fn get(self: &Self, slot: usize) -> &Style { return &self.styles.asSlice()[slot] }
+  pub fn asSlice(self: &Self) -> &[Style] { return self.styles.asSlice() }
+  /// One more than the largest slot.
+  pub fn length(self: &Self) -> usize { return self.styles.length() }
+  /// Slots some box holds, the viewport's included: the distinct anonymous styles.
+  pub fn held(self: &Self) -> usize { return self.styles.length() - self.free.length() }
+  /// Boxes holding `slot`.
+  pub fn holds(self: &Self, slot: usize) -> u32 { return self.refs.get(slot) }
+
+  // What the slots hold, for the bench census: styles in use (`held`) against the slots made,
+  // and the counts, hashes, chains, buckets and free list beside them.
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    run out.held("css.out.anonymous-styles", self.held(), self.styles.capacity(), Intrinsic.layoutOf<Style>().bytes)
+    let side = self.refs.length() + self.chains.length() + self.buckets.length() + self.free.length()
+    let sideCapacity = self.refs.capacity() + self.chains.capacity() + self.buckets.capacity() + self.free.capacity()
+    run out.held("css.out.anonymous-style-index", side, sideCapacity, 4)
+    run out.held("css.out.anonymous-style-hashes", self.hashes.length(), self.hashes.capacity(), 8)
+  }
+
+  /// Makes slot 0, the viewport's style. The slots must be empty.
+  pub effect fn viewport(self: &mut Self, style: Style) ! OutOfMemoryError ? &mut Allocator {
+    run self.styles.append(move style)
+    run self.refs.append(0)
+    run self.hashes.append(0)
+    run self.chains.append(NONE)
+  }
+
+  /// The slot of a style equal to `style`, made if none is held. The slot is not held until a
+  /// box takes it (`take`), which the caller makes sure of before the next `release`.
+  pub effect fn intern(self: &mut Self, style: Style) -> usize ! OutOfMemoryError ? &mut Allocator {
+    let hash = hashOf(&style)
+    if self.buckets.length() != 0 {
+      let mut at = self.buckets.get(u64.wrappingToUsize(hash) % self.buckets.length())
+      while at != NONE {
+        let index = u32.toUsize(at)
+        if self.hashes.get(index) == hash && self.get(index) == &style { return index }
+        at = self.chains.get(index)
+      }
+    }
+    let mut index = self.styles.length()
+    let free = self.free.length()
+    if free != 0 {
+      index = u32.toUsize(self.free.get(free - 1))
+      self.free.truncate(free - 1)
+      let all = self.styles.asMutSlice()
+      all[index] = move style
+      self.hashes.set(index, hash)
+      self.chains.set(index, NONE)
+    } else {
+      run self.styles.append(move style)
+      run self.refs.append(0)
+      run self.hashes.append(hash)
+      run self.chains.append(NONE)
+    }
+    if (self.held() - 1) * 2 >= self.buckets.length() { run self.rehash() }
+    else { self.link(index) }
+    return index
+  }
+
+  /// A box takes `slot`.
+  @inlineAlways
+  pub fn take(self: &mut Self, slot: usize) {
+    if slot != 0 {
+      let count = self.refs.get(slot) + 1
+      self.refs.set(slot, count)
+    }
+  }
+
+  /// A box gives up `slot`; the last one frees it.
+  pub effect fn release(self: &mut Self, slot: usize) ! OutOfMemoryError ? &mut Allocator {
+    if slot == 0 { return }
+    let count = self.refs.get(slot)
+    if count == 0 { Intrinsic.trap("css-layout: an anonymous style was released more often than taken") }
+    self.refs.set(slot, count - 1)
+    if count == 1 { run self.freeSlot(slot) }
+  }
+
+  // Frees a slot no box holds and unlinks it.
+  effect fn freeSlot(self: &mut Self, slot: usize) ! OutOfMemoryError ? &mut Allocator {
+    self.unlink(slot)
+    self.chains.set(slot, FREE)
+    run self.free.append(usize.toU32(slot))
+  }
+
+  fn link(self: &mut Self, index: usize) {
+    let bucket = u64.wrappingToUsize(self.hashes.get(index)) % self.buckets.length()
+    let first = self.buckets.get(bucket)
+    self.chains.set(index, first)
+    self.buckets.set(bucket, usize.toU32(index))
+  }
+
+  fn unlink(self: &mut Self, index: usize) {
+    if self.buckets.length() == 0 { return }
+    let bucket = u64.wrappingToUsize(self.hashes.get(index)) % self.buckets.length()
+    let target = usize.toU32(index)
+    let mut at = self.buckets.get(bucket)
+    if at == target {
+      let after = self.chains.get(index)
+      self.buckets.set(bucket, after)
+      return
+    }
+    while at != NONE {
+      let next = self.chains.get(u32.toUsize(at))
+      if next == target {
+        let after = self.chains.get(index)
+        self.chains.set(u32.toUsize(at), after)
+        return
+      }
+      at = next
+    }
+  }
+
+  // Links every slot that is not free, slot 0 aside, into buckets at least four times as many.
+  effect fn rehash(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
+    let mut size: usize = 64
+    while size < self.held() * 4 { size = size * 2 }
+    self.buckets.clear()
+    run self.buckets.appendRepeated(NONE, size)
+    let mut index: usize = 1
+    while index < self.styles.length() {
+      if self.chains.get(index) != FREE { self.link(index) }
+      index = index + 1
+    }
+  }
+}
+
+// Equal styles hash equal: only plain integers take part, the ones that tell most anonymous
+// styles apart (their font, first of all). Equality settles the rest.
+fn hashOf(style: &Style) -> u64 {
+  let mut hash = Hash.combine(usize.toU64(style.fontKey), usize.toU64(style.maxLines))
+  hash = Hash.combine(hash, usize.toU64(style.orphans))
+  hash = Hash.combine(hash, usize.toU64(style.widows))
+  return Hash.combine(hash, u32.toU64(style.columnCount))
+}

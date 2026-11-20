@@ -21,6 +21,7 @@ import incremental as Incremental
 import replaced { layoutReplaced, preferredRatio, borderRatio }
 import box_tree as Boxes
 import box_tree { BoxTree, BoxKind, BoxNode, itemParent }
+import anonymous_styles { AnonymousStyles }
 import box_patch as Patch
 import box_patch { BoxPatch }
 import table { layoutTable, layoutTablePart }
@@ -2311,18 +2312,15 @@ effect fn boxesFor<'source, S: LayoutSource>(tree: &'source S, output: &mut Layo
     return run Boxes.build(tree, WritingMode.HorizontalTb, Direction.Ltr)
   }
   let boxes = Intrinsic.replace(output.boxNodes, List<BoxNode>.make())
-  let styles = Intrinsic.replace(output.anonymousStyles, List<Style>.make())
-  let origins = Intrinsic.replace(output.anonymousOrigins, List<usize>.make())
-  let texts = Intrinsic.replace(output.anonymousText, List<bool>.make())
+  let anonymous = Intrinsic.replace(output.anonymousStyles, AnonymousStyles.make())
   let first = Intrinsic.replace(output.firstBySource, List<usize>.make())
   let last = Intrinsic.replace(output.lastBySource, List<usize>.make())
   // Scroll offsets changed since: those boxes alone take the new offsets.
   let mut scrolled = List<usize>.make()
   let logged = run tree.changes().scrolledNodes(output.keptScrolls, &mut scrolled)
-  let mut nodes = BoxTree.restore(tree, move boxes, move styles, move origins, move texts, move first, move last, !logged)
+  let mut nodes = BoxTree.restore(tree, move boxes, move anonymous, move first, move last, !logged)
   nodes.columnSets = output.keptColumnSets
   nodes.freeBoxes = Intrinsic.replace(output.freeBoxes, List<usize>.make())
-  nodes.freeStyles = Intrinsic.replace(output.freeStyles, List<usize>.make())
   let mut at: usize = 0
   while at < scrolled.length() {
     nodes.refreshScroll(scrolled.get(at))
@@ -2343,11 +2341,14 @@ effect fn boxesFor<'source, S: LayoutSource>(tree: &'source S, output: &mut Layo
       source = source + 1
     }
   }
-  let mut slot: usize = 0
-  while slot < nodes.anonymousOrigins.length() {
-    let origin = nodes.anonymousOrigins.get(slot)
-    if origin != NO_NODE && tree.changes().changedAt(origin) > since { nodes.refreshAnonymous(slot) }
-    slot = slot + 1
+  // Anonymous boxes take their styles again from restyled origins.
+  let mut id: usize = 1
+  while id < nodes.boxes.length() {
+    if nodes.node(id).anonymousStyle != NO_NODE {
+      let origin = nodes.anonymousOrigin(id)
+      if origin != NO_NODE && tree.changes().changedAt(origin) > since { run nodes.refreshAnonymous(id) }
+    }
+    id = id + 1
   }
   return move nodes
 }

@@ -161,13 +161,12 @@ pub effect fn patch<S: LayoutSource>(tree: &S, nodes: &mut BoxTree<'_, S>, since
     if dead.length() * 2 > count { return false }
   }
   run kept.sort()
-  // The lost boxes give up their sources and styles, and their ids.
+  // The lost boxes give up their sources and anonymous styles, and their ids.
   let sources = nodes.source.nodeCount()
   while nodes.firstBySource.length() < sources {
     run nodes.firstBySource.append(NO_NODE)
     run nodes.lastBySource.append(NO_NODE)
   }
-  let mut styles = List<usize>.make()
   let gone = anonymous(BoxKind.Block, NO_NODE, 0)
   at = 0
   while at < dead.length() {
@@ -178,19 +177,9 @@ pub effect fn patch<S: LayoutSource>(tree: &S, nodes: &mut BoxTree<'_, S>, since
       nodes.firstBySource.set(source, NO_NODE)
       nodes.lastBySource.set(source, NO_NODE)
     }
-    if style != NO_NODE && style != 0 { run styles.append(style) }
+    if style != NO_NODE { run nodes.anonymous.release(style) }
     let boxes = nodes.boxes.asMutSlice()
     boxes[id] = gone
-    at = at + 1
-  }
-  run styles.sort()
-  at = 0
-  while at < styles.length() {
-    let slot = styles.get(at)
-    if at == 0 || styles.get(at - 1) != slot {
-      nodes.anonymousOrigins.set(slot, NO_NODE)
-      run nodes.freeStyles.append(slot)
-    }
     at = at + 1
   }
   run mergeInto(&mut nodes.freeBoxes, dead.asSlice())

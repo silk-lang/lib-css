@@ -11,6 +11,7 @@ import context { outOfFlow, scrollable, overflowForAxis, containsAbsolute }
 import grid_style { GridTemplate }
 import silk.num.u32
 import shapes { FloatShape }
+import anonymous_styles { AnonymousStyles }
 
 // A Table lays out its row groups, rows, column groups, columns, cells and captions
 // itself (table.silk); a TablePart (row group, row or column group) only places its
@@ -47,10 +48,8 @@ impl Copy for BoxNode {}
 
 pub struct BoxTree<'a, S> {
   pub boxes: List<BoxNode>,
-  pub anonymousStyles: List<Style>,
-  // The source element each anonymous style inherits from, and whether it
-  // styles text; see refreshAnonymous.
-  pub anonymousOrigins: List<usize>, pub anonymousText: List<bool>,
+  // The styles of anonymous boxes, shared by value (see anonymous_styles.silk).
+  pub anonymous: AnonymousStyles,
   pub firstBySource: List<usize>, pub lastBySource: List<usize>,
   // The source the boxes are generated from (see source.silk), and its tables.
   pub source: &'a S,
@@ -67,9 +66,9 @@ pub struct BoxTree<'a, S> {
   // the source path a split resumes along, with the next entry to take.
   spanRoot: usize, spanHit: usize,
   resumePath: List<usize>, resumeDepth: usize, resumeAfter: usize,
-  // Box ids no box holds, ascending, and anonymous style slots no box
-  // holds, which a patch of the tree (see box_patch.silk) leaves and takes.
-  pub freeBoxes: List<usize>, pub freeStyles: List<usize>,
+  // Box ids no box holds, ascending, which a patch of the tree (see
+  // box_patch.silk) leaves and takes.
+  pub freeBoxes: List<usize>,
   // While a patch constructs boxes: the ids its new boxes take before any
   // appended, ascending, and how many it took; and the text styles it made,
   // as style index and slot pairs (`textStyles` is empty then).
@@ -79,8 +78,8 @@ pub struct BoxTree<'a, S> {
 impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   // A box tree built from these sources at an earlier revision, when no
   // change since could alter which boxes are generated.
-  pub fn restore<'a>(source: &'a S, boxes: List<BoxNode>, anonymousStyles: List<Style>, anonymousOrigins: List<usize>, anonymousText: List<bool>, firstBySource: List<usize>, lastBySource: List<usize>, copyScrolls: bool) -> BoxTree<'a, S> {
-    let mut result = BoxTree { boxes: move boxes, anonymousStyles: move anonymousStyles, anonymousOrigins: move anonymousOrigins, anonymousText: move anonymousText, firstBySource: move firstBySource, lastBySource: move lastBySource, source: source, styles: source.styles(), grids: source.grids(), gridNames: source.gridNames(), shapes: source.shapes(), textStyles: List<usize>.make(), columnSets: false, spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE, freeBoxes: List<usize>.make(), freeStyles: List<usize>.make(), slots: List<usize>.make(), slotsTaken: 0, patchTexts: List<usize>.make() }
+  pub fn restore<'a>(source: &'a S, boxes: List<BoxNode>, anonymous: AnonymousStyles, firstBySource: List<usize>, lastBySource: List<usize>, copyScrolls: bool) -> BoxTree<'a, S> {
+    let mut result = BoxTree { boxes: move boxes, anonymous: move anonymous, firstBySource: move firstBySource, lastBySource: move lastBySource, source: source, styles: source.styles(), grids: source.grids(), gridNames: source.gridNames(), shapes: source.shapes(), textStyles: List<usize>.make(), columnSets: false, spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE, freeBoxes: List<usize>.make(), slots: List<usize>.make(), slotsTaken: 0, patchTexts: List<usize>.make() }
     if !copyScrolls { return move result }
     let values = result.boxes.asMutSlice()
     let mut index: usize = 0
@@ -115,15 +114,28 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
       id = boxes[id].nextContinuation
     }
   }
-  // Recomputes an anonymous style after its origin's style changed.
-  pub fn refreshAnonymous(self: &mut Self, slot: usize) {
-    let origin = self.anonymousOrigins.get(slot)
+  // The source node anonymous box `id` takes its style from: its owner, or
+  // a text box's parent. NO_NODE for the viewport.
+  pub fn anonymousOrigin(self: &Self, id: usize) -> usize {
+    let node = self.node(id)
+    if node.kind == BoxKind.Text && node.styleOwner != NO_NODE { return self.source.parent(node.styleOwner) }
+    return node.styleOwner
+  }
+  // Takes anonymous box `id`'s style again from its origin, after the
+  // origin's style changed.
+  pub effect fn refreshAnonymous(self: &mut Self, id: usize) ! OutOfMemoryError ? &mut Allocator {
+    let origin = self.anonymousOrigin(id)
     if origin == NO_NODE { return }
     let parent = &self.styles[self.source.styleIndex(origin)]
     let mut style = runStyle(parent)
-    if self.anonymousText.get(slot) { style = textStyle(parent) }
-    let styles = self.anonymousStyles.asMutSlice()
-    styles[slot] = move style
+    if self.node(id).kind == BoxKind.Text { style = textStyle(parent) }
+    let previous = self.node(id).anonymousStyle
+    if self.anonymous.get(previous) == &style { return }
+    let slot = run self.anonymous.intern(move style)
+    self.anonymous.take(slot)
+    run self.anonymous.release(previous)
+    let boxes = self.boxes.asMutSlice()
+    boxes[id].anonymousStyle = slot
   }
   @inlineAlways
   pub fn node(self: &Self, id: usize) -> &BoxNode { return &self.boxes.asSlice()[id] }
@@ -136,7 +148,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   }
   pub fn style(self: &Self, id: usize) -> &Style {
     let node = self.node(id)
-    if node.anonymousStyle != NO_NODE { return &self.anonymousStyles.asSlice()[node.anonymousStyle] }
+    if node.anonymousStyle != NO_NODE { return self.anonymous.get(node.anonymousStyle) }
     return &self.styles[node.styleIndex]
   }
 
@@ -226,6 +238,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     let mut value = move node
     value.parent = parent
     let source = value.source
+    if value.anonymousStyle != NO_NODE { self.anonymous.take(value.anonymousStyle) }
     // A patch takes free ids first, in ascending order, so that a box still
     // follows its parent and every box made before it.
     if self.slotsTaken < self.slots.length() {
@@ -258,23 +271,10 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     return id
   }
 
-  // Stores an anonymous style in a free slot or a new one.
-  effect fn newStyle(self: &mut Self, style: Style, origin: usize, text: bool) -> usize ! OutOfMemoryError ? &mut Allocator {
-    let free = self.freeStyles.length()
-    if free != 0 {
-      let slot = self.freeStyles.get(free - 1)
-      self.freeStyles.truncate(free - 1)
-      let styles = self.anonymousStyles.asMutSlice()
-      styles[slot] = move style
-      self.anonymousOrigins.set(slot, origin)
-      self.anonymousText.set(slot, text)
-      return slot
-    }
-    let slot = self.anonymousStyles.length()
-    run self.anonymousStyles.append(move style)
-    run self.anonymousOrigins.append(origin)
-    run self.anonymousText.append(text)
-    return slot
+  // The slot of an anonymous style equal to `style`, which the box made
+  // next takes.
+  effect fn newStyle(self: &mut Self, style: Style) -> usize ! OutOfMemoryError ? &mut Allocator {
+    return run self.anonymous.intern(move style)
   }
   // The text style slot of element style `styleIndex` made by this
   // construction, or NO_NODE.
@@ -292,8 +292,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   effect fn ensureAnonymousStyle(self: &mut Self, flow: &mut Flow) -> usize ! OutOfMemoryError ? &mut Allocator {
     if flow.anonymousStyle == NO_NODE {
       let style = runStyle(self.style(flow.container))
-      let origin = self.node(flow.container).styleOwner
-      flow.anonymousStyle = run self.newStyle(move style, origin, false)
+      flow.anonymousStyle = run self.newStyle(move style)
     }
     return flow.anonymousStyle
   }
@@ -316,10 +315,8 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
     let styleIndex = self.source.styleIndex(source)
     let mut slot = self.textSlot(styleIndex)
     if slot == NO_NODE {
-      let mut style = inherited(&self.styles[styleIndex])
-      style.display = Display.Box { outside: DisplayOutside.Inline, inside: DisplayInside.Flow }
-      let origin = self.source.parent(source)
-      slot = run self.newStyle(move style, origin, true)
+      let style = textStyle(&self.styles[styleIndex])
+      slot = run self.newStyle(move style)
       if styleIndex < self.textStyles.length() { self.textStyles.set(styleIndex, slot) }
       else {
         run self.patchTexts.append(styleIndex)
@@ -619,7 +616,7 @@ impl<'tree, S: LayoutSource> BoxTree<'tree, S> {
   effect fn columnSet(self: &mut Self, container: usize) -> usize ! OutOfMemoryError ? &mut Allocator {
     let owner = self.node(container).styleOwner
     let style = runStyle(self.style(container))
-    let slot = run self.newStyle(move style, owner, false)
+    let slot = run self.newStyle(move style)
     self.columnSets = true
     let mut set = anonymous(BoxKind.Block, owner, slot)
     set.columnSet = true
@@ -805,12 +802,11 @@ pub effect fn build<'a, S: LayoutSource>(source: &'a S, writingMode: WritingMode
   let styles = source.styles()
   let sources = source.nodeCount()
   let mut result = BoxTree {
-    boxes: List<BoxNode>.make(), anonymousStyles: List<Style>.make(),
-    anonymousOrigins: List<usize>.make(), anonymousText: List<bool>.make(),
+    boxes: List<BoxNode>.make(), anonymous: AnonymousStyles.make(),
     firstBySource: List<usize>.make(), lastBySource: List<usize>.make(), source: source,
     styles: styles, grids: source.grids(), gridNames: source.gridNames(), shapes: source.shapes(), textStyles: List<usize>.make(), columnSets: false,
     spanRoot: NO_NODE, spanHit: NO_NODE, resumePath: List<usize>.make(), resumeDepth: 0, resumeAfter: NO_NODE,
-    freeBoxes: List<usize>.make(), freeStyles: List<usize>.make(), slots: List<usize>.make(), slotsTaken: 0, patchTexts: List<usize>.make(),
+    freeBoxes: List<usize>.make(), slots: List<usize>.make(), slotsTaken: 0, patchTexts: List<usize>.make(),
   }
   run result.boxes.reserveExact(sources + 1)
   run result.firstBySource.reserveExact(sources)
@@ -833,9 +829,7 @@ pub effect fn build<'a, S: LayoutSource>(source: &'a S, writingMode: WritingMode
   viewportStyle.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.FlowRoot }
   viewportStyle.writingMode = writingMode
   viewportStyle.direction = direction
-  run result.anonymousStyles.append(move viewportStyle)
-  run result.anonymousOrigins.append(NO_NODE)
-  run result.anonymousText.append(false)
+  run result.anonymous.viewport(move viewportStyle)
   let mut viewport = anonymous(BoxKind.Block, NO_NODE, 0)
   viewport.independentRoot = true
   let viewportId = run result.append(viewport, NO_NODE)

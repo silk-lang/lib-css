@@ -388,11 +388,10 @@ pub fn insetAnchored(style: &Style) -> bool {
   return lengths(&style.margin) && lengths(&style.padding) && lengths(&style.border)
 }
 
-// The tree node whose style a box takes: text shares its parent's.
+// The tree node whose style a box takes: text shares its parent's, and an
+// anonymous box takes its owner's (see BoxTree.anonymousOrigin).
 fn styleSource<S: LayoutSource>(tree: &S, nodes: &BoxTree<'_, S>, id: usize) -> usize {
-  let node = nodes.node(id)
-  if node.anonymousStyle != NO_NODE { return nodes.anonymousOrigins.get(node.anonymousStyle) }
-  let owner = node.styleOwner
+  let owner = nodes.node(id).styleOwner
   if owner != NO_NODE && tree.isText(owner) { return tree.parent(owner) }
   return owner
 }
