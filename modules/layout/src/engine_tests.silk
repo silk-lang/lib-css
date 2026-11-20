@@ -2595,3 +2595,102 @@ test effect fn keptBoxesTakeANewStyleIndex()
     "a kept box reads its node's new style index",
   )
 }
+
+// Anonymous boxes with equal styles share one slot, and every slot counts the boxes that hold
+// it: the counts match the boxes, and the kept output holds as many styles as a fresh compute.
+effect fn expectSharedAnonymousStyles(tree: &Tree, output: &LayoutTree) ! OutOfMemoryError | TextError | FragmentationError | AssertionError<'static> ? &mut Allocator {
+  let nodes = output.boxNodes.asSlice()
+  let styles = &output.anonymousStyles
+  let mut slot: usize = 1
+  while slot < styles.length() {
+    let mut holders: u32 = 0
+    let mut id: usize = 0
+    while id < nodes.length {
+      if nodes[id].anonymousStyle == slot { holders = holders + 1 }
+      id = id + 1
+    }
+    run Testing.expect(holders == styles.holds(slot), "each anonymous style counts the boxes that hold it")
+    slot = slot + 1
+  }
+  let mut fresh = LayoutTree.make()
+  let mut paragraph = Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }
+  run compute(tree, &mut fresh, &mut paragraph, OptionalSize.definite(200.0, 400.0))
+  run Testing.expect(fresh.anonymousStyles.held() == styles.held(), "a kept output holds no more anonymous styles than a fresh one")
+}
+
+// The font of the text box of `text`.
+fn textFont(output: &LayoutTree, text: NodeId) -> usize {
+  let nodes = output.boxNodes.asSlice()
+  let id = output.firstBySource.get(text.index)
+  return output.anonymousStyles.get(nodes[id].anonymousStyle).fontKey
+}
+
+test effect fn equalAnonymousStylesShareOneSlot()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut style = Style.make()
+  style.width = SizeValue.px(200.0)
+  style.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flow }
+  let mut tree = run Tree.make(move style) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let mut paragraphs = List<NodeId>.make()
+  let mut texts = List<NodeId>.make()
+  let mut index: usize = 0
+  while index < 6 {
+    let mut block = Style.make()
+    block.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flow }
+    block.fontKey = if index == 5 { 2 } else { 1 }
+    let p = run tree.append(root, move block) |> Effect.provideMut<Allocator>(&mut allocator)
+    let value = run String.copy("a b c") |> Effect.provideMut<Allocator>(&mut allocator)
+    let t = run tree.appendText(p, move value) |> Effect.provideMut<Allocator>(&mut allocator)
+    run paragraphs.append(p) |> Effect.provideMut<Allocator>(&mut allocator)
+    run texts.append(t) |> Effect.provideMut<Allocator>(&mut allocator)
+    index = index + 1
+  }
+  let mut output = LayoutTree.make()
+  let mut paragraph = Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }
+  run compute(&tree, &mut output, &mut paragraph, OptionalSize.definite(200.0, 400.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  // The viewport's, and a run and a text style for each of the two fonts.
+  let held = output.anonymousStyles.held()
+  run Testing.expect(held == 5, "six paragraphs in two fonts hold five anonymous styles")
+  run expectSharedAnonymousStyles(&tree, &output) |> Effect.provideMut<Allocator>(&mut allocator)
+
+  // A restyled paragraph takes its own styles; the others keep theirs.
+  let mut changed = Style.make()
+  changed.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flow }
+  changed.fontKey = 3
+  run tree.setStyle(paragraphs.get(2), move changed)
+  run compute(&tree, &mut output, &mut paragraph, OptionalSize.definite(200.0, 400.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(textFont(&output, texts.get(2)) == 3, "the restyled paragraph's text takes its new font")
+  run Testing.expect(textFont(&output, texts.get(1)) == 1 && textFont(&output, texts.get(3)) == 1, "its siblings keep theirs")
+  run Testing.expect(output.anonymousStyles.held() == held + 2, "the new font adds a run and a text style")
+  run expectSharedAnonymousStyles(&tree, &output) |> Effect.provideMut<Allocator>(&mut allocator)
+
+  // Restyled back, it shares again and the styles it held are free.
+  let mut back = Style.make()
+  back.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flow }
+  back.fontKey = 1
+  run tree.setStyle(paragraphs.get(2), move back)
+  run compute(&tree, &mut output, &mut paragraph, OptionalSize.definite(200.0, 400.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(textFont(&output, texts.get(2)) == 1, "the paragraph takes its first font again")
+  run Testing.expect(output.anonymousStyles.held() == held, "the styles of the font no box uses are freed")
+  run expectSharedAnonymousStyles(&tree, &output) |> Effect.provideMut<Allocator>(&mut allocator)
+
+  // The only paragraph of the second font goes, and its styles with it.
+  run tree.remove(paragraphs.get(5))
+  run compute(&tree, &mut output, &mut paragraph, OptionalSize.definite(200.0, 400.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.anonymousStyles.held() == held - 2, "removing the last paragraph of a font frees its styles")
+  run expectSharedAnonymousStyles(&tree, &output) |> Effect.provideMut<Allocator>(&mut allocator)
+
+  // New text in a new paragraph of the first font shares what is held.
+  let mut again = Style.make()
+  again.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flow }
+  again.fontKey = 1
+  let p = run tree.append(root, move again) |> Effect.provideMut<Allocator>(&mut allocator)
+  let value = run String.copy("d e") |> Effect.provideMut<Allocator>(&mut allocator)
+  let t = run tree.appendText(p, move value) |> Effect.provideMut<Allocator>(&mut allocator)
+  run compute(&tree, &mut output, &mut paragraph, OptionalSize.definite(200.0, 400.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(textFont(&output, t) == 1, "the new text takes the first font")
+  run Testing.expect(output.anonymousStyles.held() == held - 2, "a new paragraph of a held font adds no style")
+  run expectSharedAnonymousStyles(&tree, &output) |> Effect.provideMut<Allocator>(&mut allocator)
+}
