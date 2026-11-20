@@ -1901,7 +1901,7 @@ effect fn textFont<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer
 
 fn runUnit(value: TextRun) -> usize {
   return match value {
-    TextRun.Text { unit, start: _, end: _, advance: _, fontKey: _, bidiLevel: _, shapeKey: _ } => unit
+    TextRun.Text { unit, .. } => unit
     TextRun.Object { unit, bidiLevel: _, lineLeftSpacing: _, lineRightSpacing: _ } => unit
   }
 }
@@ -1910,6 +1910,12 @@ fn runUnit(value: TextRun) -> usize {
 // shaping does not depend on its inline origin, so each range is shaped once
 // and copied when a later line, probe or compute covers it again.
 effect fn shapeRange<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, shapeText: bool, original: &[Item], scopes: &[Scope], memo: &mut TextMemo, shaped: &mut List<TextRun>, result: &mut TextCandidate, start: TextCursor, end: TextCursor, hyphenated: bool, inlineOrigin: f32, reusable: bool, limit: usize) ! OutOfMemoryError | TextError ? &mut Allocator {
+  if reusable && !hyphenated && shapeText {
+    if memo.slicing == 0 { run prepareSlicing(nodes, &mut measurer, context, analysis, &mut visualPlan, original, scopes, &mut memo, &mut shaped) }
+    if memo.slicing == 1 {
+      if run sliceWhole(context, scopes, &mut memo, &mut result, start, end) { return }
+    }
+  }
   if reusable && !hyphenated {
     let found = memo.segment(start, end)
     if found != NO_NODE {
@@ -1919,6 +1925,109 @@ effect fn shapeRange<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<
   }
   run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, shapeText, original, scopes, &mut memo.fonts, &mut shaped, &mut result, start, end, hyphenated, false, 0.0, inlineOrigin, &[])
   if reusable && !hyphenated { run memo.addSegment(start, end, &result, limit) }
+}
+
+// Decides whether ranges of this paragraph are cut from one shaping of it (see sliceWhole),
+// and shapes it whole when they are. That needs a provider that reports break safety and
+// plain text: no tabs, preserved spaces, segment breaks, atomics or floats, whose shaping
+// would depend on the line it is on, and no visual plan (the caller's `reusable`).
+effect fn prepareSlicing<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, original: &[Item], scopes: &[Scope], memo: &mut TextMemo, shaped: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator {
+  memo.slicing = 2
+  if !TextMeasure.reportsBreakSafety(&measurer) || context.tokens.length == 0 { return }
+  let mut unit: usize = 0
+  while unit < context.tokens.length {
+    let kind = context.tokens[unit].kind
+    if kind != TextTokenKind.Text && kind != TextTokenKind.Space && kind != TextTokenKind.Open && kind != TextTokenKind.Close && kind != TextTokenKind.Anchor { return }
+    unit = unit + 1
+  }
+  let terminal = TextCursor { unit: context.tokens.length, offset: 0 }
+  run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, true, original, scopes, &mut memo.fonts, &mut shaped, &mut memo.whole, TextCursor { unit: 0, offset: 0 }, terminal, false, false, 0.0, 0.0, &[])
+  if memo.whole.visual.active || memo.whole.hanging != 0.0 { return }
+  memo.unsafeAt.clear()
+  run memo.unsafeAt.reserveExact(context.tokens.length + 1)
+  while memo.unsafeAt.length() <= context.tokens.length { run memo.unsafeAt.append(false) }
+  let mut index: usize = 0
+  while index < shaped.length() {
+    match shaped.get(index) {
+      TextRun.Text { unit: at, start: low, unsafeBefore, .. } => {
+        if low == 0 && unsafeBefore { memo.unsafeAt.set(at, true) }
+      }
+      _ => {}
+    }
+    index = index + 1
+  }
+  memo.firstItem.clear()
+  run memo.firstItem.reserveExact(context.tokens.length + 1)
+  let items = memo.whole.items.asSlice()
+  index = 0
+  unit = 0
+  while unit <= context.tokens.length {
+    while index < items.length && items[index].start.unit < unit { index = index + 1 }
+    run memo.firstItem.append(index)
+    unit = unit + 1
+  }
+  memo.slicing = 1
+}
+
+// Gives `result` what shapeCandidate gives for [start, end) without shaping: the items and
+// text leaves of the paragraph's whole shaping in that range, less the spaces at its two
+// ends, which a line's shaping leaves out. False, with `result` untouched, when a cut is
+// inside a unit or the provider marked one unsafe.
+effect fn sliceWhole(context: TextContext<'_, '_>, scopes: &[Scope], memo: &mut TextMemo, result: &mut TextCandidate, start: TextCursor, end: TextCursor) -> bool ! OutOfMemoryError ? &mut Allocator {
+  if start.offset != 0 || end.offset != 0 || end.unit < start.unit { return false }
+  // The first and last unit the line shapes, as shapeCandidate finds them.
+  let mut first = NO_NODE
+  let mut last = NO_NODE
+  let mut unit = start.unit
+  while unit < end.unit {
+    let token = &context.tokens[unit]
+    if token.kind != TextTokenKind.Space && TextFlow.length(token) > 0 {
+      if first == NO_NODE { first = unit }
+      last = unit
+    }
+    unit = unit + 1
+  }
+  if first != NO_NODE {
+    if memo.unsafeAt.get(first) { return false }
+    if last + 1 < context.tokens.length && memo.unsafeAt.get(last + 1) { return false }
+  }
+  result.items.clear()
+  result.texts.clear()
+  result.advance = 0.0
+  result.hanging = 0.0
+  result.hangingItems = 0
+  result.real = false
+  result.visual.active = false
+  result.visual.order.clear()
+  result.visual.positions.clear()
+  result.visual.spans.clear()
+  result.visual.firstSpan = NO_NODE
+  result.visual.advance = 0.0
+  result.visual.real = false
+  let items = memo.whole.items.asSlice()
+  let texts = memo.whole.texts.asSlice()
+  let mut index = memo.firstItem.get(start.unit)
+  let stop = memo.firstItem.get(end.unit)
+  while index < stop {
+    let mut item = items[index]
+    if item.kind == ItemKind.Text {
+      let at = item.start.unit
+      if first != NO_NODE && at >= first && at <= last {
+        let leaf = texts[item.leaf]
+        item.leaf = result.texts.length()
+        run result.texts.append(leaf)
+        run result.items.append(item)
+        result.advance = result.advance + item.advance
+        result.real = true
+      }
+    } else {
+      run result.items.append(item)
+      if item.kind != ItemKind.Float && item.kind != ItemKind.Anchor { result.advance = result.advance + item.advance }
+      if item.kind == ItemKind.Atomic || ((item.kind == ItemKind.Open || item.kind == ItemKind.Close) && item.advance != 0.0 && !scopes[item.scope].phantomClone) { result.real = true }
+    }
+    index = index + 1
+  }
+  return true
 }
 
 // The cursor `bytes` bytes of text after `start`, moved on to a UTF-8 scalar boundary, or
@@ -2090,7 +2199,7 @@ effect fn shapeCandidate<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxT
     }
     while next < shaped.length() && runUnit(shaped.get(next)) == unit {
       match shaped.get(next) {
-        TextRun.Text { unit: _, start: low, end: high, advance, fontKey, bidiLevel, shapeKey } => {
+        TextRun.Text { unit: _, start: low, end: high, advance, fontKey, bidiLevel, shapeKey, unsafeBefore: _ } => {
           if base.kind != ItemKind.Text || low != coverage || high <= low || high > limit || bidiLevel > 126 || advance - advance != 0.0 {
             fail TextError { source: token.source, message: "Text service returned an invalid attributed run" }
           }

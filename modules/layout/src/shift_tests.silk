@@ -70,7 +70,7 @@ impl TextMeasure for WordHost {
         if token.kind == TextTokenKind.Space { end = 1 }
         if unit == request.start.unit { start = request.start.offset }
         if unit == request.end.unit { end = request.end.offset }
-        run output.append(TextRun.Text { unit: unit, start: start, end: end, advance: usize.toF32(end - start) * 5.0, fontKey: token.fontKey, bidiLevel: request.analysis.level, shapeKey: 0 })
+        run output.append(TextRun.Text { unit: unit, start: start, end: end, advance: usize.toF32(end - start) * 5.0, fontKey: token.fontKey, bidiLevel: request.analysis.level, shapeKey: 0, unsafeBefore: false })
       }
       unit = unit + 1
     }
