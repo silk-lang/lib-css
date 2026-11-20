@@ -2,6 +2,7 @@ import task_json { J }
 import task_bench_workloads as W
 import task_bench_updates_workloads as U
 import task_update_process { Captured, Variable, runInput, runProcess, locate }
+import silk.num.u32
 import silk.cli.task { Task, TaskError }
 import silk.collections.bytes { Bytes }
 import silk.collections.list { List }
@@ -18,7 +19,6 @@ import silk.platform.native.file { CopyMethod, NativeFile, NativeFileError }
 import silk.system.child_process { ChildProcess, ProcessError }
 import silk.system.filesystem { FileError, FileSystem, Path, DirectoryEntry }
 import silk.system.host_input { HostInput, HostInputError }
-import silk.system.system_clock { SystemClock }
 import silk.text.format { Format }
 import silk.text.string { String, Split }
 import silk.num.f64
@@ -28,7 +28,7 @@ import silk.num.usize
 
 const LAYOUT: string = "modules/layout"
 
-const PIN: string = "0.1.0-dev.88+17d1a1b4d501"
+const PIN: string = "0.1.0-dev.90+43166993a300"
 
 fn pathText(path: &Path) -> string {
   return unsafe String.fromUtf8Unchecked(Path.rawBytes(path))
@@ -234,13 +234,13 @@ pub effect fn bench(cli: String, runs: i32, record: bool) -> ()
     let mut timings = List<f64>.make()
     let mut iteration: i32 = 0
     while iteration <= runs {
-      let start = run NativeClock.now(true)
+      let start = run NativeClock.now()
       let done = run checked(run runInput(String.view(&cli), Bytes.asSlice(&encoded), 30))
-      let end = run NativeClock.now(true)
+      let end = run NativeClock.now()
       let elapsed = i64.toF64(
-        (SystemClock.seconds(&end) - SystemClock.seconds(&start)) * 1000000000
-          + SystemClock.nanoseconds(&end)
-          - SystemClock.nanoseconds(&start),
+        (end.seconds() - start.seconds()) * 1000000000
+          + u32.toI64(end.subsecondNanoseconds())
+          - u32.toI64(start.subsecondNanoseconds()),
       )
         / 1000000.0
       let parsed = run J.parse(Bytes.asSlice(&done.output))
