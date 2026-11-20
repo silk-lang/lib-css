@@ -153,12 +153,15 @@ pub struct PlainLine {
   pub item: usize, pub fontSize: f32, pub lineHeight: f32,
   pub advance: f32, pub font: TextFont,
   pub items: List<Item>, pub texts: List<TextLeaf>,
+  // The units the provider marked unsafe to break before (TextRun.Text.unsafeBefore): a
+  // line cut from `items` (see seedSlicing) may not start at one or end just before it.
+  pub unsafeUnits: List<usize>,
 }
 impl PlainLine {
   pub fn make() -> PlainLine {
     return PlainLine { valid: false, refused: false, item: NO_NODE, fontSize: 0.0, lineHeight: 0.0, advance: 0.0,
       font: TextFont { style: NO_NODE, key: 0, font: FontBox { metrics: FontMetrics.zero(), baseline: 0.0, height: 0.0, lineHeight: 0.0, before: 0.0, after: 0.0 } },
-      items: List<Item>.make(), texts: List<TextLeaf>.make() }
+      items: List<Item>.make(), texts: List<TextLeaf>.make(), unsafeUnits: List<usize>.make() }
   }
 }
 
