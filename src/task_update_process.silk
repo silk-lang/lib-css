@@ -1,3 +1,4 @@
+import silk.num.u32
 import silk.cli.task { Task, TaskError }
 import silk.collections.bytes { Bytes }
 import silk.collections.slice { Slice }
@@ -14,7 +15,6 @@ import silk.system.child_process { ChildProcess, ProcessError }
 import silk.system.filesystem { FileError, FileSystem, Path }
 import silk.system.host_input { HostInput, HostInputError }
 import silk.system.subprocess { Subprocess, SubprocessError, SpawnOptions, Stdio, ExitWatch }
-import silk.system.system_clock { SystemClock }
 import silk.text.string { String, Split }
 import silk.num.i32
 import silk.num.i64
@@ -102,8 +102,8 @@ effect fn communicate(child: &mut Subprocess, input: &[u8], timeoutSeconds: i32)
   ! TaskError | NativeFileError | SubprocessError | OutOfMemoryError ? &mut Allocator {
   let mut pipes = Pipes { input: pipe(&mut child, 0), output: pipe(&mut child, 1), errors: pipe(&mut child, 2) }
   let watch = run ExitWatch.open(Subprocess.pid(&child))
-  let start = run NativeClock.now(true)
-  let deadline = SystemClock.seconds(&start) * 1000000000 + SystemClock.nanoseconds(&start) + i32.toI64(timeoutSeconds) * 1000000000
+  let start = run NativeClock.now()
+  let deadline = start.seconds() * 1000000000 + u32.toI64(start.subsecondNanoseconds()) + i32.toI64(timeoutSeconds) * 1000000000
   let mut output = Bytes.make()
   let mut errors = Bytes.make()
   let mut offset: usize = 0
@@ -125,8 +125,8 @@ effect fn communicate(child: &mut Subprocess, input: &[u8], timeoutSeconds: i32)
     run drain(&mut pipes.output, &mut output)
     run drain(&mut pipes.errors, &mut errors)
     if ended && pipes.output < 0 && pipes.errors < 0 { break }
-    let now = run NativeClock.now(true)
-    let remaining = deadline - SystemClock.seconds(&now) * 1000000000 - SystemClock.nanoseconds(&now)
+    let now = run NativeClock.now()
+    let remaining = deadline - now.seconds() * 1000000000 - u32.toI64(now.subsecondNanoseconds())
     if timeoutSeconds > 0 && remaining <= 0 { run Task.abort("benchmark process timed out") }
     let mut watched = [
       PollFd { fd: pipes.input, events: 4, revents: 0 },

@@ -1,11 +1,11 @@
 import layout.lib { Size, Rect, Measure, MeasureRequest, Measured, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, BaselineSet }
 import layout.lib { TextMeasure, TextError, TextContext, TextBreak, TextBreakKind, TextCursor, TextAnalysis, TextShapeRequest, TextRun, TextToken, TextTokenKind, WhiteSpaceCollapse }
 import layout.lib { TRACE_END }
+import silk.num.u32
 import silk.collections.list { List }
 import silk.core.effect { Effect }
 import silk.system.monotonic_clock { MonotonicClock }
 import silk.system.monotonic_clock_native { OsMonotonicClock }
-import silk.system.system_clock { SystemClock }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.num.usize
 import silk.text.string { String }
@@ -48,7 +48,7 @@ impl FixedAdvance {
 fn nanoseconds() -> i64 {
   let mut clock = OsMonotonicClock.make()
   let now = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
-  return SystemClock.seconds(&now) * 1000000000 + SystemClock.nanoseconds(&now)
+  return now.seconds() * 1000000000 + u32.toI64(now.subsecondNanoseconds())
 }
 
 fn advanceOf(fontKey: usize) -> f32 {

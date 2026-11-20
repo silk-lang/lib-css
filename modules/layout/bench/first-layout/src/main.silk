@@ -15,7 +15,7 @@ import silk.num.usize
 import silk.system.host_input { HostInput, HostInputError }
 import silk.system.monotonic_clock { MonotonicClock }
 import silk.system.monotonic_clock_native { OsMonotonicClock }
-import silk.system.system_clock { Instant, SystemClock }
+import silk.time.mark { Mark }
 import silk.text.format { Format }
 import silk.text.string { String }
 import documents as Documents
@@ -69,8 +69,8 @@ fn heapInUse() -> usize {
   }
 }
 
-fn elapsed(start: &Instant, end: &Instant) -> i64 {
-  return (SystemClock.seconds(end) - SystemClock.seconds(start)) * 1000000000 + SystemClock.nanoseconds(end) - SystemClock.nanoseconds(start)
+fn elapsed(start: &Mark, end: &Mark) -> i64 {
+  return (end.*.seconds() - start.*.seconds()) * 1000000000 + u32.toI64(end.*.subsecondNanoseconds()) - u32.toI64(start.*.subsecondNanoseconds())
 }
 
 struct Options { runs: usize, only: String, size: usize, large: bool }

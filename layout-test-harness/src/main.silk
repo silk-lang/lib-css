@@ -1,3 +1,4 @@
+import silk.num.u32
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.effect { Effect }
 import silk.collections.list { List }
@@ -14,7 +15,7 @@ import silk.io.standard_input { StandardInput, StreamReadError }
 import silk.io.writer_native { StdoutWriter, StderrWriter }
 import silk.system.monotonic_clock { MonotonicClock }
 import silk.system.monotonic_clock_native { OsMonotonicClock }
-import silk.system.system_clock { Instant, SystemClock }
+import silk.time.mark { Mark }
 import silk.io.writer { Writer, WriterError }
 import silk.num.i32
 import layout.lib as Engine
@@ -473,10 +474,10 @@ effect fn parseScrollOffset(value: &Value) -> Point
   return Point { x: x, y: y }
 }
 
-fn elapsed(start: &Instant, end: &Instant) -> i64 {
-  return (SystemClock.seconds(end) - SystemClock.seconds(start)) * 1000000000
-    + SystemClock.nanoseconds(end)
-    - SystemClock.nanoseconds(start)
+fn elapsed(start: &Mark, end: &Mark) -> i64 {
+  return (end.*.seconds() - start.*.seconds()) * 1000000000
+    + u32.toI64(end.*.subsecondNanoseconds())
+    - u32.toI64(start.*.subsecondNanoseconds())
 }
 
 // Work summed over the timed computes of a benchmark run.

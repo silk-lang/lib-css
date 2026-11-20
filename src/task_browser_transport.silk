@@ -1,3 +1,4 @@
+import silk.num.u32
 import silk.cli.task { Task, TaskError }
 import silk.collections.bytes { Bytes }
 import silk.collections.slice { Slice }
@@ -13,7 +14,6 @@ import silk.system.filesystem { FileError, FileSystem, Path }
 import silk.system.host_input { HostInput, HostInputError }
 import silk.system.monotonic_clock { MonotonicClock }
 import silk.system.monotonic_clock_native { OsMonotonicClock }
-import silk.system.system_clock { SystemClock }
 import silk.system.subprocess { ExitStatus, SpawnOptions, Stdio, Subprocess, SubprocessError }
 import silk.text.string { InvalidUtf8, String }
 import silk.num.f64
@@ -72,7 +72,7 @@ static if Intrinsic.targetOperatingSystem() == "darwin" {
 effect fn milliseconds() -> i64 {
   let mut clock = OsMonotonicClock.make()
   let instant = run MonotonicClock.now() |> Effect.provideMut<MonotonicClock>(&mut clock)
-  return SystemClock.seconds(&instant) * 1000 + SystemClock.nanoseconds(&instant) / 1000000
+  return instant.seconds() * 1000 + u32.toI64(instant.subsecondNanoseconds()) / 1000000
 }
 
 effect fn text(bytes: &[u8]) -> string ! TaskError | OutOfMemoryError ? &mut Allocator {
