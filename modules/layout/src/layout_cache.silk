@@ -111,14 +111,14 @@ pub struct BoxMark { pub stamp: u32, pub slot: u32, pub partial: u32, pub writte
 impl Copy for BoxMark {}
 // The marks of a box sit together, so the checks a reuse makes of one box
 // read one cache line.
-pub struct BoxWrites { pub generation: u32, pub marks: List<BoxMark>, pub saved: List<Layout>, pub placed: List<Placement> }
+pub struct BoxWrites { pub generation: u32, pub marks: List<BoxMark>, pub saved: LayoutStore, pub placed: List<Placement> }
 impl BoxWrites {
   pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
     run out.held("css.writes.marks", self.marks.length(), self.marks.capacity(), Intrinsic.layoutOf<BoxMark>().bytes)
-    run out.held("css.writes.saved(Layout)", self.saved.length(), self.saved.capacity(), Intrinsic.layoutOf<Layout>().bytes)
+    run out.bytes("css.writes.saved(Layout)", self.saved.usedBytes(), self.saved.storageBytes())
     run out.held("css.writes.placed", self.placed.length(), self.placed.capacity(), Intrinsic.layoutOf<Placement>().bytes)
   }
-  pub fn make() -> BoxWrites { return BoxWrites { generation: 0, marks: List<BoxMark>.make(), saved: List<Layout>.make(), placed: List<Placement>.make() } }
+  pub fn make() -> BoxWrites { return BoxWrites { generation: 0, marks: List<BoxMark>.make(), saved: LayoutStore.make(), placed: List<Placement>.make() } }
   // Starts a compute over `count` boxes.
   pub effect fn begin(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {
     self.generation = self.generation + 1
@@ -472,12 +472,12 @@ impl LayoutCache {
     run out.held("css.cache.entries", self.entries.length(), self.entries.capacity(), Intrinsic.layoutOf<Entry>().bytes)
     run out.held("css.cache.inputs", self.inputs.length(), self.inputs.capacity(), input)
     run out.bytes("css.cache.rare-inputs", self.entryRares.storageBytes() + self.resultRares.storageBytes() + self.baseRares.storageBytes(), self.entryRares.storageBytes() + self.resultRares.storageBytes() + self.baseRares.storageBytes())
+    run out.held("css.cache.final-inputs", self.finalInputs.length(), self.finalInputs.capacity(), input)
     run out.bytes("css.cache.layouts", self.layouts.usedBytes(), self.layouts.storageBytes())
     run out.unit("css.cache.dead-entries", self.dead)
     run out.held("css.cache.spare-entries", self.spare.length(), self.spare.capacity(), Intrinsic.layoutOf<Entry>().bytes)
     run out.held("css.cache.spare-inputs", self.spareInputs.length(), self.spareInputs.capacity(), input)
     run out.bytes("css.cache.spare-layouts", self.spareLayouts.usedBytes(), self.spareLayouts.storageBytes())
-    run out.held("css.cache.final-inputs", self.finalInputs.length(), self.finalInputs.capacity(), input)
     run out.held("css.cache.final-results", self.results.length(), self.results.capacity(), Intrinsic.layoutOf<FinalResult>().bytes)
     run out.held("css.cache.final-ranges", self.ranges.length(), self.ranges.capacity(), Intrinsic.layoutOf<BoxRanges>().bytes)
     let mut valid: usize = 0
