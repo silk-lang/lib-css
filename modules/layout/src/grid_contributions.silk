@@ -250,11 +250,11 @@ effect fn probe<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
   let found = output.cache.find(id, &key, CacheKind.IndependentBox)
   if found != usize.MAX {
     output.stats.cacheHits = output.stats.cacheHits + 1
-    let cached = output.cache.layoutAt(found)
+    let cached = output.cache.coreAt(found)
     return Probe {
-      size: cached.size,
-      preferredRatio: cached.preferredRatio,
-      ratioBorderBox: cached.ratioBorderBox,
+      size: cached.sizes(),
+      preferredRatio: cached.ratio(),
+      ratioBorderBox: cached.ratioBorderBox(),
     }
   }
   let mut request = probeInput(input, horizontal, constraint)

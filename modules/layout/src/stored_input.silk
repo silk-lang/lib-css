@@ -1,0 +1,307 @@
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.collections.list { List }
+import silk.core.ownership { Copy }
+import silk.core.option { Option }
+import silk.core.reflect { Reflect }
+import silk.num.u32
+import silk.num.u64
+import silk.num.u8
+import silk.num.usize
+import silk.num.f32
+import context { Input }
+import geometry { OptionalSize, AvailableSpace, AvailableKind, Size, Point }
+import style { WritingMode, TextOrientation, Align, OverflowAlignment }
+import fragmentation { FragmentInput, BoundaryProbe }
+import breaks { BreakKinds, ForcedBreaks }
+
+// An Input as the layout cache keeps it, for every cached probe, every box's
+// final request and every block's base: the same values in 72 bytes instead
+// of 160. Sizes stay f32 and flags become bits of `flags`; the grid
+// context, table plan and fragmentation, which only grids, tables and
+// fragmented layout set, are a RareInput in a RarePool of the record's
+// owner, at slot `rare` or none (RARE_NONE) when all three are as
+// Input.make leaves them. Packing loses nothing: unpack gives the Input
+// back field for field.
+pub struct StoredInput {
+  parentWidth: f32, parentHeight: f32,
+  initialWidth: f32, initialHeight: f32,
+  maxWidth: f32, maxHeight: f32,
+  scrollportWidth: f32, scrollportHeight: f32,
+  knownWidth: f32, knownHeight: f32,
+  minimumWidth: f32, minimumHeight: f32,
+  availableWidth: f32, availableHeight: f32,
+  originX: f32, originY: f32,
+  pub flags: u32,
+  pub rare: u32,
+}
+impl Copy for StoredInput {}
+
+pub const RARE_NONE: u32 = u32.MAX
+
+// The parts of an Input that most requests leave as Input.make does.
+pub struct RareInput { pub gridContext: usize, pub tablePlan: u64, pub fragmentation: FragmentInput }
+impl Copy for RareInput {}
+impl RareInput {
+  @inlineAlways
+  pub fn of(input: &Input) -> RareInput {
+    return RareInput { gridContext: input.gridContext, tablePlan: input.tablePlan, fragmentation: input.fragmentation }
+  }
+  @inlineAlways
+  pub fn needed(input: &Input) -> bool {
+    return input.gridContext != 0 || input.tablePlan != 0 || !continuous(&input.fragmentation)
+  }
+}
+
+// Flags, from the lowest bit.
+const PARENT_WIDTH: u32 = 1
+const PARENT_HEIGHT: u32 = 2
+const INITIAL_WIDTH: u32 = 4
+const INITIAL_HEIGHT: u32 = 8
+const KNOWN_WIDTH: u32 = 16
+const KNOWN_HEIGHT: u32 = 32
+// AvailableKind discriminants of the two axes, two bits each.
+const AVAILABLE_WIDTH_SHIFT: u32 = 6
+const AVAILABLE_HEIGHT_SHIFT: u32 = 8
+const BLOCK_ROOT: u32 = 1024
+const BLOCKIFY: u32 = 2048
+const ATOMIC_INLINE: u32 = 4096
+const INTRINSIC_WIDTH: u32 = 8192
+const INTRINSIC_HEIGHT: u32 = 16384
+const SHRINK_TO_FIT: u32 = 32768
+const INDEFINITE_WIDTH: u32 = 65536
+const INDEFINITE_HEIGHT: u32 = 131072
+// Parent writing mode * 3 + text orientation, four bits.
+const ORIENTATION_SHIFT: u32 = 18
+// Parent justify-items, five bits, and its safety, two.
+const JUSTIFY_SHIFT: u32 = 22
+const SAFETY_SHIFT: u32 = 27
+const PERFORM_LAYOUT: u32 = 536870912
+const BASELINES: u32 = 1073741824
+const FULL_SIZE: u32 = 2147483648
+// The flags two requests must share to be the same request (see
+// sameInput): all but performLayout, baselines and fullSize.
+const SAME_MASK: u32 = 536870911
+const DEFINITE: u32 = 0
+
+@inlineAlways
+fn bit(value: bool, flag: u32) -> u32 {
+  if value { return flag }
+  return 0
+}
+@inlineAlways
+fn kindBits(kind: AvailableKind) -> u32 { return u8.toU32(AvailableKind.value(kind)) }
+fn kindOf(bits: u32) -> AvailableKind {
+  if bits == 0 { return AvailableKind.Definite }
+  if bits == 1 { return AvailableKind.MinContent }
+  return AvailableKind.MaxContent
+}
+fn member<Enum>(value: u32) -> Enum {
+  return match Reflect.enumFromValue<Enum, u8>(u32.toU8(value)) {
+    Option<Enum>.Some { value: found } => move found
+    Option<Enum>.None => Intrinsic.trap("StoredInput: no such enum member")
+  }
+}
+
+fn sameKinds(a: &BreakKinds, b: &BreakKinds) -> bool { return a.page == b.page && a.column == b.column && a.region == b.region }
+// Whether `value` is FragmentInput.continuous(), field for field.
+fn continuous(value: &FragmentInput) -> bool {
+  let none = BreakKinds.none()
+  let forced = &value.sourceBoundary.forced
+  return !value.active && value.offset == 0.0 && value.limit == 0.0 && !value.canBreakBefore && !value.avoidInside && !value.forcedStart
+    && !value.contextStart && !value.marginStart && !value.marginEnd && !value.marginEndChosen && !value.sourceAdjacent
+    && sameKinds(&forced.kinds, &none) && forced.side == ForcedBreaks.none().side && !forced.all && sameKinds(&value.sourceBoundary.avoided, &none)
+    && sameKinds(&value.contextKinds, &none) && sameKinds(&value.boundaryKinds, &none)
+    && !value.allocatedAutoExtent && value.boundaryProbe == BoundaryProbe.None
+    && value.relaxation == FragmentInput.continuous().relaxation && value.kind == FragmentInput.continuous().kind && value.rectoOnRight
+}
+
+impl StoredInput {
+  // `input` packed, with rare slot `rare`.
+  @inlineAlways
+  pub fn pack(input: &Input, rare: u32) -> StoredInput {
+    let orientation = u8.toU32(WritingMode.value(input.parentWritingMode)) * 3 + u8.toU32(TextOrientation.value(input.parentTextOrientation))
+    let flags = bit(input.parent.widthDefinite, PARENT_WIDTH) | bit(input.parent.heightDefinite, PARENT_HEIGHT)
+      | bit(input.initialContainingBlock.widthDefinite, INITIAL_WIDTH) | bit(input.initialContainingBlock.heightDefinite, INITIAL_HEIGHT)
+      | bit(input.known.widthDefinite, KNOWN_WIDTH) | bit(input.known.heightDefinite, KNOWN_HEIGHT)
+      | u32.shiftLeft(kindBits(input.availableWidth.kind), AVAILABLE_WIDTH_SHIFT) | u32.shiftLeft(kindBits(input.availableHeight.kind), AVAILABLE_HEIGHT_SHIFT)
+      | bit(input.blockRoot, BLOCK_ROOT) | bit(input.blockify, BLOCKIFY) | bit(input.atomicInline, ATOMIC_INLINE)
+      | bit(input.intrinsicWidth, INTRINSIC_WIDTH) | bit(input.intrinsicHeight, INTRINSIC_HEIGHT) | bit(input.shrinkToFit, SHRINK_TO_FIT)
+      | bit(input.indefiniteWidth, INDEFINITE_WIDTH) | bit(input.indefiniteHeight, INDEFINITE_HEIGHT)
+      | u32.shiftLeft(orientation, ORIENTATION_SHIFT)
+      | u32.shiftLeft(u8.toU32(Align.value(input.parentJustifyItems)), JUSTIFY_SHIFT) | u32.shiftLeft(u8.toU32(OverflowAlignment.value(input.parentJustifyItemsSafety)), SAFETY_SHIFT)
+      | bit(input.performLayout, PERFORM_LAYOUT) | bit(input.baselines, BASELINES) | bit(input.fullSize, FULL_SIZE)
+    return StoredInput {
+      parentWidth: input.parent.width, parentHeight: input.parent.height,
+      initialWidth: input.initialContainingBlock.width, initialHeight: input.initialContainingBlock.height,
+      maxWidth: input.parentMaxSize.width, maxHeight: input.parentMaxSize.height,
+      scrollportWidth: input.scrollportSize.width, scrollportHeight: input.scrollportSize.height,
+      knownWidth: input.known.width, knownHeight: input.known.height,
+      minimumWidth: input.minimum.width, minimumHeight: input.minimum.height,
+      availableWidth: input.availableWidth.value, availableHeight: input.availableHeight.value,
+      originX: input.bfcContentOrigin.x, originY: input.bfcContentOrigin.y,
+      flags: flags, rare: rare,
+    }
+  }
+  // The Input this was packed from; `rare` is its RareInput when it has one.
+  pub fn unpack(self: &Self, rare: &RareInput) -> Input {
+    let flags = self.flags
+    let orientation = u32.shiftRight(flags, ORIENTATION_SHIFT) & 15
+    let mut result = Input.make(OptionalSize.none())
+    result.parent = OptionalSize { width: self.parentWidth, height: self.parentHeight, widthDefinite: flags & PARENT_WIDTH != 0, heightDefinite: flags & PARENT_HEIGHT != 0 }
+    result.initialContainingBlock = OptionalSize { width: self.initialWidth, height: self.initialHeight, widthDefinite: flags & INITIAL_WIDTH != 0, heightDefinite: flags & INITIAL_HEIGHT != 0 }
+    result.parentMaxSize = Size { width: self.maxWidth, height: self.maxHeight }
+    result.scrollportSize = Size { width: self.scrollportWidth, height: self.scrollportHeight }
+    result.known = OptionalSize { width: self.knownWidth, height: self.knownHeight, widthDefinite: flags & KNOWN_WIDTH != 0, heightDefinite: flags & KNOWN_HEIGHT != 0 }
+    result.minimum = Size { width: self.minimumWidth, height: self.minimumHeight }
+    result.availableWidth = AvailableSpace { kind: kindOf(u32.shiftRight(flags, AVAILABLE_WIDTH_SHIFT) & 3), value: self.availableWidth }
+    result.availableHeight = AvailableSpace { kind: kindOf(u32.shiftRight(flags, AVAILABLE_HEIGHT_SHIFT) & 3), value: self.availableHeight }
+    result.blockRoot = flags & BLOCK_ROOT != 0
+    result.blockify = flags & BLOCKIFY != 0
+    result.atomicInline = flags & ATOMIC_INLINE != 0
+    result.intrinsicWidth = flags & INTRINSIC_WIDTH != 0
+    result.intrinsicHeight = flags & INTRINSIC_HEIGHT != 0
+    result.shrinkToFit = flags & SHRINK_TO_FIT != 0
+    result.indefiniteWidth = flags & INDEFINITE_WIDTH != 0
+    result.indefiniteHeight = flags & INDEFINITE_HEIGHT != 0
+    result.parentWritingMode = member<WritingMode>(orientation / 3)
+    result.parentTextOrientation = member<TextOrientation>(orientation % 3)
+    result.parentJustifyItems = member<Align>(u32.shiftRight(flags, JUSTIFY_SHIFT) & 31)
+    result.parentJustifyItemsSafety = member<OverflowAlignment>(u32.shiftRight(flags, SAFETY_SHIFT) & 3)
+    result.bfcContentOrigin = Point { x: self.originX, y: self.originY }
+    result.performLayout = flags & PERFORM_LAYOUT != 0
+    result.baselines = flags & BASELINES != 0
+    result.fullSize = flags & FULL_SIZE != 0
+    if self.rare != RARE_NONE {
+      result.gridContext = rare.gridContext
+      result.tablePlan = rare.tablePlan
+      result.fragmentation = rare.fragmentation
+    }
+    return result
+  }
+  // Whether `a` and `b` hold the same sizes, bit for bit, all but the BFC
+  // content origin, and neither has rare parts: then a request differing
+  // from `a` only in flags and origin is `a` with those (see withOwn).
+  pub fn sameSizes(a: &StoredInput, b: &StoredInput) -> bool {
+    return a.rare == RARE_NONE && b.rare == RARE_NONE
+      && f32.toBits(a.parentWidth) == f32.toBits(b.parentWidth) && f32.toBits(a.parentHeight) == f32.toBits(b.parentHeight)
+      && f32.toBits(a.initialWidth) == f32.toBits(b.initialWidth) && f32.toBits(a.initialHeight) == f32.toBits(b.initialHeight)
+      && f32.toBits(a.maxWidth) == f32.toBits(b.maxWidth) && f32.toBits(a.maxHeight) == f32.toBits(b.maxHeight)
+      && f32.toBits(a.scrollportWidth) == f32.toBits(b.scrollportWidth) && f32.toBits(a.scrollportHeight) == f32.toBits(b.scrollportHeight)
+      && f32.toBits(a.knownWidth) == f32.toBits(b.knownWidth) && f32.toBits(a.knownHeight) == f32.toBits(b.knownHeight)
+      && f32.toBits(a.minimumWidth) == f32.toBits(b.minimumWidth) && f32.toBits(a.minimumHeight) == f32.toBits(b.minimumHeight)
+      && f32.toBits(a.availableWidth) == f32.toBits(b.availableWidth) && f32.toBits(a.availableHeight) == f32.toBits(b.availableHeight)
+  }
+  // This request with another's flags and origin.
+  @inlineAlways
+  pub fn withOwn(self: &Self, flags: u32, originX: f32, originY: f32) -> StoredInput {
+    let mut result = self.*
+    result.flags = flags
+    result.originX = originX
+    result.originY = originY
+    return result
+  }
+  @inlineAlways
+  pub fn originXValue(self: &Self) -> f32 { return self.originX }
+  @inlineAlways
+  pub fn originYValue(self: &Self) -> f32 { return self.originY }
+  @inlineAlways
+  pub fn parent(self: &Self) -> OptionalSize {
+    return OptionalSize { width: self.parentWidth, height: self.parentHeight, widthDefinite: self.flags & PARENT_WIDTH != 0, heightDefinite: self.flags & PARENT_HEIGHT != 0 }
+  }
+  @inlineAlways
+  pub fn intrinsicWidth(self: &Self) -> bool { return self.flags & INTRINSIC_WIDTH != 0 }
+  @inlineAlways
+  pub fn parentWritingMode(self: &Self) -> WritingMode { return member<WritingMode>((u32.shiftRight(self.flags, ORIENTATION_SHIFT) & 15) / 3) }
+  @inlineAlways
+  pub fn availableWidthKind(self: &Self) -> AvailableKind { return kindOf(u32.shiftRight(self.flags, AVAILABLE_WIDTH_SHIFT) & 3) }
+  @inlineAlways
+  pub fn availableWidthValue(self: &Self) -> f32 { return self.availableWidth }
+  @inlineAlways
+  pub fn knownWidthDefinite(self: &Self) -> bool { return self.flags & KNOWN_WIDTH != 0 }
+  @inlineAlways
+  pub fn knownHeightDefinite(self: &Self) -> bool { return self.flags & KNOWN_HEIGHT != 0 }
+  @inlineAlways
+  pub fn availableHeightKind(self: &Self) -> AvailableKind { return kindOf(u32.shiftRight(self.flags, AVAILABLE_HEIGHT_SHIFT) & 3) }
+}
+
+// sameInput (layout_cache.silk) of a stored request `a`, whose grid context
+// and table plan are `aGrid` and `aPlan`, and `b`, another request packed with
+// StoredInput.pack: every flag but performLayout, baselines and fullSize
+// equal, and `b` reading no baselines or height `a` lacks, and the sizes
+// equal wherever their flags make them count.
+@inlineAlways
+pub fn sameStored(a: &StoredInput, aGrid: usize, aPlan: u64, b: &StoredInput, bGrid: usize, bPlan: u64) -> bool {
+  let flags = a.flags
+  if ((flags ^ b.flags) & SAME_MASK) != 0 || (b.flags & BASELINES != 0 && flags & BASELINES == 0) || (b.flags & FULL_SIZE != 0 && flags & FULL_SIZE == 0) { return false }
+  if aGrid != bGrid || aPlan != bPlan { return false }
+  if a.minimumWidth != b.minimumWidth || a.minimumHeight != b.minimumHeight || a.maxWidth != b.maxWidth || a.maxHeight != b.maxHeight || a.scrollportWidth != b.scrollportWidth || a.scrollportHeight != b.scrollportHeight { return false }
+  if (flags & PARENT_WIDTH != 0 && a.parentWidth != b.parentWidth) || (flags & PARENT_HEIGHT != 0 && a.parentHeight != b.parentHeight) { return false }
+  if (flags & KNOWN_WIDTH != 0 && a.knownWidth != b.knownWidth) || (flags & KNOWN_HEIGHT != 0 && a.knownHeight != b.knownHeight) { return false }
+  if (flags & INITIAL_WIDTH != 0 && a.initialWidth != b.initialWidth) || (flags & INITIAL_HEIGHT != 0 && a.initialHeight != b.initialHeight) { return false }
+  if (u32.shiftRight(flags, AVAILABLE_WIDTH_SHIFT) & 3) == DEFINITE && a.availableWidth != b.availableWidth { return false }
+  if (u32.shiftRight(flags, AVAILABLE_HEIGHT_SHIFT) & 3) == DEFINITE && a.availableHeight != b.availableHeight { return false }
+  return true
+}
+
+// The RareInputs of one kind of record, by slot; a freed slot is reused.
+pub struct RarePool { values: List<RareInput>, free: List<u32> }
+impl RarePool {
+  pub fn make() -> RarePool { return RarePool { values: List<RareInput>.make(), free: List<u32>.make() } }
+  pub fn clear(self: &mut Self) {
+    self.values.clear()
+    self.free.clear()
+  }
+  pub fn count(self: &Self) -> usize { return self.values.length() - self.free.length() }
+  @inlineAlways
+  pub fn get(self: &Self, slot: u32) -> &RareInput { return &self.values.asSlice()[u32.toUsize(slot)] }
+  @inlineAlways
+  pub fn gridContext(self: &Self, slot: u32) -> usize {
+    if slot == RARE_NONE { return 0 }
+    return self.values.asSlice()[u32.toUsize(slot)].gridContext
+  }
+  @inlineAlways
+  pub fn tablePlan(self: &Self, slot: u32) -> u64 {
+    if slot == RARE_NONE { return 0 }
+    return self.values.asSlice()[u32.toUsize(slot)].tablePlan
+  }
+  // The slot for `input`'s rare parts, reusing `previous` (a slot of the
+  // record being overwritten, or RARE_NONE), which is freed when `input`
+  // needs none.
+  @inlineAlways
+  pub effect fn put(self: &mut Self, previous: u32, input: &Input) -> u32 ! OutOfMemoryError ? &mut Allocator {
+    if !RareInput.needed(input) {
+      if previous != RARE_NONE { run self.release(previous) }
+      return RARE_NONE
+    }
+    return run self.putRare(previous, input)
+  }
+  effect fn putRare(self: &mut Self, previous: u32, input: &Input) -> u32 ! OutOfMemoryError ? &mut Allocator {
+    let value = RareInput.of(input)
+    if previous != RARE_NONE {
+      self.values.set(u32.toUsize(previous), value)
+      return previous
+    }
+    if self.free.length() != 0 {
+      let slot = self.free.get(self.free.length() - 1)
+      drop self.free.pop()
+      self.values.set(u32.toUsize(slot), value)
+      return slot
+    }
+    let slot = usize.toU32(self.values.length())
+    run self.values.append(value)
+    return slot
+  }
+  pub effect fn release(self: &mut Self, slot: u32) ! OutOfMemoryError ? &mut Allocator {
+    if slot == RARE_NONE { return }
+    run self.free.append(slot)
+  }
+  // `stored` unpacked against this pool.
+  pub fn unpack(self: &Self, stored: &StoredInput) -> Input {
+    if stored.rare == RARE_NONE { let none = RareInput { gridContext: 0, tablePlan: 0, fragmentation: FragmentInput.continuous() }
+    return stored.unpack(&none) }
+    return stored.unpack(self.get(stored.rare))
+  }
+  pub fn storageBytes(self: &Self) -> usize {
+    return self.values.capacity() * Intrinsic.layoutOf<RareInput>().bytes + self.free.capacity() * 4
+  }
+}

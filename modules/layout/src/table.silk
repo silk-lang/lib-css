@@ -68,16 +68,16 @@ effect fn collect<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, plan: &mut
   // §17.2: the first header group goes first and the first footer group last.
   let mut header = NO_NODE
   let mut footer = NO_NODE
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     if inFlow(nodes, child) && part(nodes, child) {
       if header == NO_NODE && display(nodes, child, DisplayInside.TableHeaderGroup) { header = child }
       if footer == NO_NODE && display(nodes, child, DisplayInside.TableFooterGroup) { footer = child }
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   if header != NO_NODE { run addSection(nodes, &mut plan, header) }
-  child = nodes.node(id).firstChild
+  child = nodes.node(id).firstChild()
   while child != NO_NODE {
     if inFlow(nodes, child) && child != header && child != footer {
       if display(nodes, child, DisplayInside.TableCaption) {
@@ -97,7 +97,7 @@ effect fn collect<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, plan: &mut
         run addLooseCell(nodes, &mut plan, child, id)
       }
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   closeSection(&mut plan)
   if footer != NO_NODE { run addSection(nodes, &mut plan, footer) }
@@ -155,13 +155,13 @@ effect fn addSection<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, s
   plan.busy.clear()
   plan.openSection = true
   plan.openRow = false
-  let mut child = nodes.node(section).firstChild
+  let mut child = nodes.node(section).firstChild()
   while child != NO_NODE {
     if inFlow(nodes, child) {
       if part(nodes, child) && display(nodes, child, DisplayInside.TableRow) { run addRow(nodes, &mut plan, child, section) }
       else { run addLooseCell(nodes, &mut plan, child, section) }
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   closeSection(&mut plan)
 }
@@ -180,10 +180,10 @@ effect fn startRow<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, row
 effect fn addRow<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, row: usize, parent: usize) ! OutOfMemoryError ? &mut Allocator {
   plan.openRow = false
   run startRow(nodes, &mut plan, row, parent)
-  let mut child = nodes.node(row).firstChild
+  let mut child = nodes.node(row).firstChild()
   while child != NO_NODE {
     if inFlow(nodes, child) { run addCell(nodes, &mut plan, child) }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
 }
 
@@ -220,14 +220,14 @@ effect fn addCell<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, cell
 
 effect fn addColumnGroup<S: LayoutSource>(nodes: &BoxTree<'_, S>, plan: &mut Plan, group: usize) ! OutOfMemoryError ? &mut Allocator {
   let first = plan.nextColumn
-  let mut child = nodes.node(group).firstChild
+  let mut child = nodes.node(group).firstChild()
   let mut any = false
   while child != NO_NODE {
     if inFlow(nodes, child) && display(nodes, child, DisplayInside.TableColumn) {
       run addColumn(nodes, &mut plan, child, group)
       any = true
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   if !any { plan.nextColumn = plan.nextColumn + larger(1, nodes.style(group).columnSpan) }
   run plan.columnBoxes.append(ColumnBox { box: group, parent: NO_NODE, first: first, span: plan.nextColumn - first })
@@ -1574,14 +1574,14 @@ effect fn assignSlots<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut Layo
 
 effect fn digest<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, id: usize) ! OutOfMemoryError ? &mut Allocator {
   let mut hash = OFFSET
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     if inFlow(nodes, child) {
       let slot = output.tableSlots.get(child)
       hash = mix(mix(mix(mix(hash, slot.x), slot.y), slot.width), slot.height)
       hash = u64.wrappingMultiply(u64.bitXor(hash, output.tablePlans.get(child)), PRIME)
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
   // Clear of CELL_BORDERS, which marks a cell's borders instead.
   let plans = output.tablePlans.asMutSlice()
@@ -1590,7 +1590,7 @@ effect fn digest<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPas
 
 // `repeated` is a part laid out again in a later fragment, whose fragments say so.
 effect fn placeChildren<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, base: &Input, performLayout: bool, repeated: usize) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
-  let mut child = nodes.node(id).firstChild
+  let mut child = nodes.node(id).firstChild()
   while child != NO_NODE {
     if inFlow(nodes, child) {
       let mut slot = Rect.zero()
@@ -1608,7 +1608,7 @@ effect fn placeChildren<'pass, 'source, M: Measure + TextMeasure, S: LayoutSourc
         if child == repeated { markRepeated(&mut output, child) }
       }
     }
-    child = nodes.node(child).nextSibling
+    child = nodes.node(child).nextSibling()
   }
 }
 

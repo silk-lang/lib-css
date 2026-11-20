@@ -74,7 +74,7 @@ test effect fn gridItemsEstablishIndependentBlockifiedBoxes()
       && boxes.node(child).independentRoot,
     "inline floating grid item is blockified and independent",
   )
-  run Testing.expect(boxes.node(child).parent == parent, "grid item belongs directly to the grid")
+  run Testing.expect(boxes.node(child).parent() == parent, "grid item belongs directly to the grid")
 }
 
 // Grid §6.1: whitespace-only runs vanish; contiguous text forms an anonymous item.
@@ -105,16 +105,16 @@ test effect fn gridTextRunsBecomeAnonymousItems()
   )
   let parent = boxes.firstBySource.get(root.index)
   let child = boxes.firstBySource.get(item.index)
-  let anonymous = boxes.node(child).nextSibling
+  let anonymous = boxes.node(child).nextSibling()
   run Testing.expect(
     anonymous != NO_NODE && boxes.node(anonymous).anonymousBlock
-      && boxes.node(anonymous).parent == parent,
+      && boxes.node(anonymous).parent() == parent,
     "text run has one anonymous grid item",
   )
-  let firstRun = boxes.node(boxes.firstBySource.get(first.index)).parent
-  let secondRun = boxes.node(boxes.firstBySource.get(second.index)).parent
+  let firstRun = boxes.node(boxes.firstBySource.get(first.index)).parent()
+  let secondRun = boxes.node(boxes.firstBySource.get(second.index)).parent()
   run Testing.expect(
-    firstRun == secondRun && boxes.node(firstRun).parent == anonymous,
+    firstRun == secondRun && boxes.node(firstRun).parent() == anonymous,
     "contiguous text shares the anonymous item inline formatting context",
   )
 }

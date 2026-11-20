@@ -19,7 +19,7 @@ import fragmentation { FragmentationError }
 /// final layout `result` of the block's contents. Fragmented and intrinsic passes leave it.
 @inlineNever
 pub effect fn placeMarker<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, result: &Layout) ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
-  let marker = nodes.node(id).firstChild
+  let marker = nodes.node(id).firstChild()
   if marker == NO_NODE || !nodes.style(marker).outsideMarker { return }
   if !input.performLayout || input.fragmentation.active { return }
   let style = nodes.style(id)
