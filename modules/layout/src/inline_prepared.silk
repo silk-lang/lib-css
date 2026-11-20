@@ -179,6 +179,11 @@ pub struct TextMemo {
   // visual plan, chained by the unit they start in.
   pub fonts: List<TextFont>, pub segments: List<Segment>, pub heads: List<usize>,
   pub fitted: FittedLines,
+  // The paragraph shaped whole, for plain text from a provider that reports break safety
+  // (see shapeRange): `slicing` is 0 before that is decided, 1 when ranges are cut from
+  // `whole`, 2 when they are shaped. `firstItem[u]` is the first item of `whole` in unit u
+  // or later, and `unsafeAt[u]` tells that a cut before unit u may not reuse `whole`.
+  pub slicing: u8, pub whole: TextCandidate, pub firstItem: List<usize>, pub unsafeAt: List<bool>,
   // Candidates of dropped segments, whose lists the next segments reuse.
   spare: List<TextCandidate>,
   valid: bool,
@@ -189,7 +194,9 @@ impl TextMemo {
       items: List<Item>.make(), scopes: List<Scope>.make(), prefix: List<f32>.make(),
       minContent: 0.0, maxContent: 0.0, hasMin: false, hasMax: false,
       widths: List<f32>.make(), counts: List<usize>.make(), ends: List<usize>.make(),
-      fonts: List<TextFont>.make(), segments: List<Segment>.make(), heads: List<usize>.make(), fitted: FittedLines.make(), spare: List<TextCandidate>.make(), valid: false,
+      fonts: List<TextFont>.make(), segments: List<Segment>.make(), heads: List<usize>.make(), fitted: FittedLines.make(),
+      slicing: 0, whole: TextCandidate.make(), firstItem: List<usize>.make(), unsafeAt: List<bool>.make(),
+      spare: List<TextCandidate>.make(), valid: false,
     }
   }
   // Whether the results stand for `items` (see prepare).
@@ -213,6 +220,7 @@ impl TextMemo {
     if same { return }
     self.valid = true
     self.fitted.valid = false
+    self.slicing = 0
     run self.dropSegments()
     self.heads.clear()
     self.fonts.clear()
@@ -241,6 +249,7 @@ impl TextMemo {
   pub fn forget(self: &mut Self) {
     self.valid = false
     self.fitted.valid = false
+    self.slicing = 0
     self.prefix.clear()
   }
   // The shaped range [start, end), or NO_NODE.

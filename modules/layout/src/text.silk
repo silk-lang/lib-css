@@ -153,7 +153,12 @@ impl<'tokens, 'text> Copy for TextShapeRequest<'tokens, 'text> {}
 pub union TextRun {
   Text {
     pub unit: usize, pub start: usize, pub end: usize, pub advance: f32,
-    pub fontKey: usize, pub bidiLevel: u8, pub shapeKey: usize
+    pub fontKey: usize, pub bidiLevel: u8, pub shapeKey: usize,
+    // Set by a provider that reports break safety (see TextMeasure) when a line may not
+    // start at this run's start, or end just before it, with the runs on either side of
+    // the cut taken from a shaping of the whole paragraph: the glyphs there change with
+    // what is shaped beside them (kerning or a state machine across the cut).
+    pub unsafeBefore: bool
   },
   Object {
     pub unit: usize, pub bidiLevel: u8,
@@ -175,6 +180,11 @@ pub interface TextMeasure {
   // break, as UAX #9 and UAX #14 resolve it. Layout then shapes such a
   // paragraph that fits one line without calling analyze.
   fn plainText(provider: &Self) -> bool { return false }
+  // Whether `shape` sets TextRun.Text.unsafeBefore. When it does, shaping a range that
+  // starts and ends at unit boundaries whose runs are not unsafeBefore gives the runs that
+  // shaping the whole paragraph gives for that range. Layout then answers widths and
+  // builds lines of plain text from one shaping of the paragraph.
+  fn reportsBreakSafety(provider: &Self) -> bool { return false }
   effect fn analyze(provider: &mut Self, context: TextContext<'_, '_>, output: &mut List<TextBreak>) -> TextAnalysis ! OutOfMemoryError | TextError ? &mut Allocator
   effect fn shape(provider: &mut Self, request: TextShapeRequest<'_, '_>, output: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator
 }

@@ -279,6 +279,7 @@ impl TextMeasure for Paragraph {
             fontKey: token.fontKey,
             bidiLevel: request.analysis.level,
             shapeKey: 0,
+            unsafeBefore: false,
           },
         )
       }
@@ -289,7 +290,7 @@ impl TextMeasure for Paragraph {
     if request.ellipsis && output.length() != 0 {
       let last = output.length() - 1
       match output.get(last) {
-        TextRun.Text { unit: at, start, end, advance, fontKey, bidiLevel, shapeKey } => {
+        TextRun.Text { unit: at, start, end, advance, fontKey, bidiLevel, shapeKey, unsafeBefore } => {
           output.set(
             last,
             TextRun.Text {
@@ -300,6 +301,7 @@ impl TextMeasure for Paragraph {
               fontKey: fontKey,
               bidiLevel: bidiLevel,
               shapeKey: shapeKey,
+              unsafeBefore: unsafeBefore,
             },
           )
         }
@@ -545,6 +547,7 @@ impl TextMeasure for HyphenBidiText {
               fontKey: token.fontKey,
               bidiLevel: level,
               shapeKey: 0,
+              unsafeBefore: false,
             },
           )
           start = limit
