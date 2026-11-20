@@ -1,4 +1,5 @@
 //! Indexed, per-element stylesheet matching. The host owns declarations and value computation.
+import css_properties.census { Census }
 import silk.num.u32
 import cascade { Priority, Candidate }
 import element { ElementTree, MatchContext, PseudoTarget }
@@ -59,6 +60,12 @@ pub struct Resolver {
   starting: List<bool>,
   relations: u32,
   shared: Sharing,
+  /// For the bench census: elements matched, the rules the index offered for them, the rules
+  /// that matched, and the declarations those gave.
+  pub collects: usize,
+  pub offered: usize,
+  pub matchedRules: usize,
+  pub offeredDeclarations: usize,
 }
 
 impl Resolver {
@@ -74,6 +81,7 @@ impl Resolver {
       starting: List<bool>.make(),
       relations: 0,
       shared: Sharing.none(),
+      collects: 0, offered: 0, matchedRules: 0, offeredDeclarations: 0,
     }
   }
 
@@ -158,6 +166,8 @@ impl Resolver {
       fail ResolverError.UnfinishedIndex
     }
     run self.index.collect(tree, node, &mut context.*)
+    self.collects = self.collects + 1
+    self.offered = self.offered + self.index.candidates().length
     let mut candidates = List<Candidate>.make()
     let mut matched = List<Match>.make()
     let mut states: u32 = 0
@@ -203,9 +213,40 @@ impl Resolver {
         i = i + 1
       }
     }
+    self.matchedRules = self.matchedRules + matched.length()
+    self.offeredDeclarations = self.offeredDeclarations + candidates.length()
     self.candidates = move candidates
     self.matched = move matched
     self.selectedStates = states
+  }
+
+  /// What the resolver holds and did, for the bench census.
+  pub effect fn census(self: &Self, out: &mut Census) -> () ! OutOfMemoryError ? &mut Allocator {
+    run out.held("sheet.rules", self.entries.length(), self.entries.capacity(), Intrinsic.layoutOf<Rule>().bytes)
+    let mut enabled: usize = 0
+    let mut declarations: usize = 0
+    let mut i: usize = 0
+    while i < self.entries.length() {
+      let rule = &self.entries.asSlice()[i]
+      if rule.enabled { enabled = enabled + 1 }
+      declarations = declarations + (rule.declarations.end - rule.declarations.start)
+      i = i + 1
+    }
+    run out.unit("sheet.rules.enabled", enabled)
+    run out.unit("sheet.rules.declarations", declarations)
+    let mut dependencies: usize = 0
+    i = 0
+    while i < self.dependencies.length() {
+      dependencies = dependencies + self.dependencies.asSlice()[i].capacity()
+      i = i + 1
+    }
+    run out.held("sheet.rule-dependencies", dependencies, dependencies, Intrinsic.layoutOf<Dependency>().bytes)
+    run out.held("sheet.rule-side(states, starting, dependency lists)", self.states.length(), self.states.capacity(), 5 + Intrinsic.layoutOf<List<Dependency>>().bytes)
+    run self.index.census(&mut out)
+    run out.work("selector.elements-matched", self.collects)
+    run out.work("selector.rules-offered-by-index", self.offered)
+    run out.work("selector.rules-matched", self.matchedRules)
+    run out.work("selector.declarations-offered", self.offeredDeclarations)
   }
 
   /// Includes state tests in indexed candidates whose current state did not match.

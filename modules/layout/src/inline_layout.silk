@@ -1039,6 +1039,7 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
 // can reuse it. When it overflows, layoutText uses the same whole-paragraph
 // advances for fitting, but still shapes the chosen lines at their boundaries.
 effect fn plainLine<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, result: &mut Layout) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  output.stats.plainLines = output.stats.plainLines + 1
   let style = nodes.style(id)
   if !plainLineStyle(style) || !plainLineStyle(nodes.style(raw[0].id)) { return false }
   // A long line cut by an ellipsis is shaped by layoutText only as far as it can show.
@@ -1142,6 +1143,7 @@ fn trimmedBox<M: Measure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mu
 
 // layoutInline with its lists, empty, from InlineScratch.
 effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, input: &Input, physicalBox: &ResolvedBox, bfc: &mut BfcState, scopes: &mut List<Scope>, extents: &mut List<Extent>, items: &mut List<Item>, atomics: &mut List<AtomicData>, text: &mut TextScratch) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+  output.stats.inlineLayouts = output.stats.inlineLayouts + 1
   let style = nodes.style(id)
   let axes = Axes.make(style.writingMode)
   let box = axes.box(physicalBox.*)
@@ -1382,6 +1384,7 @@ fn textOnlyLine(output: &LayoutPass<'_, '_>, items: &[Item], scopes: &[Scope], l
 // their line, and kept in a TEXT_LINE_OVERFLOW record when it is not the
 // line box.
 effect fn emitTextLine<'pass, 'source, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, items: &[Item], texts: &[TextLeaf], fonts: &[TextFont], scopes: &[Scope], extents: &mut List<Extent>, id: usize, style: &Style, axes: &Axes, box: &ResolvedBox, container: Size, line: &LineBox) ! OutOfMemoryError ? &mut Allocator {
+  output.stats.linesEmitted = output.stats.linesEmitted + 1
   let parent = output.fragmentParent
   let physicalSize = axes.size(Size { width: line.width, height: line.height })
   let lineLocation = axes.physicalPoint(Point { x: box.inset.left + line.left, y: box.inset.top + line.y }, physicalSize, container)
@@ -1514,6 +1517,7 @@ effect fn emitLine<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(no
     run emitTextLine(nodes, &mut output, items, texts, fonts, scopes, &mut extents, id, style, axes, box, container, line)
     return
   }
+  output.stats.linesEmitted = output.stats.linesEmitted + 1
   let mut fragment = output.fragment(id, NO_NODE, FragmentKind.Line)
   fragment.parent = previousParent
   fragment.location = axes.physicalPoint(Point { x: box.inset.left + line.left, y: box.inset.top + line.y }, physicalSize, container)

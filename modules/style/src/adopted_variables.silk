@@ -1,4 +1,5 @@
 //! Immutable token inputs shared by a root's variable scopes across adopted sheets.
+import css_properties.census { Census }
 import adopted { AdoptedSheet, Candidate as MatchedCandidate, Source }
 import sheet { Declaration as SheetDeclaration }
 import cascade { Declaration, Candidate, Name, Target, Specified, Priority }
@@ -45,9 +46,22 @@ pub struct Inputs {
   pub catalog: List<Declaration>,
   offsets: List<usize>,
   pub variables: VariableStore,
+  /// For the bench census: scopes asked for, and those built (the rest were found).
+  pub scopeCalls: usize,
+  pub scopeBuilds: usize,
+  pub scopeCandidates: usize,
 }
 
 impl Inputs {
+  pub effect fn census(self: &Self, out: &mut Census) -> () ! OutOfMemoryError ? &mut Allocator {
+    run out.held("variables.catalog(declarations copied from the sheets)", self.catalog.length(), self.catalog.capacity(), Intrinsic.layoutOf<Declaration>().bytes)
+    run out.held("variables.inline-entries", self.inline.length(), self.inline.capacity(), Intrinsic.layoutOf<InlineEntry>().bytes)
+    run self.variables.census(&mut out)
+    run out.work("variables.scope-requests", self.scopeCalls)
+    run out.work("variables.scope-requests.candidates", self.scopeCandidates)
+    run out.work("variables.scopes-built", self.scopeBuilds)
+  }
+
   pub effect fn make(sheets: &[AdoptedSheet], limits: &Limits) -> Inputs
     ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
     let mut buffers = Buffers.make()
@@ -121,7 +135,7 @@ impl Inputs {
     }
     let baseBuffers = buffers.owned().length
     let baseCatalog = catalog.length()
-    return Inputs { inline: List<InlineEntry>.make(), inlineHeads: HashMap<u64, usize>.make(Hash.seed(1093)), scopes: Cache.make(), retained: true, baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables }
+    return Inputs { inline: List<InlineEntry>.make(), inlineHeads: HashMap<u64, usize>.make(Hash.seed(1093)), scopes: Cache.make(), retained: true, baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables, scopeCalls: 0, scopeBuilds: 0, scopeCandidates: 0 }
   }
 
   /// Repeating the same scope inputs cannot grow storage until this becomes false.
@@ -152,7 +166,10 @@ impl Inputs {
       }
       i = i + 1
     }
+    self.scopeCalls = self.scopeCalls + 1
+    self.scopeCandidates = self.scopeCandidates + candidates.length()
     if let Option<ScopeId>.Some { value } = self.scopes.find(parent, candidates.asSlice(), limits) { return value }
+    self.scopeBuilds = self.scopeBuilds + 1
     let scope = run self.variables.build(self.buffers.view(), self.catalog.asSlice(), candidates.asSlice(), parent, limits)
     run self.scopes.insert(parent, move candidates, limits, scope)
     return scope

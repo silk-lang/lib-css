@@ -1,3 +1,4 @@
+import properties.census { Census }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
@@ -452,6 +453,20 @@ pub struct FragmentArena {
   pub resolvedMoved: usize, pub resolvedEdited: usize,
 }
 impl FragmentArena {
+  // What the arena holds, for the bench census: the fragments, the text
+  // records, and every per-fragment, per-text and per-box side list together.
+  pub effect fn census(self: &Self, fragments: string<'static>, texts: string<'static>, side: string<'static>, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    let f = Intrinsic.layoutOf<Fragment>().bytes
+    let t = Intrinsic.layoutOf<LineText>().bytes
+    run out.held(fragments, self.values.length(), self.values.capacity(), f)
+    run out.held(texts, self.texts.length(), self.texts.capacity(), t)
+    let s = self.storage()
+    let used = (self.firstByBox.length() + self.lastByBox.length() + self.boxStamps.length() + self.boxSlots.length() + self.savedFirst.length() + self.savedLast.length()
+      + self.textMarks.length() + self.fragmentStamps.length() + self.fragmentSlots.length() + self.textStamps.length() + self.textSlots.length()) * Intrinsic.layoutOf<usize>().bytes
+      + self.savedFragments.length() * f + self.savedPositions.length() * Intrinsic.layoutOf<FragmentPosition>().bytes + self.savedTexts.length() * t
+      + self.tailFragments.length() * f + self.tailTexts.length() * t + self.settled.length() * Intrinsic.layoutOf<SettledRange>().bytes
+    run out.bytes(side, used, s.byBox + s.marks + s.saved + s.tail + s.settled)
+  }
   pub fn make() -> FragmentArena {
     return FragmentArena {
       values: List<Fragment>.make(),

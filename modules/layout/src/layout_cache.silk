@@ -1,3 +1,4 @@
+import properties.census { Census }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.collections.list { List }
 import silk.core.option { Option }
@@ -10,7 +11,9 @@ import geometry { Layout, OptionalSize, AvailableSpace, AvailableKind, Rect, Poi
 import fragments { FragmentArena, Shift, one, headedFor }
 import bfc { FloatBox }
 import silk.collections.slice { Slice }
-import inline_prepared { KeptText, PlainLine }
+import inline_prepared { KeptText, PlainLine, PreparedCore, TextLeaf, TextFont, Segment, LineBox }
+import inline_items { Item, Scope }
+import text { TextBreak, TextLevel, TextParagraph }
 import flex { FlexMemos }
 import grid_geometry { GridGeometryStore }
 import grid_scratch { GridMemos }
@@ -58,6 +61,16 @@ pub struct BoxFacts { pub own: List<u8>, pub reusable: List<u8>, pub viewportFre
   // `visits`: a change of overflow generates boxes again.
   pub scrollers: List<usize>, pub scrollersFor: usize }
 impl BoxFacts {
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    let u = Intrinsic.layoutOf<usize>().bytes
+    run out.bytes("css.facts(per-box flags and indexes)",
+      self.own.length() + self.reusable.length() + self.viewportFree.length() + self.keyShapes.length() * 2 + self.itemFlags.length()
+        + (self.visits.length() + self.styledOffsets.length() + self.styledBoxes.length() + self.parents.length() + self.marks.length() + self.scrollers.length()) * u,
+      self.own.capacity() + self.reusable.capacity() + self.viewportFree.capacity() + self.keyShapes.capacity() * 2 + self.itemFlags.capacity()
+        + (self.visits.capacity() + self.styledOffsets.capacity() + self.styledBoxes.capacity() + self.parents.capacity() + self.marks.capacity() + self.scrollers.capacity()) * u)
+    run out.unit("css.facts.positioning-visits", self.visits.length())
+    run out.unit("css.facts.auto-scrollers", self.scrollers.length())
+  }
   pub fn make() -> BoxFacts { return BoxFacts { own: List<u8>.make(), reusable: List<u8>.make(), viewportFree: List<bool>.make(), keyShapes: List<u16>.make(), itemFlags: List<u8>.make(), visits: List<usize>.make(), styledOffsets: List<usize>.make(), styledBoxes: List<usize>.make(), parents: List<usize>.make(), marks: List<usize>.make(), mark: 0, visitsRevision: 0, scrollers: List<usize>.make(), scrollersFor: usize.MAX } }
   pub fn covers(self: &Self, count: usize) -> bool {
     return self.own.length() == count && self.reusable.length() == count && self.viewportFree.length() == count && self.keyShapes.length() == count && self.itemFlags.length() == count && self.parents.length() == count
@@ -95,6 +108,11 @@ impl Copy for BoxMark {}
 // read one cache line.
 pub struct BoxWrites { pub generation: usize, pub marks: List<BoxMark>, pub saved: List<Layout>, pub placed: List<Placement> }
 impl BoxWrites {
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    run out.held("css.writes.marks", self.marks.length(), self.marks.capacity(), Intrinsic.layoutOf<BoxMark>().bytes)
+    run out.held("css.writes.saved(Layout)", self.saved.length(), self.saved.capacity(), Intrinsic.layoutOf<Layout>().bytes)
+    run out.held("css.writes.placed", self.placed.length(), self.placed.capacity(), Intrinsic.layoutOf<Placement>().bytes)
+  }
   pub fn make() -> BoxWrites { return BoxWrites { generation: 0, marks: List<BoxMark>.make(), saved: List<Layout>.make(), placed: List<Placement>.make() } }
   // Starts a compute over `count` boxes.
   pub effect fn begin(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {
@@ -385,6 +403,99 @@ pub const PLAIN_NEVER: f32 = -2.0
 const CLEAR_LOG: usize = 16
 
 impl LayoutCache {
+  // What the cache holds, for the bench census.
+  pub effect fn heldCensus(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    let u = Intrinsic.layoutOf<usize>().bytes
+    let input = Intrinsic.layoutOf<Input>().bytes
+    let layout = Intrinsic.layoutOf<Layout>().bytes
+    run out.held("css.cache.heads", self.heads.length(), self.heads.capacity(), u)
+    run out.held("css.cache.entries", self.entries.length(), self.entries.capacity(), Intrinsic.layoutOf<Entry>().bytes)
+    run out.held("css.cache.inputs", self.inputs.length(), self.inputs.capacity(), input)
+    run out.held("css.cache.layouts", self.layouts.length(), self.layouts.capacity(), layout)
+    run out.unit("css.cache.dead-entries", self.dead)
+    run out.held("css.cache.spare-entries", self.spare.length(), self.spare.capacity(), Intrinsic.layoutOf<Entry>().bytes)
+    run out.held("css.cache.spare-inputs", self.spareInputs.length(), self.spareInputs.capacity(), input)
+    run out.held("css.cache.spare-layouts", self.spareLayouts.length(), self.spareLayouts.capacity(), layout)
+    run out.held("css.cache.final-results", self.results.length(), self.results.capacity(), Intrinsic.layoutOf<FinalResult>().bytes)
+    run out.held("css.cache.final-ranges", self.ranges.length(), self.ranges.capacity(), Intrinsic.layoutOf<BoxRanges>().bytes)
+    let mut valid: usize = 0
+    let mut at: usize = 0
+    while at < self.ranges.length() {
+      if self.ranges.asSlice()[at].range.valid { valid = valid + 1 }
+      at = at + 1
+    }
+    run out.unit("css.cache.final-ranges.valid", valid)
+    run out.held("css.cache.positioned-runs", self.runs.length() + self.spareRuns.length(), self.runs.capacity() + self.spareRuns.capacity(), Intrinsic.layoutOf<PositionedRun>().bytes)
+    run out.held("css.cache.cleared", self.cleared.length(), self.cleared.capacity(), u)
+    run out.held("css.cache.floats", self.floats.length(), self.floats.capacity(), Intrinsic.layoutOf<FloatBox>().bytes)
+    run out.held("css.cache.block-slots", self.blockSlots.length(), self.blockSlots.capacity(), u)
+    run out.held("css.cache.block-bases", self.blockBases.length(), self.blockBases.capacity(), Intrinsic.layoutOf<BlockBase>().bytes)
+    run out.held("css.cache.plain-widths", self.plainWidths.length(), self.plainWidths.capacity(), 4)
+    run out.held("css.cache.plain-slots", self.plainSlots.length(), self.plainSlots.capacity(), u)
+    run out.held("css.cache.plain-lines", self.plainLines.length(), self.plainLines.capacity(), Intrinsic.layoutOf<PlainLine>().bytes)
+    let mut plainUsed: usize = 0
+    let mut plainRoom: usize = 0
+    at = 0
+    while at < self.plainLines.length() {
+      let line = &self.plainLines.asSlice()[at]
+      plainUsed = plainUsed + line.items.length() * Intrinsic.layoutOf<Item>().bytes + line.texts.length() * Intrinsic.layoutOf<TextLeaf>().bytes
+      plainRoom = plainRoom + line.items.capacity() * Intrinsic.layoutOf<Item>().bytes + line.texts.capacity() * Intrinsic.layoutOf<TextLeaf>().bytes
+      at = at + 1
+    }
+    run out.bytes("css.cache.plain-lines.heap", plainUsed, plainRoom)
+    // Prepared paragraphs kept between computes.
+    run out.held("css.cache.texts(per-box list header)", self.texts.length(), self.texts.capacity(), Intrinsic.layoutOf<List<KeptText>>().bytes)
+    let mut kept: usize = 0
+    let mut keptRoom: usize = 0
+    let mut stale: usize = 0
+    let mut coreUsed: usize = 0
+    let mut coreRoom: usize = 0
+    let mut fittedLines: usize = 0
+    let mut memoItems: usize = 0
+    let mut offered: usize = 0
+    at = 0
+    while at < self.texts.length() {
+      let held = self.texts.asSlice()[at].asSlice()
+      keptRoom = keptRoom + self.texts.asSlice()[at].capacity()
+      let mut k: usize = 0
+      while k < held.length {
+        kept = kept + 1
+        if held[k].stale { stale = stale + 1 }
+        let core = held[k].core.get()
+        let memo = &core[0].memo
+        let item = Intrinsic.layoutOf<Item>().bytes
+        let leaf = Intrinsic.layoutOf<TextLeaf>().bytes
+        coreUsed = coreUsed + core[0].offered.length() * Intrinsic.layoutOf<TextBreak>().bytes + core[0].barriers.length() + core[0].origins.length() * u
+          + core[0].analysis.levels.length() * Intrinsic.layoutOf<TextLevel>().bytes + core[0].analysis.paragraphs.length() * Intrinsic.layoutOf<TextParagraph>().bytes
+          + memo.items.length() * item + memo.scopes.length() * Intrinsic.layoutOf<Scope>().bytes + memo.prefix.length() * 4
+          + memo.widths.length() * 4 + (memo.counts.length() + memo.ends.length() + memo.heads.length()) * u
+          + memo.fonts.length() * Intrinsic.layoutOf<TextFont>().bytes + memo.segments.length() * Intrinsic.layoutOf<Segment>().bytes
+          + memo.fitted.lines.length() * Intrinsic.layoutOf<LineBox>().bytes + memo.fitted.items.length() * item + memo.fitted.texts.length() * leaf
+        coreRoom = coreRoom + core[0].offered.capacity() * Intrinsic.layoutOf<TextBreak>().bytes + core[0].barriers.capacity() + core[0].origins.capacity() * u
+          + core[0].analysis.levels.capacity() * Intrinsic.layoutOf<TextLevel>().bytes + core[0].analysis.paragraphs.capacity() * Intrinsic.layoutOf<TextParagraph>().bytes
+          + memo.items.capacity() * item + memo.scopes.capacity() * Intrinsic.layoutOf<Scope>().bytes + memo.prefix.capacity() * 4
+          + memo.widths.capacity() * 4 + (memo.counts.capacity() + memo.ends.capacity() + memo.heads.capacity()) * u
+          + memo.fonts.capacity() * Intrinsic.layoutOf<TextFont>().bytes + memo.segments.capacity() * Intrinsic.layoutOf<Segment>().bytes
+          + memo.fitted.lines.capacity() * Intrinsic.layoutOf<LineBox>().bytes + memo.fitted.items.capacity() * item + memo.fitted.texts.capacity() * leaf
+        fittedLines = fittedLines + memo.fitted.lines.length()
+        memoItems = memoItems + memo.items.length()
+        offered = offered + core[0].offered.length()
+        k = k + 1
+      }
+      at = at + 1
+    }
+    run out.held("css.cache.kept-paragraphs(KeptText)", kept, keptRoom, Intrinsic.layoutOf<KeptText>().bytes)
+    run out.held("css.cache.kept-paragraphs.core(PreparedCore)", kept, kept, Intrinsic.layoutOf<PreparedCore>().bytes)
+    run out.bytes("css.cache.kept-paragraphs.core-heap", coreUsed, coreRoom)
+    run out.unit("css.cache.kept-paragraphs.stale", stale)
+    run out.unit("css.cache.kept-paragraphs.fitted-lines", fittedLines)
+    run out.unit("css.cache.kept-paragraphs.memo-items", memoItems)
+    run out.unit("css.cache.kept-paragraphs.offered-breaks", offered)
+    run self.flexMemos.census(&mut out)
+    run self.gridGeometry.census(&mut out)
+    run self.gridMemos.census(&mut out)
+    run self.subgrids.census(&mut out)
+  }
   pub fn make() -> LayoutCache {
     return LayoutCache { textStamp: 0, counting: false, asked: List<u32>.make(), heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<Input>.make(), layouts: List<Layout>.make(), spare: List<Entry>.make(), spareInputs: List<Input>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make(), plainSlots: List<usize>.make(), plainLines: List<PlainLine>.make() }
   }

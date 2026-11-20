@@ -1,3 +1,4 @@
+import properties.census { Census }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import source { LayoutSource }
 import silk.collections.list { List }
@@ -105,6 +106,10 @@ pub struct SubgridPool {
   free: usize,
 }
 impl SubgridPool {
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    run out.held("css.subgrids.contexts", self.values.length(), self.values.capacity(), Intrinsic.layoutOf<ContextSlot>().bytes)
+    run out.held("css.subgrids.latest", self.latest.length(), self.latest.capacity(), Intrinsic.layoutOf<usize>().bytes)
+  }
   pub fn make() -> SubgridPool {
     return SubgridPool {
       values: List<ContextSlot>.make(), latest: List<usize>.make(),

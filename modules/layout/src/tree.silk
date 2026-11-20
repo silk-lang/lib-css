@@ -1,3 +1,4 @@
+import properties.census { Census }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.text.format { Debug, Format, Formatter }
 import silk.io.writer { Writer, WriterError }
@@ -144,6 +145,39 @@ impl LayoutSource for Tree {
   fn changes<'a>(self: &'a Self) -> &'a Changes { return &self.changes }
 }
 impl Tree {
+  // What the tree holds, for the bench census (see properties.census).
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    let u = Intrinsic.layoutOf<usize>().bytes
+    run out.held("css.tree.nodes", self.nodes.length(), self.nodes.capacity(), Intrinsic.layoutOf<Node>().bytes)
+    let mut texts: usize = 0
+    let mut textBytes: usize = 0
+    let mut textRoom: usize = 0
+    let mut liveNodes: usize = 0
+    let mut at: usize = 0
+    while at < self.nodes.length() {
+      if self.live.asSlice()[at] { liveNodes = liveNodes + 1 }
+      match &self.nodes.asSlice()[at].content {
+        SourceContent.Text { value } => {
+          texts = texts + 1
+          textBytes = textBytes + String.utf8Bytes(String.view(&value)).length
+          textRoom = textRoom + value.capacity()
+        }
+        SourceContent.Element => {}
+      }
+      at = at + 1
+    }
+    run out.unit("css.tree.live-nodes", liveNodes)
+    run out.unit("css.tree.text-nodes", texts)
+    run out.bytes("css.tree.nodes.text-bytes", textBytes, textRoom)
+    run out.held("css.tree.styles", self.styles.length(), self.styles.capacity(), Intrinsic.layoutOf<Style>().bytes)
+    run out.held("css.tree.grids", self.grids.length(), self.grids.capacity(), Intrinsic.layoutOf<GridTemplate>().bytes)
+    run out.held("css.tree.grid-names", self.gridNames.length(), self.gridNames.capacity(), Intrinsic.layoutOf<String>().bytes)
+    run out.held("css.tree.shapes", self.shapes.length(), self.shapes.capacity(), Intrinsic.layoutOf<FloatShape>().bytes)
+    run self.changes.census(&mut out)
+    run out.held("css.tree.live", self.live.length(), self.live.capacity(), 1)
+    run out.held("css.tree.free-lists", self.freeNodes.length() + self.freeStyles.length() + self.freeGrids.length() + self.freeShapes.length(),
+      self.freeNodes.capacity() + self.freeStyles.capacity() + self.freeGrids.capacity() + self.freeShapes.capacity(), u)
+  }
   pub effect fn make(style: Style) -> Tree ! OutOfMemoryError ? &mut Allocator {
     let mut nodes = List<Node>.make()
     let mut styles = List<Style>.make()
@@ -571,10 +605,13 @@ pub struct LayoutStats {
   pub passes: usize, pub fullLayouts: usize, pub sizeProbes: usize, pub cacheHits: usize,
   // Independent subtrees copied from the previous compute instead of laid out.
   pub reusedLayouts: usize,
+  // For the bench census: inline formatting contexts laid out or probed by the
+  // general path, those the one-line path answered, and line boxes emitted.
+  pub inlineLayouts: usize, pub plainLines: usize, pub linesEmitted: usize,
 }
 impl Copy for LayoutStats {}
 impl LayoutStats {
-  pub fn zero() -> LayoutStats { return LayoutStats { passes: 0, fullLayouts: 0, sizeProbes: 0, cacheHits: 0, reusedLayouts: 0 } }
+  pub fn zero() -> LayoutStats { return LayoutStats { passes: 0, fullLayouts: 0, sizeProbes: 0, cacheHits: 0, reusedLayouts: 0, inlineLayouts: 0, plainLines: 0, linesEmitted: 0 } }
 }
 pub struct LayoutTree {
   pub stats: LayoutStats,
@@ -638,6 +675,64 @@ pub struct LayoutTree {
   pub preparedSlots: List<PreparedSlot>, pub preparedGeneration: usize,
 }
 impl LayoutTree {
+  // What the layout output and its caches hold, for the bench census.
+  pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
+    let u = Intrinsic.layoutOf<usize>().bytes
+    let layout = Intrinsic.layoutOf<Layout>().bytes
+    run out.held("css.out.boxes(Layout)", self.boxes.length(), self.boxes.capacity(), layout)
+    run out.held("css.out.box-nodes", self.boxNodes.length(), self.boxNodes.capacity(), Intrinsic.layoutOf<BoxNode>().bytes)
+    run out.held("css.out.anonymous-styles", self.anonymousStyles.length(), self.anonymousStyles.capacity(), Intrinsic.layoutOf<Style>().bytes)
+    run out.held("css.out.anonymous-origins", self.anonymousOrigins.length(), self.anonymousOrigins.capacity(), u)
+    run out.held("css.out.anonymous-text", self.anonymousText.length(), self.anonymousText.capacity(), 1)
+    run out.held("css.out.by-source", self.firstBySource.length() + self.lastBySource.length(), self.firstBySource.capacity() + self.lastBySource.capacity(), u)
+    run out.held("css.out.normal-offsets", self.normalOffsets.length(), self.normalOffsets.capacity(), Intrinsic.layoutOf<Point>().bytes)
+    run out.held("css.out.cutoff-misses", self.cutoffMisses.length(), self.cutoffMisses.capacity(), Intrinsic.layoutOf<CutoffMiss>().bytes)
+    run out.held("css.out.scratch-lists", self.flexScratch.length() + self.inlineScratch.length() + self.blockScratch.length(),
+      self.flexScratch.capacity() + self.inlineScratch.capacity() + self.blockScratch.capacity(), Intrinsic.layoutOf<FlexScratch>().bytes)
+    run self.fragments.census("css.out.fragments", "css.out.fragment-texts", "css.out.fragment-side", &mut out)
+    run self.snapshot.fragments.census("css.snapshot.fragments", "css.snapshot.fragment-texts", "css.snapshot.fragment-side", &mut out)
+    run out.held("css.snapshot.boxes(Layout)", self.snapshot.boxes.length(), self.snapshot.boxes.capacity(), layout)
+    run self.scratchFragments.census("css.scratch.fragments", "css.scratch.fragment-texts", "css.scratch.fragment-side", &mut out)
+    run out.bytes("css.scratch.boxes", self.scratchBoxes.storageBytes(), self.scratchBoxes.storageBytes())
+    run self.facts.census(&mut out)
+    run self.writes.census(&mut out)
+    run self.cache.heldCensus(&mut out)
+    // Boxes by kind, and how the fragments divide.
+    let mut kinds: [usize; 8] = [0; 8]
+    let mut anonymous: usize = 0
+    let mut at: usize = 0
+    while at < self.boxNodes.length() {
+      let box = &self.boxNodes.asSlice()[at]
+      let slot: usize = match box.kind {
+        BoxKind.Block => 0
+        BoxKind.Flex => 1
+        BoxKind.Grid => 2
+        BoxKind.Inline => 3
+        BoxKind.InlineFormatting => 4
+        BoxKind.Text => 5
+        BoxKind.Table => 6
+        BoxKind.TablePart => 7
+      }
+      kinds[slot] = kinds[slot] + 1
+      if box.anonymousStyle != NO_NODE { anonymous = anonymous + 1 }
+      at = at + 1
+    }
+    run out.unit("css.boxes", self.boxNodes.length())
+    run out.unit("css.boxes.block", kinds[0])
+    run out.unit("css.boxes.flex", kinds[1])
+    run out.unit("css.boxes.grid", kinds[2])
+    run out.unit("css.boxes.inline", kinds[3])
+    run out.unit("css.boxes.inline-formatting", kinds[4])
+    run out.unit("css.boxes.text", kinds[5])
+    run out.unit("css.boxes.table", kinds[6] + kinds[7])
+    run out.unit("css.boxes.anonymous", anonymous)
+    run out.work("css.layout.passes", self.stats.passes)
+    run out.work("css.layout.full-layouts", self.stats.fullLayouts)
+    run out.work("css.layout.size-probes", self.stats.sizeProbes)
+    run out.work("css.layout.cache-hits", self.stats.cacheHits)
+    run out.work("css.layout.reused-layouts", self.stats.reusedLayouts)
+    run out.work("css.layout.inline-layouts(last compute)", self.stats.inlineLayouts)
+  }
   pub fn make() -> LayoutTree {
     return LayoutTree {
       stats: LayoutStats.zero(),
