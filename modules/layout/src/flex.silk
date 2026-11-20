@@ -236,8 +236,8 @@ effect fn probe<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes
   let index = output.cache.find(id, &key, CacheKind.IndependentBox)
   if index != usize.MAX {
     output.stats.cacheHits = output.stats.cacheHits + 1
-    let cached = output.cache.layoutAt(index)
-    return Probe { size: cached.size, preferredRatio: cached.preferredRatio, ratioBorderBox: cached.ratioBorderBox }
+    let cached = output.cache.coreAt(index)
+    return Probe { size: cached.sizes(), preferredRatio: cached.ratio(), ratioBorderBox: cached.ratioBorderBox() }
   }
   run probeFresh(nodes, &mut output, &mut measurer, id, &input, &key)
   let layout = &output.boxes[id]
@@ -745,7 +745,8 @@ effect fn crossSizes<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
           if cached == usize.MAX { run probeFresh(nodes, &mut output, &mut measurer, item.id, &request, &key) }
         }
       }
-      let layout = output.probed(item.id, cached)
+      let probedLayout = output.probed(item.id, cached)
+      let layout = &probedLayout
       item.cross = axisSize(layout.size, !axis.horizontal)
       item.baseline = baselineDistance(layout, nodes.style(item.id), input.parentWritingMode, input.parentTextOrientation, &axis, false)
       item.lastBaseline = baselineDistance(layout, nodes.style(item.id), input.parentWritingMode, input.parentTextOrientation, &axis, true)

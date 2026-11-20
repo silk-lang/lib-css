@@ -1021,7 +1021,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   pub fn lookupSize(self: &mut Self, id: usize, input: &Input, kind: CacheKind) -> Option<Size> {
     let index = self.cache.find(id, input, kind)
     if index == usize.MAX { return Option<Size>.None }
-    return Option<Size>.Some { value: self.cache.layoutAt(index).size }
+    return Option<Size>.Some { value: self.cache.coreAt(index).sizes() }
   }
   // Stores a cached intrinsic result (see store) straight from its cache entry
   // and returns it, if the cache has one for this request.
@@ -1030,7 +1030,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
     if index == usize.MAX { return false }
     run self.preserveLayout(id)
     run self.touch(id)
-    self.boxes[id] = self.cache.layoutAt(index).*
+    self.boxes[id] = self.cache.layoutAt(index)
     self.stats.cacheHits = self.stats.cacheHits + 1
     return true
   }
@@ -1043,8 +1043,8 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   }
   // A probe's result: the cache entry `index` from findProbe, else the layout
   // a fresh probe stored.
-  pub fn probed(self: &Self, id: usize, index: usize) -> &Layout {
-    if index == usize.MAX { return &self.boxes[id] }
+  pub fn probed(self: &Self, id: usize, index: usize) -> Layout {
+    if index == usize.MAX { return self.boxes[id] }
     return self.cache.layoutAt(index)
   }
   // Caches the layout last stored for the box.
