@@ -978,6 +978,7 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
   let style = nodes.style(id)
   line.valid = true
   line.refused = true
+  line.unsafeUnits.clear()
   line.item = raw[0].id
   line.fontSize = scopes[0].font.metrics.fontSize
   line.lineHeight = scopes[0].font.lineHeight
@@ -1007,7 +1008,7 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
     index = index + 1
   }
   if !plain {
-    text.origins = move normalized.origins
+    keepPlainTokens(&mut output, id, &mut text, move normalized)
     return false
   }
   let context = TextContext { tokens: tokens, writingMode: style.writingMode, textOrientation: style.textOrientation, direction: style.usedDirection(), unicodeBidi: UnicodeBidi.Normal, textJustify: style.textJustify }
@@ -1022,14 +1023,32 @@ effect fn shapePlain<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
   run shapeCandidate(nodes, &mut measurer, context, &analysis, &mut plan, true, raw, scopes, &mut fonts, &mut text.shaped, &mut candidate, TextCursor { unit: 0, offset: 0 }, TextCursor { unit: tokens.length, offset: 0 }, false, false, 0.0, 0.0, &[])
   plain = candidate.real && !candidate.visual.active && candidate.hanging == 0.0 && fonts.length() == 1
   if plain {
+    let mut at: usize = 0
+    while at < text.shaped.length() {
+      match text.shaped.get(at) {
+        TextRun.Text { unit, start: low, unsafeBefore, .. } => {
+          if low == 0 && unsafeBefore { run line.unsafeUnits.append(unit) }
+        }
+        _ => {}
+      }
+      at = at + 1
+    }
     line.items = move candidate.items
     line.texts = move candidate.texts
     line.advance = candidate.advance
     line.font = fonts.get(0)
     line.refused = false
   }
-  text.origins = move normalized.origins
+  keepPlainTokens(&mut output, id, &mut text, move normalized)
   return plain
+}
+
+// Keeps shapePlain's normalized text for box `id`'s layoutText (see LayoutPass.plainTokens),
+// giving `text` the lists it held before.
+fn keepPlainTokens<'pass, 'source>(output: &mut LayoutPass<'pass, 'source>, id: usize, text: &mut TextScratch, normalized: NormalizedText<'source>) {
+  output.plainTokensFor = id
+  output.plainTokens = move normalized.tokens
+  text.origins = Intrinsic.replace(output.plainOrigins, move normalized.origins)
 }
 
 // layoutText for a paragraph that is one text box of plain text (see
@@ -1064,7 +1083,7 @@ effect fn plainLine<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(n
   let metrics = lineExtents(line.items.asSlice(), scopes, extents.asMutSlice(), 0, line.items.length(), true)
   let band = indentBand(bfc.lineBand(input.bfcContentOrigin, width, 0.0, metrics.height), 0.0, false)
   if !(line.advance <= band.right - band.left) {
-    result.* = run layoutText(nodes, &mut output, &mut measurer, id, UnicodeBidi.Normal, true, &input, &box, &mut bfc, raw, &mut atomics, scopes, &mut extents, &mut text, line.items.asSlice())
+    result.* = run layoutText(nodes, &mut output, &mut measurer, id, UnicodeBidi.Normal, true, &input, &box, &mut bfc, raw, &mut atomics, scopes, &mut extents, &mut text, &line)
     run output.cache.keepPlain(id, move line)
     return true
   }
@@ -1192,7 +1211,7 @@ effect fn layoutInlineWith<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
     textIndex = textIndex + 1
   }
   if needsAnalysis || needsVisual || (input.fragmentation.active && input.performLayout) {
-    return run layoutText(nodes, &mut output, &mut measurer, id, rootBidi, needsAnalysis, &input, &box, &mut bfc, items.asSlice(), &mut atomics, scopes.asSlice(), &mut extents, &mut text, &[])
+    return run layoutText(nodes, &mut output, &mut measurer, id, rootBidi, needsAnalysis, &input, &box, &mut bfc, items.asSlice(), &mut atomics, scopes.asSlice(), &mut extents, &mut text, &PlainLine.make())
   }
   let chunks = run chunksFor(nodes, items.asSlice(), scopes.asSlice())
   let mut maximum: f32 = 0.0
@@ -1933,13 +1952,7 @@ effect fn shapeRange<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<
 // would depend on the line it is on, and no visual plan (the caller's `reusable`).
 effect fn prepareSlicing<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'_, S>, measurer: &mut M, context: TextContext<'_, '_>, analysis: &TextAnalysis, visualPlan: &mut Visual.Plan, original: &[Item], scopes: &[Scope], memo: &mut TextMemo, shaped: &mut List<TextRun>) ! OutOfMemoryError | TextError ? &mut Allocator {
   memo.slicing = 2
-  if !TextMeasure.reportsBreakSafety(&measurer) || context.tokens.length == 0 { return }
-  let mut unit: usize = 0
-  while unit < context.tokens.length {
-    let kind = context.tokens[unit].kind
-    if kind != TextTokenKind.Text && kind != TextTokenKind.Space && kind != TextTokenKind.Open && kind != TextTokenKind.Close && kind != TextTokenKind.Anchor { return }
-    unit = unit + 1
-  }
+  if !slicable(TextMeasure.reportsBreakSafety(&measurer), context) { return }
   let terminal = TextCursor { unit: context.tokens.length, offset: 0 }
   run shapeCandidate(nodes, &mut measurer, context, analysis, &mut visualPlan, true, original, scopes, &mut memo.fonts, &mut shaped, &mut memo.whole, TextCursor { unit: 0, offset: 0 }, terminal, false, false, 0.0, 0.0, &[])
   if memo.whole.visual.active || memo.whole.hanging != 0.0 { return }
@@ -1956,17 +1969,69 @@ effect fn prepareSlicing<M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxT
     }
     index = index + 1
   }
+  run markSlices(context, &mut memo)
+}
+
+// Whether prepareSlicing may cut this paragraph's lines from its whole shaping.
+fn slicable(safety: bool, context: TextContext<'_, '_>) -> bool {
+  if !safety || context.tokens.length == 0 { return false }
+  let mut unit: usize = 0
+  while unit < context.tokens.length {
+    let kind = context.tokens[unit].kind
+    if kind != TextTokenKind.Text && kind != TextTokenKind.Space && kind != TextTokenKind.Open && kind != TextTokenKind.Close && kind != TextTokenKind.Anchor { return false }
+    unit = unit + 1
+  }
+  return true
+}
+
+// Indexes memo.whole by unit and turns slicing on, with memo.unsafeAt filled.
+effect fn markSlices(context: TextContext<'_, '_>, memo: &mut TextMemo) ! OutOfMemoryError ? &mut Allocator {
   memo.firstItem.clear()
   run memo.firstItem.reserveExact(context.tokens.length + 1)
   let items = memo.whole.items.asSlice()
-  index = 0
-  unit = 0
+  let mut index: usize = 0
+  let mut unit: usize = 0
   while unit <= context.tokens.length {
     while index < items.length && items[index].start.unit < unit { index = index + 1 }
     run memo.firstItem.append(index)
     unit = unit + 1
   }
   memo.slicing = 1
+}
+
+// prepareSlicing from the whole shaping shapePlain made of the same paragraph. The line's
+// leaves name its one font, here memo.fonts' entry.
+effect fn seedSlicing(safety: bool, context: TextContext<'_, '_>, memo: &mut TextMemo, plain: &PlainLine) ! OutOfMemoryError ? &mut Allocator {
+  if memo.slicing != 0 || plain.items.length() == 0 { return }
+  memo.slicing = 2
+  if !slicable(safety, context) { return }
+  let mut font: usize = 0
+  while font < memo.fonts.length() && !(memo.fonts.asSlice()[font].style == plain.font.style && memo.fonts.asSlice()[font].key == plain.font.key) { font = font + 1 }
+  if font == memo.fonts.length() { run memo.fonts.append(plain.font) }
+  memo.whole.reset()
+  run memo.whole.items.reserveExact(plain.items.length())
+  run memo.whole.items.appendSlice(plain.items.asSlice())
+  run memo.whole.texts.reserveExact(plain.texts.length())
+  let texts = plain.texts.asSlice()
+  let mut index: usize = 0
+  while index < texts.length {
+    let mut leaf = texts[index]
+    leaf.font = font
+    run memo.whole.texts.append(leaf)
+    index = index + 1
+  }
+  memo.whole.advance = plain.advance
+  memo.whole.real = true
+  memo.unsafeAt.clear()
+  run memo.unsafeAt.reserveExact(context.tokens.length + 1)
+  while memo.unsafeAt.length() <= context.tokens.length { run memo.unsafeAt.append(false) }
+  index = 0
+  while index < plain.unsafeUnits.length() {
+    let unit = plain.unsafeUnits.get(index)
+    if unit <= context.tokens.length { memo.unsafeAt.set(unit, true) }
+    index = index + 1
+  }
+  run markSlices(context, &mut memo)
 }
 
 // Gives `result` what shapeCandidate gives for [start, end) without shaping: the items and
@@ -2484,7 +2549,7 @@ effect fn takePrepared<'pass, 'source>(output: &mut LayoutPass<'pass, 'source>, 
   }
   return PreparedInline { tokens: List<TextToken<'source>>.make(), core: run Box.make(PreparedCore.make()), hasTokens: false }
 }
-effect fn layoutText<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, unicodeBidi: UnicodeBidi, externalAnalysis: bool, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, wholeItems: &[Item]) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
+effect fn layoutText<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutPass<'pass, 'source>, measurer: &mut M, id: usize, unicodeBidi: UnicodeBidi, externalAnalysis: bool, input: &Input, box: &ResolvedBox, bfc: &mut BfcState, raw: &[Item], atomics: &mut List<AtomicData>, scopes: &[Scope], extents: &mut List<Extent>, text: &mut TextScratch, whole: &PlainLine) -> Layout ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
   let style = nodes.style(id)
   let axes = Axes.make(style.writingMode)
   let rtl = style.usedDirection() == Direction.Rtl
@@ -2512,7 +2577,13 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
     barrierIndex = barrierIndex + 1
   }
   if !reuse { memo.forget() }
-  if !reuse || !haveTokens {
+  if (!reuse || !haveTokens) && output.plainTokensFor == id {
+    output.plainTokensFor = NO_NODE
+    let tokens = move normalized.tokens
+    normalized.tokens = Intrinsic.replace(output.plainTokens, move tokens)
+    let origins = move normalized.origins
+    normalized.origins = Intrinsic.replace(output.plainOrigins, move origins)
+  } else if !reuse || !haveTokens {
     let mut rawTokens = Intrinsic.replace(output.rawTokens, List<TextToken<'source>>.make())
     run tokensFor(nodes, raw, scopes, &mut rawTokens)
     let origins = Intrinsic.replace(normalized.origins, List<usize>.make())
@@ -2694,6 +2765,8 @@ effect fn layoutText<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
     wholeReusable = context.tokens[index].kind != TextTokenKind.Tab
     index = index + 1
   }
+  let wholeItems = whole.items.asSlice()
+  if wholeReusable && hasText && !fragmented { run seedSlicing(TextMeasure.reportsBreakSafety(&measurer), context, &mut memo, whole) }
   let shaped = &mut text.shaped
   // The two trade places as lines are accepted.
   let mut candidate = &mut text.candidate

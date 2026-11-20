@@ -500,8 +500,8 @@ impl LayoutCache {
     at = 0
     while at < self.plainLines.length() {
       let line = &self.plainLines.asSlice()[at]
-      plainUsed = plainUsed + line.items.length() * Intrinsic.layoutOf<Item>().bytes + line.texts.length() * Intrinsic.layoutOf<TextLeaf>().bytes
-      plainRoom = plainRoom + line.items.capacity() * Intrinsic.layoutOf<Item>().bytes + line.texts.capacity() * Intrinsic.layoutOf<TextLeaf>().bytes
+      plainUsed = plainUsed + line.items.length() * Intrinsic.layoutOf<Item>().bytes + line.texts.length() * Intrinsic.layoutOf<TextLeaf>().bytes + line.unsafeUnits.length() * u
+      plainRoom = plainRoom + line.items.capacity() * Intrinsic.layoutOf<Item>().bytes + line.texts.capacity() * Intrinsic.layoutOf<TextLeaf>().bytes + line.unsafeUnits.capacity() * u
       at = at + 1
     }
     run out.bytes("css.cache.plain-lines.heap", plainUsed, plainRoom)

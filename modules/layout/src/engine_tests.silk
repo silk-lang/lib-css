@@ -2805,3 +2805,35 @@ test effect fn linesCutFromTheParagraphKeepUnsafeBreaksShaped()
   run Testing.expect(fragmentDigest(&cut) == fragmentDigest(&shaped), "lines cut from the paragraph's shaping match lines shaped one by one, unsafe breaks included")
   run Testing.expect(safe.shapes < plain.shapes, "a provider that reports break safety is asked to shape less")
 }
+
+// Blocks lay their paragraphs out at once: the shaping made to try one line (see shapePlain)
+// is the one the lines are cut from.
+test effect fn linesCutFromTheSingleLineShapingKeepUnsafeBreaksShaped()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut column = Style.make()
+  column.width = SizeValue.px(120.0)
+  let mut tree = run Tree.make(move column) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let contents: [string<'static>; 3] = [
+    "AV VA VV alpha AV beta VAV gamma VA delta",
+    "Vivid Valleys of Vast Velvet Vines",
+    "plain words with no kerning at all in them",
+  ]
+  let mut index: usize = 0
+  while index < 3 {
+    let paragraph = run tree.append(root, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let value = run String.copy(contents[index]) |> Effect.provideMut<Allocator>(&mut allocator)
+    drop run tree.appendText(paragraph, move value) |> Effect.provideMut<Allocator>(&mut allocator)
+    index = index + 1
+  }
+  let viewport = OptionalSize.definite(120.0, 400.0)
+  let mut cut = LayoutTree.make()
+  let mut shaped = LayoutTree.make()
+  let mut safe = Kerned { words: Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: true, analyses: 0, shapedUnits: 0 }, safety: true, shapes: 0 }
+  let mut plain = Kerned { words: Words { paragraph: Paragraph { forced: false, advance: 5.0, zeroHeight: false, levelBoundary: false }, plain: true, analyses: 0, shapedUnits: 0 }, safety: false, shapes: 0 }
+  run compute(&tree, &mut cut, &mut safe, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  run compute(&tree, &mut shaped, &mut plain, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(fragmentDigest(&cut) == fragmentDigest(&shaped), "lines cut from the shaping made for one line match lines shaped one by one, unsafe breaks included")
+  run Testing.expect(safe.shapes < plain.shapes, "a provider that reports break safety is asked to shape less")
+}
