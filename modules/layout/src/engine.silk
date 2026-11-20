@@ -1536,7 +1536,7 @@ effect fn probeText<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(n
     widest.availableWidth = AvailableSpace.maxContent()
     let widestKey = cacheKey(output.keyShape(id), &widest, output.viewportFree(id))
     let found = output.cache.findWidest(id, &widestKey)
-    if found != usize.MAX && output.cache.layoutAt(found).size.width <= request.availableWidth.value {
+    if found != usize.MAX && output.cache.coreAt(found).sizes().width <= request.availableWidth.value {
       let result = output.cache.layoutAt(found).widenedTo(request.availableWidth.value, !request.indefiniteWidth)
       output.stats.cacheHits = output.stats.cacheHits + 1
       // Stored as a cache hit stores it (see storeCached).

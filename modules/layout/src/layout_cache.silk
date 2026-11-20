@@ -6,10 +6,10 @@ import silk.core.ownership { Copy }
 import silk.num.usize
 import silk.num.u32
 import context { Input }
-import stored_input { StoredInput, RarePool, RARE_NONE, sameStored }
+import stored_input { StoredInput, RareInput, RarePool, RARE_NONE, sameStored }
 import style { WritingMode }
-import geometry { Layout, OptionalSize, AvailableSpace, AvailableKind, Rect, Point, ResolvedEdges }
-import fragments { FragmentArena, Shift, one, headedFor }
+import geometry { Layout, LayoutStore, LayoutCore, OptionalSize, AvailableSpace, AvailableKind, Rect, Point, ResolvedEdges }
+import fragments { FragmentArena, Shift, headedFor }
 import bfc { FloatBox }
 import silk.collections.slice { Slice }
 import inline_prepared { KeptText, PlainLine, PreparedCore, TextLeaf, TextFont, Segment, LineBox }
@@ -21,6 +21,9 @@ import grid_scratch { GridMemos }
 import grid_subgrid { SubgridPool }
 
 const ABSENT: usize = usize.MAX
+const REQUEST_NONE: u32 = u32.MAX
+const REQUEST_OWN: u32 = 2147483648
+const SLOT_MASK: u32 = 2147483647
 // Reuse levels of a subtree's kept layout; see Incremental.markSubtrees.
 pub const REUSE_NONE: u8 = 0
 pub const REUSE_INDEPENDENT: u8 = 1
@@ -108,14 +111,14 @@ pub struct BoxMark { pub stamp: u32, pub slot: u32, pub partial: u32, pub writte
 impl Copy for BoxMark {}
 // The marks of a box sit together, so the checks a reuse makes of one box
 // read one cache line.
-pub struct BoxWrites { pub generation: u32, pub marks: List<BoxMark>, pub saved: List<Layout>, pub placed: List<Placement> }
+pub struct BoxWrites { pub generation: u32, pub marks: List<BoxMark>, pub saved: LayoutStore, pub placed: List<Placement> }
 impl BoxWrites {
   pub effect fn census(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
     run out.held("css.writes.marks", self.marks.length(), self.marks.capacity(), Intrinsic.layoutOf<BoxMark>().bytes)
-    run out.held("css.writes.saved(Layout)", self.saved.length(), self.saved.capacity(), Intrinsic.layoutOf<Layout>().bytes)
+    run out.bytes("css.writes.saved(Layout)", self.saved.usedBytes(), self.saved.storageBytes())
     run out.held("css.writes.placed", self.placed.length(), self.placed.capacity(), Intrinsic.layoutOf<Placement>().bytes)
   }
-  pub fn make() -> BoxWrites { return BoxWrites { generation: 0, marks: List<BoxMark>.make(), saved: List<Layout>.make(), placed: List<Placement>.make() } }
+  pub fn make() -> BoxWrites { return BoxWrites { generation: 0, marks: List<BoxMark>.make(), saved: LayoutStore.make(), placed: List<Placement>.make() } }
   // Starts a compute over `count` boxes.
   pub effect fn begin(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {
     self.generation = self.generation + 1
@@ -179,7 +182,9 @@ pub const AGES_OLDER: u8 = 2
 // entry first would copy both through the stack.
 // `next` and `generation` are u32s (LINK_NONE for no next entry), so an entry
 // is 12 bytes.
-struct Entry { kind: CacheKind, next: u32, generation: u32 }
+// `pinned` marks the entry whose request a final result shares (see
+// FinalResult.request): it is neither overwritten nor dropped as stale.
+struct Entry { kind: CacheKind, pinned: bool, next: u32, generation: u32 }
 impl Copy for Entry {}
 
 // The last full layout of a reusable box: its request, and the contiguous
@@ -191,8 +196,12 @@ impl Copy for Entry {}
 // (see Layout.withFinal).
 // `beside` marks an in-flow box recorded beside its BFC's floats (see
 // LayoutPass.recordFinal), the others independent formatting contexts.
+// The request is where the box's recorded request is: REQUEST_NONE, a
+// cache entry of the box whose request differs only in `flags` and the
+// origin (most finals were probed under the same sizes first), or, with
+// REQUEST_OWN, a slot of LayoutCache.finalInputs.
 pub struct FinalResult {
-  pub input: StoredInput,
+  request: u32, flags: u32, originX: f32, originY: f32,
   pub location: Point, pub usedMargin: ResolvedEdges, pub scrollableOverflow: Rect,
   pub hasClearance: bool, pub horizontalScrollbar: bool, pub verticalScrollbar: bool,
   pub beside: bool,
@@ -200,7 +209,7 @@ pub struct FinalResult {
 impl Copy for FinalResult {}
 impl FinalResult {
   fn none() -> FinalResult {
-    return FinalResult { input: StoredInput.pack(&Input.make(OptionalSize.definite(0.0, 0.0)), RARE_NONE), location: Point { x: 0.0, y: 0.0 }, usedMargin: ResolvedEdges.zero(), scrollableOverflow: Rect.zero(), hasClearance: false, horizontalScrollbar: false, verticalScrollbar: false, beside: false }
+    return FinalResult { request: REQUEST_NONE, flags: 0, originX: 0.0, originY: 0.0, location: Point { x: 0.0, y: 0.0 }, usedMargin: ResolvedEdges.zero(), scrollableOverflow: Rect.zero(), hasClearance: false, horizontalScrollbar: false, verticalScrollbar: false, beside: false }
   }
   // The recorded layout, from the box's kept final layout.
   pub fn layout(self: &Self, kept: &Layout) -> Layout {
@@ -386,13 +395,16 @@ pub struct LayoutCache {
   // Lookups per box, counted when `counting` (see census).
   pub counting: bool, asked: List<u32>,
   heads: List<usize>,
-  entries: List<Entry>, inputs: List<StoredInput>, layouts: List<Layout>,
+  entries: List<Entry>, inputs: List<StoredInput>, layouts: LayoutStore,
   // The rare parts of the stored requests of entries, results and block
   // bases (see StoredInput).
   entryRares: RarePool, resultRares: RarePool, baseRares: RarePool,
+  // Recorded final requests no cache entry shares (REQUEST_OWN), and the
+  // first free one, the free ones chained through their flags.
+  finalInputs: List<StoredInput>, freeFinal: u32,
   // The storage compact last moved entries out of, kept so that neither list
   // grows again in a steady state.
-  spare: List<Entry>, spareInputs: List<StoredInput>, spareLayouts: List<Layout>,
+  spare: List<Entry>, spareInputs: List<StoredInput>, spareLayouts: LayoutStore,
   // Entries no longer reachable from a head; compacted when they dominate.
   dead: usize,
   // The current compute, and how many entries the previous one used.
@@ -456,16 +468,16 @@ impl LayoutCache {
   pub effect fn heldCensus(self: &Self, out: &mut Census) ! OutOfMemoryError ? &mut Allocator {
     let u = Intrinsic.layoutOf<usize>().bytes
     let input = Intrinsic.layoutOf<StoredInput>().bytes
-    let layout = Intrinsic.layoutOf<Layout>().bytes
     run out.held("css.cache.heads", self.heads.length(), self.heads.capacity(), u)
     run out.held("css.cache.entries", self.entries.length(), self.entries.capacity(), Intrinsic.layoutOf<Entry>().bytes)
     run out.held("css.cache.inputs", self.inputs.length(), self.inputs.capacity(), input)
     run out.bytes("css.cache.rare-inputs", self.entryRares.storageBytes() + self.resultRares.storageBytes() + self.baseRares.storageBytes(), self.entryRares.storageBytes() + self.resultRares.storageBytes() + self.baseRares.storageBytes())
-    run out.held("css.cache.layouts", self.layouts.length(), self.layouts.capacity(), layout)
+    run out.held("css.cache.final-inputs", self.finalInputs.length(), self.finalInputs.capacity(), input)
+    run out.bytes("css.cache.layouts", self.layouts.usedBytes(), self.layouts.storageBytes())
     run out.unit("css.cache.dead-entries", self.dead)
     run out.held("css.cache.spare-entries", self.spare.length(), self.spare.capacity(), Intrinsic.layoutOf<Entry>().bytes)
     run out.held("css.cache.spare-inputs", self.spareInputs.length(), self.spareInputs.capacity(), input)
-    run out.held("css.cache.spare-layouts", self.spareLayouts.length(), self.spareLayouts.capacity(), layout)
+    run out.bytes("css.cache.spare-layouts", self.spareLayouts.usedBytes(), self.spareLayouts.storageBytes())
     run out.held("css.cache.final-results", self.results.length(), self.results.capacity(), Intrinsic.layoutOf<FinalResult>().bytes)
     run out.held("css.cache.final-ranges", self.ranges.length(), self.ranges.capacity(), Intrinsic.layoutOf<BoxRanges>().bytes)
     let mut valid: usize = 0
@@ -547,7 +559,7 @@ impl LayoutCache {
     run self.subgrids.census(&mut out)
   }
   pub fn make() -> LayoutCache {
-    return LayoutCache { textStamp: 0, counting: false, asked: List<u32>.make(), heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<StoredInput>.make(), layouts: List<Layout>.make(), entryRares: RarePool.make(), resultRares: RarePool.make(), baseRares: RarePool.make(), spare: List<Entry>.make(), spareInputs: List<StoredInput>.make(), spareLayouts: List<Layout>.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make(), plainSlots: List<usize>.make(), plainLines: List<PlainLine>.make() }
+    return LayoutCache { textStamp: 0, counting: false, asked: List<u32>.make(), heads: List<usize>.make(), entries: List<Entry>.make(), inputs: List<StoredInput>.make(), layouts: LayoutStore.make(), entryRares: RarePool.make(), resultRares: RarePool.make(), baseRares: RarePool.make(), finalInputs: List<StoredInput>.make(), freeFinal: REQUEST_NONE, spare: List<Entry>.make(), spareInputs: List<StoredInput>.make(), spareLayouts: LayoutStore.make(), dead: 0, emptyAtStart: true, generation: 0, touched: 0, previouslyTouched: 0, results: List<FinalResult>.make(), ranges: List<BoxRanges>.make(), cleared: List<usize>.make(), clock: 0, clearedAll: 0, clearLog: [0; 16], clearLogClocks: [0; 16], clearLogCount: 0, clearLogNext: 0, clearLogFrom: 0, runs: List<PositionedRun>.make(), spareRuns: List<PositionedRun>.make(), rotatedTouched: 0, rotatedFloats: false, stamped: 0, skipping: false, rangesReset: false, floats: List<FloatBox>.make(), floatsCompacted: 0, texts: List<List<KeptText>>.make(), flexMemos: FlexMemos.make(), gridGeometry: GridGeometryStore.make(), gridMemos: GridMemos.make(), subgrids: SubgridPool.make(), blockSlots: List<usize>.make(), blockBases: List<BlockBase>.make(), plainWidths: List<f32>.make(), plainSlots: List<usize>.make(), plainLines: List<PlainLine>.make() }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() - self.dead }
   pub fn clear(self: &mut Self) {
@@ -569,6 +581,8 @@ impl LayoutCache {
     self.entries.clear()
     self.inputs.clear()
     self.entryRares.clear()
+    // No result can share a cleared entry.
+    self.forgetRequests()
     self.layouts.clear()
     self.dead = 0
     self.touched = 0
@@ -602,7 +616,8 @@ impl LayoutCache {
       while at < self.ranges.length() {
         let ranges = &self.ranges.asSlice()[at]
         if ranges.range.valid() || ranges.kept.valid() {
-          self.subgrids.mark(self.resultRares.gridContext(self.results.asSlice()[at].input.rare))
+          let grid = self.requestGrid(at)
+          self.subgrids.mark(grid)
         }
         at = at + 1
       }
@@ -771,9 +786,8 @@ impl LayoutCache {
   }
   @inlineAlways
   effect fn writeResult(self: &mut Self, id: usize, input: &Input, layout: &Layout, beside: bool) ! OutOfMemoryError ? &mut Allocator {
-    let rare = run self.resultRares.put(self.results.asSlice()[id].input.rare, input)
+    run self.keepRequest(id, input)
     let results = self.results.asMutSlice()
-    results[id].input = StoredInput.pack(input, rare)
     results[id].location = layout.location
     results[id].usedMargin = layout.usedMargin
     results[id].scrollableOverflow = layout.scrollableOverflow
@@ -814,7 +828,7 @@ impl LayoutCache {
       let id = ids[at]
       self.clearBox(id)
       if id < self.results.length() {
-        run self.resultRares.release(self.results.asSlice()[id].input.rare)
+        self.releaseRequest(id)
         let results = self.results.asMutSlice()
         results[id] = FinalResult.none()
       }
@@ -830,6 +844,8 @@ impl LayoutCache {
   // inside them changed: its placement memo stays (see GridMemos).
   pub fn clearPlaced(self: &mut Self, id: usize) { self.clearResults(id) }
   fn clearResults(self: &mut Self, id: usize) {
+    // Its entries go below, unlinked but in place: a result that shares one
+    // still reads it, until compact gives that result a slot of its own.
     self.clock = self.clock + 1
     if id < self.cleared.length() { self.cleared.set(id, self.clock) }
     // A full ring drops its oldest clear, after which it holds every one.
@@ -867,10 +883,95 @@ impl LayoutCache {
   pub fn sameRequest(a: &Input, b: &Input) -> bool { return sameInput(a, b) }
   // Whether box `id`'s recorded final request is `input` (see sameInput).
   pub fn sameResultRequest(self: &Self, id: usize, input: &Input) -> bool {
-    return sameAgainst(&self.results.asSlice()[id].input, &self.resultRares, input, &StoredInput.pack(input, RARE_NONE))
+    let stored = self.resultStored(id)
+    return sameAgainst(&stored, &self.resultRares, input, &StoredInput.pack(input, RARE_NONE))
   }
   // Box `id`'s recorded final request.
-  pub fn resultInput(self: &Self, id: usize) -> Input { return self.resultRares.unpack(&self.results.asSlice()[id].input) }
+  pub fn resultInput(self: &Self, id: usize) -> Input { return self.resultRares.unpack(&self.resultStored(id)) }
+  // Box `id`'s recorded request, stored; its rare parts are in resultRares.
+  fn resultStored(self: &Self, id: usize) -> StoredInput {
+    let result = &self.results.asSlice()[id]
+    let request = result.request
+    if request == REQUEST_NONE { return StoredInput.pack(&Input.make(OptionalSize.definite(0.0, 0.0)), RARE_NONE) }
+    if request & REQUEST_OWN != 0 { return self.finalInputs.asSlice()[u32.toUsize(request & SLOT_MASK)] }
+    return self.inputs.asSlice()[u32.toUsize(request)].withOwn(result.flags, result.originX, result.originY)
+  }
+  fn requestGrid(self: &Self, id: usize) -> usize {
+    let request = self.results.asSlice()[id].request
+    if request == REQUEST_NONE || request & REQUEST_OWN == 0 { return 0 }
+    return self.resultRares.gridContext(self.finalInputs.asSlice()[u32.toUsize(request & SLOT_MASK)].rare)
+  }
+  // Records `input` as box `id`'s request: shared with a cache entry of the
+  // box when one has its sizes, else in a slot of its own.
+  effect fn keepRequest(self: &mut Self, id: usize, input: &Input) ! OutOfMemoryError ? &mut Allocator {
+    self.releaseRequest(id)
+    let packed = StoredInput.pack(input, RARE_NONE)
+    if !RareInput.needed(input) && id < self.heads.length() {
+      let mut index = self.heads.get(id)
+      while index != ABSENT {
+        let entry = self.entries.get(index)
+        if !entry.pinned && StoredInput.sameSizes(&self.inputs.asSlice()[index], &packed) {
+          let entries = self.entries.asMutSlice()
+          entries[index].pinned = true
+          let results = self.results.asMutSlice()
+          results[id].request = usize.toU32(index)
+          results[id].flags = packed.flags
+          results[id].originX = packed.originXValue()
+          results[id].originY = packed.originYValue()
+          return
+        }
+        index = follow(entry.next)
+      }
+    }
+    run self.keepOwnRequest(id, input)
+  }
+  // Records `input` as box `id`'s request in a slot of its own.
+  effect fn keepOwnRequest(self: &mut Self, id: usize, input: &Input) ! OutOfMemoryError ? &mut Allocator {
+    let mut slot = self.freeFinal
+    let mut previous = RARE_NONE
+    if slot != REQUEST_NONE {
+      let free = self.finalInputs.asSlice()[u32.toUsize(slot)]
+      self.freeFinal = free.flags
+      previous = free.rare
+    } else {
+      slot = usize.toU32(self.finalInputs.length())
+      if slot >= REQUEST_OWN { return Intrinsic.trap("LayoutCache: too many final requests") }
+      run self.finalInputs.append(StoredInput.pack(input, RARE_NONE))
+    }
+    let rare = run self.resultRares.put(previous, input)
+    self.finalInputs.set(u32.toUsize(slot), StoredInput.pack(input, rare))
+    let results = self.results.asMutSlice()
+    results[id].request = slot | REQUEST_OWN
+  }
+  // Box `id` no longer records a request: its shared entry is unpinned, its
+  // own slot freed (keeping its rare slot for the next owner to reuse).
+  fn releaseRequest(self: &mut Self, id: usize) {
+    let request = self.results.asSlice()[id].request
+    if request == REQUEST_NONE { return }
+    if request & REQUEST_OWN != 0 {
+      let slot = request & SLOT_MASK
+      let inputs = self.finalInputs.asMutSlice()
+      inputs[u32.toUsize(slot)].flags = self.freeFinal
+      self.freeFinal = slot
+    } else {
+      let entries = self.entries.asMutSlice()
+      entries[u32.toUsize(request)].pinned = false
+    }
+    let results = self.results.asMutSlice()
+    results[id].request = REQUEST_NONE
+  }
+  // Every result records no request.
+  fn forgetRequests(self: &mut Self) {
+    let results = self.results.asMutSlice()
+    let mut id: usize = 0
+    while id < results.length {
+      results[id].request = REQUEST_NONE
+      id = id + 1
+    }
+    self.finalInputs.clear()
+    self.freeFinal = REQUEST_NONE
+    self.resultRares.clear()
+  }
   // Like sameRequest, but neither side may read more of the result.
   pub fn sameBase(a: &Input, b: &Input) -> bool {
     return sameInput(a, b) && a.baselines == b.baselines && a.fullSize == b.fullSize
@@ -975,7 +1076,7 @@ impl LayoutCache {
       if entry.kind == CacheKind.ContainerAllocation { return false }
       if entry.kind == CacheKind.IndependentBox {
         if u32.toUsize(entry.generation) < generation { return false }
-        run result.append(CachedProbe { input: self.entryRares.unpack(&self.inputs.asSlice()[index]), layout: self.layouts.asSlice()[index] })
+        run result.append(CachedProbe { input: self.entryRares.unpack(&self.inputs.asSlice()[index]), layout: self.layouts.get(index) })
       }
       index = follow(entry.next)
     }
@@ -1001,7 +1102,7 @@ impl LayoutCache {
   pub fn lookup(self: &mut Self, id: usize, input: &Input, kind: CacheKind) -> Option<Layout> {
     let index = self.find(id, input, kind)
     if index == ABSENT { return Option<Layout>.None }
-    return Option<Layout>.Some { value: self.layouts.asSlice()[index] }
+    return Option<Layout>.Some { value: self.layouts.get(index) }
   }
   // The entry index of a cached result, or usize.MAX; read it with layoutAt.
   // The census of the last compute's probes over `count` boxes; lookups are
@@ -1010,7 +1111,7 @@ impl LayoutCache {
     let mut result = ProbeCensus { asked: 0, computed: 0, repeated: 0, sameAnswer: 0, sameAnswerBy: [0; 16], mostAsked: 0, mostComputed: 0, byWidth: [0; 4], byHeight: [0; 4], perBox: [0; 5], askedPerBox: [0; 6] }
     let inputs = self.inputs.asSlice()
     let entries = self.entries.asSlice()
-    let layouts = self.layouts.asSlice()
+    let layouts = &self.layouts
     let mut id: usize = 0
     while id < count {
       let mut asked: usize = 0
@@ -1043,8 +1144,8 @@ impl LayoutCache {
         // The chain's head is its newest entry, so `other` was computed first.
         other = follow(entries[index].next)
         while other != ABSENT {
-          let earlier = &layouts[other].size
-          let later = &layouts[index].size
+          let earlier = layouts.size(other)
+          let later = layouts.size(index)
           if entries[other].kind == entries[index].kind && earlier.width == later.width && earlier.height == later.height {
             result.sameAnswer = result.sameAnswer + 1
             let earlierInput = self.entryRares.unpack(&inputs[other])
@@ -1128,7 +1229,7 @@ impl LayoutCache {
     while index != ABSENT {
       let entry = self.entries.get(index)
       let stored = &self.inputs.asSlice()[index]
-      if entry.kind == CacheKind.IndependentBox && stored.intrinsicWidth() && !stored.knownWidthDefinite() && sameInputAtWidth(&self.entryRares.unpack(stored), input, self.layouts.asSlice()[index].size.width) {
+      if entry.kind == CacheKind.IndependentBox && stored.intrinsicWidth() && !stored.knownWidthDefinite() && sameInputAtWidth(&self.entryRares.unpack(stored), input, self.layouts.size(index).width) {
         if entry.generation != stamp(self.generation) {
           let mutable = self.entries.asMutSlice()
           mutable[index].generation = stamp(self.generation)
@@ -1141,7 +1242,10 @@ impl LayoutCache {
     return ABSENT
   }
   @inlineAlways
-  pub fn layoutAt(self: &Self, index: usize) -> &Layout { return &self.layouts.asSlice()[index] }
+  pub fn layoutAt(self: &Self, index: usize) -> Layout { return self.layouts.get(index) }
+  // The stored sizes and ratio of a cached result.
+  @inlineAlways
+  pub fn coreAt(self: &Self, index: usize) -> &LayoutCore { return self.layouts.core(index) }
   pub effect fn remember(self: &mut Self, id: usize, input: &Input, kind: CacheKind, layout: &Layout) ! OutOfMemoryError ? &mut Allocator {
     if id >= self.heads.length() {
       let missing = id + 1 - self.heads.length()
@@ -1157,13 +1261,12 @@ impl LayoutCache {
       let mut at = previous
       while at != ABSENT {
         let entry = self.entries.get(at)
-        if u32.toUsize(entry.generation) + 1 < self.generation {
-          self.entries.set(at, Entry { kind: kind, next: entry.next, generation: stamp(self.generation) })
+        if u32.toUsize(entry.generation) + 1 < self.generation && !entry.pinned {
+          self.entries.set(at, Entry { kind: kind, pinned: false, next: entry.next, generation: stamp(self.generation) })
           let rare = run self.entryRares.put(self.inputs.asSlice()[at].rare, input)
           let inputs = self.inputs.asMutSlice()
           inputs[at] = StoredInput.pack(input, rare)
-          let layouts = self.layouts.asMutSlice()
-          layouts[at] = layout.*
+          run self.layouts.set(at, layout)
           self.touched = self.touched + 1
           return
         }
@@ -1180,8 +1283,8 @@ impl LayoutCache {
     }
     let rare = run self.entryRares.put(RARE_NONE, input)
     run self.inputs.append(StoredInput.pack(input, rare))
-    run self.layouts.appendSlice(one<Layout>(layout))
-    run self.entries.append(Entry { kind: kind, next: link(previous), generation: stamp(self.generation) })
+    run self.layouts.append(layout)
+    run self.entries.append(Entry { kind: kind, pinned: false, next: link(previous), generation: stamp(self.generation) })
     self.touched = self.touched + 1
     self.heads.set(id, index)
   }
@@ -1218,6 +1321,7 @@ impl LayoutCache {
     let mut kept = List<BoxRanges>.make()
     let mut results = List<FinalResult>.make()
     let mut resultRares = RarePool.make()
+    let mut finalInputs = List<StoredInput>.make()
     run heads.reserveExact(toOld.length)
     run kept.reserveExact(toOld.length)
     run results.reserveExact(toOld.length)
@@ -1232,7 +1336,12 @@ impl LayoutCache {
       run kept.append(BoxRanges { range: StoredRange.of(range), kept: NO_RANGE, stamp: STAMP_NONE })
       if from != ABSENT && from < self.results.length() {
         let mut result = self.results.asSlice()[from]
-        if result.input.rare != RARE_NONE { result.input.rare = run resultRares.put(RARE_NONE, &self.resultRares.unpack(&result.input)) }
+        if result.request != REQUEST_NONE && result.request & REQUEST_OWN != 0 {
+          let mut stored = self.finalInputs.asSlice()[u32.toUsize(result.request & SLOT_MASK)]
+          if stored.rare != RARE_NONE { stored.rare = run resultRares.put(RARE_NONE, &self.resultRares.unpack(&stored)) }
+          result.request = usize.toU32(finalInputs.length()) | REQUEST_OWN
+          run finalInputs.append(stored)
+        }
         run results.append(result)
       } else { run results.append(FinalResult.none()) }
       id = id + 1
@@ -1242,6 +1351,8 @@ impl LayoutCache {
     self.rotatedFloats = true
     self.results = move results
     self.resultRares = move resultRares
+    self.finalInputs = move finalInputs
+    self.freeFinal = REQUEST_NONE
     let mut texts = List<List<KeptText>>.make()
     run texts.reserveExact(toOld.length)
     id = 0
@@ -1343,12 +1454,13 @@ impl LayoutCache {
   pub effect fn compact(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
     let live = self.entries.length() - self.dead
     let stale = live > 2 * self.previouslyTouched + 256
-    if !stale && (self.dead < 256 || self.dead * 2 < self.entries.length()) { return }
+    let wasteful = self.layouts.unusedWords() > 4096 && self.layouts.unusedWords() * 2 > self.layouts.wordCount()
+    if !stale && !wasteful && (self.dead < 256 || self.dead * 2 < self.entries.length()) { return }
     let mut oldest: usize = 0
     if stale && self.generation > 0 { oldest = self.generation - 1 }
     let mut kept = Intrinsic.replace(self.spare, List<Entry>.make())
     let mut keptInputs = Intrinsic.replace(self.spareInputs, List<StoredInput>.make())
-    let mut keptLayouts = Intrinsic.replace(self.spareLayouts, List<Layout>.make())
+    let mut keptLayouts = Intrinsic.replace(self.spareLayouts, LayoutStore.make())
     let mut keptRares = RarePool.make()
     kept.clear()
     keptInputs.clear()
@@ -1357,12 +1469,17 @@ impl LayoutCache {
     run keptInputs.reserve(self.entries.length() - self.dead)
     run keptLayouts.reserve(self.entries.length() - self.dead)
     let mut chain = List<usize>.make()
+    // Where each kept entry moved, for the results that share one.
+    let mut moved = List<u32>.make()
+    run moved.reserve(self.entries.length())
+    while moved.length() < self.entries.length() { run moved.append(REQUEST_NONE) }
     let mut id: usize = 0
     while id < self.heads.length() {
       chain.clear()
       let mut index = self.heads.get(id)
       while index != ABSENT {
-        if u32.toUsize(self.entries.get(index).generation) >= oldest { run chain.append(index) }
+        let entry = self.entries.get(index)
+        if u32.toUsize(entry.generation) >= oldest || entry.pinned { run chain.append(index) }
         index = follow(self.entries.get(index).next)
       }
       let mut next = ABSENT
@@ -1373,13 +1490,33 @@ impl LayoutCache {
         let mut entry = self.entries.get(from)
         entry.next = link(next)
         next = kept.length()
+        moved.set(from, usize.toU32(next))
         run kept.append(entry)
         let mut stored = self.inputs.asSlice()[from]
         if stored.rare != RARE_NONE { stored.rare = run keptRares.put(RARE_NONE, &self.entryRares.unpack(&stored)) }
         run keptInputs.append(stored)
-        run keptLayouts.appendSlice(one<Layout>(&self.layouts.asSlice()[from]))
+        run keptLayouts.appendFrom(&self.layouts, from)
       }
       self.heads.set(id, next)
+      id = id + 1
+    }
+    // A result follows its shared entry, or takes its own slot when the
+    // entry is gone (its box's entries were forgotten).
+    id = 0
+    while id < self.results.length() {
+      let request = self.results.asSlice()[id].request
+      if request != REQUEST_NONE && request & REQUEST_OWN == 0 {
+        let to = moved.get(u32.toUsize(request))
+        if to != REQUEST_NONE {
+          let results = self.results.asMutSlice()
+          results[id].request = to
+        } else {
+          let input = self.resultInput(id)
+          let results = self.results.asMutSlice()
+          results[id].request = REQUEST_NONE
+          run self.keepOwnRequest(id, &input)
+        }
+      }
       id = id + 1
     }
     self.spare = Intrinsic.replace(self.entries, move kept)
@@ -1394,7 +1531,7 @@ impl LayoutCache {
     // (as Snapshot.releaseSpare does for the output).
     let bytes = self.spare.capacity() * Intrinsic.layoutOf<Entry>().bytes
       + self.spareInputs.capacity() * Intrinsic.layoutOf<StoredInput>().bytes
-      + self.spareLayouts.capacity() * Intrinsic.layoutOf<Layout>().bytes
+      + self.spareLayouts.storageBytes()
     if bytes > SPARE_KEPT_BYTES {
       self.spare.clearAndFree()
       self.spareInputs.clearAndFree()
