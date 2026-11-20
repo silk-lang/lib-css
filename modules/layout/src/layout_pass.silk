@@ -856,7 +856,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   effect fn reuseKept<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>, id: usize, input: &Input, level: u8, beside: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
     if id >= self.facts.reusable.length() || (self.facts.reusable.get(id) & REUSE_LEVEL) < level { return false }
     let slot = self.cache.keptRange(id)
-    if !slot.valid || !LayoutCache.sameRequest(&self.cache.result(id).input, input) { return false }
+    if !slot.valid || !self.cache.sameResultRequest(id, input) { return false }
     return run self.reuseRange(nodes, id, slot, beside)
   }
   // Whether a box its parent knows to request what it last requested still

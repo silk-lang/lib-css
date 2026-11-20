@@ -1,0 +1,123 @@
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.core.effect { Effect }
+import silk.testing.testing { Testing, AssertionError }
+import silk.num.usize
+import context { Input }
+import geometry { OptionalSize, AvailableSpace, Size, Point }
+import style { WritingMode, TextOrientation, Align, OverflowAlignment }
+import fragmentation { BoundaryProbe }
+import layout_cache { LayoutCache }
+import stored_input { StoredInput, RarePool, RARE_NONE, sameStored }
+
+// Requests that differ from Input.make in one field each, and one that
+// differs in all of them.
+fn variant(which: usize) -> Input {
+  let mut input = Input.make(OptionalSize.definite(800.0, 600.0))
+  if which == 1 || which == 0 { input.parent = OptionalSize { width: 120.5, height: 7.0, widthDefinite: true, heightDefinite: false } }
+  if which == 2 || which == 0 { input.initialContainingBlock = OptionalSize { width: 1024.0, height: 0.0, widthDefinite: false, heightDefinite: true } }
+  if which == 3 || which == 0 { input.parentMaxSize = Size { width: 33.0, height: 44.0 } }
+  if which == 4 || which == 0 { input.scrollportSize = Size { width: 55.0, height: 66.0 } }
+  if which == 5 || which == 0 { input.known = OptionalSize { width: 10.0, height: 20.0, widthDefinite: true, heightDefinite: true } }
+  if which == 6 || which == 0 { input.minimum = Size { width: 3.0, height: 4.0 } }
+  if which == 7 || which == 0 { input.availableWidth = AvailableSpace.minContent() }
+  if which == 8 || which == 0 { input.availableHeight = AvailableSpace.definite(99.0) }
+  if which == 9 || which == 0 { input.blockRoot = true }
+  if which == 10 || which == 0 { input.blockify = true }
+  if which == 11 || which == 0 { input.atomicInline = true }
+  if which == 12 || which == 0 { input.intrinsicWidth = true }
+  if which == 13 || which == 0 { input.intrinsicHeight = true }
+  if which == 14 || which == 0 { input.shrinkToFit = true }
+  if which == 15 || which == 0 { input.indefiniteWidth = true }
+  if which == 16 || which == 0 { input.indefiniteHeight = true }
+  if which == 17 || which == 0 { input.parentWritingMode = WritingMode.SidewaysLr }
+  if which == 18 || which == 0 { input.parentTextOrientation = TextOrientation.Sideways }
+  if which == 19 || which == 0 { input.parentJustifyItems = Align.Right }
+  if which == 20 || which == 0 { input.parentJustifyItemsSafety = OverflowAlignment.Unsafe }
+  if which == 21 || which == 0 { input.bfcContentOrigin = Point { x: 1.5, y: -2.5 } }
+  if which == 22 || which == 0 { input.performLayout = false }
+  if which == 23 || which == 0 { input.baselines = false }
+  if which == 24 || which == 0 { input.fullSize = false }
+  if which == 25 || which == 0 { input.gridContext = 7 }
+  if which == 26 || which == 0 { input.tablePlan = 12345678901 }
+  if which == 27 || which == 0 {
+    input.fragmentation.active = true
+    input.fragmentation.offset = 12.0
+    input.fragmentation.limit = 300.0
+    input.fragmentation.boundaryProbe = BoundaryProbe.After
+  }
+  if which == 28 { input.fragmentation.avoidInside = true }
+  return input
+}
+const VARIANTS: usize = 29
+
+// Every field, including those sameInput leaves out.
+fn identical(a: &Input, b: &Input) -> bool {
+  return LayoutCache.sameBase(a, b) && LayoutCache.sameBase(b, a)
+    && a.parent.width == b.parent.width && a.parent.height == b.parent.height
+    && a.initialContainingBlock.width == b.initialContainingBlock.width && a.initialContainingBlock.height == b.initialContainingBlock.height
+    && a.known.width == b.known.width && a.known.height == b.known.height
+    && a.availableWidth.value == b.availableWidth.value && a.availableHeight.value == b.availableHeight.value
+    && a.bfcContentOrigin.x == b.bfcContentOrigin.x && a.bfcContentOrigin.y == b.bfcContentOrigin.y
+    && a.performLayout == b.performLayout
+    && a.fragmentation.active == b.fragmentation.active && a.fragmentation.offset == b.fragmentation.offset && a.fragmentation.limit == b.fragmentation.limit
+    && a.fragmentation.avoidInside == b.fragmentation.avoidInside && a.fragmentation.boundaryProbe == b.fragmentation.boundaryProbe
+}
+
+effect fn storedInputsUnpackToTheirRequestBody() ! OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
+  let mut pool = RarePool.make()
+  let mut which: usize = 0
+  while which < VARIANTS {
+    let input = variant(which)
+    let rare = run pool.put(RARE_NONE, &input)
+    let stored = StoredInput.pack(&input, rare)
+    run Testing.expect(identical(&pool.unpack(&stored), &input), "a stored request unpacks to the request")
+    run Testing.expect((rare != RARE_NONE) == (which == 0 || which >= 25), "only grid, table and fragmentation parts take a rare slot")
+    which = which + 1
+  }
+  run Testing.expect(Intrinsic.layoutOf<StoredInput>().bytes == 72, "a stored request is 72 bytes")
+}
+
+effect fn storedComparisonMatchesSameRequestBody() ! OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
+  let mut pool = RarePool.make()
+  let mut a: usize = 0
+  while a < VARIANTS {
+    let left = variant(a)
+    let stored = StoredInput.pack(&left, run pool.put(RARE_NONE, &left))
+    let mut b: usize = 0
+    while b < VARIANTS {
+      let right = variant(b)
+      let packed = StoredInput.pack(&right, RARE_NONE)
+      let expected = LayoutCache.sameRequest(&left, &right)
+      let got = sameStored(&stored, pool.gridContext(stored.rare), pool.tablePlan(stored.rare), &packed, right.gridContext, right.tablePlan)
+      run Testing.expect(expected == got, "a stored comparison agrees with sameRequest")
+      b = b + 1
+    }
+    a = a + 1
+  }
+}
+
+effect fn rareSlotsAreReusedBody() ! OutOfMemoryError | AssertionError<'static> ? &mut Allocator {
+  let mut pool = RarePool.make()
+  let grid = variant(25)
+  let plain = variant(1)
+  let first = run pool.put(RARE_NONE, &grid)
+  let kept = run pool.put(first, &grid)
+  run Testing.expect(kept == first, "an overwritten record keeps its slot")
+  let freed = run pool.put(first, &plain)
+  run Testing.expect(freed == RARE_NONE, "a record that needs none frees it")
+  let reused = run pool.put(RARE_NONE, &grid)
+  run Testing.expect(reused == first, "and the next one takes it")
+  run Testing.expect(pool.count() == 1, "one slot in use")
+}
+test effect fn aStoredRequestUnpacksToItsRequest() ! OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run storedInputsUnpackToTheirRequestBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+test effect fn aStoredComparisonAgreesWithSameRequest() ! OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run storedComparisonMatchesSameRequestBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+test effect fn rareSlotsAreReused() ! OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run rareSlotsAreReusedBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}

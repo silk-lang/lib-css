@@ -2407,7 +2407,8 @@ fn anchorBlock<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &LayoutPass<'_, 
     anchored.padding = Point { x: padding.x, y: padding.y }
   }
   let cbStyle = nodes.style(cb)
-  let request = &output.cache.result(id).input
+  let recorded = output.cache.resultInput(id)
+  let request = &recorded
   if request.parentWritingMode != cbStyle.writingMode || request.parentTextOrientation != cbStyle.textOrientation
     || request.parentJustifyItems != cbStyle.justifyItems || request.parentJustifyItemsSafety != cbStyle.justifyItemsSafety { return false }
   return true

@@ -2880,7 +2880,8 @@ fn unsetSubtree<S: LayoutSource>(nodes: &BoxTree<'_, S>, fragments: &mut Fragmen
 // Lays out a candidate alone and, when its parent would see no change,
 // splices it into the previous output; see cutoffCandidates.
 effect fn cutoffBox<'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &BoxTree<'source, S>, output: &mut LayoutTree, facts: &mut BoxFacts, measurer: &mut M, id: usize, range: FinalRange, probes: &[CachedProbe], first: usize, end: usize, plain: f32) -> bool ! OutOfMemoryError | TextError | FragmentationError ? &mut Allocator {
-  let final = output.cache.result(id).*
+  let finalInput = output.cache.resultInput(id)
+  let finalBeside = output.cache.result(id).beside
   let count = nodes.boxes.length()
   let mut scratchBoxes = Intrinsic.replace(output.scratchBoxes, ScratchBoxes.make())
   run scratchBoxes.reserve(count)
@@ -2915,10 +2916,10 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &
   // What read the box's plain width in place of a probe must find it again.
   if same && plain != PLAIN_UNKNOWN { same = (run plainWidth(nodes, &mut pass, id)) == plain }
   if same {
-    if final.beside {
+    if finalBeside {
       let mut bfc = BfcState.make()
-      drop run layoutInFlow(nodes, &mut pass, &mut measurer, id, &final.input, &mut bfc)
-    } else { run layoutNodeInPlace(nodes, &mut pass, &mut measurer, id, &final.input) }
+      drop run layoutInFlow(nodes, &mut pass, &mut measurer, id, &finalInput, &mut bfc)
+    } else { run layoutNodeInPlace(nodes, &mut pass, &mut measurer, id, &finalInput) }
     subtreeOverflow(nodes, &mut pass)
     let recorded = pass.cache.recordedRange(id)
     let length = range.end - range.start
@@ -3088,7 +3089,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure, S: LayoutSource>(tree: 
     // the roots' ancestors, as invalidateUnmatched clears changed boxes.
     run output.cache.rotateFinals()
     let forgotten = patch.forgotten.asSlice()
-    output.cache.forgetBoxes(forgotten)
+    run output.cache.forgetBoxes(forgotten)
     let count = nodes.boxes.length()
     let laid = output.boxes.length()
     if laid < count { run output.boxes.appendRepeated(Layout.zero(), count - laid) }
