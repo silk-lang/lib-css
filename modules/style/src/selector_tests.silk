@@ -1,7 +1,9 @@
 //! Selector tests use the real tokenizer and parser and an element-only host tree.
 import sheet_binary { Writer, Reader, DecodeError }
 import sheet_tokens
-import selectors { SelectorList, Specificity, NamespaceBinding, DependencyKind }
+import selectors { SelectorList, Specificity, NamespaceBinding, DependencyKind, SubjectKind }
+import ancestor_filter
+import ancestor_filter { AncestorFilter, NameKind }
 import selectors
 import lexer
 import tokens
@@ -661,6 +663,99 @@ test effect fn invalidationKeysIncludeRelationalAndFailedLogicalArms() -> ()
   } else { run Testing.expect(false, "local selector parses") }
 }
 
+/// Whether the class `name` in `text` is a dependency on the subject, and the subject key.
+effect fn classDependency(text: &[u8], name: &[u8], subject: bool, kind: SubjectKind, key: &[u8]) -> bool
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let buffer = run lexer.tokenize(text, &Limits.make())
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &Limits.make())
+  if let Option<SelectorList>.Some { value } = move parsed {
+    let dependencies = run value.dependencies()
+    let mut i: usize = 0
+    while i < dependencies.length() {
+      let dependency = dependencies.asSlice()[i]
+      if dependency.kind == DependencyKind.Class && tokens.equal(buffer.text(dependency.name), name) {
+        return dependency.subject == subject && dependency.subjectKind == kind && tokens.equal(buffer.text(dependency.subjectName), key)
+      }
+      i = i + 1
+    }
+  }
+  return false
+}
+
+effect fn subjectDependencies() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let case1 = run classDependency(b".on .label", b"on", false, SubjectKind.Class, b"label")
+  run Testing.expect(case1, "an ancestor compound names the subject it restyles")
+  let case2 = run classDependency(b".on .label", b"label", true, SubjectKind.Class, b"label")
+  run Testing.expect(case2, "the subject compound is the subject")
+  let case3 = run classDependency(b".x:not(.off)", b"off", true, SubjectKind.Class, b"x")
+  run Testing.expect(case3, "a :not() argument tests the subject")
+  let case4 = run classDependency(b".tw:is(:where(.group)[data-open] *)", b"group", false, SubjectKind.Class, b"tw")
+  run Testing.expect(case4, "a :where() ancestor inside :is() is not the subject")
+  let case5 = run classDependency(b":is(.peer > *)", b"peer", false, SubjectKind.Any, b"")
+  run Testing.expect(case5, "a subject with no key restyles the subtree")
+  let case6 = run classDependency(b".a, .b .c", b"b", false, SubjectKind.Any, b"")
+  run Testing.expect(case6, "lists of several arms have no single subject key")
+}
+
+test effect fn dependenciesSayWhetherTheyTestTheSubject() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run subjectDependencies() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+/// Whether a filter holding the names `held` can match `text`.
+effect fn filterAdmits(text: &[u8], held: &[u32]) -> bool ! CssError | OutOfMemoryError ? &mut Allocator {
+  let buffer = run lexer.tokenize(text, &Limits.make())
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &Limits.make())
+  let mut filter = AncestorFilter.make()
+  run filter.clear()
+  let mut i: usize = 0
+  while i < held.length {
+    filter.push(held[i])
+    i = i + 1
+  }
+  if let Option<SelectorList>.Some { value } = move parsed { return value.ancestorKeys(&buffer).mayMatch(&filter) }
+  return true
+}
+
+effect fn ancestorKeys() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let group = ancestor_filter.key(NameKind.Class, b"group")
+  let nav = ancestor_filter.key(NameKind.Element, b"nav")
+  let main = ancestor_filter.key(NameKind.Id, b"main")
+  let missing = run filterAdmits(b".group .x", &[nav])
+  run Testing.expect(!missing, "a missing ancestor class rules a selector out")
+  let held = run filterAdmits(b".group .x", &[group])
+  run Testing.expect(held, "a held one does not")
+  let upper = run filterAdmits(b"NAV > .x", &[nav])
+  run Testing.expect(upper, "element names fold ASCII case")
+  let id = run filterAdmits(b"#main .x", &[group])
+  let idHeld = run filterAdmits(b"#main .x", &[main])
+  run Testing.expect(!id && idHeld, "ids are ancestor keys")
+  let sibling = run filterAdmits(b".group + .x", &[])
+  run Testing.expect(sibling, "a sibling compound is no ancestor key")
+  let across = run filterAdmits(b".group ~ .y .x", &[nav])
+  let acrossHeld = run filterAdmits(b".group ~ .y .x", &[ancestor_filter.key(NameKind.Class, b"y")])
+  run Testing.expect(!across && acrossHeld, "only the compounds across a space or > are")
+  let inner = run filterAdmits(b".x:is(:where(.group)[data-open] *)", &[nav])
+  run Testing.expect(!inner, "a one-arm :is() names its ancestors")
+  let arms = run filterAdmits(b".x:is(.group *, .other *)", &[])
+  run Testing.expect(arms, "an :is() of several arms names none")
+  let mut counted = AncestorFilter.make()
+  run counted.clear()
+  counted.push(group)
+  counted.push(group)
+  counted.pop(group)
+  run Testing.expect(counted.mayHold(group), "a name pushed twice stays until popped twice")
+  counted.pop(group)
+  run Testing.expect(!counted.mayHold(group), "and then leaves")
+}
+
+test effect fn ancestorKeysRuleOutSelectorsBeforeMatching() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run ancestorKeys() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
 test effect fn nthOfInvalidationReachesSiblingsForClassAndStateChanges() -> ()
   ! AssertionError<'static> | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
@@ -889,4 +984,62 @@ test effect fn formStatesMatchTheirHostBits() -> ()
   run checkState(b":in-range", 2, true, 0, 1, 0, element.IN_RANGE)
   run checkState(b":out-of-range", 2, true, 0, 1, 0, element.OUT_OF_RANGE)
   run checkState(b":in-range", 2, false, 0, 0, 0, element.OUT_OF_RANGE)
+}
+
+// One element whose host answers class tests from its own interned names, which here differ
+// from the `class` attribute text so that the test sees which answer matching used.
+struct Interned {}
+
+impl ElementTree for Interned {
+  fn hasClass(self: &Self, node: usize, name: &[u8]) -> Option<bool> {
+    return Option<bool>.some(tokens.equal(name, b"interned"))
+  }
+  fn containingHost(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn parent(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn firstChild(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn nextSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn previousSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn localName(self: &Self, node: usize) -> &[u8] { return b"div" }
+  fn namespaceUri(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn attributeCount(self: &Self, node: usize) -> usize { return 1 }
+  fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"class" }
+  fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
+  fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"written" }
+  fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
+    return AttributeText<'a> { namespace: b"", name: b"class", value: b"written" }
+  }
+  fn language(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn isRoot(self: &Self, node: usize) -> bool { return true }
+  fn isEmpty(self: &Self, node: usize) -> bool { return true }
+  fn isLink(self: &Self, node: usize) -> bool { return false }
+}
+
+effect fn matchesInterned(source: &[u8]) -> bool
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(source, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  match &parsed {
+    Option<SelectorList>.Some { value } => {
+      let mut context = MatchContext.make(0, 0)
+      return (run selectors.matchElement(&value, &buffer, &Interned {}, 0, &mut context)).isSome()
+    }
+    _ => {
+      run Testing.expect(false, "selector must parse")
+      return false
+    }
+  }
+}
+
+// A host that interns class names answers class selectors itself; `[class~=]` still reads
+// the attribute text.
+test effect fn hostAnswersClassSelectorsFromInternedNames() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  run Testing.expect(run matchesInterned(b".interned"), "the host's class answer matches")
+  run Testing.expect(!(run matchesInterned(b".written")), "the attribute text is not scanned for a class")
+  run Testing.expect(run matchesInterned(b"[class~=written]"), "attribute selectors still read the text")
+  run Testing.expect(run matchesInterned(b":not(.written) .interned, .interned"), "logical arms ask the host too")
 }

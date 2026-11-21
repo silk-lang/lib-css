@@ -4,6 +4,7 @@
 import css_properties.census { Census }
 import selectors { SelectorList, SubjectKind, SubjectKey }
 import element { ElementTree, MatchContext, PseudoTarget }
+import ancestor_filter { AncestorKeys }
 import tokens { TokenBuffer, CssError }
 import silk.collections.hash { Hash }
 import silk.collections.list { List }
@@ -80,6 +81,8 @@ pub struct CandidateIndex {
   pseudo: List<usize>,
   seen: List<bool>,
   selected: List<usize>,
+  /// By rule: the names some ancestor of a matched element holds.
+  ancestors: List<AncestorKeys>,
   indexedRules: usize,
   kinds: u8,
 }
@@ -99,6 +102,7 @@ impl CandidateIndex {
       pseudo: List<usize>.make(),
       seen: List<bool>.make(),
       selected: List<usize>.make(),
+      ancestors: List<AncestorKeys>.make(),
       indexedRules: 0,
       kinds: 0,
     }
@@ -120,12 +124,15 @@ impl CandidateIndex {
       run seen.append(false)
       i = i + 1
     }
+    let mut ancestors = run List<AncestorKeys>.makeWithCapacity(self.ancestors.length())
+    run ancestors.appendSlice(self.ancestors.asSlice())
     return CandidateIndex {
       entries: move entries,
       fallback: move fallback,
       pseudo: move pseudo,
       seen: move seen,
       selected: List<usize>.make(),
+      ancestors: move ancestors,
       indexedRules: self.indexedRules,
       kinds: self.kinds,
     }
@@ -142,6 +149,7 @@ impl CandidateIndex {
     self.pseudo.truncate(0)
     self.seen.truncate(0)
     self.selected.truncate(0)
+    self.ancestors.truncate(0)
     self.kinds = 0
   }
 
@@ -151,6 +159,7 @@ impl CandidateIndex {
     self.indexedRules = usize.MAX
     let rule = self.seen.length()
     run self.seen.append(false)
+    run self.ancestors.append(selectors.ancestorKeys(buffer))
     let start = self.entries.length()
     let previousKinds = self.kinds
     let mut unkeyedPseudo = false
@@ -297,6 +306,9 @@ impl CandidateIndex {
       i = i + 1
     }
   }
+
+  /// The names some ancestor of every element `rule` matches holds.
+  pub fn ancestorKeys(self: &Self, rule: usize) -> AncestorKeys { return self.ancestors.asSlice()[rule] }
 
   pub fn candidates(self: &Self) -> &[usize] {
     return self.selected.asSlice()

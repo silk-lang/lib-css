@@ -5,7 +5,7 @@ repository = "https://github.com/silk-lang/lib-css"
 version = "0.1.0"
 kind = "library"
 exports = [
-  "tokens", "input", "element", "lexer", "syntax", "selectors", "selector_index",
+  "tokens", "input", "element", "lexer", "syntax", "selectors", "selector_index", "ancestor_filter",
   "properties", "values", "value_cursor", "value_keywords", "dimensions",
   "colors", "text_values", "effect_values", "transform_values",
   "media_queries", "media_features", "container_queries", "supports", "declaration_values", "encoding",
