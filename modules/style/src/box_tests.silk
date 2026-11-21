@@ -163,6 +163,17 @@ effect fn boxCascade() -> ()
   run expectComputed(&engine, style, Property.PaddingTop, b"0", "an undeclared box property has its initial value")
   run expectComputed(&engine, style, Property.ZIndex, b"auto", "an undeclared keyword initial")
   run expectComputed(&engine, style, Property.Margin, b"", "a shorthand has no computed entry")
+  run add(&mut engine, &mut declarations, &mut candidates, Property.Background, b"linear-gradient(to bottom, transparent, #0f0 93%) no-repeat")
+  let gradient = run engine.build(
+    buffers.view(),
+    declarations.asSlice(),
+    candidates.asSlice(),
+    Option<StyleId>.None,
+    &host,
+    &Limits.make(),
+  )
+  run expectComputed(&engine, gradient, Property.BackgroundImage, b"linear-gradient(to bottom, transparent, #0f0 93%)", "background takes a gradient with a side")
+  run expectComputed(&engine, gradient, Property.BackgroundRepeat, b"no-repeat", "and the longhands beside it")
 
   // A child inherits none of these, and its own declarations cascade the same way.
   let mut childDeclarations = List<Declaration>.make()

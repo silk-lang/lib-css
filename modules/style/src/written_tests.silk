@@ -300,6 +300,9 @@ effect fn dropped(source: Property, css: &[u8], target: Property) -> bool
 }
 
 effect fn backgroundBody() -> () ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let sided = b"linear-gradient(to bottom, transparent, #0f0 93%) no-repeat"
+  run Testing.expect(run projection(Property.Background, sided, Property.BackgroundImage, b"linear-gradient(to bottom, transparent, #0f0 93%)"), "a gradient toward a side is the image")
+  run Testing.expect(run projection(Property.Background, sided, Property.BackgroundRepeat, b"no-repeat"), "beside a gradient toward a side")
   let layered = b"linear-gradient(red, red) 0 0 / 10px 10px no-repeat, blue linear-gradient(blue, blue)"
   run Testing.expect(run projection(Property.Background, layered, Property.BackgroundSize, b"10px 10px, auto"), "one size a layer")
   run Testing.expect(run projection(Property.Background, layered, Property.BackgroundPosition, b"0 0, 0% 0%"), "one position a layer")

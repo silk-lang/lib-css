@@ -227,11 +227,39 @@ fn unshapedGradient(word: &[u8]) -> bool {
     || tokens.insensitive(word, b"repeating-conic-gradient")
 }
 
-// A `background` value that spells a `url()` image, a gradient other than `linear-gradient`, `repeat-x`, `repeat-y` or `local`,
-// which the shared model has no shape for: read with `none`, the two-value repeats and
-// `scroll` in their places, then with the images and `local` put back in their layers of
-// `background-image` and `background-attachment`. None when it has none of them.
-effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
+// Whether the call whose name is `css[start..open]` reads as text in the shared model, as
+// `linear-gradient(to bottom, red, blue)` does.
+effect fn unshapedCall(css: &[u8], start: usize, open: usize) -> bool ! CssError | OutOfMemoryError ? &mut Allocator {
+  let mut depth: usize = 0
+  let mut quote: u8 = 0
+  let mut stop = open
+  while stop < css.length {
+    let byte = css[stop]
+    if quote != 0 {
+      if byte == 92 { stop = stop + 1 } else if byte == quote { quote = 0 }
+    } else if byte == 34 || byte == 39 {
+      quote = byte
+    } else if byte == 40 {
+      depth = depth + 1
+    } else if byte == 41 {
+      depth = depth - 1
+      if depth == 0 { break }
+    }
+    stop = stop + 1
+  }
+  if stop >= css.length { return false }
+  return match run value(Slice.view(css, start, stop + 1 - start)) {
+    Value.Text { .. } => true
+    _ => false
+  }
+}
+
+/// Longhand `target` of a `background` value that spells what the shared model has no shape
+/// for: a `url()` image, an image set, most gradients, `repeat-x`, `repeat-y` or `local`. It is
+/// read with a placeholder image, the two-value repeats and `scroll` in their places, then with
+/// the images and `local` put back in their layers of `background-image` and
+/// `background-attachment`. None when it has none of them.
+pub effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
   ! CssError | OutOfMemoryError ? &mut Allocator {
   let mut plain = Bytes.make()
   let mut layers = List<LayerWords>.make()
@@ -270,7 +298,8 @@ effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
       let word = Slice.view(css, i, end - i)
       let called = end < css.length && css[end] == 40
       if called && (tokens.insensitive(word, b"url") || tokens.insensitive(word, b"image-set")
-        || tokens.insensitive(word, b"-webkit-image-set") || unshapedGradient(word)) {
+        || tokens.insensitive(word, b"-webkit-image-set") || unshapedGradient(word)
+        || (tokens.insensitive(word, b"linear-gradient") && run unshapedCall(css, i, end))) {
         if current.image.length() != 0 { return Option<Value>.None }
         let close = itemEnd(css, end)
         let mut stop = end + 1
