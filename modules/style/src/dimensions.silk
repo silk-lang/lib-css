@@ -219,6 +219,27 @@ pub struct Context {
 impl Copy for Context {}
 
 impl Context {
+  /// Whether every field is equal; a field added to Context must be added here.
+  pub fn same(a: &Context, b: &Context) -> bool {
+    return a.fontSize == b.fontSize && a.rootFontSize == b.rootFontSize && a.xHeight == b.xHeight
+      && a.rootXHeight == b.rootXHeight && a.capHeight == b.capHeight && a.rootCapHeight == b.rootCapHeight
+      && a.zeroAdvance == b.zeroAdvance && a.rootZeroAdvance == b.rootZeroAdvance
+      && a.ideographAdvance == b.ideographAdvance && a.rootIdeographAdvance == b.rootIdeographAdvance
+      && a.lineHeight == b.lineHeight && a.rootLineHeight == b.rootLineHeight
+      && a.viewportWidth == b.viewportWidth && a.viewportHeight == b.viewportHeight
+      && a.smallViewportWidth == b.smallViewportWidth && a.smallViewportHeight == b.smallViewportHeight
+      && a.dynamicViewportWidth == b.dynamicViewportWidth
+      && a.dynamicViewportHeight == b.dynamicViewportHeight && a.vertical == b.vertical
+      && &a.containerWidth == &b.containerWidth && &a.containerHeight == &b.containerHeight
+      && &a.containerInlineSize == &b.containerInlineSize && &a.containerBlockSize == &b.containerBlockSize
+      && a.parentFontSize == b.parentFontSize && a.parentXHeight == b.parentXHeight
+      && a.parentCapHeight == b.parentCapHeight && a.parentZeroAdvance == b.parentZeroAdvance
+      && a.parentIdeographAdvance == b.parentIdeographAdvance && a.parentLineHeight == b.parentLineHeight
+      && a.parentFontWeight == b.parentFontWeight && a.parentFontStretch == b.parentFontStretch
+      && a.initialFontSize == b.initialFontSize && a.mathFontSize == b.mathFontSize
+      && sameValues(&a.fontSizeKeywords, &b.fontSizeKeywords)
+  }
+
   /// Share the host's unit bases with the typed Declaration conversion path.
   /// Parent font bases start at the supplied element bases; font-property callers
   /// can replace them independently before using font value grammars.
@@ -1516,4 +1537,13 @@ pub fn evaluate(store: &Store<'_>, id: ExprId, percentageBasis: f64) -> f64 {
 
 fn wider(value: Option<f32>) -> Option<f64> {
   return match value { Option.Some { value: size } => Option<f64>.some(f32.toF64(size)) _ => Option<f64>.None }
+}
+
+fn sameValues(a: &[f64; 8], b: &[f64; 8]) -> bool {
+  let mut i: usize = 0
+  while i < 8 {
+    if a[i] != b[i] { return false }
+    i = i + 1
+  }
+  return true
 }
