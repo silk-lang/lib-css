@@ -890,3 +890,61 @@ test effect fn formStatesMatchTheirHostBits() -> ()
   run checkState(b":out-of-range", 2, true, 0, 1, 0, element.OUT_OF_RANGE)
   run checkState(b":in-range", 2, false, 0, 0, 0, element.OUT_OF_RANGE)
 }
+
+// One element whose host answers class tests from its own interned names, which here differ
+// from the `class` attribute text so that the test sees which answer matching used.
+struct Interned {}
+
+impl ElementTree for Interned {
+  fn hasClass(self: &Self, node: usize, name: &[u8]) -> Option<bool> {
+    return Option<bool>.some(tokens.equal(name, b"interned"))
+  }
+  fn containingHost(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn parent(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn firstChild(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn nextSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn previousSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn localName(self: &Self, node: usize) -> &[u8] { return b"div" }
+  fn namespaceUri(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn attributeCount(self: &Self, node: usize) -> usize { return 1 }
+  fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"class" }
+  fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
+  fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"written" }
+  fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
+    return AttributeText<'a> { namespace: b"", name: b"class", value: b"written" }
+  }
+  fn language(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn isRoot(self: &Self, node: usize) -> bool { return true }
+  fn isEmpty(self: &Self, node: usize) -> bool { return true }
+  fn isLink(self: &Self, node: usize) -> bool { return false }
+}
+
+effect fn matchesInterned(source: &[u8]) -> bool
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(source, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  match &parsed {
+    Option<SelectorList>.Some { value } => {
+      let mut context = MatchContext.make(0, 0)
+      return (run selectors.matchElement(&value, &buffer, &Interned {}, 0, &mut context)).isSome()
+    }
+    _ => {
+      run Testing.expect(false, "selector must parse")
+      return false
+    }
+  }
+}
+
+// A host that interns class names answers class selectors itself; `[class~=]` still reads
+// the attribute text.
+test effect fn hostAnswersClassSelectorsFromInternedNames() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  run Testing.expect(run matchesInterned(b".interned"), "the host's class answer matches")
+  run Testing.expect(!(run matchesInterned(b".written")), "the attribute text is not scanned for a class")
+  run Testing.expect(run matchesInterned(b"[class~=written]"), "attribute selectors still read the text")
+  run Testing.expect(run matchesInterned(b":not(.written) .interned, .interned"), "logical arms ask the host too")
+}

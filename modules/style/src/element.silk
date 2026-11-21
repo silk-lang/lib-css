@@ -1,5 +1,6 @@
 //! Selector matching borrows a host tree instead of duplicating its nodes.
 import silk.core.option { Option }
+import ancestor_filter { AncestorFilter }
 import media_features { Environment }
 import variables { ScopeId }
 import silk.num.usize
@@ -106,6 +107,19 @@ pub interface ElementTree {
   /// Static hosts have no interactive states unless they override this operation.
   fn state(self: &Self, node: usize) -> StateBits {
     return StateBits.empty()
+  }
+
+  /// A filter of the names `node`'s ancestors hold (see `ancestor_filter`), when the host keeps
+  /// one for exactly those ancestors. None makes every selector match in full.
+  fn ancestorFilter(self: &Self, node: usize) -> Option<&AncestorFilter> {
+    return Option<&AncestorFilter>.None
+  }
+
+  /// Whether the element's class list holds `name` (case-sensitive), when the host can answer
+  /// without the attribute text, such as from interned class names. None leaves the answer to
+  /// a scan of the `class` attribute.
+  fn hasClass(self: &Self, node: usize, name: &[u8]) -> Option<bool> {
+    return Option<bool>.None
   }
 
   fn parent(self: &Self, node: usize) -> usize

@@ -1,0 +1,120 @@
+//! A counting Bloom filter of the names an element's ancestors hold: their classes, ids and
+//! element names. A selector that needs an ancestor with some name fails at once when the filter
+//! lacks that name, before any ancestor is visited; a name the filter may hold proves nothing,
+//! so the full match still decides. Hosts that walk their tree top down keep one filter, push an
+//! element's names before its children are matched and pop them after (`ElementTree.ancestorFilter`).
+import silk.collections.hash { Hash }
+import silk.collections.list { List }
+import silk.core.ownership { Copy }
+import silk.mem.allocator { Allocator, OutOfMemoryError }
+import silk.num.u8
+import silk.num.u32
+import silk.num.u64
+import silk.num.usize
+
+/// What kind of name a key is: the three never collide on purpose.
+pub enum NameKind { Class, Id, Element }
+
+const SLOTS: usize = 4096
+const MASK: u32 = 4095
+/// A slot that reached this count stays there: it can no longer tell when its last name left.
+const SATURATED: u8 = 255
+
+fn seedOf(kind: NameKind) -> u64 {
+  return match kind { NameKind.Class => 0x636c617373 NameKind.Id => 0x6964 NameKind.Element => 0x656c656d }
+}
+
+/// The key of a name, as both the filter and the selectors' required names use it.
+pub fn key(kind: NameKind, text: &[u8]) -> u32 {
+  let seed = Hash.seed(seedOf(kind))
+  let mut result = Hash.mix(&seed, usize.toU64(text.length))
+  let mut i: usize = 0
+  while i < text.length {
+    result = Hash.combine(result, u8.toU64(text[i]))
+    i = i + 1
+  }
+  return u64.wrappingToU32(u64.bitXor(result, u64.shiftRight(result, 32)))
+}
+
+fn first(value: u32) -> usize { return u32.toUsize(u32.bitAnd(value, MASK)) }
+fn second(value: u32) -> usize { return u32.toUsize(u32.bitAnd(u32.shiftRight(value, 12), MASK)) }
+
+pub struct AncestorFilter { counts: List<u8> }
+
+impl AncestorFilter {
+  pub fn make() -> AncestorFilter { return AncestorFilter { counts: List<u8>.make() } }
+
+  /// Forgets every name.
+  pub effect fn clear(self: &mut Self) -> () ! OutOfMemoryError ? &mut Allocator {
+    if self.counts.length() != SLOTS {
+      self.counts.clear()
+      let mut i: usize = 0
+      while i < SLOTS {
+        run self.counts.append(0)
+        i = i + 1
+      }
+      return ()
+    }
+    let counts = self.counts.asMutSlice()
+    let mut i: usize = 0
+    while i < SLOTS {
+      counts[i] = 0
+      i = i + 1
+    }
+  }
+
+  /// Adds a name. The filter must have been cleared once.
+  pub fn push(self: &mut Self, value: u32) -> () {
+    let counts = self.counts.asMutSlice()
+    let a = first(value)
+    let b = second(value)
+    if counts[a] != SATURATED { counts[a] = counts[a] + 1 }
+    if counts[b] != SATURATED { counts[b] = counts[b] + 1 }
+  }
+
+  /// Takes back a name `push` added.
+  pub fn pop(self: &mut Self, value: u32) -> () {
+    let counts = self.counts.asMutSlice()
+    let a = first(value)
+    let b = second(value)
+    if counts[a] != SATURATED && counts[a] != 0 { counts[a] = counts[a] - 1 }
+    if counts[b] != SATURATED && counts[b] != 0 { counts[b] = counts[b] - 1 }
+  }
+
+  /// False only when no name pushed and not popped has this key.
+  pub fn mayHold(self: &Self, value: u32) -> bool {
+    let counts = self.counts.asSlice()
+    if counts.length != SLOTS { return true }
+    return counts[first(value)] != 0 && counts[second(value)] != 0
+  }
+}
+
+/// Up to four names that some ancestor of every element a selector matches holds.
+pub struct AncestorKeys { pub count: u32, pub keys: [u32; 4] }
+
+impl Copy for AncestorKeys {}
+
+impl AncestorKeys {
+  pub fn none() -> AncestorKeys { return AncestorKeys { count: 0, keys: [0, 0, 0, 0] } }
+
+  pub fn add(self: &mut Self, value: u32) -> () {
+    if self.count == 4 { return () }
+    let mut i: u32 = 0
+    while i < self.count {
+      if self.keys[u32.toUsize(i)] == value { return () }
+      i = i + 1
+    }
+    self.keys[u32.toUsize(self.count)] = value
+    self.count = self.count + 1
+  }
+
+  /// False when `filter` proves an ancestor the selector needs is missing.
+  pub fn mayMatch(self: &Self, filter: &AncestorFilter) -> bool {
+    let mut i: u32 = 0
+    while i < self.count {
+      if !filter.mayHold(self.keys[u32.toUsize(i)]) { return false }
+      i = i + 1
+    }
+    return true
+  }
+}

@@ -11,6 +11,8 @@ import tokens { Span, TokenRange, TokenBuffer, Kind, Limits, CssError, CssErrorK
 import tokens
 import element
 import element { ElementTree, MatchContext, PseudoTarget, NO_ELEMENT }
+import ancestor_filter { AncestorKeys, NameKind }
+import ancestor_filter
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
 import silk.core.ownership { Copy }
@@ -408,6 +410,52 @@ impl SelectorList {
       i = i + 1
     }
     return result
+  }
+
+  /// Names that some ancestor of every element this list matches must hold, for an ancestor
+  /// filter to rule the list out before matching. Only a list of one selector has them: the
+  /// classes, ids and element names of its compounds across a descendant or child combinator
+  /// from the subject, including those inside a one-selector `:is()` or `:where()`.
+  pub fn ancestorKeys(self: &Self, buffer: &TokenBuffer) -> AncestorKeys {
+    let mut keys = AncestorKeys.none()
+    if self.validationOnly || self.head == NONE || self.arms.asSlice()[self.head].next != NONE { return keys }
+    self.armKeys(buffer, self.head, false, &mut keys, 0)
+    return keys
+  }
+
+  /// Adds the ancestor names of arm `arm`; with `above`, its subject is itself an ancestor.
+  fn armKeys(self: &Self, buffer: &TokenBuffer, arm: usize, above: bool, keys: &mut AncestorKeys, depth: usize) -> () {
+    if depth > 8 { return () }
+    let mut across = above
+    let mut index = self.arms.asSlice()[arm].tail
+    while index != NONE {
+      let compound = &self.compounds.asSlice()[index]
+      if across {
+        if compound.named { keys.add(ancestor_filter.key(NameKind.Element, buffer.text(compound.name))) }
+      }
+      let mut simple = compound.first
+      while simple != NONE {
+        let entry = &self.simples.asSlice()[simple]
+        match &entry.test {
+          Test.Class { text } => { if across { keys.add(ancestor_filter.key(NameKind.Class, buffer.text(text))) } }
+          Test.Id { text } => { if across { keys.add(ancestor_filter.key(NameKind.Id, buffer.text(text))) } }
+          Test.Function { kind, list } => {
+            if kind == FunctionKind.Is && list != NONE && self.arms.asSlice()[list].next == NONE {
+              self.armKeys(buffer, list, across, &mut keys.*, depth + 1)
+            }
+          }
+          _ => {}
+        }
+        simple = entry.next
+      }
+      if compound.previous == NONE { break }
+      // The compound on the left is an ancestor only across `>` or a space: across `+` or `~`
+      // it is a sibling, though those further left across a space are ancestors again.
+      if compound.relation == Combinator.Descendant || compound.relation == Combinator.Child { across = true }
+      else if compound.relation == Combinator.Adjacent || compound.relation == Combinator.Sibling { across = false }
+      else { break }
+      index = compound.previous
+    }
   }
 
   /// Builds invalidation keys once for this program, including failed logical arms.
@@ -2604,6 +2652,10 @@ effect fn matchTest<T: ElementTree>(
       return false
     }
     Test.Class { text } => {
+      if let Option<bool>.Some { value } = ElementTree.hasClass(tree, node, buffer.text(text)) {
+        run spend(&mut context.*)
+        return value
+      }
       return run namedAttribute(
         buffer,
         tree,
