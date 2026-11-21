@@ -400,6 +400,10 @@ effect fn boundCases() ! AssertionError<'static> | OutOfMemoryError ? &mut Alloc
   let mixed = values.math(MathOperator.Clamp, run triple(values.unit(200.0, Unit.Px), run values.calc(20.0, 50.0), values.unit(800.0, Unit.Px)))
   run Testing.expect(convert.size(&mixed, &context).isNone(), "a size kind has no length beside a percentage in clamp()")
   run Testing.expect(isSize(convert.sizeIn(&mixed, &context, &mut bounds), SizeValue.bounded(20.0, 0.5, 2)), "clamp() of a length plus a percentage")
+  // min(32px, max(4em, 100% - 236px)), as t3code sizes its timeline minimap: the lower bound
+  // passes the upper one, so the size is the upper length.
+  let settles = values.math(MathOperator.Min, run pair(values.unit(32.0, Unit.Px), values.math(MathOperator.Max, run pair(values.unit(4.0, Unit.Em), run values.calc(-236.0, 100.0)))))
+  run Testing.expect(isSize(convert.sizeIn(&settles, &context, &mut bounds), SizeValue.px(32.0)), "a comparison that settles to a length")
   // calc(min(100%, 600px) - 2em) moves the bound with the length.
   let lessened = values.math(MathOperator.Sum, run pair(values.math(MathOperator.Min, run pair(values.percent(100.0), values.unit(600.0, Unit.Px))), values.unit(-2.0, Unit.Em)))
   let mut other = Bounds.none()
