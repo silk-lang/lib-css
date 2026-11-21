@@ -104,6 +104,21 @@ pub struct Environment {
 impl Copy for Environment {}
 
 impl Environment {
+  /// Whether every field is equal, so every media feature evaluates the same; a field added to
+  /// Environment must be added here.
+  pub fn same(a: &Environment, b: &Environment) -> bool {
+    return sameSize(a.querySize, b.querySize) && a.mediaType == b.mediaType
+      && Context.same(&a.initial, &b.initial) && a.deviceWidth == b.deviceWidth
+      && a.deviceHeight == b.deviceHeight && a.resolutionDppx == b.resolutionDppx
+      && a.infiniteResolution == b.infiniteResolution && a.colorBits == b.colorBits
+      && a.colorIndex == b.colorIndex && a.monochromeBits == b.monochromeBits
+      && a.colorGamut == b.colorGamut && a.grid == b.grid && a.scan == b.scan && a.update == b.update
+      && a.overflowBlock == b.overflowBlock && a.overflowInline == b.overflowInline
+      && a.pointer == b.pointer && a.hover == b.hover && a.anyPointerCoarse == b.anyPointerCoarse
+      && a.anyPointerFine == b.anyPointerFine && a.anyHover == b.anyHover && a.colorScheme == b.colorScheme
+      && a.reducedMotion == b.reducedMotion && a.forcedColors == b.forcedColors
+  }
+
   // Static sRGB pixel target: no input, scrolling, or post-render updates.
   // Override fields with the host's actual capabilities and initial font metrics.
   pub fn headless(width: f64, height: f64) -> Environment {
@@ -1031,4 +1046,14 @@ pub effect fn evaluate(
     return Truth.Unknown
   }
   return truth(lower == Truth.True && upper == Truth.True)
+}
+
+fn sameSize(a: Option<QuerySize>, b: Option<QuerySize>) -> bool {
+  return match a {
+    Option<QuerySize>.Some { value: x } => match b {
+      Option<QuerySize>.Some { value: y } => x.width == y.width && x.height == y.height
+      _ => false
+    }
+    _ => b.isNone()
+  }
 }

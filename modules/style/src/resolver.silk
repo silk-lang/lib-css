@@ -61,6 +61,8 @@ pub struct Resolver {
   ruleReads: List<u32>,
   selectedStates: u32,
   starting: List<bool>,
+  /// How many of `starting` are true: hosts ask every style pass.
+  startingCount: usize,
   relations: u32,
   shared: Sharing,
   /// For the bench census: elements matched, the rules the index offered for them, the rules
@@ -85,6 +87,7 @@ impl Resolver {
       ruleReads: List<u32>.make(),
       selectedStates: 0,
       starting: List<bool>.make(),
+      startingCount: 0,
       relations: 0,
       shared: Sharing.none(),
       collects: 0, offered: 0, matchedRules: 0, offeredDeclarations: 0, filtered: 0,
@@ -132,18 +135,14 @@ impl Resolver {
   pub fn setStarting(self: &mut Self, rule: usize, enabled: bool) -> () {
     if rule < self.starting.length() {
       let entries = self.starting.asMutSlice()
+      if entries[rule] != enabled {
+        self.startingCount = if enabled { self.startingCount + 1 } else { self.startingCount - 1 }
+      }
       entries[rule] = enabled
     }
   }
 
-  pub fn hasStarting(self: &Self) -> bool {
-    let mut i: usize = 0
-    while i < self.starting.length() {
-      if self.starting.asSlice()[i] { return true }
-      i = i + 1
-    }
-    return false
-  }
+  pub fn hasStarting(self: &Self) -> bool { return self.startingCount != 0 }
 
   /// Matches one element, replacing the previous result. Inline candidates share the same
   /// catalog and cascade; callers set their inline flag and source order explicitly.

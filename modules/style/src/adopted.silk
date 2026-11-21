@@ -56,6 +56,10 @@ pub struct StyleSheets {
   variables: Option<Box<Inputs>>,
   /// The last environment, which `if(media(...))` reads during substitution.
   current: Option<Environment>,
+  /// Whether every sheet's conditions were evaluated for `current` (with `settledStarting`)
+  /// and no sheet came or went since: a host asks every frame, and the answer only changes then.
+  settled: bool,
+  settledStarting: bool,
 }
 
 fn important(declaration: &Declaration) -> bool {
@@ -143,7 +147,8 @@ impl StyleSheets {
 
   pub fn make() -> StyleSheets {
     return StyleSheets { entries: List<AdoptedSheet>.make(), layers: Layers.make(),
-      output: List<Candidate>.make(), matched: List<MatchedRule>.make(), selectedStates: 0, variables: Option<Box<Inputs>>.None, current: Option<Environment>.None }
+      output: List<Candidate>.make(), matched: List<MatchedRule>.make(), selectedStates: 0, variables: Option<Box<Inputs>>.None, current: Option<Environment>.None,
+      settled: false, settledStarting: false }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() }
   pub fn sheets(self: &Self) -> &[AdoptedSheet] { return self.entries.asSlice() }
@@ -288,6 +293,7 @@ impl StyleSheets {
 
   effect fn rebuildLayers(self: &mut Self) -> () ! OutOfMemoryError ? &mut Allocator {
     self.variables = Option<Box<Inputs>>.None
+    self.settled = false
     self.layers = Layers.make()
     self.output.clear()
     self.matched.clear()
@@ -329,6 +335,11 @@ impl StyleSheets {
   /// Re-evaluates retained conditions; true only if rule or registration eligibility changed.
   pub effect fn environment(self: &mut Self, environment: &Environment, starting: bool, limits: &Limits) -> bool
     ! CssError | OutOfMemoryError ? &mut Allocator {
+    if self.settled && self.settledStarting == starting {
+      if let Option<Environment>.Some { value: last } = &self.current {
+        if Environment.same(&last, environment) { return false }
+      }
+    }
     let mut changed = false
     let entries = self.entries.asMutSlice()
     let mut i: usize = 0
@@ -343,6 +354,8 @@ impl StyleSheets {
       _ => true
     }
     self.current = Option<Environment>.some(environment.*)
+    self.settled = true
+    self.settledStarting = starting
     if moved && !changed && self.current.isSome() && mediaTests(self.entries.asSlice()) { changed = true }
     if changed { self.variables = Option<Box<Inputs>>.None }
     if let Option<Box<Inputs>>.Some { value } = &mut self.variables {
