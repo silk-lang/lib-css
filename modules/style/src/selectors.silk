@@ -276,6 +276,13 @@ pub struct Dependency {
   pub descendants: bool,
   pub siblings: bool,
   pub ancestors: bool,
+  /// The test is on the subject itself (its compound, or a nested `:is()`, `:where()` or
+  /// `:not()` there), so a change of it can only restyle that element.
+  pub subject: bool,
+  /// The one key every subject of the selector carries (`SubjectKind.Any` when there is none):
+  /// a change elsewhere restyles only the descendants or siblings with it.
+  pub subjectKind: SubjectKind,
+  pub subjectName: Span,
 }
 impl Copy for Dependency {}
 
@@ -458,6 +465,27 @@ impl SelectorList {
     }
   }
 
+  fn markSubject(self: &Self, arm: usize, marks: &mut List<bool>, depth: usize) -> () {
+    if depth > 8 { return () }
+    let compound = &self.compounds.asSlice()[self.arms.asSlice()[arm].tail]
+    let mut simple = compound.first
+    while simple != NONE {
+      let all = marks.asMutSlice()
+      all[simple] = true
+      let entry = &self.simples.asSlice()[simple]
+      if let Test.Function { kind, list } = entry.test {
+        if (kind == FunctionKind.Is || kind == FunctionKind.Not) && list != NONE {
+          let mut inner = list
+          while inner != NONE {
+            self.markSubject(inner, &mut marks.*, depth + 1)
+            inner = self.arms.asSlice()[inner].next
+          }
+        }
+      }
+      simple = entry.next
+    }
+  }
+
   /// Builds invalidation keys once for this program, including failed logical arms.
   /// Relational rules deliberately use coarse reach; simple class rules stay local.
   pub effect fn dependencies(self: &Self) -> List<Dependency>
@@ -484,6 +512,30 @@ impl SelectorList {
         if list != NONE { siblings = true }
       }
       i = i + 1
+    }
+    // The simples that test the subject: those of each arm's last compound, and of the
+    // one-element arguments (`:is()`, `:where()`, `:not()`) found there.
+    let mut onSubject = List<bool>.make()
+    i = 0
+    while i < self.simples.length() {
+      run onSubject.append(false)
+      i = i + 1
+    }
+    let mut arm = self.head
+    while arm != NONE {
+      self.markSubject(arm, &mut onSubject, 0)
+      arm = self.arms.asSlice()[arm].next
+    }
+    let mut subjectKind = SubjectKind.Any
+    let mut subjectName = emptySpan()
+    if self.head != NONE && self.arms.asSlice()[self.head].next == NONE {
+      let mut keys = self.subjectKeys()
+      if let Option<SubjectKey>.Some { value } = keys.next() {
+        if value.kind != SubjectKind.Never && value.target == PseudoTarget.None {
+          subjectKind = value.kind
+          subjectName = value.text
+        }
+      }
     }
     let mut out = List<Dependency>.make()
     i = 0
@@ -519,13 +571,15 @@ impl SelectorList {
       }
       if keep {
         run out.append(Dependency { kind: kind, name: name, states: states,
-          descendants: descendants, siblings: siblings, ancestors: ancestors })
+          descendants: descendants, siblings: siblings, ancestors: ancestors,
+          subject: onSubject.asSlice()[i], subjectKind: subjectKind, subjectName: subjectName })
       }
       i = i + 1
     }
     if structural {
       run out.append(Dependency { kind: DependencyKind.Structure, name: emptySpan(), states: 0,
-        descendants: descendants, siblings: siblings, ancestors: ancestors })
+        descendants: descendants, siblings: siblings, ancestors: ancestors,
+        subject: false, subjectKind: SubjectKind.Any, subjectName: emptySpan() })
     }
     return move out
   }

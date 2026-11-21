@@ -24,13 +24,17 @@ fn seedOf(kind: NameKind) -> u64 {
   return match kind { NameKind.Class => 0x636c617373 NameKind.Id => 0x6964 NameKind.Element => 0x656c656d }
 }
 
-/// The key of a name, as both the filter and the selectors' required names use it.
+/// The key of a name, as both the filter and the selectors' required names use it. Element
+/// names are keyed without ASCII case, since HTML matches them so: a key may only collide more.
 pub fn key(kind: NameKind, text: &[u8]) -> u32 {
   let seed = Hash.seed(seedOf(kind))
   let mut result = Hash.mix(&seed, usize.toU64(text.length))
+  let fold = kind == NameKind.Element
   let mut i: usize = 0
   while i < text.length {
-    result = Hash.combine(result, u8.toU64(text[i]))
+    let mut byte = text[i]
+    if fold && byte >= 65 && byte <= 90 { byte = byte + 32 }
+    result = Hash.combine(result, u8.toU64(byte))
     i = i + 1
   }
   return u64.wrappingToU32(u64.bitXor(result, u64.shiftRight(result, 32)))
