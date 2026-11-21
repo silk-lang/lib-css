@@ -584,7 +584,9 @@ pub fn sizeIn(value: &Value, context: &Context, bounds: &mut Bounds) -> Option<S
     return Option<SizeValue>.some(found)
   }
   if let Option<Bound>.Some { value: found } = bound(value, context) {
-    if found.bounded() && found.percent != 0.0 {
+    // A comparison can settle to a length or an unbounded sum, as min(32px, max(4rem, X)) does.
+    if !found.bounded() { return Option<SizeValue>.some(if found.percent == 0.0 { SizeValue.px(found.value) } else { SizeValue.calc(found.value, found.percent) }) }
+    if found.percent != 0.0 {
       if let Option<u8>.Some { value: slot } = bounds.slotOf(found.lower, found.upper) {
         return Option<SizeValue>.some(SizeValue.bounded(found.value, found.percent, slot))
       }
