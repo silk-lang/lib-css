@@ -29,6 +29,7 @@ import silk.core.option { Option }
 import cssom_animation
 import written
 import css_properties.values as shared
+import css_properties.values { Value as SharedValue }
 import css_properties.shorthands as shorthands
 import tokens { CssError }
 import silk.core.effect { Effect }
@@ -1606,6 +1607,23 @@ effect fn unshaped(error: CssError) -> Option<shared.Value> {
   return Option<shared.Value>.None
 }
 
+// A `background` the shared model reads as text, for an image it has no shape for, takes
+// its layers from `written.backgroundWords`.
+effect fn boxLonghand(property: Property, shape: &shared.Value, target: Property) -> Option<shared.Value>
+  ! OutOfMemoryError ? &mut Allocator {
+  if property == Property.Background {
+    if let SharedValue.Text { css } = &shape.* {
+      return run Effect.catch<CssError>(written.backgroundWords(css.asSlice(), target), noLonghand)
+    }
+  }
+  return run shorthands.longhand(property, shape, target)
+}
+
+effect fn noLonghand(error: CssError) -> Option<shared.Value> {
+  drop error
+  return Option<shared.Value>.None
+}
+
 // A box property's value, read by shape and kept as canonical text: one text for a
 // longhand, one per longhand for a shorthand. The value is not checked against the
 // property's grammar; a shorthand in a form `shorthands` does not expand is invalid.
@@ -1651,7 +1669,7 @@ effect fn boxValue(
   let mut l: usize = 0
   while l < count {
     let target = properties.longhandAt(property, l)
-    match &run shorthands.longhand(property, &shape, target) {
+    match &run boxLonghand(property, &shape, target) {
       Option<shared.Value>.Some { value: longhand } => {
         let canonical = run shared.cssText(&longhand)
         run texts.append(run store.storeText(canonical.asSlice()))
