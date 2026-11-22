@@ -3270,8 +3270,9 @@ pub effect fn compute<'source, M: Measure + TextMeasure, S: LayoutSource>(tree: 
   boxes.deferSticky = tree.stickyDeferred()
   // After computes that laid out most boxes again and copied none, copying
   // is unlikely to pay: this one skips its checks and the write tracking
-  // they need, trying again every eighth compute.
-  boxes.tracking = (sameBoxes || kept) && output.reuseIdle % 8 == 0
+  // they need, trying again every eighth compute. A patched compute changed
+  // boxes under a few roots only, so copying the rest always pays.
+  boxes.tracking = (sameBoxes || kept) && (output.reuseIdle % 8 == 0 || patched)
   let mut input = Input.make(viewport)
   input.known = viewport
   input.blockRoot = true
