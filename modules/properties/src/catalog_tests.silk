@@ -1,6 +1,8 @@
 //! The catalog's tables agree with each other for every property.
 import catalog { Property }
 import catalog
+import keywords { Keyword }
+import keywords
 import silk.core.option { Option }
 import silk.testing.testing { Testing, AssertionError }
 
@@ -35,6 +37,16 @@ test effect fn everyPropertyHasOneIndexAndFindsItselfByName() -> ()
     Option<Property>.None => false
   }
   run Testing.expect(prefixed, "a prefixed name finds the property it aliases")
+  let region = match catalog.lookup(b"-webkit-app-region") {
+    Option<Property>.Some { value } => value == Property.AppRegion
+    Option<Property>.None => false
+  }
+  run Testing.expect(region && catalog.lookup(b"app-region").isSome(), "app-region takes its prefixed name too")
+  let words = match keywords.lookup(b"no-drag") {
+    Option<Keyword>.Some { value } => value == Keyword.NoDrag && keywords.lookup(b"DRAG").isSome()
+    Option<Keyword>.None => false
+  }
+  run Testing.expect(words, "drag and no-drag are keywords")
 }
 
 test effect fn shorthandsExpandToLonghands() -> ()
