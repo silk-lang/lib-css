@@ -1,4 +1,7 @@
-import adopted { StyleSheets, AdoptionError, Source }
+import adopted { StyleSheets, AdoptionError, Source, Candidate }
+import variables { nameBit }
+import silk.num.u64
+import silk.collections.list { List }
 import compile { Options, CompileError }
 import compile
 import sheet { Sheet, Declaration }
@@ -227,6 +230,22 @@ effect fn variablesBody() -> ()
   run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.Width)), b"8px"), "inherited custom properties use cross-sheet important layer order")
   run Testing.expect(valueIs(&(run pendingValue(&sheets, child, Property.Height)), b"3px"), "registered non-inherited values use relocated initial tokens in another sheet")
   run Testing.expect((run pendingValue(&sheets, child, Property.MarginLeft)).isNone(), "unresolved variables are invalid at computed-value time")
+  let read = sheets.variableMasks(&[])
+  run Testing.expect(u64.bitAnd(read.reads, nameBit(b"--gap")) != 0 && u64.bitAnd(read.reads, nameBit(b"--size")) != 0 && u64.bitAnd(read.reads, nameBit(b"--missing")) != 0,
+    "the masks of a match name the custom properties its values mention")
+  let mut customs = List<Candidate>.make()
+  run sheets.customCandidates(&mut customs)
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 0, &[], &mut context)
+  let declared = sheets.variableMasks(&[])
+  run Testing.expect(u64.bitAnd(declared.declares, nameBit(b"--gap")) != 0 && u64.bitAnd(declared.declares, nameBit(b"--size")) != 0, "and the ones it declares")
+  let kept = run sheets.variableScopeOf(Option<ScopeId>.some(parent), customs.asSlice(), &[], &Limits.make())
+  run Testing.expect(kept.index == child.index, "the custom candidates kept from a match give its scope again after another match")
+  run Testing.expect(sheets.variablesDiffering(Option<ScopeId>.some(parent), Option<ScopeId>.some(parent)) == 0
+    && u64.bitAnd(sheets.variablesDiffering(Option<ScopeId>.some(parent), Option<ScopeId>.some(child)), nameBit(b"--gap")) != 0,
+    "two scopes differ in the properties only one declares")
+  context = MatchContext.make(0, NO_ELEMENT)
+  run sheets.resolve(&tree, 1, &[], &mut context)
   run sheets.adopt(3, run compiled(b"@property --size {syntax:'<length>';inherits:false;initial-value:5px} @media (width >= 600px) {@property --size {syntax:'<length>';inherits:false;initial-value:7px}}"))
   drop run sheets.environment(&Environment.headless(400.0, 300.0), false, &Limits.make())
   context = MatchContext.make(0, NO_ELEMENT)

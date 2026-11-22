@@ -26,6 +26,10 @@ import media_queries
 import supports
 import values { Store as ValueStore }
 import silk.collections.list { List }
+import silk.collections.hash { Hash }
+import silk.num.u8
+import silk.num.u64
+import silk.num.usize
 import silk.core.ownership { Copy }
 import silk.core.option { Option }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
@@ -115,6 +119,18 @@ impl Budget {
     }
     self.remaining = self.remaining - amount
   }
+}
+
+/// The bit a custom property name takes in a set of names (`VariableStore.differing`,
+/// `adopted_variables.VariableMasks`).
+pub fn nameBit(name: &[u8]) -> u64 {
+  let mut hash = Hash.mix(&Hash.seed(1103), usize.toU64(name.length))
+  let mut i: usize = 0
+  while i < name.length {
+    hash = Hash.combine(hash, u8.toU64(name[i]))
+    i = i + 1
+  }
+  return u64.shiftLeft(1, u64.bitAnd(u64.shiftRight(hash, 23), 63))
 }
 
 pub effect fn appendClosingBuffer(buffers: &mut Buffers<'_>) -> usize
@@ -442,6 +458,72 @@ impl VariableStore {
       return Option<usize>.some(self.closingBuffer)
     }
     return Option<usize>.None
+  }
+
+  /// The custom properties that the entries of scopes `a` and `b` give different values, or
+  /// that only one of them has an entry for, as name bits (`nameBit`): the ones a descendant
+  /// can tell the two scopes apart by, so a property registered not to inherit is left out.
+  /// It compares what the two elements declare, substituted: what each inherits is the
+  /// caller's to compare.
+  pub fn differing(self: &VariableStore, buffers: BufferView<'_>, a: ScopeId, b: ScopeId) -> u64 {
+    if a.index == b.index { return 0 }
+    if a.index >= self.scopes.length() || b.index >= self.scopes.length() { return u64.MAX }
+    let one = self.scopes.asSlice()[a.index].entries
+    let two = self.scopes.asSlice()[b.index].entries
+    let entries = self.entries.asSlice()
+    let mut bits: u64 = 0
+    let mut i = one.start
+    while i < one.end {
+      let mut found = false
+      let mut j = two.start
+      while j < two.end && !found {
+        if cascade.sameName(buffers, entries[i].name, entries[j].name) {
+          found = true
+          if !self.sameValue(buffers, entries[i].value, entries[j].value) { bits = u64.bitOr(bits, self.inheritedBit(buffers, entries[i].name)) }
+        }
+        j = j + 1
+      }
+      if !found { bits = u64.bitOr(bits, self.inheritedBit(buffers, entries[i].name)) }
+      i = i + 1
+    }
+    let mut j = two.start
+    while j < two.end {
+      let mut found = false
+      i = one.start
+      while i < one.end && !found {
+        found = cascade.sameName(buffers, entries[i].name, entries[j].name)
+        i = i + 1
+      }
+      if !found { bits = u64.bitOr(bits, self.inheritedBit(buffers, entries[j].name)) }
+      j = j + 1
+    }
+    return bits
+  }
+
+  /// The name bit of a custom property that inherits, and no bit for one registered not to.
+  fn inheritedBit(self: &VariableStore, buffers: BufferView<'_>, name: Name) -> u64 {
+    if let Option<Registered>.Some { value } = self.registered(buffers, name) {
+      if !value.definition.inherits { return 0 }
+    }
+    return nameBit(buffers.one(name.buffer)[0].text(name.span))
+  }
+
+  fn sameValue(self: &VariableStore, buffers: BufferView<'_>, a: Option<TokenRange>, b: Option<TokenRange>) -> bool {
+    let first = match a { Option<TokenRange>.Some { value } => value _ => { return b.isNone() } }
+    let second = match b { Option<TokenRange>.Some { value } => value _ => { return false } }
+    if first.end - first.start != second.end - second.start || first.end > self.refs.length() || second.end > self.refs.length() { return false }
+    let refs = self.refs.asSlice()
+    let mut i: usize = 0
+    while i < first.end - first.start {
+      let x = refs[first.start + i]
+      let y = refs[second.start + i]
+      if x.buffer != y.buffer || x.token != y.token {
+        if x.buffer >= buffers.length() || y.buffer >= buffers.length() { return false }
+        if !(blank(buffers, x) && blank(buffers, y)) && !sameToken(&buffers.one(x.buffer)[0], x.token, &buffers.one(y.buffer)[0], y.token) { return false }
+      }
+      i = i + 1
+    }
+    return true
   }
 
   pub fn references(self: &VariableStore) -> &[TokenRef] {

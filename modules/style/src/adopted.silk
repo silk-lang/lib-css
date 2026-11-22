@@ -6,7 +6,9 @@ import css_properties.census { Census }
 import silk.num.u32
 import sheet { Sheet, Declaration }
 import sheet_conditions
-import adopted_variables { Inputs, InlineCustom }
+import adopted_variables { Inputs, InlineCustom, VariableMasks }
+import adopted_variables
+import silk.num.u64
 import variables { ScopeId, RegistrationError }
 import silk.core.option { Option }
 import silk.mem.box { Box }
@@ -382,6 +384,48 @@ impl StyleSheets {
       Option<Box<Inputs>>.Some { value } => { let inputs = value.getMut()
         return run inputs[0].scope(self.output.asSlice(), inline, parent, limits) }
       Option<Box<Inputs>>.None => Intrinsic.trap("variable inputs were initialized")
+    }
+  }
+
+  /// The variable scope under `parent` of an element whose match held the custom-property
+  /// candidates `customs` (`customCandidates`) and that has the inline custom properties
+  /// `inline`. It reads nothing of the last match, so a caller that kept those of an earlier
+  /// match can move the element under a changed parent scope without matching it again.
+  pub effect fn variableScopeOf(self: &mut Self, parent: Option<ScopeId>, customs: &[Candidate], inline: &[InlineCustom<'_, '_>], limits: &Limits) -> ScopeId
+    ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
+    if self.variables.isNone() {
+      let mut made = run Inputs.make(self.entries.asSlice(), limits)
+      made.variables.environment = self.current
+      self.variables = Option<Box<Inputs>>.some(run Box<Inputs>.make(move made))
+    }
+    match &mut self.variables {
+      Option<Box<Inputs>>.Some { value } => { let inputs = value.getMut()
+        return run inputs[0].scope(customs, inline, parent, limits) }
+      Option<Box<Inputs>>.None => Intrinsic.trap("variable inputs were initialized")
+    }
+  }
+
+  /// The custom properties two elements' own declarations give different values, as name
+  /// bits, given the scope of each (`VariableStore.differing`); every bit where one is unknown.
+  pub fn variablesDiffering(self: &Self, a: Option<ScopeId>, b: Option<ScopeId>) -> u64 {
+    let one = match a { Option<ScopeId>.Some { value } => value _ => { return u64.MAX } }
+    let two = match b { Option<ScopeId>.Some { value } => value _ => { return u64.MAX } }
+    let inputs = self.variableInputs()
+    if inputs.length == 0 { return u64.MAX }
+    return inputs[0].differing(one, two)
+  }
+
+  /// Appends the candidates of the last match that declare a custom property.
+  pub effect fn customCandidates(self: &Self, out: &mut List<Candidate>) -> () ! OutOfMemoryError ? &mut Allocator {
+    if let Option<Box<Inputs>>.Some { value } = &self.variables { run value.get()[0].customCandidates(self.output.asSlice(), &mut out) }
+  }
+
+  /// Which custom properties the last match and `inline` declare, and which their values
+  /// mention. Every bit is set before the first scope is asked for.
+  pub fn variableMasks(self: &Self, inline: &[InlineCustom<'_, '_>]) -> VariableMasks {
+    return match &self.variables {
+      Option<Box<Inputs>>.Some { value } => value.get()[0].sheetMasks(self.output.asSlice()).with(adopted_variables.inlineMasks(inline))
+      Option<Box<Inputs>>.None => VariableMasks { reads: u64.MAX, declares: u64.MAX }
     }
   }
 
