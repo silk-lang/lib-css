@@ -1,6 +1,7 @@
 import sheet_binary { Writer, Reader, DecodeError }
 import sheet_tokens
-import tokens { Limits, CssError, equal }
+import tokens { Limits, CssError, equal, Buffers, TokenBuffer }
+import silk.collections.list { List }
 import lexer
 import cssom_serialization
 import silk.core.effect { Effect }
@@ -22,4 +23,29 @@ test effect fn decodedTokensPreserveEscapesNumbersAndBlocksWithoutSourceText() -
   let before = run cssom_serialization.components(&buffer, buffer.all()) |> Effect.provideMut<Allocator>(&mut allocator)
   let after = run cssom_serialization.components(&decoded, decoded.all()) |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(equal(before.asSlice(), after.asSlice()), "token identity round trips")
+}
+
+test effect fn borrowedBufferRunsReadInPlaceBetweenTheBaseAndOwnedBuffers() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let limits = Limits.make()
+  let mut first = List<TokenBuffer>.make()
+  run first.append(run lexer.tokenize(b"a", &limits) |> Effect.provideMut<Allocator>(&mut allocator)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run first.append(run lexer.tokenize(b"bb", &limits) |> Effect.provideMut<Allocator>(&mut allocator)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut second = List<TokenBuffer>.make()
+  run second.append(run lexer.tokenize(b"ccc", &limits) |> Effect.provideMut<Allocator>(&mut allocator)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let base = run lexer.tokenize(b"base0", &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bases: [TokenBuffer; 1] = [move base]
+  let mut buffers = Buffers.over(&bases)
+  run unsafe buffers.borrow(first.asSlice()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run unsafe buffers.borrow(List<TokenBuffer>.make().asSlice()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run unsafe buffers.borrow(second.asSlice()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run buffers.append(run lexer.tokenize(b"dddd", &limits) |> Effect.provideMut<Allocator>(&mut allocator)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(buffers.length() == 5 && buffers.owned().length == 1, "base, two borrowed runs and one owned buffer")
+  let view = buffers.view()
+  run Testing.expect(view.length() == 5, "the view counts the borrowed runs")
+  run Testing.expect(view.one(0)[0].source().length == 5 && view.one(1)[0].source().length == 1 && view.one(2)[0].source().length == 2
+    && view.one(3)[0].source().length == 3 && view.one(4)[0].source().length == 4, "each index reads its own buffer")
+  run Testing.expect(buffers.one(2)[0].source().length == 2 && buffers.one(3)[0].source().length == 3, "Buffers reads the runs too")
+  drop buffers
 }

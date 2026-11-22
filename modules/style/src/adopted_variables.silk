@@ -121,12 +121,8 @@ impl Inputs {
     let mut i: usize = 0
     while i < sheets.length {
       run bufferOffsets.append(buffers.length())
-      let source = sheets[i].sheet.buffers.asSlice()
-      let mut at: usize = 0
-      while at < source.length {
-        run buffers.append(run source[at].copy())
-        at = at + 1
-      }
+      // Read in place: StyleSheets drops these inputs before any adopted sheet changes.
+      run unsafe buffers.borrow(sheets[i].sheet.buffers.asSlice())
       i = i + 1
     }
     let nameBuffer = buffers.length()

@@ -119,6 +119,8 @@ pub effect fn decode(reader: &mut Reader<'_>, limits: &Limits) -> TokenBuffer
   let count = run reader.count(limits.maxTokens)
   if count == 0 { run reader.invalid() }
   let mut buffer = TokenBuffer.make()
+  // The count is known: one exact list, not a doubling one that copies as it grows.
+  run buffer.tokens.reserveExact(count)
   let mut i: usize = 0
   while i < count {
     let matching = run reader.index()
