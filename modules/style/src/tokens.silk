@@ -5,6 +5,7 @@ import silk.simd.mask16
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
 import silk.core.ownership { Copy }
+import silk.mem.pointer { Pointer }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
 
 pub struct Span {
@@ -275,9 +276,36 @@ pub fn nonAsciiIdentifier(value: u32) -> bool {
 
 const NO_BUFFERS: [TokenBuffer; 0] = []
 
-/// Token buffers whose first indices may name another owner's buffers, read in place.
+/// Another owner's token buffers that Buffers reads in place (Buffers.borrow). The
+/// owner keeps them where they are, unchanged, for as long as those Buffers live.
+pub struct BorrowedRun { data: *const TokenBuffer, length: usize }
+
+impl Copy for BorrowedRun {}
+
+const NO_RUNS: [BorrowedRun; 0] = []
+
+/// The buffer at `index` of `runs`, counted across them in order.
+fn runBuffer<'r>(runs: &'r [BorrowedRun], index: usize) -> &'r [TokenBuffer] {
+  let mut left = index
+  let mut i: usize = 0
+  while i < runs.length {
+    let part = &runs[i]
+    if left < part.length {
+      let all = unsafe Pointer.borrowMany<BorrowedRun, TokenBuffer>(part, unsafe Pointer.assumeMany<TokenBuffer>(part.data), part.length)
+      return Slice.view<TokenBuffer>(all, left, 1)
+    }
+    left = left - part.length
+    i = i + 1
+  }
+  Intrinsic.trap("token buffer index past the borrowed runs")
+}
+
+/// Token buffers whose first indices may name another owner's buffers, read in place:
+/// `base`, then the borrowed runs, then the buffers this owner holds.
 pub struct Buffers<'a> {
   base: &'a [TokenBuffer],
+  runs: List<BorrowedRun>,
+  borrowed: usize,
   own: List<TokenBuffer>,
 }
 
@@ -285,17 +313,31 @@ impl<'a> Buffers<'a> {
   pub fn make() -> Buffers<'a> {
     return Buffers<'a> {
       base: Slice.view<TokenBuffer>(&NO_BUFFERS, 0, 0),
+      runs: List<BorrowedRun>.make(),
+      borrowed: 0,
       own: List<TokenBuffer>.make(),
     }
   }
 
   /// Buffers whose first `base.length` indices read `base` in place.
   pub fn over(base: &'a [TokenBuffer]) -> Buffers<'a> {
-    return Buffers<'a> { base: base, own: List<TokenBuffer>.make() }
+    return Buffers<'a> { base: base, runs: List<BorrowedRun>.make(), borrowed: 0, own: List<TokenBuffer>.make() }
   }
 
   pub fn length(self: &Self) -> usize {
-    return self.base.length + self.own.length()
+    return self.base.length + self.borrowed + self.own.length()
+  }
+
+  /// Reads `buffers` in place as the next indices, instead of copies of them.
+  /// The caller keeps them where they are, unchanged, while these Buffers live;
+  /// it must not borrow after appending a buffer of its own.
+  pub unsafe effect fn borrow(self: &mut Self, buffers: &[TokenBuffer]) -> ()
+    ! OutOfMemoryError
+    ? &mut Allocator {
+    if self.own.length() != 0 { Intrinsic.trap("borrowed token buffers after owned ones") }
+    if buffers.length == 0 { return () }
+    run self.runs.append(BorrowedRun { data: Pointer.fromRef<TokenBuffer>(&buffers[0]), length: buffers.length })
+    self.borrowed = self.borrowed + buffers.length
   }
 
   /// The buffer at `index` as a one-element slice.
@@ -304,7 +346,9 @@ impl<'a> Buffers<'a> {
     if index < self.base.length {
       return Slice.view<TokenBuffer>(self.base, index, 1)
     }
-    return Slice.view<TokenBuffer>(self.own.asSlice(), index - self.base.length, 1)
+    let at = index - self.base.length
+    if at < self.borrowed { return runBuffer(self.runs.asSlice(), at) }
+    return Slice.view<TokenBuffer>(self.own.asSlice(), at - self.borrowed, 1)
   }
 
   /// The buffers this owner holds, after the borrowed ones.
@@ -313,7 +357,7 @@ impl<'a> Buffers<'a> {
   }
 
   pub fn view<'s>(self: &'s Self) -> BufferView<'s> {
-    return BufferView<'s> { base: self.base, own: self.own.asSlice() }
+    return BufferView<'s> { base: self.base, runs: self.runs.asSlice(), borrowed: self.borrowed, own: self.own.asSlice() }
   }
 
   pub effect fn append(self: &mut Self, buffer: TokenBuffer) -> ()
@@ -333,9 +377,12 @@ impl<'a> Buffers<'a> {
   }
 }
 
-/// A borrowed view of token buffers: a shared run followed by a document's own.
+/// A borrowed view of token buffers: a shared run, other owners' runs read in place,
+/// then a document's own.
 pub struct BufferView<'a> {
   base: &'a [TokenBuffer],
+  runs: &'a [BorrowedRun],
+  borrowed: usize,
   own: &'a [TokenBuffer],
 }
 
@@ -344,11 +391,11 @@ impl<'a> Copy for BufferView<'a> {}
 impl<'a> BufferView<'a> {
   /// A view of one plain slice of buffers.
   pub fn of(buffers: &'a [TokenBuffer]) -> BufferView<'a> {
-    return BufferView<'a> { base: buffers, own: Slice.view<TokenBuffer>(&NO_BUFFERS, 0, 0) }
+    return BufferView<'a> { base: buffers, runs: Slice.view<BorrowedRun>(&NO_RUNS, 0, 0), borrowed: 0, own: Slice.view<TokenBuffer>(&NO_BUFFERS, 0, 0) }
   }
 
   pub fn length(self: &Self) -> usize {
-    return self.base.length + self.own.length
+    return self.base.length + self.borrowed + self.own.length
   }
 
   /// The buffer at `index` as a one-element slice.
@@ -357,6 +404,8 @@ impl<'a> BufferView<'a> {
     if index < self.base.length {
       return Slice.view<TokenBuffer>(self.base, index, 1)
     }
-    return Slice.view<TokenBuffer>(self.own, index - self.base.length, 1)
+    let at = index - self.base.length
+    if at < self.borrowed { return runBuffer(self.runs, at) }
+    return Slice.view<TokenBuffer>(self.own, at - self.borrowed, 1)
   }
 }
