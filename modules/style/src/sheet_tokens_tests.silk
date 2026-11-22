@@ -47,5 +47,10 @@ test effect fn borrowedBufferRunsReadInPlaceBetweenTheBaseAndOwnedBuffers() -> (
   run Testing.expect(view.one(0)[0].source().length == 5 && view.one(1)[0].source().length == 1 && view.one(2)[0].source().length == 2
     && view.one(3)[0].source().length == 3 && view.one(4)[0].source().length == 4, "each index reads its own buffer")
   run Testing.expect(buffers.one(2)[0].source().length == 2 && buffers.one(3)[0].source().length == 3, "Buffers reads the runs too")
+  let mut after = run buffers.reading() |> Effect.provideMut<Allocator>(&mut allocator)
+  run after.append(run lexer.tokenize(b"eeeee5", &limits) |> Effect.provideMut<Allocator>(&mut allocator)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(after.length() == 6 && after.owned().length == 1 && after.one(4)[0].source().length == 4
+    && after.view().one(2)[0].source().length == 2 && after.view().one(5)[0].source().length == 6, "reading Buffers sees all of them, then its own")
+  drop after
   drop buffers
 }

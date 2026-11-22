@@ -351,6 +351,20 @@ impl<'a> Buffers<'a> {
     return Slice.view<TokenBuffer>(self.own.asSlice(), at - self.borrowed, 1)
   }
 
+  /// New Buffers whose first indices read every buffer of these in place, the
+  /// borrowed and owned ones alike, so a caller can add its own after them.
+  /// These must stay unchanged while the new ones live.
+  pub effect fn reading<'s>(self: &'s Self) -> Buffers<'s>
+    ! OutOfMemoryError
+    ? &mut Allocator {
+    let mut runs = List<BorrowedRun>.make()
+    run runs.reserveExact(self.runs.length() + 1)
+    run runs.appendSlice(self.runs.asSlice())
+    let own = self.own.asSlice()
+    if own.length != 0 { run runs.append(BorrowedRun { data: Pointer.fromRef<TokenBuffer>(&own[0]), length: own.length }) }
+    return Buffers<'s> { base: self.base, runs: move runs, borrowed: self.borrowed + own.length, own: List<TokenBuffer>.make() }
+  }
+
   /// The buffers this owner holds, after the borrowed ones.
   pub fn owned(self: &Self) -> &[TokenBuffer] {
     return self.own.asSlice()
