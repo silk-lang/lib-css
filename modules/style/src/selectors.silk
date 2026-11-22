@@ -2312,6 +2312,8 @@ pub effect fn matchElement<T: ElementTree>(
 ) -> Option<Specificity>
   ! CssError {
   let mut result = Option<Specificity>.None
+  let outer = context.subject
+  context.subject = node
   let mut arm = selectors.head
   while arm != NONE {
     run spend(&mut context.*)
@@ -2326,6 +2328,7 @@ pub effect fn matchElement<T: ElementTree>(
     }
     arm = entry.next
   }
+  context.subject = outer
   return result
 }
 
@@ -2352,6 +2355,8 @@ pub effect fn matchElementRecorded<T: ElementTree>(
   ! CssError {
   let mut result = Option<Specificity>.None
   let mut positional = node == context.shadowHost
+  let outer = context.subject
+  context.subject = node
   let mut arm = selectors.head
   while arm != NONE {
     run spend(&mut context.*)
@@ -2382,6 +2387,7 @@ pub effect fn matchElementRecorded<T: ElementTree>(
     }
     arm = entry.next
   }
+  context.subject = outer
   return RecordedMatch { specificity: result, positional: positional }
 }
 
@@ -2651,7 +2657,7 @@ effect fn anchored<T: ElementTree>(
 fn watches(test: &Test) -> bool {
   return match &test.* {
     Test.Function { kind, .. } => kind == FunctionKind.Has
-    Test.State { pseudo } => pseudo == Pseudo.FocusWithin
+    Test.State { pseudo } => pseudo == Pseudo.FocusWithin || pseudo == Pseudo.Hover || pseudo == Pseudo.Active
     _ => false
   }
 }
@@ -2733,6 +2739,7 @@ effect fn matchNormal<T: ElementTree>(
   ! CssError {
   let mut normal = MatchContext.make(context.scope, context.target)
   normal.shadowHost = ElementTree.containingHost(tree, node)
+  normal.subject = context.subject
   normal.remainingSteps = context.remainingSteps
   let result = run Effect.result(
     matchesAny(ast, buffer, tree, list, node, NONE, &mut normal, depth),
@@ -3176,6 +3183,12 @@ effect fn matchState<T: ElementTree>(
   let mask = stateMask(state)
   if mask != 0 {
     if state == Pseudo.FocusWithin { context.watch(node, element.WATCH_FOCUS_WITHIN) }
+    // A pointer state of the subject is the host's own business; of another element, the host
+    // restyles those that asked when it flips.
+    if node != context.subject {
+      if state == Pseudo.Hover { context.watch(node, element.WATCH_HOVER) }
+      if state == Pseudo.Active { context.watch(node, element.WATCH_ACTIVE) }
+    }
     return ElementTree.state(tree, node).contains(mask)
   }
   let typed = state == Pseudo.FirstType || state == Pseudo.LastType || state == Pseudo.OnlyType

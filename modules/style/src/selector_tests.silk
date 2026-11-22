@@ -623,6 +623,9 @@ test effect fn matchingReportsHasAnchorsAndFocusWithinElements() -> ()
   run Testing.expect((run watchOf(b"rect:has(circle)", 3, 3)) == 0 && (run watchOf(b":has(circle).absent", 2, 2)) == 0 && (run watchOf(b":focus-within.absent", 2, 2)) == 0, "a compound whose other tests fail watches nothing, in any order")
   run Testing.expect((run watchOf(b"g:focus-within > rect", 2, 1)) == element.WATCH_FOCUS_WITHIN && (run watchOf(b"g:focus-within > rect", 2, 2)) == 0, ":focus-within is watched on the element it was asked of")
   run Testing.expect((run watchOf(b"g:has(:focus-within)", 1, 1)) == element.WATCH_HAS && (run watchOf(b"g:has(:focus-within)", 1, 2)) == element.WATCH_FOCUS_WITHIN, "states read inside :has() are watched on the candidates")
+  run Testing.expect((run watchOf(b"g:hover > rect", 2, 1)) == element.WATCH_HOVER && (run watchOf(b"g:active rect", 2, 1)) == element.WATCH_ACTIVE, "a pointer state is watched on the ancestor it was asked of")
+  run Testing.expect((run watchOf(b"rect:hover", 2, 2)) == 0 && (run watchOf(b":is(rect:active)", 2, 2)) == 0, "the subject's own pointer state is not watched")
+  run Testing.expect((run watchOf(b"g:has(:hover)", 1, 2)) == element.WATCH_HOVER, "a pointer state read inside :has() is watched on the candidate")
 }
 
 test effect fn invalidationKeysIncludeRelationalAndFailedLogicalArms() -> ()
