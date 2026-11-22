@@ -338,9 +338,11 @@ pub enum(u16) Keyword {
   Capitalize,
   FullWidth,
   Ellipsis,
+  Drag,
+  NoDrag,
 }
 
-pub const COUNT: usize = 332
+pub const COUNT: usize = 334
 
 /// The CSS spelling. A few SVG keywords are mixed case, such as `sRGB` and `optimizeSpeed`.
 pub fn name(value: Keyword) -> &'static [u8] {
@@ -680,6 +682,8 @@ pub fn name(value: Keyword) -> &'static [u8] {
     Keyword.Capitalize => b"capitalize"
     Keyword.FullWidth => b"full-width"
     Keyword.Ellipsis => b"ellipsis"
+    Keyword.Drag => b"drag"
+    Keyword.NoDrag => b"no-drag"
   }
 }
 
@@ -739,6 +743,9 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
     }
     4 => {
+      if first == 100 && insensitive(name, b"drag") {
+        return Option<Keyword>.some(Keyword.Drag)
+      }
       if first == 97 && insensitive(name, b"auto") {
         return Option<Keyword>.some(Keyword.Auto)
       }
@@ -1096,6 +1103,9 @@ pub fn lookup(name: &[u8]) -> Option<Keyword> {
       }
     }
     7 => {
+      if first == 110 && insensitive(name, b"no-drag") {
+        return Option<Keyword>.some(Keyword.NoDrag)
+      }
       if first == 109 && insensitive(name, b"masonry") {
         return Option<Keyword>.some(Keyword.Masonry)
       }

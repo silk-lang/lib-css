@@ -466,9 +466,10 @@ pub enum(u16) Property {
   Offset,
   WrapFlow,
   WrapThrough,
+  AppRegion,
 }
 
-pub const COUNT: usize = 463
+pub const COUNT: usize = 464
 
 pub fn all() -> [Property; COUNT] {
   return [
@@ -935,6 +936,7 @@ pub fn all() -> [Property; COUNT] {
     Property.Offset,
     Property.WrapFlow,
     Property.WrapThrough,
+    Property.AppRegion,
   ]
 }
 
@@ -1403,6 +1405,7 @@ pub fn index(property: Property) -> usize {
     Property.Offset => 460
     Property.WrapFlow => 461
     Property.WrapThrough => 462
+    Property.AppRegion => 463
   }
 }
 
@@ -1871,6 +1874,7 @@ pub fn name(property: Property) -> &'static [u8] {
     Property.Offset => b"offset"
     Property.WrapFlow => b"wrap-flow"
     Property.WrapThrough => b"wrap-through"
+    Property.AppRegion => b"app-region"
   }
 }
 
@@ -2151,6 +2155,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     10 => {
+      if first == 97 && insensitive(name, b"app-region") {
+        return Option<Property>.some(Property.AppRegion)
+      }
       if first == 109 && insensitive(name, b"marker-mid") {
         return Option<Property>.some(Property.MarkerMid)
       }
@@ -2887,6 +2894,9 @@ pub fn lookup(name: &[u8]) -> Option<Property> {
       }
     }
     18 => {
+      if first == 45 && insensitive(name, b"-webkit-app-region") {
+        return Option<Property>.some(Property.AppRegion)
+      }
       if first == 102 && insensitive(name, b"font-variant-emoji") {
         return Option<Property>.some(Property.FontVariantEmoji)
       }
@@ -3830,6 +3840,7 @@ pub fn inherited(property: Property) -> bool {
     Property.Offset => false
     Property.WrapFlow => false
     Property.WrapThrough => false
+    Property.AppRegion => false
   }
 }
 
@@ -4300,6 +4311,7 @@ pub fn initial(property: Property) -> &'static [u8] {
     Property.Offset => b"normal"
     Property.WrapFlow => b"auto"
     Property.WrapThrough => b"wrap"
+    Property.AppRegion => b"none"
   }
 }
 
@@ -4334,7 +4346,7 @@ pub fn canonical(property: Property) -> Property {
 // Iteration is allocation-free; a shorthand value retains typed data for every target.
 pub fn longhandCount(property: Property) -> usize {
   return match property {
-    Property.All => 385
+    Property.All => 386
     Property.Animation => 8
     Property.Transition => 5
     Property.WhiteSpace => 3
@@ -5948,6 +5960,9 @@ pub fn longhandAt(property: Property, index: usize) -> Property {
       }
       if index == 384 {
         return Property.WrapThrough
+      }
+      if index == 385 {
+        return Property.AppRegion
       }
     }
     Property.WhiteSpace => {
