@@ -10,6 +10,7 @@ import values { Store }
 import lexer
 import syntax
 import silk.collections.list { List }
+import silk.collections.slice { Slice }
 import silk.core.option { Option }
 import silk.core.effect { Effect }
 import silk.core.result { Result }
@@ -526,4 +527,35 @@ test effect fn layerRollbackAfterSubstitutionRetainsDependencyOrder() -> ()
   let x = run substitution(&mut f, scope, b"var(--x)") |> Effect.provideMut<Allocator>(&mut allocator)
   let y = run substitution(&mut f, scope, b"var(--y)") |> Effect.provideMut<Allocator>(&mut allocator)
   run Testing.expect(isIdent(&f, &x, b"red") && isIdent(&f, &y, b"red"), "substituted layer rollback skips its whole layer before resolving dependents")
+}
+
+// Two scopes that give a range's variables the same values substitute it the same way, so a
+// caller can keep one substitution for both.
+test effect fn readsTellScopesThatSubstituteAlike() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut f = run fixture(b"--a: red; --b: 1px; --b: 2px; --c: x;") |> Effect.provideMut<Allocator>(&mut allocator)
+  let all = f.candidates.asSlice()
+  let root = run f.variables.build(f.buffers.view(), f.catalog.asSlice(), Slice.view(all, 0, 2), Option<ScopeId>.None, &Limits.make())
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let other = run f.variables.build(f.buffers.view(), f.catalog.asSlice(), Slice.view(all, 2, 1), Option<ScopeId>.some(root), &Limits.make())
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let alike = run f.variables.build(f.buffers.view(), f.catalog.asSlice(), Slice.view(all, 3, 1), Option<ScopeId>.some(root), &Limits.make())
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(b"var(--a) var(--b, var(--z))", &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  let range = buffer.all()
+  let index = f.buffers.length()
+  run f.buffers.append(move buffer) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut atRoot = List<u64>.make()
+  let mut atOther = List<u64>.make()
+  let mut atAlike = List<u64>.make()
+  run f.variables.reads(f.buffers.view(), root, index, range, &mut atRoot) |> Effect.provideMut<Allocator>(&mut allocator)
+  run f.variables.reads(f.buffers.view(), other, index, range, &mut atOther) |> Effect.provideMut<Allocator>(&mut allocator)
+  run f.variables.reads(f.buffers.view(), alike, index, range, &mut atAlike) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(atRoot.length() == 3, "each var(), fallbacks included, is read")
+  run Testing.expect(atRoot.asSlice()[2] == 18446744073709551615, "an undefined variable reads as none")
+  let same = atAlike.length() == 3 && atAlike.asSlice()[0] == atRoot.asSlice()[0] && atAlike.asSlice()[1] == atRoot.asSlice()[1] && atAlike.asSlice()[2] == atRoot.asSlice()[2]
+  run Testing.expect(same, "a scope that declares only unread variables reads what its parent reads")
+  run Testing.expect(atOther.asSlice()[1] != atRoot.asSlice()[1], "a scope that redeclares a read variable reads another value")
 }

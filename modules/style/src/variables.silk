@@ -50,6 +50,8 @@ impl Copy for ComputedVariable {}
 
 struct Entry {
   name: Name,
+  /// `nameKey` of the name: lookups compare it before the text.
+  key: u64,
   value: Option<TokenRange>
 }
 
@@ -66,6 +68,7 @@ pub enum RegistrationError { AlreadyBuilt, Invalid }
 
 struct Registered {
   definition: Registration,
+  key: u64,
   initial: Option<TokenRange>,
 }
 impl Copy for Registered {}
@@ -123,6 +126,19 @@ impl Budget {
 
 /// The bit a custom property name takes in a set of names (`VariableStore.differing`,
 /// `adopted_variables.VariableMasks`).
+/// A hash of a custom property's name, equal for equal names.
+fn nameKey(buffers: BufferView<'_>, name: Name) -> u64 {
+  if name.buffer >= buffers.length() { return 0 }
+  let text = buffers.one(name.buffer)[0].text(name.span)
+  let mut hash = Hash.mix(&Hash.seed(1123), usize.toU64(text.length))
+  let mut i: usize = 0
+  while i < text.length {
+    hash = Hash.combine(hash, u8.toU64(text[i]))
+    i = i + 1
+  }
+  return hash
+}
+
 pub fn nameBit(name: &[u8]) -> u64 {
   let mut hash = Hash.mix(&Hash.seed(1103), usize.toU64(name.length))
   let mut i: usize = 0
@@ -176,6 +192,15 @@ fn variable(buffer: &TokenBuffer, index: usize) -> bool {
   return match &buffer.tokens.asSlice()[index].kind {
     Kind.Function { name } => tokens.insensitive(buffer.text(name), b"var")
     _ => false
+  }
+}
+
+/// One entry of `VariableStore.reads`: where a looked-up value starts and ends in the store's
+/// references, or `u64.MAX` for none.
+fn variableRead(value: Option<TokenRange>) -> u64 {
+  return match value {
+    Option<TokenRange>.Some { value: found } => u64.bitOr(u64.shiftLeft(usize.toU64(found.start), 32), usize.toU64(found.end))
+    Option<TokenRange>.None => u64.MAX
   }
 }
 
@@ -279,7 +304,7 @@ impl VariableStore {
       }
       initial = Option<TokenRange>.some(TokenRange { start: start, end: self.refs.length() })
     } else if definition.syntax != Syntax.Universal { fail RegistrationError.Invalid }
-    let item = Registered { definition: definition, initial: initial }
+    let item = Registered { definition: definition, key: nameKey(buffers, definition.name), initial: initial }
     let mut found = false
     let mut i: usize = 0
     while i < self.registrations.length() {
@@ -304,10 +329,12 @@ impl VariableStore {
   }
 
   fn registered(self: &Self, buffers: BufferView<'_>, name: Name) -> Option<Registered> {
+    if self.registrations.length() == 0 { return Option<Registered>.None }
+    let key = nameKey(buffers, name)
     let mut i: usize = 0
     while i < self.registrations.length() {
       let entry = self.registrations.asSlice()[i]
-      if cascade.sameName(buffers, name, entry.definition.name) { return Option<Registered>.some(entry) }
+      if entry.key == key && cascade.sameName(buffers, name, entry.definition.name) { return Option<Registered>.some(entry) }
       i = i + 1
     }
     return Option<Registered>.None
@@ -477,7 +504,7 @@ impl VariableStore {
       let mut found = false
       let mut j = two.start
       while j < two.end && !found {
-        if cascade.sameName(buffers, entries[i].name, entries[j].name) {
+        if entries[i].key == entries[j].key && cascade.sameName(buffers, entries[i].name, entries[j].name) {
           found = true
           if !self.sameValue(buffers, entries[i].value, entries[j].value) { bits = u64.bitOr(bits, self.inheritedBit(buffers, entries[i].name)) }
         }
@@ -491,7 +518,7 @@ impl VariableStore {
       let mut found = false
       i = one.start
       while i < one.end && !found {
-        found = cascade.sameName(buffers, entries[i].name, entries[j].name)
+        found = entries[i].key == entries[j].key && cascade.sameName(buffers, entries[i].name, entries[j].name)
         i = i + 1
       }
       if !found { bits = u64.bitOr(bits, self.inheritedBit(buffers, entries[j].name)) }
@@ -537,6 +564,7 @@ impl VariableStore {
     name: Name,
   ) -> Option<TokenRange> {
     let registered = self.registered(buffers, name)
+    let key = nameKey(buffers, name)
     let mut current = Option<ScopeId>.some(scope)
     while true {
       match &current {
@@ -548,7 +576,7 @@ impl VariableStore {
           let mut i = item.entries.start
           while i < item.entries.end {
             let entry = self.entries.asSlice()[i]
-            if cascade.sameName(buffers, name, entry.name) {
+            if entry.key == key && cascade.sameName(buffers, name, entry.name) {
               return entry.value
             }
             i = i + 1
@@ -699,6 +727,7 @@ impl VariableStore {
   ) -> Option<TokenRange>
     ! CssError {
     let registered = self.registered(buffers, name)
+    let key = nameKey(buffers, name)
     let mut current = parent
     while true {
       match &current {
@@ -712,7 +741,7 @@ impl VariableStore {
           while i < item.entries.end {
             run budget.spend(1)
             let entry = self.entries.asSlice()[i]
-            if cascade.sameName(buffers, name, entry.name) {
+            if entry.key == key && cascade.sameName(buffers, name, entry.name) {
               return entry.value
             }
             i = i + 1
@@ -929,7 +958,7 @@ impl VariableStore {
     i = 0
     while i < work.nodes.length() {
       let node = work.nodes.asSlice()[i]
-      run self.entries.append(Entry { name: node.name, value: node.value })
+      run self.entries.append(Entry { name: node.name, key: nameKey(buffers, node.name), value: node.value })
       i = i + 1
     }
     let id = ScopeId { index: self.scopes.length() }
@@ -1040,6 +1069,42 @@ impl VariableStore {
     }
     let mut nodes = work.nodes.asMutSlice()
     nodes[index].resolved = true
+  }
+
+  /// Appends what substituting `range` of `buffer` in `scope` reads: for each `var()` in it,
+  /// fallbacks included, the value its name has in the scope (`variableRead`). Two scopes that
+  /// give the same list substitute the range the same way, while the environment holds.
+  pub effect fn reads(
+    self: &VariableStore,
+    buffers: BufferView<'_>,
+    scope: ScopeId,
+    buffer: usize,
+    range: TokenRange,
+    out: &mut List<u64>,
+  ) -> ()
+    ! OutOfMemoryError
+    ? &mut Allocator {
+    if buffer >= buffers.length() || range.start > range.end || range.end > buffers.one(buffer)[0].all().end {
+      return ()
+    }
+    if scope.index >= self.scopes.length() {
+      run out.append(u64.MAX - 1)
+      return ()
+    }
+    let source = &buffers.one(buffer)[0]
+    let mut position = range.start
+    while position < range.end {
+      if variable(source, position) {
+        let matching = source.tokens.asSlice()[position].matching
+        let end = if matching < range.end { matching } else { range.end }
+        let value = match variableName(source, buffer, position, end) {
+          Option<Name>.Some { value: name } => self.lookup(buffers, scope, name)
+          Option<Name>.None => Option<TokenRange>.None
+        }
+        run out.append(variableRead(value))
+      }
+      position = position + 1
+    }
   }
 
   pub effect fn substitute(
