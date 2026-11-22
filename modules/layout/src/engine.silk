@@ -76,10 +76,16 @@ fn configureScrollbars<M: Measure>(style: &Style, output: &mut LayoutPass<'_, '_
   if available.widthDefinite { available.width = max(0.0, available.width - box.border.horizontal() - box.padding.horizontal()) }
   if available.heightDefinite { available.height = max(0.0, available.height - box.border.vertical() - box.padding.vertical()) }
   let metrics = Measure.scrollbars(&mut measurer, ScrollbarRequest { width: style.scrollbarWidth, gutter: style.scrollbarGutter, writingMode: style.writingMode, direction: style.usedDirection(), available: available })
-  output.gutterScrollbars = output.gutterScrollbars || ((x == Overflow.Auto || y == Overflow.Auto) && !metrics.overlay)
   let horizontal = x == Overflow.Scroll || output.selected(id, true)
   let vertical = y == Overflow.Scroll || output.selected(id, false)
-  let mut result = withGutter(&box.*, scrollbarGutter(style, metrics, horizontal, vertical))
+  let gutter = scrollbarGutter(style, metrics, horizontal, vertical)
+  // A compute starts with no auto scrollbar selected, so its results serve the next one only
+  // while none that is selected takes room. One that fills a gutter the box reserves anyway
+  // (`scrollbar-gutter: stable`) or lies over the content takes none.
+  let unselected = scrollbarGutter(style, metrics, x == Overflow.Scroll, y == Overflow.Scroll)
+  output.gutterScrollbars = output.gutterScrollbars || gutter.top != unselected.top || gutter.right != unselected.right
+    || gutter.bottom != unselected.bottom || gutter.left != unselected.left
+  let mut result = withGutter(&box.*, gutter)
   result.scrollbarMetrics = metrics
   box.* = result
 }
@@ -3303,8 +3309,9 @@ pub effect fn compute<'source, M: Measure + TextMeasure, S: LayoutSource>(tree: 
       else { output.reuseIdle = 0 }
       run boxes.keepTexts()
       // Auto scrollbar selection is not part of a cache key: results are kept
-      // only when no auto scrollbar takes room, so that showing one or not
-      // changes no geometry (an overlay scrollbar, as a window's by default).
+      // only when no selected auto scrollbar takes room, so that they hold for
+      // the next compute, which starts with none selected (an overlay
+      // scrollbar, as a window's by default, or one in a stable gutter).
       let settled = !boxes.gutterScrollbars
       let keptScratch = Intrinsic.replace(boxes.flexScratch, List<FlexScratch>.make())
       let keptInline = Intrinsic.replace(boxes.inlineScratch, List<InlineScratch>.make())
