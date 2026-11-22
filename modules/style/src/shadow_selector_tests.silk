@@ -421,7 +421,7 @@ test effect fn hostArgumentKeysNeverExcludeHostCandidates() -> ()
   let mut allocator = Allocator.systemAllocatorProvider()
   let limits = Limits.make()
   let buffer = run lexer.tokenize(
-    b":host(use.hot#inner), :host-context(.theme), :is(:host(.hot)), :host > symbol",
+    b":host(use.hot#inner), :host-context(.theme), :is(:host(.hot)), :host > symbol, :is(:where(.group):hover .tip), :where(button), :is(.a, .b), :root.dark, [data-slot] > [data-x], :where(div, *)",
     &limits,
   )
     |> Effect.provideMut<Allocator>(&mut allocator)
@@ -431,16 +431,18 @@ test effect fn hostArgumentKeysNeverExcludeHostCandidates() -> ()
     Option<SelectorList>.Some { value } => {
       let mut keys = value.subjectKeys()
       let mut index: usize = 0
-      while index < 4 {
+      // An unkeyed subject takes a key from each alternative of an `:is()` or `:where()`
+      // when they all have one.
+      let expected = [
+        SubjectKind.Any, SubjectKind.Any, SubjectKind.Any, SubjectKind.LocalName,
+        SubjectKind.Class, SubjectKind.LocalName, SubjectKind.Class, SubjectKind.Class,
+        SubjectKind.Root, SubjectKind.Attribute, SubjectKind.Any,
+      ]
+      while index < expected.length {
         let key = keys.next()
         run Testing.expect(
           match &key {
-            Option<SubjectKey>.Some { value: subject } => subject.kind
-              == if index == 3 {
-                SubjectKind.LocalName
-              } else {
-                SubjectKind.Any
-              }
+            Option<SubjectKey>.Some { value: subject } => subject.kind == expected[index]
             _ => false
           },
           "host arguments are not necessary conditions on the subject",
@@ -452,7 +454,7 @@ test effect fn hostArgumentKeysNeverExcludeHostCandidates() -> ()
           Option<SubjectKey>.None => true
           _ => false
         },
-        "one conservative key per arm",
+        "keys end with the last arm",
       )
     }
     _ => {

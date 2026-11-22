@@ -1,4 +1,4 @@
-//! Conservative subject indexing; complete selectors still determine matches and specificity.
+//! Conservative subject indexing by pseudo-element target; complete selectors still determine matches and specificity.
 //! Sorted fingerprints keep lookup logarithmic even for adversarial collisions. Every collision
 //! remains a candidate, and discovery shares the exact matcher's document-wide work budget.
 import css_properties.census { Census }
@@ -20,6 +20,8 @@ import silk.num.usize
 struct Entry {
   key: u64,
   rule: usize,
+  /// The pseudo-element the keyed arm styles; other collects skip it.
+  target: PseudoTarget,
 }
 
 impl Copy for Entry {}
@@ -47,6 +49,8 @@ fn kindBit(kind: SubjectKind) -> u8 {
     SubjectKind.Id => 1
     SubjectKind.Class => 2
     SubjectKind.LocalName => 4
+    SubjectKind.Attribute => 8
+    SubjectKind.Root => 16
     SubjectKind.Any => 0
     SubjectKind.Never => 0
   }
@@ -79,6 +83,8 @@ pub struct CandidateIndex {
   fallback: List<usize>,
   /// Rules with an unkeyed arm on a pseudo-element: candidates only when one is being matched.
   pseudo: List<usize>,
+  /// Keyed pseudo-element rules an element's own names reached, kept for their state reads.
+  aside: List<usize>,
   seen: List<bool>,
   selected: List<usize>,
   /// By rule: the names some ancestor of a matched element holds.
@@ -92,6 +98,7 @@ impl CandidateIndex {
     run out.held("sheet.index.keyed-entries", self.entries.length(), self.entries.capacity(), Intrinsic.layoutOf<Entry>().bytes)
     run out.held("sheet.index.fallback-rules(offered to every element)", self.fallback.length(), self.fallback.capacity(), Intrinsic.layoutOf<usize>().bytes)
     run out.held("sheet.index.pseudo-only-rules", self.pseudo.length(), self.pseudo.capacity(), Intrinsic.layoutOf<usize>().bytes)
+    run out.held("sheet.index.aside", self.aside.length(), self.aside.capacity(), Intrinsic.layoutOf<usize>().bytes)
     run out.held("sheet.index.seen+selected", self.seen.length(), self.seen.capacity() + self.selected.capacity() * 8, 1)
   }
 
@@ -100,6 +107,7 @@ impl CandidateIndex {
       entries: List<Entry>.make(),
       fallback: List<usize>.make(),
       pseudo: List<usize>.make(),
+      aside: List<usize>.make(),
       seen: List<bool>.make(),
       selected: List<usize>.make(),
       ancestors: List<AncestorKeys>.make(),
@@ -130,6 +138,7 @@ impl CandidateIndex {
       entries: move entries,
       fallback: move fallback,
       pseudo: move pseudo,
+      aside: List<usize>.make(),
       seen: move seen,
       selected: List<usize>.make(),
       ancestors: move ancestors,
@@ -147,6 +156,7 @@ impl CandidateIndex {
     self.entries.truncate(0)
     self.fallback.truncate(0)
     self.pseudo.truncate(0)
+    self.aside.truncate(0)
     self.seen.truncate(0)
     self.selected.truncate(0)
     self.ancestors.truncate(0)
@@ -160,26 +170,27 @@ impl CandidateIndex {
     let rule = self.seen.length()
     run self.seen.append(false)
     run self.ancestors.append(selectors.ancestorKeys(buffer))
-    let start = self.entries.length()
-    let previousKinds = self.kinds
+    // One unkeyed element arm makes the rule a candidate for every element; its
+    // pseudo-element arms are still indexed, since element collects never offer them.
+    let mut everyElement = false
+    let mut scan = selectors.subjectKeys()
+    while let Option<SubjectKey>.Some { value } = scan.next() {
+      if value.kind == SubjectKind.Any && value.target == PseudoTarget.None {
+        everyElement = true
+      }
+    }
+    if everyElement { run self.fallback.append(rule) }
     let mut unkeyedPseudo = false
     let mut keys = selectors.subjectKeys()
     while let Option<SubjectKey>.Some { value } = keys.next() {
       if value.kind == SubjectKind.Never { continue }
-      if value.kind == SubjectKind.Any && value.target != PseudoTarget.None {
+      if value.target == PseudoTarget.None && everyElement { continue }
+      if value.kind == SubjectKind.Any {
         unkeyedPseudo = true
         continue
       }
-      if value.kind == SubjectKind.Any {
-        // One unkeyed arm makes the entire rule a candidate for every element.
-        self.entries.truncate(start)
-        self.kinds = previousKinds
-        run self.fallback.append(rule)
-        return
-      }
-      run self.entries.append(
-        Entry { key: fingerprint(value.kind, buffer.text(value.text)), rule: rule },
-      )
+      let key = if value.kind == SubjectKind.Root { fingerprint(value.kind, b"") } else { fingerprint(value.kind, buffer.text(value.text)) }
+      run self.entries.append(Entry { key: key, rule: rule, target: value.target })
       self.kinds = u8.bitOr(self.kinds, kindBit(value.kind))
     }
     if unkeyedPseudo { run self.pseudo.append(rule) }
@@ -187,6 +198,9 @@ impl CandidateIndex {
 
   /// Rules `collect` leaves out while an element itself, not a pseudo-element, is matched.
   pub fn pseudoOnly(self: &Self) -> &[usize] { return self.pseudo.asSlice() }
+
+  /// Keyed pseudo-element rules the last element collect reached but left out.
+  pub fn reachedPseudo(self: &Self) -> &[usize] { return self.aside.asSlice() }
 
   pub effect fn finish(self: &mut Self) -> ()
     ! OutOfMemoryError
@@ -230,8 +244,15 @@ impl CandidateIndex {
       }
     }
     while low < self.entries.length() && self.entries.asSlice()[low].key == key {
-      let rule = self.entries.asSlice()[low].rule
-      run self.select(rule, &mut context.*)
+      let entry = self.entries.asSlice()[low]
+      if entry.target == context.pseudo {
+        run self.select(entry.rule, &mut context.*)
+      } else if context.pseudo == PseudoTarget.None {
+        run context.spend(1)
+        run self.aside.append(entry.rule)
+      } else {
+        run context.spend(1)
+      }
       low = low + 1
     }
   }
@@ -254,13 +275,15 @@ impl CandidateIndex {
       i = i + 1
     }
     self.selected.truncate(0)
-    i = 0
-    while i < self.fallback.length() {
-      let rule = self.fallback.asSlice()[i]
-      run self.select(rule, &mut context.*)
-      i = i + 1
-    }
-    if context.pseudo != PseudoTarget.None {
+    self.aside.truncate(0)
+    if context.pseudo == PseudoTarget.None {
+      i = 0
+      while i < self.fallback.length() {
+        let rule = self.fallback.asSlice()[i]
+        run self.select(rule, &mut context.*)
+        i = i + 1
+      }
+    } else {
       i = 0
       while i < self.pseudo.length() {
         let rule = self.pseudo.asSlice()[i]
@@ -274,15 +297,22 @@ impl CandidateIndex {
     if u8.bitAnd(self.kinds, 4) != 0 {
       run self.lookup(SubjectKind.LocalName, ElementTree.localName(tree, node), &mut context.*)
     }
+    if u8.bitAnd(self.kinds, 16) != 0 && ElementTree.isRoot(tree, node) {
+      run self.lookup(SubjectKind.Root, b"", &mut context.*)
+    }
     let ids = u8.bitAnd(self.kinds, 1) != 0
     let classes = u8.bitAnd(self.kinds, 2) != 0
-    if !ids && !classes {
+    let names = u8.bitAnd(self.kinds, 8) != 0
+    if !ids && !classes && !names {
       return
     }
     let attributes = ElementTree.attributeCount(tree, node)
     i = 0
     while i < attributes {
       run context.spend(1)
+      if names {
+        run self.lookup(SubjectKind.Attribute, ElementTree.attributeName(tree, node, i), &mut context.*)
+      }
       if ids && ElementTree.attributeIsId(tree, node, i) {
         run self.lookup(SubjectKind.Id, ElementTree.attributeValue(tree, node, i), &mut context.*)
       }

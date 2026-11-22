@@ -231,6 +231,14 @@ impl Resolver {
         }
         i = i + 1
       }
+      let reached = self.index.reachedPseudo()
+      i = 0
+      while i < reached.length {
+        if self.entries.asSlice()[reached[i]].enabled || (starting && self.starting.asSlice()[reached[i]]) {
+          states = u32.bitOr(states, self.states.asSlice()[reached[i]])
+        }
+        i = i + 1
+      }
     }
     self.matchedRules = self.matchedRules + matched.length()
     self.offeredDeclarations = self.offeredDeclarations + candidates.length()

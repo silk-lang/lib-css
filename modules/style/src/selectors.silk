@@ -246,6 +246,10 @@ pub enum SubjectKind {
   Id,
   Class,
   LocalName,
+  /// An attribute name the subject has.
+  Attribute,
+  /// The subject is the root element (`:root`).
+  Root,
   /// The arm names a pseudo-element no host has, so it matches nothing.
   Never
 }
@@ -262,6 +266,9 @@ impl Copy for SubjectKey {}
 pub struct SubjectKeys<'a> {
   selectors: &'a SelectorList,
   nextArm: usize,
+  /// The next alternative of a subject `:is()` or `:where()` whose alternatives all have keys.
+  pending: usize,
+  pendingTarget: PseudoTarget,
 }
 
 pub enum DependencyKind { Class, Id, Attribute, State, Structure, Host }
@@ -531,7 +538,10 @@ impl SelectorList {
     if self.head != NONE && self.arms.asSlice()[self.head].next == NONE {
       let mut keys = self.subjectKeys()
       if let Option<SubjectKey>.Some { value } = keys.next() {
-        if value.kind != SubjectKind.Never && value.target == PseudoTarget.None {
+        // Keys of alternatives are each carried by only some subjects.
+        let only = keys.next().isNone()
+        if only && value.kind != SubjectKind.Never && value.target == PseudoTarget.None
+          && value.kind != SubjectKind.Attribute && value.kind != SubjectKind.Root {
           subjectKind = value.kind
           subjectName = value.text
         }
@@ -603,9 +613,11 @@ impl SelectorList {
     }
   }
 
-  /// One conservative key per top-level arm. Functional-only subjects remain unkeyed.
+  /// Conservative subject keys: one per top-level arm, or one per alternative when an unkeyed
+  /// subject has an `:is()` or `:where()` whose alternatives all have keys. Every subject the
+  /// list matches carries at least one of them.
   pub fn subjectKeys<'a>(self: &'a Self) -> SubjectKeys<'a> {
-    return SubjectKeys<'a> { selectors: self, nextArm: self.head }
+    return SubjectKeys<'a> { selectors: self, nextArm: self.head, pending: NONE, pendingTarget: PseudoTarget.None }
   }
 
   pub fn hasPseudoElements(self: &Self) -> bool {
@@ -686,46 +698,114 @@ fn localCompound(ast: &SelectorList, index: usize, depth: usize) -> bool {
 
 impl<'a> SubjectKeys<'a> {
   pub fn next(self: &mut Self) -> Option<SubjectKey> {
+    let arms = self.selectors.arms.asSlice()
+    if self.pending != NONE {
+      let alternative = &arms[self.pending]
+      self.pending = alternative.next
+      return Option<SubjectKey>.Some { value: compoundKey(self.selectors, alternative.tail, self.pendingTarget, 1) }
+    }
     if self.nextArm == NONE {
       return Option<SubjectKey>.None
     }
-    let arm = &self.selectors.arms.asSlice()[self.nextArm]
-    let compound = &self.selectors.compounds.asSlice()[arm.tail]
+    let arm = &arms[self.nextArm]
     self.nextArm = arm.next
-    let mut key = SubjectKey {
-      kind: if compound.named {
-        SubjectKind.LocalName
-      } else {
-        SubjectKind.Any
-      },
-      text: compound.name,
-      target: compound.target,
-    }
-    let mut id = false
-    let mut simple = compound.first
-    while simple != NONE {
-      let entry = &self.selectors.simples.asSlice()[simple]
-      match &entry.test {
-        Test.Id { text } => {
-          if !id { key = SubjectKey { kind: SubjectKind.Id, text: text, target: compound.target } }
-          id = true
-        }
-        Test.Class { text } => {
-          if !id && key.kind != SubjectKind.Class {
-            key = SubjectKey { kind: SubjectKind.Class, text: text, target: compound.target }
-          }
-        }
-        Test.State { pseudo } => {
-          if pseudo == Pseudo.Never {
-            return Option<SubjectKey>.Some { value: SubjectKey { kind: SubjectKind.Never, text: compound.name, target: compound.target } }
-          }
-        }
-        _ => {}
+    let target = self.selectors.compounds.asSlice()[arm.tail].target
+    let key = compoundKey(self.selectors, arm.tail, target, 0)
+    if key.kind == SubjectKind.Any {
+      let list = keyedAlternatives(self.selectors, arm.tail, target)
+      if list != NONE {
+        self.pending = arms[list].next
+        self.pendingTarget = target
+        return Option<SubjectKey>.Some { value: compoundKey(self.selectors, arms[list].tail, target, 1) }
       }
-      simple = entry.next
     }
     return Option<SubjectKey>.Some { value: key }
   }
+}
+
+/// The first `:is()` or `:where()` of a subject compound whose alternatives all have keys, as
+/// in the HTML sheet's lists of element names.
+fn keyedAlternatives(selectors: &SelectorList, index: usize, target: PseudoTarget) -> usize {
+  let compound = &selectors.compounds.asSlice()[index]
+  let mut simple = compound.first
+  while simple != NONE {
+    let entry = &selectors.simples.asSlice()[simple]
+    if let Test.Function { kind, list } = entry.test {
+      if kind == FunctionKind.Is && list != NONE {
+        let mut keyed = true
+        let mut alternative = list
+        while alternative != NONE && keyed {
+          let arm = &selectors.arms.asSlice()[alternative]
+          keyed = compoundKey(selectors, arm.tail, target, 1).kind != SubjectKind.Any
+          alternative = arm.next
+        }
+        if keyed { return list }
+      }
+    }
+    simple = entry.next
+  }
+  return NONE
+}
+
+/// The key of a subject compound. Without an id or class of its own, the one alternative of an
+/// `:is()` or `:where()` there keys it: Tailwind writes its group and peer variants that way.
+fn compoundKey(selectors: &SelectorList, index: usize, target: PseudoTarget, depth: usize) -> SubjectKey {
+  let compound = &selectors.compounds.asSlice()[index]
+  let mut key = SubjectKey {
+    kind: if compound.named {
+      SubjectKind.LocalName
+    } else {
+      SubjectKind.Any
+    },
+    text: compound.name,
+    target: target,
+  }
+  let mut nested = Option<SubjectKey>.None
+  let mut root = false
+  let mut attribute = Option<Span>.None
+  let mut id = false
+  let mut simple = compound.first
+  while simple != NONE {
+    let entry = &selectors.simples.asSlice()[simple]
+    match &entry.test {
+      Test.Id { text } => {
+        if !id { key = SubjectKey { kind: SubjectKind.Id, text: text, target: target } }
+        id = true
+      }
+      Test.Class { text } => {
+        if !id && key.kind != SubjectKind.Class {
+          key = SubjectKey { kind: SubjectKind.Class, text: text, target: target }
+        }
+      }
+      Test.State { pseudo } => {
+        if pseudo == Pseudo.Never {
+          return SubjectKey { kind: SubjectKind.Never, text: compound.name, target: target }
+        }
+        if pseudo == Pseudo.Root { root = true }
+      }
+      Test.Attribute { name, .. } => {
+        if attribute.isNone() { attribute = Option<Span>.some(name) }
+      }
+      Test.Function { kind, list } => {
+        if kind == FunctionKind.Is && list != NONE && depth < 8 && nested.isNone()
+          && selectors.arms.asSlice()[list].next == NONE {
+          let inner = compoundKey(selectors, selectors.arms.asSlice()[list].tail, target, depth + 1)
+          if inner.kind != SubjectKind.Any && inner.kind != SubjectKind.Never {
+            nested = Option<SubjectKey>.some(inner)
+          }
+        }
+      }
+      _ => {}
+    }
+    simple = entry.next
+  }
+  // The root is one element; a class or id narrows less than that.
+  if root { return SubjectKey { kind: SubjectKind.Root, text: compound.name, target: target } }
+  if key.kind == SubjectKind.Any {
+    if let Option<SubjectKey>.Some { value } = nested { return value }
+    if let Option<Span>.Some { value } = attribute { return SubjectKey { kind: SubjectKind.Attribute, text: value, target: target } }
+  }
+  return key
 }
 
 struct Parsed {
