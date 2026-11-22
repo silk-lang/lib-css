@@ -307,7 +307,7 @@ effect fn discoverBefore<'pass, 'source, M: Measure + TextMeasure, S: LayoutSour
       request.fragmentation.relaxation = BreakRelaxation.Avoidance
       run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &request)
       let before = output.resumes.get(item.id).before
-      output.restoreCheckpoint(checkpoint)
+      run output.restoreCheckpoint(checkpoint)
       output.closeCheckpoint(checkpoint)
       let mut state = output.resumes.get(item.id)
       state.before.merge(before)
@@ -461,7 +461,7 @@ effect fn fitItem<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(
   let mut layout = run layoutNode(nodes, &mut output, &mut measurer, item.id, &request)
   let child = output.resumes.get(item.id)
   if child.blocked {
-    output.restoreCheckpoint(checkpoint)
+    run output.restoreCheckpoint(checkpoint)
     let mut deferred = output.resumes.get(item.id)
     deferred.before.merge(child.before)
     run output.resumes.set(item.id, deferred)
@@ -814,7 +814,7 @@ pub effect fn layoutGridFragment<'pass, 'source, M: Measure + TextMeasure, S: La
       || input.fragmentation.relaxation == BreakRelaxation.Avoidance
       || boundary.forced.active(input.fragmentation.activeKinds()).kinds.any()
     if !handled && discoveredForced.kinds.any() {
-      output.restoreCheckpoint(checkpoint)
+      run output.restoreCheckpoint(checkpoint)
       if row == 0 {
         blocked = true
       } else {
@@ -836,7 +836,7 @@ pub effect fn layoutGridFragment<'pass, 'source, M: Measure + TextMeasure, S: La
     }
     if anyBlocked
       || !anyFit && !allNormal && (input.fragmentation.canBreakBefore || rowStart > 0.0) {
-      output.restoreCheckpoint(checkpoint)
+      run output.restoreCheckpoint(checkpoint)
       if !retainedCheckpoint {
         output.closeCheckpoint(checkpoint)
       }
@@ -884,7 +884,7 @@ pub effect fn layoutGridFragment<'pass, 'source, M: Measure + TextMeasure, S: La
     && !initial.beforeHandled
     && !initial.started
   if blocked && fallbackCursor > 0.0 && !forcedBefore {
-    output.restoreCheckpoint(fallback)
+    run output.restoreCheckpoint(fallback)
     index = fallbackRow
     while index < scratch.rows.length() {
       let row = &mut scratch.rows.asMutSlice()[index]

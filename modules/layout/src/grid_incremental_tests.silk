@@ -5,7 +5,7 @@ import silk.num.usize
 import silk.text.string { String }
 import silk.testing.testing { Testing, AssertionError }
 import fragmentation { FragmentationError }
-import style { Style, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, Align, Edges, LineHeight, TextBoxTrim, TextBoxEdge, TextEdge, EmphasisSide, WritingMode, TextOrientation }
+import style { FlexDirection, Position, Overflow, Style, Dimension, SizeValue, Display, DisplayOutside, DisplayInside, Align, Edges, LineHeight, TextBoxTrim, TextBoxEdge, TextEdge, EmphasisSide, WritingMode, TextOrientation }
 import geometry {
   Measure,
   MeasureRequest,
@@ -817,4 +817,96 @@ test effect fn emphasisMarksTakeLineRoom()
   ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   run emphasizedLines() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+// A compute in place that rolls back a trial over fragments it kept must leave the previous
+// output whole, or the compute after it reuses nothing: edits then alternate between laying out
+// the whole page and laying out a little.
+effect fn flexTilesEdits()
+  ! OutOfMemoryError
+    | TextError
+    | FragmentationError
+    | InvalidNode
+    | GridError
+    | AssertionError<'static>
+  ? &mut Allocator {
+  let mut tree = run Tree.make(Style.make())
+  let root = tree.root()
+  let mut wrapper = Style.make()
+  wrapper.position = Position.Absolute
+  wrapper.width = SizeValue.pct(1.0)
+  let page = run tree.append(root, move wrapper)
+  let grid = run tree.append(page, gridStyle())
+  let mut template = GridTemplate.make()
+  run template.columns.tracks.append(GridTrack.minmax(GridBreadth.fixed(60.0), GridBreadth.flex(1.0)))
+  run template.columns.repeats.append(GridRepeat { start: 0, length: 1, count: 1, kind: GridRepeatKind.AutoFill })
+  run template.autoRows.append(GridTrack.breadth(GridBreadth.fixed(40.0)))
+  run tree.setGrid(grid, move template)
+  let mut counter = root
+  let mut value = root
+  let mut i: usize = 0
+  while i < 40 {
+    let mut tile = Style.make()
+    tile.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+    tile.flexDirection = FlexDirection.Column
+    tile.overflowX = Overflow.Hidden
+    tile.overflowY = Overflow.Hidden
+    tile.minWidth = SizeValue.px(0.0)
+    let item = run tree.append(grid, move tile)
+    let mut stageStyle = gridStyle()
+    stageStyle.alignItems = Align.Center
+    stageStyle.justifyItems = Align.Center
+    stageStyle.flexGrow = 1.0
+    stageStyle.flexBasis = SizeValue.px(0.0)
+    stageStyle.minHeight = SizeValue.px(0.0)
+    stageStyle.overflowX = Overflow.Hidden
+    stageStyle.overflowY = Overflow.Hidden
+    let stage = run tree.append(item, move stageStyle)
+    let mut reqStyle = Style.make()
+    reqStyle.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+    reqStyle.flexDirection = FlexDirection.Column
+    reqStyle.width = SizeValue.pct(1.0)
+    let req = run tree.append(stage, move reqStyle)
+    let mut headStyle = Style.make()
+    headStyle.display = Display.Box { outside: DisplayOutside.Block, inside: DisplayInside.Flex }
+    headStyle.alignItems = Align.Baseline
+    headStyle.justifyContent = Align.SpaceBetween
+    let head = run tree.append(req, move headStyle)
+    let label = run tree.append(head, Style.make())
+    drop run tree.appendText(label, run String.copy("ab"))
+    let count = run tree.append(head, Style.make())
+    let text = run tree.appendText(count, run String.copy("1/9"))
+    let mut fieldStyle = Style.make()
+    fieldStyle.minHeight = SizeValue.px(30.0)
+    fieldStyle.maxHeight = SizeValue.px(40.0)
+    let field = run tree.append(req, move fieldStyle)
+    let typed = run tree.appendText(field, run String.copy("cd ef gh"))
+    if i == 0 { counter = text
+      value = typed }
+    i = i + 1
+  }
+  let mut output = LayoutTree.make()
+  let mut host = TextHost {}
+  run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 2000.0))
+  let mut most: usize = 0
+  let mut edit: usize = 0
+  while edit < 6 {
+    run tree.setText(counter, run String.copy(if edit % 2 == 0 { "2/9" } else { "1/9" }))
+    run tree.setText(value, run String.copy(if edit % 2 == 0 { "cd ef gh ij kl mn op qr st" } else { "cd ef gh" }))
+    run compute(&tree, &mut output, &mut host, OptionalSize.definite(300.0, 2000.0))
+    if output.stats.fullLayouts > most { most = output.stats.fullLayouts }
+    edit = edit + 1
+  }
+  run Testing.expect(most <= 40, "every edit of one tile lays out that tile, not the page")
+}
+
+test effect fn inPlaceEditsKeepReusing()
+  ! OutOfMemoryError
+    | TextError
+    | FragmentationError
+    | InvalidNode
+    | GridError
+    | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run flexTilesEdits() |> Effect.provideMut<Allocator>(&mut allocator)
 }

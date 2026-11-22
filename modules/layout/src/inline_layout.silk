@@ -604,13 +604,13 @@ effect fn sourceBoundaries<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
             probe.fragmentation.boundaryProbe = BoundaryProbe.Before
             run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &probe)
             before.merge(output.resumes.get(item.id).before)
-            output.restoreCheckpoint(checkpoint)
+            run output.restoreCheckpoint(checkpoint)
           }
           if nodes.node(item.id).dynamicAfter {
             probe.fragmentation.boundaryProbe = BoundaryProbe.After
             run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &probe)
             following.merge(output.resumes.get(item.id).after)
-            output.restoreCheckpoint(checkpoint)
+            run output.restoreCheckpoint(checkpoint)
           }
           output.closeCheckpoint(checkpoint)
         }
@@ -714,7 +714,7 @@ effect fn placeFloats<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>
           let request = floatRequest(&atomics[item.leaf], &input, blockInset)
           let layout = run layoutNode(nodes, &mut output, &mut measurer, item.id, &request)
           let state = output.resumes.get(item.id)
-          output.restoreCheckpoint(checkpoint)
+          run output.restoreCheckpoint(checkpoint)
           output.closeCheckpoint(checkpoint)
           if !state.normalComplete { bfc.pendingFloat = true }
           if state.blocked || state.skipped {
@@ -775,7 +775,7 @@ effect fn emitFloat<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(n
   let mut layout = run layoutNode(nodes, &mut output, &mut measurer, item.id, &request)
   let state = output.resumes.get(item.id)
   if state.blocked || state.skipped {
-    output.restoreCheckpoint(checkpoint)
+    run output.restoreCheckpoint(checkpoint)
     output.closeCheckpoint(checkpoint)
     if output.resumes.get(item.id).notBeforeFrame <= output.frame { run output.defer(item.id, state.requested) }
     run output.enqueuePending(owner, item.id)

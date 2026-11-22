@@ -240,7 +240,7 @@ effect fn fragmentedContents<'pass, 'source, M: Measure + TextMeasure, S: Layout
         if offset != 0.0 { request.fragmentation.marginStart = false }
         if complete && free - offset > 0.0 { request.fragmentation.marginEnd = false }
       }
-      output.restoreCheckpoint(pass)
+      run output.restoreCheckpoint(pass)
       output.closeCheckpoint(pass)
       bfc.restore(floats)
     }
@@ -1611,7 +1611,7 @@ pub effect fn layoutInBfc<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
   let discovered = finished.before.forced.active(incoming.fragmentation.activeKinds())
   let lateForced = !state.started && !state.beforeHandled && discovered.kinds.any()
   if finished.blocked || finished.skipped || lateForced {
-    output.restoreCheckpoint(checkpoint)
+    run output.restoreCheckpoint(checkpoint)
     bfc.restore(exclusions)
     let mut restored = output.resumes.get(id)
     restored.before = finished.before
@@ -1868,7 +1868,7 @@ pub effect fn resolveFragmentBox<'pass, 'source, M: Measure + TextMeasure, S: La
   let checkpoint = output.checkpoint()
   let mut sizing = BoxSizing { box: shapedBox(&output, nodes.style(id), id, &input), request: input, natural: NaturalDimensions.none(), ratio: 0.0, ratioBorder: false, ratioInsetWidth: 0.0, ratioInsetHeight: 0.0 }
   run prepareSizing(nodes, &mut output, &mut measurer, id, &input, true, false, &mut sizing)
-  output.restoreCheckpoint(checkpoint)
+  run output.restoreCheckpoint(checkpoint)
   output.closeCheckpoint(checkpoint)
   return sizing.box
 }
@@ -2017,7 +2017,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutS
       probe.fragmentation.boundaryProbe = BoundaryProbe.After
       drop run layoutBox(nodes, &mut output, &mut measurer, id, &probe, &mut bfc)
       let after = output.resumes.get(id).after
-      output.restoreCheckpoint(trial)
+      run output.restoreCheckpoint(trial)
       output.closeCheckpoint(trial)
       bfc.restore(checkpoint)
       let mut state = output.resumes.get(id)
@@ -2059,7 +2059,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutS
       sizing.box.size.heightDefinite = true }
     configureScrollbars(style, &mut output, &mut measurer, id, &sizing.request, &mut sizing.box)
     bfc.restore(checkpoint)
-    output.restoreCheckpoint(passCheckpoint)
+    run output.restoreCheckpoint(passCheckpoint)
     result = run contents(nodes, &mut output, &mut measurer, id, &sizing.request, &sizing.box, natural, &mut bfc)
   }
   // An intrinsic inline size can become the ratio-determining size only
@@ -2105,7 +2105,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutS
     if transferred {
       configureScrollbars(style, &mut output, &mut measurer, id, &sizing.request, &mut sizing.box)
       bfc.restore(checkpoint)
-      output.restoreCheckpoint(passCheckpoint)
+      run output.restoreCheckpoint(passCheckpoint)
       result = run contents(nodes, &mut output, &mut measurer, id, &sizing.request, &sizing.box, natural, &mut bfc)
     }
   }
@@ -2130,7 +2130,7 @@ effect fn layoutAdjustedBox<'pass, 'source, M: Measure + TextMeasure, S: LayoutS
       sizing.box.size = originalSize
       if previous.top == sizing.box.gutter.top && previous.right == sizing.box.gutter.right && previous.bottom == sizing.box.gutter.bottom && previous.left == sizing.box.gutter.left { break }
       bfc.restore(checkpoint)
-      output.restoreCheckpoint(passCheckpoint)
+      run output.restoreCheckpoint(passCheckpoint)
       result = run contents(nodes, &mut output, &mut measurer, id, &sizing.request, &sizing.box, natural, &mut bfc)
     }
   }
