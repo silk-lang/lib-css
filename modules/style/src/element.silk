@@ -182,6 +182,13 @@ pub const WATCH_HAS: u32 = 1
 pub const WATCH_HAS_SIBLINGS: u32 = 2
 /// `:focus-within` was evaluated on this element.
 pub const WATCH_FOCUS_WITHIN: u32 = 4
+/// `:hover` was evaluated on this element for another one: an ancestor, a sibling, or an
+/// element inside a `:has()`. 8 is left to hosts.
+pub const WATCH_HOVER: u32 = 16
+/// `:active` was evaluated on this element for another one.
+pub const WATCH_ACTIVE: u32 = 32
+/// Every bit a match sets on an element it asked something of.
+pub const WATCH_ASKED: u32 = 55
 
 const WATCH_LIMIT: usize = 8
 
@@ -205,6 +212,8 @@ pub struct MatchContext {
   watchCount: usize,
   /// More elements were watched than `watched` holds: the host must assume any element was.
   pub watchOverflow: bool,
+  /// The element `matchElement` matches; a state read of any other element is watched.
+  pub subject: usize,
 }
 
 impl MatchContext {
@@ -222,6 +231,7 @@ impl MatchContext {
       watches: [Watch { node: NO_ELEMENT, bits: 0 }; 8],
       watchCount: 0,
       watchOverflow: false,
+      subject: NO_ELEMENT,
     }
   }
 
