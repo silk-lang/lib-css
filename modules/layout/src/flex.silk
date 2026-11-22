@@ -1603,7 +1603,7 @@ effect fn layoutFlexPass<'pass, 'source, M: Measure + TextMeasure, S: LayoutSour
       if item.target != item.earlyMain { settled = false }
       index = index + 1 }
     if !settled {
-      output.restoreCheckpoint(aheadStart)
+      run output.restoreCheckpoint(aheadStart)
       return run layoutFlexPass(nodes, &mut output, &mut measurer, id, &input, &box, resolvedIntrinsicInline, false, move scratch)
     }
   }
@@ -1932,7 +1932,7 @@ effect fn discoverItemBefore<'pass, 'source, M: Measure + TextMeasure, S: Layout
   request.fragmentation.relaxation = BreakRelaxation.Avoidance
   run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &request)
   let before = output.resumes.get(item.id).before
-  output.restoreCheckpoint(checkpoint)
+  run output.restoreCheckpoint(checkpoint)
   output.closeCheckpoint(checkpoint)
   let mut state = output.resumes.get(item.id)
   state.before.merge(before)
@@ -2209,7 +2209,7 @@ effect fn fragmentRows<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource
           let mut childLayout = run layoutNode(nodes, &mut output, &mut measurer, item.id, &finalInput)
           let child = output.resumes.get(item.id)
           if child.blocked {
-            output.restoreCheckpoint(childCheckpoint)
+            run output.restoreCheckpoint(childCheckpoint)
             let mut deferred = output.resumes.get(item.id)
             deferred.before.merge(child.before)
             run output.resumes.set(item.id, deferred)
@@ -2258,7 +2258,7 @@ effect fn fragmentRows<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource
     boundaryAllowed = !avoidedInside && !boundary.avoided.intersects(input.fragmentation.boundaryKinds) || input.fragmentation.relaxation == BreakRelaxation.Avoidance || boundary.forced.active(input.fragmentation.activeKinds()).kinds.any()
     let discoveredForced = discovered.forced.active(input.fragmentation.activeKinds())
     if !overflowOnly && !handled && discoveredForced.kinds.any() && (ordinal > 0 || input.fragmentation.canBreakBefore && !initial.beforeHandled) {
-      output.restoreCheckpoint(checkpoint)
+      run output.restoreCheckpoint(checkpoint)
       if lineIndex == 0 || ordinal == 0 {
         let mut state = output.resumes.get(id)
         state.before.merge(discovered)
@@ -2288,7 +2288,7 @@ effect fn fragmentRows<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource
       break
     }
     if !overflowOnly && !anyFit && !allNormal && (input.fragmentation.canBreakBefore || rowStart > 0.0) {
-      output.restoreCheckpoint(checkpoint)
+      run output.restoreCheckpoint(checkpoint)
       if !retainedCheckpoint { output.closeCheckpoint(checkpoint) }
       if rowStart == 0.0 || !boundaryAllowed { blocked = true }
       break
@@ -2315,7 +2315,7 @@ effect fn fragmentRows<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource
   // avoidance. Restoring also retracts descendant publication and cursors.
   let forcedBefore = before.forced.active(input.fragmentation.activeKinds()).kinds.any() && !initial.beforeHandled && !initial.started
   if blocked && fallbackCursor > 0.0 && !forcedBefore {
-    output.restoreCheckpoint(fallback)
+    run output.restoreCheckpoint(fallback)
     cursor = fallbackCursor
     nextLine = fallbackLine
     progress = fallbackProgress
@@ -2500,7 +2500,7 @@ effect fn fragmentColumns<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
           boundaryAllowed = !avoidedInside && !discovered.avoided.intersects(input.fragmentation.boundaryKinds) || input.fragmentation.relaxation == BreakRelaxation.Avoidance || discovered.forced.active(input.fragmentation.activeKinds()).kinds.any()
           let discoveredForced = discovered.forced.active(input.fragmentation.activeKinds())
           if !old.started && !old.beforeHandled && discoveredForced.kinds.any() && (index != firstItem || input.fragmentation.canBreakBefore && !initial.beforeHandled) {
-            output.restoreCheckpoint(childCheckpoint)
+            run output.restoreCheckpoint(childCheckpoint)
             if index == firstItem {
               before.merge(discovered)
               blocked = true
@@ -2518,12 +2518,12 @@ effect fn fragmentColumns<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
             retainedCheckpoint = true
           }
           if child.blocked {
-            output.restoreCheckpoint(childCheckpoint)
+            run output.restoreCheckpoint(childCheckpoint)
             output.closeCheckpoint(childCheckpoint)
             if !retainedCheckpoint { output.closeCheckpoint(boundaryCheckpoint) }
             if !overflowOnly && cursor > 0.0 && !boundaryAllowed {
               if fallbackCursor > 0.0 {
-                output.restoreCheckpoint(fallback)
+                run output.restoreCheckpoint(fallback)
                 cursor = fallbackCursor
                 extent = max(previousExtent, cursor)
               } else { blocked = true }
@@ -2612,7 +2612,7 @@ effect fn fragmentColumns<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
     index = index + 1
   }
   if !anyFit && !allNormal && !waiting && input.fragmentation.canBreakBefore { blocked = true }
-  if blocked { output.restoreCheckpoint(checkpoint) }
+  if blocked { run output.restoreCheckpoint(checkpoint) }
   output.closeCheckpoint(checkpoint)
   let mut state = output.resumes.get(id)
   state.before.merge(before)

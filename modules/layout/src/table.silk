@@ -1282,7 +1282,7 @@ effect fn layoutFragment<'pass, 'source, M: Measure + TextMeasure, S: LayoutSour
       }
     }
     if needed > rest + 0.01 {
-      output.restoreCheckpoint(checkpoint)
+      run output.restoreCheckpoint(checkpoint)
       grown = needed
       attempt = attempt + 1
       continue

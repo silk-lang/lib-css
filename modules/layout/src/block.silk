@@ -216,7 +216,7 @@ effect fn layoutFragmentedBlock<'pass, 'source, M: Measure + TextMeasure, S: Lay
     // completed. Replay that chosen boundary into the child, rather than
     // editing its rectangles or allowing smaller margins to pull content back.
     let forced = output.resumes.get(cut).requested
-    output.restoreCheckpoint(pass)
+    run output.restoreCheckpoint(pass)
     bfc.restore(floats)
     result = run layoutBlockPass(nodes, &mut output, &mut measurer, id, style, &input, &physicalBox, &mut bfc, cut, forced, true)
   }
@@ -761,7 +761,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
         probe.fragmentation.boundaryProbe = BoundaryProbe.After
         run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &probe)
         floatAfter.merge(output.resumes.get(item.id).after)
-        output.restoreCheckpoint(trial)
+        run output.restoreCheckpoint(trial)
       }
       y = max(bfc.sourceFloor - origin.y, max(0.0, y + pending.value()))
       y = bfc.clearFloor(childStyle.clear, origin.y + y) - origin.y
@@ -788,7 +788,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
           let avoided = discovered.avoided.intersects(input.fragmentation.boundaryKinds) || childBase.fragmentation.avoidInside
           candidateAllowed = allowsBoundary(discovered.forced, input.fragmentation.activeKinds(), input.fragmentation.kind, avoided, input.fragmentation.relaxation)
           if !item.parallel && !startedBeforeTrial && (normalSeen || floatSeen) && forced.kinds.any() {
-            output.restoreCheckpoint(trial)
+            run output.restoreCheckpoint(trial)
             run output.defer(item.id, forced)
             stopped = true
             nextChild = item.id
@@ -797,7 +797,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
             break
           }
           if state.blocked || state.skipped || (!state.normalComplete && childLayout.size.height == 0.0 && request.fragmentation.offset >= request.fragmentation.limit) {
-            output.restoreCheckpoint(trial)
+            run output.restoreCheckpoint(trial)
             run output.defer(item.id, state.requested)
             deferred = true
             break
@@ -814,7 +814,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
           band = bfc.band(origin, contentWidth, y, max(0.0, outerHeight))
         }
         if fragmented && y != previousY {
-          output.restoreCheckpoint(trial)
+          run output.restoreCheckpoint(trial)
           continue
         }
         x = band.left
@@ -905,7 +905,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
           if bfc.bottom(origin) <= y + childLayout.size.height + bottomMargins(&childLayout).value() {
             item.input.fragmentation.marginEnd = true
             bfc.restore(checkpoint)
-            output.restoreCheckpoint(fragmentCheckpoint)
+            run output.restoreCheckpoint(fragmentCheckpoint)
             continue
           }
         }
@@ -923,7 +923,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
           // Fragment capacity changes with the collapsed block position even
           // when no float exclusions are present.
           bfc.restore(checkpoint)
-          output.restoreCheckpoint(fragmentCheckpoint)
+          run output.restoreCheckpoint(fragmentCheckpoint)
         } else {
           if !independent && moved { bfc.translate(checkpoint, Point { x: nextX - x, y: nextY - y }) }
           placed = true
@@ -970,7 +970,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
               bfcInput.fragmentation.offset = input.fragmentation.offset + box.inset.top + y
               bfcInput.fragmentation.limit = input.fragmentation.limit - box.inset.bottom
             }
-            output.restoreCheckpoint(fragmentCheckpoint)
+            run output.restoreCheckpoint(fragmentCheckpoint)
             if fragmented { childLayout = run layoutNode(nodes, &mut output, &mut measurer, item.id, &bfcInput) }
             else {
               run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &bfcInput)
@@ -1031,7 +1031,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
         let mustBreak = !item.parallel && !startedBeforeTrial && (!handledBeforeTrial || boundary.forced.active(input.fragmentation.activeKinds()).kinds.any() || nodes.node(item.id).kind == BoxKind.InlineFormatting && state.blocked) && forced.kinds.any()
         if state.blocked || state.skipped || mustBreak {
           bfc.restore(checkpoint)
-          output.restoreCheckpoint(fragmentCheckpoint)
+          run output.restoreCheckpoint(fragmentCheckpoint)
           output.closeCheckpoint(fragmentCheckpoint)
           let previous = move candidate
           candidate = settleCandidate(&mut output, move previous, move trialCandidate, candidateAllowed)
@@ -1054,7 +1054,7 @@ effect fn layoutBlockPassWith<'pass, 'source, M: Measure + TextMeasure, S: Layou
           } else {
             match &candidate {
               Option<Candidate>.Some { value } => {
-                output.restoreCheckpoint(value.pass)
+                run output.restoreCheckpoint(value.pass)
                 bfc.restore(value.bfc)
                 nextChild = value.next
                 cursor = value.cursor

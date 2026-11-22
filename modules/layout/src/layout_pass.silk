@@ -397,8 +397,8 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   pub fn checkpoint(self: &mut Self) -> PassCheckpoint {
     return PassCheckpoint { fragments: self.fragments.checkpoint(), texts: self.fragments.textCheckpoint(), resume: self.resumes.checkpoint(), frame: self.frame, parentFragment: self.fragmentParent, roots: self.frameRoots.length(), fullBoxes: self.fullBoxes.length(), fullIndices: self.fullIndices.length(), scrollbars: self.scrollbarSnapshots.length(), gridGeometry: self.cache.gridGeometry.checkpoint() }
   }
-  pub fn restoreCheckpoint(self: &mut Self, checkpoint: PassCheckpoint) {
-    self.fragments.rollback(checkpoint.fragments)
+  pub effect fn restoreCheckpoint(self: &mut Self, checkpoint: PassCheckpoint) ! OutOfMemoryError ? &mut Allocator {
+    run self.fragments.rollback(checkpoint.fragments)
     self.fragments.rollbackTexts(checkpoint.texts)
     self.resumes.restore(checkpoint.resume, &mut self.boxes)
     self.cache.gridGeometry.restore(checkpoint.gridGeometry)
@@ -763,7 +763,7 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   }
   pub effect fn restart(self: &mut Self) ! OutOfMemoryError ? &mut Allocator {
     run self.fragments.finishInPlace()
-    self.fragments.rollback(0)
+    run self.fragments.rollback(0)
     self.fragments.restartFlow()
     self.fragmentParent = NO_NODE
     if self.frame != NO_NODE { self.resumes.reset() }

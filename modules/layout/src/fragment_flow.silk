@@ -57,7 +57,7 @@ effect fn fitRoot<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(nod
       return request.fragmentation.relaxation
     }
     let forced = state.before.forced.active(request.fragmentation.activeKinds())
-    output.restoreCheckpoint(checkpoint)
+    run output.restoreCheckpoint(checkpoint)
     if forced.kinds.any() && !state.started && !state.beforeHandled {
       run output.defer(0, forced)
       output.closeCheckpoint(checkpoint)
@@ -96,10 +96,10 @@ effect fn fitWithWidows<'pass, 'source, M: Measure + TextMeasure, S: LayoutSourc
       if failed != NO_NODE || !decision.pending { break }
       future = future + 1
     }
-    output.restoreCheckpoint(preview)
+    run output.restoreCheckpoint(preview)
     output.closeCheckpoint(preview)
     if failed == NO_NODE { break }
-    output.restoreCheckpoint(checkpoint)
+    run output.restoreCheckpoint(checkpoint)
     run output.limitLines(failed, limit)
   }
   output.closeCheckpoint(checkpoint)
