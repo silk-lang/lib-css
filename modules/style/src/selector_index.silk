@@ -14,6 +14,7 @@ import silk.mem.allocator { Allocator, OutOfMemoryError }
 import silk.core.option { Option }
 import silk.core.order { Order, Ordering }
 import silk.num.u8
+import silk.num.u32
 import silk.num.u64
 import silk.num.usize
 
@@ -59,10 +60,17 @@ fn kindBit(kind: SubjectKind) -> u8 {
 fn fingerprint(kind: SubjectKind, text: &[u8]) -> u64 {
   let seed = Hash.seed(u8.toU64(kindBit(kind)))
   let mut result = Hash.mix(&seed, usize.toU64(text.length))
+  // Eight bytes to a step: class names are hashed once per element and class.
   let mut i: usize = 0
   while i < text.length {
-    result = Hash.combine(result, u8.toU64(text[i]))
-    i = i + 1
+    let mut word: u64 = 0
+    let mut shift: u64 = 0
+    while shift < 64 && i < text.length {
+      word = u64.bitOr(word, u64.shiftLeft(u8.toU64(text[i]), shift))
+      shift = shift + 8
+      i = i + 1
+    }
+    result = Hash.combine(result, word)
   }
   return result
 }
@@ -80,6 +88,10 @@ fn space(byte: u8) -> bool {
 /// Storage is reused across elements. A failed collection is safe to retry with a new budget.
 pub struct CandidateIndex {
   entries: List<Entry>,
+  /// Where each run of `entries` whose keys share their top `64 - shift` bits starts, and
+  /// one end mark: a lookup searches its key's run instead of every entry.
+  starts: List<u32>,
+  shift: u64,
   fallback: List<usize>,
   /// Rules with an unkeyed arm on a pseudo-element: candidates only when one is being matched.
   pseudo: List<usize>,
@@ -96,6 +108,7 @@ pub struct CandidateIndex {
 impl CandidateIndex {
   pub effect fn census(self: &Self, out: &mut Census) -> () ! OutOfMemoryError ? &mut Allocator {
     run out.held("sheet.index.keyed-entries", self.entries.length(), self.entries.capacity(), Intrinsic.layoutOf<Entry>().bytes)
+    run out.held("sheet.index.runs", self.starts.length(), self.starts.capacity(), 4)
     run out.held("sheet.index.fallback-rules(offered to every element)", self.fallback.length(), self.fallback.capacity(), Intrinsic.layoutOf<usize>().bytes)
     run out.held("sheet.index.pseudo-only-rules", self.pseudo.length(), self.pseudo.capacity(), Intrinsic.layoutOf<usize>().bytes)
     run out.held("sheet.index.aside", self.aside.length(), self.aside.capacity(), Intrinsic.layoutOf<usize>().bytes)
@@ -105,6 +118,8 @@ impl CandidateIndex {
   pub fn make() -> CandidateIndex {
     return CandidateIndex {
       entries: List<Entry>.make(),
+      starts: List<u32>.make(),
+      shift: 64,
       fallback: List<usize>.make(),
       pseudo: List<usize>.make(),
       aside: List<usize>.make(),
@@ -122,6 +137,8 @@ impl CandidateIndex {
     ? &mut Allocator {
     let mut entries = run List<Entry>.makeWithCapacity(self.entries.length())
     run entries.appendSlice(self.entries.asSlice())
+    let mut starts = run List<u32>.makeWithCapacity(self.starts.length())
+    run starts.appendSlice(self.starts.asSlice())
     let mut fallback = run List<usize>.makeWithCapacity(self.fallback.length())
     run fallback.appendSlice(self.fallback.asSlice())
     let mut pseudo = run List<usize>.makeWithCapacity(self.pseudo.length())
@@ -136,6 +153,8 @@ impl CandidateIndex {
     run ancestors.appendSlice(self.ancestors.asSlice())
     return CandidateIndex {
       entries: move entries,
+      starts: move starts,
+      shift: self.shift,
       fallback: move fallback,
       pseudo: move pseudo,
       aside: List<usize>.make(),
@@ -154,6 +173,8 @@ impl CandidateIndex {
   pub fn clear(self: &mut Self) -> () {
     self.indexedRules = usize.MAX
     self.entries.truncate(0)
+    self.starts.truncate(0)
+    self.shift = 64
     self.fallback.truncate(0)
     self.pseudo.truncate(0)
     self.aside.truncate(0)
@@ -202,10 +223,35 @@ impl CandidateIndex {
   /// Keyed pseudo-element rules the last element collect reached but left out.
   pub fn reachedPseudo(self: &Self) -> &[usize] { return self.aside.asSlice() }
 
+  // Fingerprints are hashes, so their top bits spread entries evenly over about one run per
+  // entry. Runs keep the sorted order, and a run of colliding keys is still searched in halves.
+  effect fn bucket(self: &mut Self) -> ()
+    ! OutOfMemoryError
+    ? &mut Allocator {
+    self.starts.truncate(0)
+    self.shift = 64
+    let count = self.entries.length()
+    if count < 16 || count > 4294967295 { return () }
+    let mut bits: u64 = 1
+    while bits < 20 && u64.shiftLeft(1, bits) < usize.toU64(count) { bits = bits + 1 }
+    self.shift = 64 - bits
+    let runs = u64.toUsize(u64.shiftLeft(1, bits))
+    let entries = self.entries.asSlice()
+    let mut at: usize = 0
+    let mut group: usize = 0
+    while group < runs {
+      while at < count && u64.toUsize(u64.shiftRight(entries[at].key, self.shift)) < group { at = at + 1 }
+      run self.starts.append(usize.toU32(at))
+      group = group + 1
+    }
+    run self.starts.append(usize.toU32(count))
+  }
+
   pub effect fn finish(self: &mut Self) -> ()
     ! OutOfMemoryError
     ? &mut Allocator {
     run self.entries.sort()
+    run self.bucket()
     self.indexedRules = self.seen.length()
   }
 
@@ -234,6 +280,11 @@ impl CandidateIndex {
     let key = fingerprint(kind, text)
     let mut low: usize = 0
     let mut high = self.entries.length()
+    if self.starts.length() != 0 {
+      let group = u64.toUsize(u64.shiftRight(key, self.shift))
+      low = u32.toUsize(self.starts.asSlice()[group])
+      high = u32.toUsize(self.starts.asSlice()[group + 1])
+    }
     while low < high {
       run context.spend(1)
       let mid = low + (high - low) / 2

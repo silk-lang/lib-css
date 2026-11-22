@@ -10,6 +10,8 @@ import selectors
 import lexer
 import tokens { Limits, TokenRange, TokenBuffer, BufferView, CssError }
 import silk.core.effect { Effect }
+import silk.collections.list { List }
+import silk.num.usize
 import silk.core.option { Option }
 import silk.core.result { Result }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
@@ -173,4 +175,49 @@ test effect fn pseudoElementRulesAreCandidatesOnlyOfPseudoElements() -> ()
   ! AssertionError<'static> | ResolverError | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run pseudoElements() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn digits(out: &mut List<u8>, value: usize) -> () ! OutOfMemoryError ? &mut Allocator {
+  if value >= 10 { run digits(&mut out, value / 10) }
+  run out.append(usize.toU8(value % 10) + 48)
+}
+
+effect fn manyKeys() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  // Enough keyed rules that lookups search runs of the sorted entries.
+  let mut buffers = List<TokenBuffer>.make()
+  let mut i: usize = 0
+  while i < 300 {
+    let mut text = List<u8>.make()
+    run text.appendSlice(b".k")
+    run digits(&mut text, i)
+    run text.appendSlice(b", #i")
+    run digits(&mut text, i)
+    run buffers.append(run lexer.tokenize(text.asSlice(), &Limits.make()))
+    i = i + 1
+  }
+  run buffers.append(run lexer.tokenize(b".hot", &Limits.make()))
+  run buffers.append(run lexer.tokenize(b".a, button", &Limits.make()))
+  let mut index = CandidateIndex.make()
+  i = 0
+  while i < buffers.length() {
+    let parsed = run selectors.parse(&buffers.asSlice()[i], buffers.asSlice()[i].all(), &[], &Limits.make())
+    if let Option<SelectorList>.Some { value } = &parsed { run index.add(&value, &buffers.asSlice()[i]) }
+    i = i + 1
+  }
+  run index.finish()
+  let tree = Tree { hovered: false }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run index.collect(&tree, 0, &mut context)
+  let own = index.candidates()
+  run Testing.expect(own.length == 2 && holds(own, 300) && holds(own, 301), "a class and a type each find their rule among many keys")
+  run index.collect(&tree, 1, &mut context)
+  let child = index.candidates()
+  run Testing.expect(child.length == 1 && holds(child, 301), "another class finds only its rule")
+}
+
+test effect fn lookupsFindTheirRulesAmongManyKeys() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run manyKeys() |> Effect.provideMut<Allocator>(&mut allocator)
 }
