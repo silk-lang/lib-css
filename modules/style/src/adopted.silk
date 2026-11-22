@@ -385,6 +385,24 @@ impl StyleSheets {
     }
   }
 
+  /// The variable scope of an element that declares no custom property: what it inherits from
+  /// `parent`. Unlike `variableScopeWith` it reads nothing of the last match, so a caller that
+  /// knows an element's match declares none can move the element under a changed parent scope
+  /// without matching it again.
+  pub effect fn inheritedScope(self: &mut Self, parent: Option<ScopeId>, limits: &Limits) -> ScopeId
+    ! RegistrationError | CssError | OutOfMemoryError ? &mut Allocator {
+    if self.variables.isNone() {
+      let mut made = run Inputs.make(self.entries.asSlice(), limits)
+      made.variables.environment = self.current
+      self.variables = Option<Box<Inputs>>.some(run Box<Inputs>.make(move made))
+    }
+    match &mut self.variables {
+      Option<Box<Inputs>>.Some { value } => { let inputs = value.getMut()
+        return run inputs[0].scope(&[], &[], parent, limits) }
+      Option<Box<Inputs>>.None => Intrinsic.trap("variable inputs were initialized")
+    }
+  }
+
   pub fn resetScopes(self: &mut Self) -> () {
     if let Option<Box<Inputs>>.Some { value } = &mut self.variables {
       let inputs = value.getMut()

@@ -5,9 +5,9 @@ import silk.num.usize
 import text { TextMeasure, TextError, TextContext, TextBreak, TextAnalysis, TextShapeRequest, TextRun }
 import silk.core.effect { Effect }
 import silk.testing.testing { Testing, AssertionError }
-import style { Style, Dimension, SizeValue, Overflow, Position }
+import style { Style, Dimension, SizeValue, Overflow, Position, ScrollbarGutter }
 import geometry { Measure, MeasureRequest, Measured, BaselineSet, NaturalDimensions, ScrollbarRequest, ScrollbarMetrics, FontRequest, FontMetrics, Size, Rect, Point, OptionalSize }
-import tree { Tree, LayoutTree, InvalidNode }
+import tree { Tree, LayoutTree, InvalidNode, NodeId }
 import engine { compute, repositionScroll }
 
 struct Host { horizontal: f32, vertical: f32, overlay: bool }
@@ -195,7 +195,7 @@ test effect fn deferredStickyStaysAtItsNormalPosition() ! OutOfMemoryError | Tex
 
 // A scrollbar that overlays the content takes no room, so whether an auto one
 // shows changes no geometry: the results of a tree that holds one are kept as
-// any other tree's. One that takes room still turns reuse off.
+// any other tree's. One that takes room turns reuse off while it shows.
 test effect fn overlayAutoScrollbarsKeepResults() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
   let mut allocator = Allocator.systemAllocatorProvider()
   let mut style = Style.make()
@@ -224,5 +224,106 @@ test effect fn overlayAutoScrollbarsKeepResults() ! OutOfMemoryError | TextError
   let mut gutter = Host { horizontal: 10.0, vertical: 10.0, overlay: false }
   let mut fresh = LayoutTree.make()
   run compute(&tree, &mut fresh, &mut gutter, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(fresh.reusable(), "an auto scrollbar that is not showing takes no room, so the results are kept")
+  let grown = tree.styles.asMutSlice()
+  grown[childStyleIndex].height = SizeValue.px(300.0)
+  drop grown
+  run tree.markDirty(child)
+  run compute(&tree, &mut fresh, &mut gutter, OptionalSize.definite(800.0, 600.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let shown = fresh.boxes.get(fresh.firstBySource.get(root.index))
+  run Testing.expect(shown.verticalScrollbar && shown.contentSize.width == 90.0, "content that overflows a kept layout selects the scrollbar and gives it room")
   run Testing.expect(!fresh.reusable(), "an auto scrollbar that takes room keeps reuse off: which ones show is in no cache key")
+}
+
+effect fn scroller(tree: &mut Tree, gutter: ScrollbarGutter, blocks: usize) -> [NodeId; 2]
+  ! OutOfMemoryError | InvalidNode ? &mut Allocator {
+  let mut style = Style.make()
+  style.width = SizeValue.px(300.0)
+  style.height = SizeValue.px(200.0)
+  style.overflowX = Overflow.Auto
+  style.overflowY = Overflow.Auto
+  style.scrollbarGutter = gutter
+  let root = tree.root()
+  let box = run tree.append(root, move style)
+  let mut last = box
+  let mut at: usize = 0
+  while at < blocks {
+    last = run tree.append(box, Style.make())
+    let mut row = Style.make()
+    row.height = SizeValue.px(30.0)
+    drop run tree.append(last, move row)
+    at = at + 1
+  }
+  return [box, last]
+}
+
+// A scrollbar in a gutter the box reserves anyway takes no room when it shows, so the results
+// of one compute serve the next: an edit lays out what it touched and copies the rest.
+test effect fn aStableGutterKeepsLayoutIncremental() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let made = run scroller(&mut tree, ScrollbarGutter.Stable, 40) |> Effect.provideMut<Allocator>(&mut allocator)
+  let box = made[0]
+  let last = made[1]
+  let mut host = Host { horizontal: 12.0, vertical: 15.0, overlay: false }
+  let viewport = OptionalSize.definite(800.0, 600.0)
+  let mut output = LayoutTree.make()
+  run compute(&tree, &mut output, &mut host, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  let before = output.boxes.get(output.firstBySource.get(box.index))
+  run Testing.expect(before.verticalScrollbar && before.scrollbarGutter.right == 15.0 && before.contentSize.width == 285.0, "the box scrolls beside its reserved gutter")
+
+  let mut row = Style.make()
+  row.height = SizeValue.px(30.0)
+  let added = run tree.append(last, move row) |> Effect.provideMut<Allocator>(&mut allocator)
+  run compute(&tree, &mut output, &mut host, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bounds = run output.sourceBounds(added)
+  let after = output.boxes.get(output.firstBySource.get(box.index))
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut host, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  let expected = run fresh.sourceBounds(added)
+  run Testing.expect(output.stats.reusedLayouts != 0 && output.stats.fullLayouts * 4 < fresh.stats.fullLayouts, "the edit copies the rows it did not touch")
+  run Testing.expect(bounds.x == expected.x && bounds.y == expected.y && bounds.width == expected.width && bounds.height == expected.height, "the edited compute matches a fresh compute")
+  run Testing.expect(after.verticalScrollbar && after.scrollbarGutter.right == 15.0, "the scrollbar stays")
+}
+
+// Results kept while no scrollbar took room must not hide one that an edit calls for: the
+// compute that finds the overflow lays out again with the scrollbar's room taken.
+test effect fn anEditThatOverflowsAKeptLayoutSelectsItsScrollbar() ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let made = run scroller(&mut tree, ScrollbarGutter.Auto, 3) |> Effect.provideMut<Allocator>(&mut allocator)
+  let box = made[0]
+  let last = made[1]
+  let mut host = Host { horizontal: 12.0, vertical: 15.0, overlay: false }
+  let viewport = OptionalSize.definite(800.0, 600.0)
+  let mut output = LayoutTree.make()
+  run compute(&tree, &mut output, &mut host, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  let before = output.boxes.get(output.firstBySource.get(box.index))
+  run Testing.expect(!before.verticalScrollbar && before.contentSize.width == 300.0, "three rows fit")
+
+  let mut added = last
+  let mut at: usize = 0
+  while at < 10 {
+    let mut row = Style.make()
+    row.height = SizeValue.px(30.0)
+    added = run tree.append(last, move row) |> Effect.provideMut<Allocator>(&mut allocator)
+    at = at + 1
+  }
+  run compute(&tree, &mut output, &mut host, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  let bounds = run output.sourceBounds(added)
+  let after = output.boxes.get(output.firstBySource.get(box.index))
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut host, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  let expected = run fresh.sourceBounds(added)
+  run Testing.expect(after.verticalScrollbar && after.scrollbarGutter.right == 15.0 && after.contentSize.width == 285.0, "the overflow selects the scrollbar and takes its room")
+  run Testing.expect(bounds.x == expected.x && bounds.y == expected.y && bounds.width == expected.width && bounds.height == expected.height, "the edited compute matches a fresh compute")
+
+  // The scrollbar takes room now, so the next edit starts again without it and finds it again.
+  let mut row = Style.make()
+  row.height = SizeValue.px(30.0)
+  let more = run tree.append(last, move row) |> Effect.provideMut<Allocator>(&mut allocator)
+  run compute(&tree, &mut output, &mut host, viewport) |> Effect.provideMut<Allocator>(&mut allocator)
+  let again = output.boxes.get(output.firstBySource.get(box.index))
+  let moreBounds = run output.sourceBounds(more)
+  run Testing.expect(again.verticalScrollbar && again.contentSize.width == 285.0 && moreBounds.width == 285.0, "a later edit keeps the scrollbar's room")
 }
