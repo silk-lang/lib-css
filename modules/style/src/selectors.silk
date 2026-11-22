@@ -2558,14 +2558,27 @@ effect fn matchComplex<T: ElementTree>(
     }
   }
   // Tests that are watched wait until the others pass, so that only elements the rest of the
-  // compound selects are reported; `:has()` is also the costliest test.
+  // compound selects are reported; `:has()` is also the costliest test. A function can hold a
+  // watched test (`:not(:hover)`), so the functions wait for the plain tests, whatever their
+  // place in the compound: `.card:not(:hover) *` asks the hover of cards alone, not of every
+  // ancestor.
   let mut watched = false
+  let mut functions = false
   let mut simple = compound.first
   while simple != NONE {
     run spend(&mut context.*)
     let entry = &ast.simples.asSlice()[simple]
     if watches(&entry.test) { watched = true }
+    else if function(&entry.test) { functions = true }
     else if !run matchTest(ast, buffer, tree, &entry.test, node, &mut context.*, depth + 1) {
+      return false
+    }
+    simple = entry.next
+  }
+  simple = if functions { compound.first } else { NONE }
+  while simple != NONE {
+    let entry = &ast.simples.asSlice()[simple]
+    if !watches(&entry.test) && function(&entry.test) && !run matchTest(ast, buffer, tree, &entry.test, node, &mut context.*, depth + 1) {
       return false
     }
     simple = entry.next
@@ -2658,6 +2671,15 @@ fn watches(test: &Test) -> bool {
   return match &test.* {
     Test.Function { kind, .. } => kind == FunctionKind.Has
     Test.State { pseudo } => pseudo == Pseudo.FocusWithin || pseudo == Pseudo.Hover || pseudo == Pseudo.Active
+    _ => false
+  }
+}
+
+/// Whether `test` is a functional pseudo-class, whose argument can hold a watched test.
+fn function(test: &Test) -> bool {
+  return match &test.* {
+    Test.Function { .. } => true
+    Test.Nth { list, .. } => list != NONE
     _ => false
   }
 }

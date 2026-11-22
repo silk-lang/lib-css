@@ -626,6 +626,9 @@ test effect fn matchingReportsHasAnchorsAndFocusWithinElements() -> ()
   run Testing.expect((run watchOf(b"g:hover > rect", 2, 1)) == element.WATCH_HOVER && (run watchOf(b"g:active rect", 2, 1)) == element.WATCH_ACTIVE, "a pointer state is watched on the ancestor it was asked of")
   run Testing.expect((run watchOf(b"rect:hover", 2, 2)) == 0 && (run watchOf(b":is(rect:active)", 2, 2)) == 0, "the subject's own pointer state is not watched")
   run Testing.expect((run watchOf(b"g:has(:hover)", 1, 2)) == element.WATCH_HOVER, "a pointer state read inside :has() is watched on the candidate")
+  run Testing.expect((run watchOf(b".absent:not(:hover) > rect", 2, 1)) == 0 && (run watchOf(b":not(:hover).absent > rect", 2, 1)) == 0 && (run watchOf(b":is(:hover, :active):not(.present) > rect", 2, 1)) != 0,
+    "a state inside a function is asked only of the elements the plain tests of the compound select, in any order")
+  run Testing.expect((run watchOf(b"g:not(:hover) > rect", 2, 1)) == element.WATCH_HOVER, "and watched on those")
 }
 
 test effect fn invalidationKeysIncludeRelationalAndFailedLogicalArms() -> ()
