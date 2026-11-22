@@ -1738,6 +1738,114 @@ test effect fn repeatedResizesLayOutAfresh()
   )
 }
 
+// The first edit after computes that laid out everything is often an insertion, as when a
+// loaded page gets its first new element. The patch changes boxes under one root, so the
+// compute copies the rest instead of laying every box out again.
+test effect fn anEditAfterFullRelayoutsCopiesTheRest()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let mut lastBlock = root
+  let mut at: usize = 0
+  while at < 40 {
+    let mut style = Style.make()
+    style.padding.left = Dimension.px(2.0)
+    let block = run tree.append(root, move style) |> Effect.provideMut<Allocator>(&mut allocator)
+    let leaf = run tree.append(block, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    run tree.setMeasurement(leaf, 0)
+    lastBlock = block
+    at = at + 1
+  }
+  let mut output = LayoutTree.make()
+  let mut content = Content { minimum: 20.0, maximum: 300.0, height: 18.0 }
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(250.0, 600.0))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.relaidMost && output.reuseIdle % 8 != 0, "the resize copied nothing")
+
+  let added = run tree.append(lastBlock, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let leaf = run tree.append(added, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  run tree.setMeasurement(leaf, 0)
+  let patches = output.patches
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(250.0, 600.0))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let bounds = run output.sourceBounds(leaf)
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut content, OptionalSize.definite(250.0, 600.0))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let expected = run fresh.sourceBounds(leaf)
+  run Testing.expect(output.patches == patches + 1, "the insertion patches the boxes")
+  run Testing.expect(
+    output.stats.reusedLayouts != 0 && output.stats.fullLayouts * 4 < fresh.stats.fullLayouts,
+    "the patched compute copies the blocks it did not touch",
+  )
+  run Testing.expect(
+    bounds.x == expected.x && bounds.y == expected.y && bounds.width == expected.width
+      && bounds.height == expected.height,
+    "the patched compute matches a fresh compute",
+  )
+}
+
+// A rich element arrives as a few hundred insertions into its own new subtree. The log of
+// parents whose children generate boxes anew holds them all, so the boxes are patched and
+// not generated again for the whole tree.
+test effect fn attachingALargeBuiltSubtreeStillPatches()
+  ! OutOfMemoryError | TextError | FragmentationError | InvalidNode | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let mut lastBlock = root
+  let mut at: usize = 0
+  while at < 8 {
+    let block = run tree.append(root, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let leaf = run tree.append(block, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    run tree.setMeasurement(leaf, 0)
+    lastBlock = block
+    at = at + 1
+  }
+  let mut output = LayoutTree.make()
+  let mut content = Content { minimum: 20.0, maximum: 300.0, height: 18.0 }
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+
+  // 100 rows of three cells, each cell a child of its row: 400 insertions under 101 parents,
+  // and the rows' own insertions under one.
+  let table = run tree.append(lastBlock, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut last = table
+  let mut row: usize = 0
+  while row < 100 {
+    let line = run tree.append(table, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+    let mut cell: usize = 0
+    while cell < 3 {
+      let leaf = run tree.append(line, Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+      run tree.setMeasurement(leaf, 0)
+      last = leaf
+      cell = cell + 1
+    }
+    row = row + 1
+  }
+  let patches = output.patches
+  let fallbacks = output.patchFallbacks
+  run compute(&tree, &mut output, &mut content, OptionalSize.definite(800.0, 600.0))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let bounds = run output.sourceBounds(last)
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut content, OptionalSize.definite(800.0, 600.0))
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let expected = run fresh.sourceBounds(last)
+  run Testing.expect(
+    output.patches == patches + 1 && output.patchFallbacks == fallbacks,
+    "a subtree of a few hundred insertions patches the boxes",
+  )
+  run Testing.expect(
+    bounds.x == expected.x && bounds.y == expected.y && bounds.width == expected.width
+      && bounds.height == expected.height,
+    "the patched compute matches a fresh compute",
+  )
+}
+
 // Grid containers must not inherit the block-only cache normalization that
 // erases available block size. Inspect both construction and restyling paths.
 test effect fn gridExcludesBlockProbeHeightNormalization()

@@ -195,7 +195,9 @@ pub fn blank(value: string) -> bool {
 }
 
 const CHANGE_LOG: usize = 256
-const GENERATION_LOG: usize = 64
+// A subtree built node by node logs each of its parents: a few hundred entries for one rich
+// element. A log that overflows makes the next compute generate every box again.
+const GENERATION_LOG: usize = 1024
 const SCROLL_LOG: usize = 64
 const GRID_LOG: usize = 64
 
@@ -527,6 +529,15 @@ impl Changes {
   // Records that the children of `node` generate boxes anew.
   fn generates(self: &mut Self, node: usize) {
     if node == NO_NODE { return }
+    if self.genLogged != 0 {
+      // Children added one after another to one parent share its entry: the entry moves to
+      // this revision, which keeps the log in revision order.
+      let newest = (self.genLogged - 1) % GENERATION_LOG
+      if self.genNodes.get(newest) == node {
+        self.genRevisions.set(newest, self.current)
+        return
+      }
+    }
     let slot = self.genLogged % GENERATION_LOG
     if self.genLogged >= GENERATION_LOG && self.genRevisions.get(slot) > self.genLost { self.genLost = self.genRevisions.get(slot) }
     self.genNodes.set(slot, node)
