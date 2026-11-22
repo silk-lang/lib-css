@@ -321,6 +321,16 @@ impl Inputs {
     self.inlineHeads.clear()
   }
 
+  /// Appends what `substitute` of the same declaration reads of `scope` (`VariableStore.reads`):
+  /// two scopes that append the same values substitute it the same way.
+  pub effect fn substitutionReads(self: &Self, scope: ScopeId, sheet: usize, declaration: usize, out: &mut List<u64>) -> ()
+    ! OutOfMemoryError ? &mut Allocator {
+    let item = self.catalog.asSlice()[self.offsets.asSlice()[sheet] + declaration]
+    if let Specified.Pending { range, .. } = item.specified {
+      run self.variables.reads(self.buffers.view(), scope, item.buffer, range, &mut out)
+    }
+  }
+
   /// A pending declaration after substitution. None is invalid at computed-value time.
   /// The receiver parses/caches the resulting value; no stylesheet syntax is reparsed.
   pub effect fn substitute(self: &Self, scope: ScopeId, sheet: usize, declaration: usize, limits: &Limits) -> Option<Bytes>
