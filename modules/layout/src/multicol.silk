@@ -150,7 +150,7 @@ pub effect fn layoutColumnSet<'pass, 'source, M: Measure + TextMeasure, S: Layou
   if box.max.height < UNBOUNDED { limit = min(limit, max(0.0, box.max.height - box.inset.vertical())) }
   let checkpoint = output.checkpoint()
   let height = run columnsLayout(nodes, &mut output, &mut measurer, id, flow, input, box, columns, limit)
-  if !input.performLayout { output.restoreCheckpoint(checkpoint) }
+  if !input.performLayout { run output.restoreCheckpoint(checkpoint) }
   output.closeCheckpoint(checkpoint)
   result.size = Size { width: box.size.width, height: height + box.inset.vertical() }
   if box.size.heightDefinite { result.size.height = box.size.height }
@@ -189,7 +189,7 @@ effect fn layoutVerticalSet<'pass, 'source, M: Measure + TextMeasure, S: LayoutS
   if box.max.width < UNBOUNDED { limit = min(limit, max(0.0, box.max.width - box.inset.horizontal())) }
   let checkpoint = output.checkpoint()
   let extent = run columnsLayout(nodes, &mut output, &mut measurer, id, flow, input, box, columns, limit)
-  if !input.performLayout { output.restoreCheckpoint(checkpoint) }
+  if !input.performLayout { run output.restoreCheckpoint(checkpoint) }
   output.closeCheckpoint(checkpoint)
   result.size = Size { width: extent + box.inset.horizontal(), height: box.size.height }
   if box.size.widthDefinite { result.size.width = box.size.width }
@@ -232,7 +232,7 @@ effect fn columnsLayout<'pass, 'source, M: Measure + TextMeasure, S: LayoutSourc
     // height to hold it, as long as the height may grow.
     let fits = placed.reach <= height + 0.01
     if placed.complete && !fits && !last {
-      output.restoreCheckpoint(attempt)
+      run output.restoreCheckpoint(attempt)
       output.closeCheckpoint(attempt)
       height = min(limit, placed.reach)
       tries = tries + 1
@@ -243,7 +243,7 @@ effect fn columnsLayout<'pass, 'source, M: Measure + TextMeasure, S: LayoutSourc
       output.resumes.resetRange(flow, end)
       return height
     }
-    output.restoreCheckpoint(attempt)
+    run output.restoreCheckpoint(attempt)
     output.closeCheckpoint(attempt)
     // Raise the height by the content left over, shared between the columns.
     let shortage = max(1.0, max(0.0, total - placed.used) / usize.toF32(columns.count))
@@ -404,7 +404,7 @@ effect fn fitColumn<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(n
       return true
     }
     let forced = state.before.forced.active(request.fragmentation.activeKinds())
-    output.restoreCheckpoint(checkpoint)
+    run output.restoreCheckpoint(checkpoint)
     if forced.kinds.any() && !state.started && !state.beforeHandled {
       run output.defer(flow, forced)
       output.closeCheckpoint(checkpoint)

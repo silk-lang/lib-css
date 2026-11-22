@@ -813,11 +813,10 @@ impl FragmentArena {
     self.textStamps.set(index, self.generation)
     self.textSlots.set(index, self.savedTexts.length() - 1)
   }
-  // Notes an edit of fragment `index` that cannot save its previous value:
-  // the previous output is no longer whole.
-  fn editUnsaved(self: &mut Self, index: usize) {
+  // savePosition before a rollback rewrites the links of fragment `index`.
+  effect fn unlinking(self: &mut Self, index: usize) ! OutOfMemoryError ? &mut Allocator {
     if !self.inPlace { return }
-    if index < self.previousCount && self.fragmentStamps.get(index) != self.generation { self.damaged = true }
+    run self.savePosition(index)
     if index + 1 > self.written { self.written = index + 1 }
   }
   // Prepares fragment `index` for an edit by the caller.
@@ -1204,7 +1203,7 @@ impl FragmentArena {
 
   // Undo appends in reverse order, including links held by surviving fragments.
   // This does not undo caller edits to geometry of fragments before the checkpoint.
-  pub fn rollback(self: &mut Self, checkpoint: usize) {
+  pub effect fn rollback(self: &mut Self, checkpoint: usize) ! OutOfMemoryError ? &mut Allocator {
     let mut index = self.count
     while index > checkpoint {
       index = index - 1
@@ -1214,9 +1213,11 @@ impl FragmentArena {
       let previousSibling = self.values.asSlice()[index].previousSibling
       let box = self.values.asSlice()[index].box
       let previousForBox = self.values.asSlice()[index].previousForBox
-      if parent != NO_NODE { self.editUnsaved(parent) }
-      if previousSibling != NO_NODE { self.editUnsaved(previousSibling) }
-      if previousForBox != NO_NODE { self.editUnsaved(previousForBox) }
+      // A fragment this compute has not written holds its previous value: saving it keeps the
+      // previous output whole for the reuse after this rollback.
+      if parent != NO_NODE { run self.unlinking(parent) }
+      if previousSibling != NO_NODE { run self.unlinking(previousSibling) }
+      if previousForBox != NO_NODE { run self.unlinking(previousForBox) }
       let values = self.values.asMutSlice()
       if parent != NO_NODE {
         values[parent].lastChild = previousSibling
@@ -1723,7 +1724,7 @@ impl FragmentArena {
     while index < end {
       let mut value = self.previous(index)
       if (index > start && (value.parent < start || value.parent >= index)) || (value.lastChild != NO_NODE && value.lastChild >= end) {
-        self.rollback(base)
+        run self.rollback(base)
         return false
       }
       if value.textData != NO_NODE {
@@ -1795,7 +1796,7 @@ impl FragmentArena {
       while index < stop {
         let from = &sourceValues[index]
         if (index > start && (from.parent < start || from.parent >= index)) || (from.lastChild != NO_NODE && from.lastChild >= end) {
-          self.rollback(base)
+          run self.rollback(base)
           return false
         }
         let text = from.textData

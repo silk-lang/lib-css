@@ -787,7 +787,7 @@ effect fn absolute<'pass, 'source, M: Measure + TextMeasure, S: LayoutSource>(no
   let checkpoint = output.checkpoint()
   if fragmented { input.performLayout = false }
   let result = run layoutNode(nodes, &mut output, &mut measurer, id, &input)
-  if fragmented { output.restoreCheckpoint(checkpoint) }
+  if fragmented { run output.restoreCheckpoint(checkpoint) }
   output.closeCheckpoint(checkpoint)
   input.performLayout = true
   output.fragmentParent = savedParent
@@ -1101,7 +1101,7 @@ effect fn containerShellAllocation<'pass, 'source, M: Measure + TextMeasure, S: 
   let mut result = output.boxes[id]
   result.location.x = result.location.x - box.inset.left
   result.location.y = result.location.y - box.inset.top
-  output.restoreCheckpoint(checkpoint)
+  run output.restoreCheckpoint(checkpoint)
   output.closeCheckpoint(checkpoint)
   return result
 }
@@ -1587,7 +1587,7 @@ effect fn previewPositionedWidows<'pass, 'source, M: Measure + TextMeasure, S: L
       let state = output.resumes.get(id)
       if !state.blocked { break }
       let forced = state.before.forced.active(input.fragmentation.activeKinds())
-      output.restoreCheckpoint(checkpoint)
+      run output.restoreCheckpoint(checkpoint)
       if forced.kinds.any() && !state.started && !state.beforeHandled {
         run output.defer(id, forced)
         deferred = true
@@ -1655,7 +1655,7 @@ effect fn fragmentedAbsolute<'pass, 'source, M: Measure + TextMeasure, S: Layout
     let state = output.resumes.get(id)
     if !unfragmented && state.blocked {
       let forced = state.before.forced.active(input.fragmentation.activeKinds())
-      output.restoreCheckpoint(checkpoint)
+      run output.restoreCheckpoint(checkpoint)
       output.closeCheckpoint(checkpoint)
       if forced.kinds.any() && !state.started && !state.beforeHandled {
         run output.defer(id, forced)
@@ -1676,10 +1676,10 @@ effect fn fragmentedAbsolute<'pass, 'source, M: Measure + TextMeasure, S: Layout
       if checks.length() > 0 {
         let preview = output.checkpoint()
         let decision = run previewPositionedWidows(nodes, &mut output, &mut measurer, id, cb, &original, &mut checks)
-        output.restoreCheckpoint(preview)
+        run output.restoreCheckpoint(preview)
         output.closeCheckpoint(preview)
         if decision.failed != NO_NODE {
-          output.restoreCheckpoint(checkpoint)
+          run output.restoreCheckpoint(checkpoint)
           output.closeCheckpoint(checkpoint)
           run output.limitLines(decision.failed, decision.limit)
           continue

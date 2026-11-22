@@ -38,7 +38,7 @@ pub effect fn captureShell<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
   let mut bfc = BfcState.make()
   drop run layoutInBfc(nodes, &mut output, &mut measurer, id, &request, &mut bfc)
   let retained = output.cache.gridGeometry.retain(id)
-  output.restoreCheckpoint(checkpoint)
+  run output.restoreCheckpoint(checkpoint)
   output.closeCheckpoint(checkpoint)
   run output.cache.gridGeometry.publish(id, retained)
   output.cache.gridGeometry.inheritRows(id)

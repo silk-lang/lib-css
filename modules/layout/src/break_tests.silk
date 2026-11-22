@@ -560,7 +560,7 @@ test effect fn fragmentPublicationAndRejectedLookaheadPreserveEarlierGeometry()
       && !pass.fragments.values.asSlice()[firstText.index].last,
     "accepted links identify the current fragmentainer and continued text",
   )
-  pass.restoreCheckpoint(checkpoint)
+  run pass.restoreCheckpoint(checkpoint) |> Effect.provideMut<Allocator>(&mut allocator)
   pass.closeCheckpoint(checkpoint)
   pass.fragments.resolveLocations()
   run Testing.expect(
