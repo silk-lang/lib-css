@@ -9,7 +9,7 @@ import variables { VariableStore, ScopeId, RegistrationError }
 import variables
 import scope_cache { Cache }
 import values { Wide, Mode }
-import tokens { Buffers, TokenBuffer, Span, Limits, CssError, equal }
+import tokens { Buffers, TokenBuffer, TokenRange, Kind, Span, Limits, CssError, equal }
 import input { Input, TokenRef }
 import cssom_serialization
 import silk.collections.bytes { Bytes }
@@ -19,6 +19,7 @@ import silk.collections.hash { Hash }
 import silk.collections.slice { Slice }
 import silk.core.ownership { Copy }
 import silk.num.u8
+import silk.num.u64
 import silk.num.usize
 import silk.core.option { Option }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
@@ -27,6 +28,63 @@ pub struct InlineCustom<'name, 'tokens> {
   pub name: &'name [u8],
   pub tokens: &'tokens TokenBuffer,
   pub priority: Priority,
+}
+
+/// Which custom properties declarations declare and which their values mention, as sets of
+/// name bits (`nameBit`): two masks that share no bit name no property in common. A value
+/// mentions every dashed identifier in it, so `var()`, its fallbacks and `style()` tests all
+/// count, and so may names that are not properties at all.
+pub struct VariableMasks { pub reads: u64, pub declares: u64 }
+impl Copy for VariableMasks {}
+
+impl VariableMasks {
+  pub fn none() -> VariableMasks { return VariableMasks { reads: 0, declares: 0 } }
+  pub fn with(self: VariableMasks, other: VariableMasks) -> VariableMasks {
+    return VariableMasks { reads: u64.bitOr(self.reads, other.reads), declares: u64.bitOr(self.declares, other.declares) }
+  }
+}
+
+/// The bit a custom property name takes in a `VariableMasks` set.
+pub fn nameBit(name: &[u8]) -> u64 {
+  let mut hash = Hash.mix(&Hash.seed(1103), usize.toU64(name.length))
+  let mut i: usize = 0
+  while i < name.length {
+    hash = Hash.combine(hash, u8.toU64(name[i]))
+    i = i + 1
+  }
+  return u64.shiftLeft(1, u64.bitAnd(u64.shiftRight(hash, 23), 63))
+}
+
+fn dashed(text: &[u8]) -> bool { return text.length > 2 && text[0] == 45 && text[1] == 45 }
+
+/// The names the tokens of `range` mention.
+pub fn mentioned(buffer: &TokenBuffer, range: TokenRange) -> u64 {
+  let all = buffer.tokens.asSlice()
+  let mut bits: u64 = 0
+  let mut i = range.start
+  while i < range.end && i < all.length {
+    match &all[i].kind {
+      Kind.Ident { text } => { if dashed(buffer.text(text)) { bits = u64.bitOr(bits, nameBit(buffer.text(text))) } }
+      Kind.Function { name } => { if dashed(buffer.text(name)) { bits = u64.bitOr(bits, nameBit(buffer.text(name))) } }
+      _ => {}
+    }
+    i = i + 1
+  }
+  return bits
+}
+
+/// The masks of the inline custom properties `inline`.
+pub fn inlineMasks(inline: &[InlineCustom<'_, '_>]) -> VariableMasks {
+  let mut masks = VariableMasks.none()
+  let mut i: usize = 0
+  while i < inline.length {
+    if declaration_values.customName(inline[i].name) {
+      masks.declares = u64.bitOr(masks.declares, nameBit(inline[i].name))
+      masks.reads = u64.bitOr(masks.reads, mentioned(inline[i].tokens, inline[i].tokens.all()))
+    }
+    i = i + 1
+  }
+  return masks
 }
 
 struct InlineEntry { declaration: usize, next: usize }
@@ -44,6 +102,8 @@ pub struct Inputs {
   baseCatalog: usize,
   pub buffers: Buffers<'static>,
   pub catalog: List<Declaration>,
+  /// The masks of each sheet declaration in `catalog`: the entries below `baseCatalog`.
+  masks: List<VariableMasks>,
   offsets: List<usize>,
   pub variables: VariableStore,
   /// For the bench census: scopes asked for, and those built (the rest were found).
@@ -135,11 +195,47 @@ impl Inputs {
     }
     let baseBuffers = buffers.owned().length
     let baseCatalog = catalog.length()
-    return Inputs { inline: List<InlineEntry>.make(), inlineHeads: HashMap<u64, usize>.make(Hash.seed(1093)), scopes: Cache.make(), retained: true, baseBuffers: baseBuffers, baseCatalog: baseCatalog, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables, scopeCalls: 0, scopeBuilds: 0, scopeCandidates: 0 }
+    let mut masks = List<VariableMasks>.make()
+    i = 0
+    while i < catalog.length() {
+      let item = catalog.asSlice()[i]
+      let mut entry = VariableMasks.none()
+      if let Specified.Pending { range, .. } = item.specified { entry.reads = mentioned(&buffers.one(item.buffer)[0], range) }
+      if let Target.Custom { name } = item.target { entry.declares = nameBit(buffers.one(name.buffer)[0].text(name.span)) }
+      run masks.append(entry)
+      i = i + 1
+    }
+    return Inputs { inline: List<InlineEntry>.make(), inlineHeads: HashMap<u64, usize>.make(Hash.seed(1093)), scopes: Cache.make(), retained: true, baseBuffers: baseBuffers, baseCatalog: baseCatalog, masks: move masks, buffers: move buffers, catalog: move catalog, offsets: move offsets, variables: move variables, scopeCalls: 0, scopeBuilds: 0, scopeCandidates: 0 }
   }
 
   /// Repeating the same scope inputs cannot grow storage until this becomes false.
   pub fn canRetainScopes(self: &Self) -> bool { return self.retained && self.scopes.retainsAll() }
+
+  /// What the sheet declarations of `matches` declare and mention between them.
+  pub fn sheetMasks(self: &Self, matches: &[MatchedCandidate]) -> VariableMasks {
+    let mut masks = VariableMasks.none()
+    let mut i: usize = 0
+    while i < matches.length {
+      if let Source.Sheet { sheet, declaration } = matches[i].source {
+        let index = self.offsets.asSlice()[sheet] + declaration
+        if index < self.masks.length() { masks = masks.with(self.masks.asSlice()[index]) }
+      }
+      i = i + 1
+    }
+    return masks
+  }
+
+  /// Appends to `out` the candidates of `matches` that declare a custom property: with the
+  /// element's inline custom properties, all that `scope` reads of a match.
+  pub effect fn customCandidates(self: &Self, matches: &[MatchedCandidate], out: &mut List<MatchedCandidate>) -> () ! OutOfMemoryError ? &mut Allocator {
+    let mut i: usize = 0
+    while i < matches.length {
+      if let Source.Sheet { sheet, declaration } = matches[i].source {
+        if let Target.Custom { .. } = self.catalog.asSlice()[self.offsets.asSlice()[sheet] + declaration].target { run out.append(matches[i]) }
+      }
+      i = i + 1
+    }
+  }
 
   /// Builds only the custom-property part of the cascade; ordinary declarations do not add work.
   pub effect fn scope(self: &mut Self, matches: &[MatchedCandidate], inline: &[InlineCustom<'_, '_>], parent: Option<ScopeId>, limits: &Limits) -> ScopeId
