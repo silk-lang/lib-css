@@ -405,6 +405,16 @@ impl StyleSheets {
     }
   }
 
+  /// The custom properties two elements' own declarations give different values, as name
+  /// bits, given the scope of each (`VariableStore.differing`); every bit where one is unknown.
+  pub fn variablesDiffering(self: &Self, a: Option<ScopeId>, b: Option<ScopeId>) -> u64 {
+    let one = match a { Option<ScopeId>.Some { value } => value _ => { return u64.MAX } }
+    let two = match b { Option<ScopeId>.Some { value } => value _ => { return u64.MAX } }
+    let inputs = self.variableInputs()
+    if inputs.length == 0 { return u64.MAX }
+    return inputs[0].differing(one, two)
+  }
+
   /// Appends the candidates of the last match that declare a custom property.
   pub effect fn customCandidates(self: &Self, out: &mut List<Candidate>) -> () ! OutOfMemoryError ? &mut Allocator {
     if let Option<Box<Inputs>>.Some { value } = &self.variables { run value.get()[0].customCandidates(self.output.asSlice(), &mut out) }

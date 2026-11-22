@@ -5,7 +5,7 @@ import sheet { Declaration as SheetDeclaration }
 import cascade { Declaration, Candidate, Name, Target, Specified, Priority }
 import cascade
 import declaration_values
-import variables { VariableStore, ScopeId, RegistrationError }
+import variables { VariableStore, ScopeId, RegistrationError, nameBit }
 import variables
 import scope_cache { Cache }
 import values { Wide, Mode }
@@ -42,17 +42,6 @@ impl VariableMasks {
   pub fn with(self: VariableMasks, other: VariableMasks) -> VariableMasks {
     return VariableMasks { reads: u64.bitOr(self.reads, other.reads), declares: u64.bitOr(self.declares, other.declares) }
   }
-}
-
-/// The bit a custom property name takes in a `VariableMasks` set.
-pub fn nameBit(name: &[u8]) -> u64 {
-  let mut hash = Hash.mix(&Hash.seed(1103), usize.toU64(name.length))
-  let mut i: usize = 0
-  while i < name.length {
-    hash = Hash.combine(hash, u8.toU64(name[i]))
-    i = i + 1
-  }
-  return u64.shiftLeft(1, u64.bitAnd(u64.shiftRight(hash, 23), 63))
 }
 
 fn dashed(text: &[u8]) -> bool { return text.length > 2 && text[0] == 45 && text[1] == 45 }
@@ -224,6 +213,9 @@ impl Inputs {
     }
     return masks
   }
+
+  /// The custom properties the entries of two scopes differ in (`VariableStore.differing`).
+  pub fn differing(self: &Self, a: ScopeId, b: ScopeId) -> u64 { return self.variables.differing(self.buffers.view(), a, b) }
 
   /// Appends to `out` the candidates of `matches` that declare a custom property: with the
   /// element's inline custom properties, all that `scope` reads of a match.

@@ -1,5 +1,5 @@
 import adopted { StyleSheets, AdoptionError, Source, Candidate }
-import adopted_variables { nameBit }
+import variables { nameBit }
 import silk.num.u64
 import silk.collections.list { List }
 import compile { Options, CompileError }
@@ -241,6 +241,9 @@ effect fn variablesBody() -> ()
   run Testing.expect(u64.bitAnd(declared.declares, nameBit(b"--gap")) != 0 && u64.bitAnd(declared.declares, nameBit(b"--size")) != 0, "and the ones it declares")
   let kept = run sheets.variableScopeOf(Option<ScopeId>.some(parent), customs.asSlice(), &[], &Limits.make())
   run Testing.expect(kept.index == child.index, "the custom candidates kept from a match give its scope again after another match")
+  run Testing.expect(sheets.variablesDiffering(Option<ScopeId>.some(parent), Option<ScopeId>.some(parent)) == 0
+    && u64.bitAnd(sheets.variablesDiffering(Option<ScopeId>.some(parent), Option<ScopeId>.some(child)), nameBit(b"--gap")) != 0,
+    "two scopes differ in the properties only one declares")
   context = MatchContext.make(0, NO_ELEMENT)
   run sheets.resolve(&tree, 1, &[], &mut context)
   run sheets.adopt(3, run compiled(b"@property --size {syntax:'<length>';inherits:false;initial-value:5px} @media (width >= 600px) {@property --size {syntax:'<length>';inherits:false;initial-value:7px}}"))
