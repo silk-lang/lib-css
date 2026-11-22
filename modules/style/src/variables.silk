@@ -461,8 +461,10 @@ impl VariableStore {
   }
 
   /// The custom properties that the entries of scopes `a` and `b` give different values, or
-  /// that only one of them has an entry for, as name bits (`nameBit`). It compares what the
-  /// two elements declare, substituted: what each inherits is the caller's to compare.
+  /// that only one of them has an entry for, as name bits (`nameBit`): the ones a descendant
+  /// can tell the two scopes apart by, so a property registered not to inherit is left out.
+  /// It compares what the two elements declare, substituted: what each inherits is the
+  /// caller's to compare.
   pub fn differing(self: &VariableStore, buffers: BufferView<'_>, a: ScopeId, b: ScopeId) -> u64 {
     if a.index == b.index { return 0 }
     if a.index >= self.scopes.length() || b.index >= self.scopes.length() { return u64.MAX }
@@ -477,11 +479,11 @@ impl VariableStore {
       while j < two.end && !found {
         if cascade.sameName(buffers, entries[i].name, entries[j].name) {
           found = true
-          if !self.sameValue(buffers, entries[i].value, entries[j].value) { bits = u64.bitOr(bits, nameBit(buffers.one(entries[i].name.buffer)[0].text(entries[i].name.span))) }
+          if !self.sameValue(buffers, entries[i].value, entries[j].value) { bits = u64.bitOr(bits, self.inheritedBit(buffers, entries[i].name)) }
         }
         j = j + 1
       }
-      if !found { bits = u64.bitOr(bits, nameBit(buffers.one(entries[i].name.buffer)[0].text(entries[i].name.span))) }
+      if !found { bits = u64.bitOr(bits, self.inheritedBit(buffers, entries[i].name)) }
       i = i + 1
     }
     let mut j = two.start
@@ -492,10 +494,18 @@ impl VariableStore {
         found = cascade.sameName(buffers, entries[i].name, entries[j].name)
         i = i + 1
       }
-      if !found { bits = u64.bitOr(bits, nameBit(buffers.one(entries[j].name.buffer)[0].text(entries[j].name.span))) }
+      if !found { bits = u64.bitOr(bits, self.inheritedBit(buffers, entries[j].name)) }
       j = j + 1
     }
     return bits
+  }
+
+  /// The name bit of a custom property that inherits, and no bit for one registered not to.
+  fn inheritedBit(self: &VariableStore, buffers: BufferView<'_>, name: Name) -> u64 {
+    if let Option<Registered>.Some { value } = self.registered(buffers, name) {
+      if !value.definition.inherits { return 0 }
+    }
+    return nameBit(buffers.one(name.buffer)[0].text(name.span))
   }
 
   fn sameValue(self: &VariableStore, buffers: BufferView<'_>, a: Option<TokenRange>, b: Option<TokenRange>) -> bool {
