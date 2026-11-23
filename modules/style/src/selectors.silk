@@ -2675,11 +2675,13 @@ fn watches(test: &Test) -> bool {
   }
 }
 
-/// Whether `test` is a functional pseudo-class, whose argument can hold a watched test.
+/// Whether `test` is a functional pseudo-class or positional sibling scan, deferred until
+/// cheap local tests (id, class, attribute, non-positional state) in the compound have passed.
 fn function(test: &Test) -> bool {
   return match &test.* {
     Test.Function { .. } => true
-    Test.Nth { list, .. } => list != NONE
+    Test.Nth { .. } => true
+    Test.State { pseudo } => pseudo == Pseudo.FirstType || pseudo == Pseudo.LastType || pseudo == Pseudo.OnlyType
     _ => false
   }
 }
@@ -2834,25 +2836,10 @@ effect fn matchTest<T: ElementTree>(
       let mut i: usize = 0
       while i < count {
         run spend(&mut context.*)
-        if (run namespaceMatches(
-          buffer,
-          namespace,
-          ElementTree.attributeNamespace(tree, node, i),
-          &mut context.*,
-        ))
-          && (run equalValue(
-            buffer.text(name),
-            ElementTree.attributeName(tree, node, i),
-            false,
-            &mut context.*,
-          ))
-          && (run attributeMatches(
-            ElementTree.attributeValue(tree, node, i),
-            buffer.text(value),
-            op,
-            insensitive,
-            &mut context.*,
-          )) {
+        let attr = ElementTree.attribute(tree, node, i)
+        if (run namespaceMatches(buffer, namespace, attr.namespace, &mut context.*))
+          && (run equalValue(buffer.text(name), attr.name, false, &mut context.*))
+          && (run attributeMatches(attr.value, buffer.text(value), op, insensitive, &mut context.*)) {
           return true
         }
         i = i + 1
@@ -2904,9 +2891,18 @@ effect fn matchTest<T: ElementTree>(
     }
     Test.Nth { a, b, reverse, ofType, list } => {
       note(&mut context.*, READS_INDEX)
+      if a <= 0.0 && b < 1.0 {
+        return false
+      }
       if list != NONE
         && !run matchesAny(ast, buffer, tree, list, node, NONE, &mut context.*, depth) {
         return false
+      }
+      if !ofType && list == NONE && node != context.shadowHost {
+        if let Option<usize>.Some { value: index } = ElementTree.siblingIndex(tree, node, reverse) {
+          run spend(&mut context.*)
+          return nthMatches(a, b, index)
+        }
       }
       let mut count: usize = 1
       let mut candidate = if reverse {
@@ -2920,6 +2916,9 @@ effect fn matchTest<T: ElementTree>(
           && (list == NONE
             || run matchesAny(ast, buffer, tree, list, candidate, NONE, &mut context.*, depth)) {
           count = count + 1
+          if a <= 0.0 && usize.toF64(count) > b {
+            return false
+          }
         }
         candidate = if reverse {
           run scopedSibling(tree, candidate, true, &mut context.*)
@@ -2927,12 +2926,7 @@ effect fn matchTest<T: ElementTree>(
           run scopedSibling(tree, candidate, false, &mut context.*)
         }
       }
-      let difference = usize.toF64(count) - b
-      if a == 0.0 {
-        return difference == 0.0
-      }
-      let quotient = difference / a
-      return quotient >= 0.0 && quotient == i64.toF64(f64.toI64(quotient))
+      return nthMatches(a, b, count)
     }
     Test.Language { range } => {
       let actual = ElementTree.language(tree, node)
@@ -3220,26 +3214,56 @@ effect fn matchState<T: ElementTree>(
     || state == Pseudo.OnlyType
   if first || last { note(&mut context.*, if typed { READS_INDEX } else { READS_EDGE }) }
   if first {
-    let mut candidate = run scopedSibling(tree, node, false, &mut context.*)
-    while candidate != NO_ELEMENT {
-      run spend(&mut context.*)
-      if !typed || run sameType(tree, node, candidate, &mut context.*) {
-        return false
+    if !typed && node != context.shadowHost {
+      if let Option<usize>.Some { value: index } = ElementTree.siblingIndex(tree, node, false) {
+        run spend(&mut context.*)
+        if index != 1 { return false }
+      } else {
+        let mut candidate = run scopedSibling(tree, node, false, &mut context.*)
+        if candidate != NO_ELEMENT { return false }
       }
-      candidate = run scopedSibling(tree, candidate, false, &mut context.*)
+    } else {
+      let mut candidate = run scopedSibling(tree, node, false, &mut context.*)
+      while candidate != NO_ELEMENT {
+        run spend(&mut context.*)
+        if !typed || run sameType(tree, node, candidate, &mut context.*) {
+          return false
+        }
+        candidate = run scopedSibling(tree, candidate, false, &mut context.*)
+      }
     }
   }
   if last {
-    let mut candidate = run scopedSibling(tree, node, true, &mut context.*)
-    while candidate != NO_ELEMENT {
-      run spend(&mut context.*)
-      if !typed || run sameType(tree, node, candidate, &mut context.*) {
-        return false
+    if !typed && node != context.shadowHost {
+      if let Option<usize>.Some { value: index } = ElementTree.siblingIndex(tree, node, true) {
+        run spend(&mut context.*)
+        if index != 1 { return false }
+      } else {
+        let mut candidate = run scopedSibling(tree, node, true, &mut context.*)
+        if candidate != NO_ELEMENT { return false }
       }
-      candidate = run scopedSibling(tree, candidate, true, &mut context.*)
+    } else {
+      let mut candidate = run scopedSibling(tree, node, true, &mut context.*)
+      while candidate != NO_ELEMENT {
+        run spend(&mut context.*)
+        if !typed || run sameType(tree, node, candidate, &mut context.*) {
+          return false
+        }
+        candidate = run scopedSibling(tree, candidate, true, &mut context.*)
+      }
     }
   }
   return true
+}
+
+@inlineAlways
+fn nthMatches(a: f64, b: f64, count: usize) -> bool {
+  let difference = usize.toF64(count) - b
+  if a == 0.0 {
+    return difference == 0.0
+  }
+  let quotient = difference / a
+  return quotient >= 0.0 && quotient == i64.toF64(f64.toI64(quotient))
 }
 
 effect fn subtagEnd(text: &[u8], at: usize, context: &mut MatchContext) -> usize

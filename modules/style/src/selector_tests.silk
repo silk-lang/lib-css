@@ -1049,3 +1049,81 @@ test effect fn hostAnswersClassSelectorsFromInternedNames() -> ()
   run Testing.expect(run matchesInterned(b"[class~=written]"), "attribute selectors still read the text")
   run Testing.expect(run matchesInterned(b":not(.written) .interned, .interned"), "logical arms ask the host too")
 }
+
+// A chain of 500 siblings whose host answers `siblingIndex` in O(1) (when `indexed` is true).
+struct SiblingChain {
+  count: usize,
+  indexed: bool,
+}
+
+impl ElementTree for SiblingChain {
+  fn siblingIndex(self: &Self, node: usize, reverse: bool) -> Option<usize> {
+    if !self.indexed || node == 0 { return Option<usize>.None }
+    return Option<usize>.some(if reverse { self.count - node + 1 } else { node })
+  }
+  fn containingHost(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn parent(self: &Self, node: usize) -> usize { return if node == 0 { NO_ELEMENT } else { 0 } }
+  fn firstChild(self: &Self, node: usize) -> usize { return if node == 0 && self.count != 0 { 1 } else { NO_ELEMENT } }
+  fn nextSibling(self: &Self, node: usize) -> usize {
+    return if node != 0 && node < self.count { node + 1 } else { NO_ELEMENT }
+  }
+  fn previousSibling(self: &Self, node: usize) -> usize {
+    return if node > 1 { node - 1 } else { NO_ELEMENT }
+  }
+  fn localName(self: &Self, node: usize) -> &[u8] { return b"span" }
+  fn namespaceUri(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn attributeCount(self: &Self, node: usize) -> usize { return 0 }
+  fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
+  fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
+    return AttributeText<'a> { namespace: b"", name: b"", value: b"" }
+  }
+  fn language(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn isRoot(self: &Self, node: usize) -> bool { return node == 0 }
+  fn isEmpty(self: &Self, node: usize) -> bool { return node != 0 }
+  fn isLink(self: &Self, node: usize) -> bool { return false }
+}
+
+effect fn checkChain(source: &[u8], node: usize, indexed: bool, expected: bool, budget: usize) -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let limits = Limits.make()
+  let buffer = run lexer.tokenize(source, &limits) |> Effect.provideMut<Allocator>(&mut allocator)
+  let parsed = run selectors.parse(&buffer, buffer.all(), &[], &limits)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  match &parsed {
+    Option<SelectorList>.Some { value } => {
+      let tree = SiblingChain { count: 500, indexed: indexed }
+      let mut context = MatchContext.make(0, NO_ELEMENT)
+      context.remainingSteps = budget
+      let matched = (run selectors.matchElement(&value, &buffer, &tree, node, &mut context)).isSome()
+      run Testing.expect(matched == expected, "sibling chain nth/edge match must agree")
+    }
+    _ => { run Testing.expect(false, "selector must parse") }
+  }
+}
+
+test effect fn nthChildUsesHostSiblingIndexAndEarlyExits() -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError {
+  // With O(1) siblingIndex, matching node 500 uses O(1) steps even for periodic :nth-child.
+  run checkChain(b"span:nth-child(even)", 500, true, true, 50)
+  run checkChain(b"span:nth-child(odd)", 500, true, false, 50)
+  run checkChain(b"span:nth-last-child(1)", 500, true, true, 50)
+  run checkChain(b"span:nth-last-child(2)", 499, true, true, 50)
+  run checkChain(b"span:nth-last-child(2)", 500, true, false, 50)
+  run checkChain(b"span:first-child", 1, true, true, 50)
+  run checkChain(b"span:first-child", 500, true, false, 50)
+  run checkChain(b"span:last-child", 500, true, true, 50)
+  run checkChain(b"span:last-child", 1, true, false, 50)
+  run checkChain(b"span:only-child", 1, true, false, 50)
+  // Without siblingIndex, a <= 0 still early-exits in O(b) steps instead of scanning all 500 siblings.
+  run checkChain(b"span:nth-child(1)", 500, false, false, 50)
+  run checkChain(b"span:nth-child(3)", 500, false, false, 50)
+  run checkChain(b"span:nth-child(-n+3)", 500, false, false, 50)
+  run checkChain(b"span:nth-child(0)", 500, false, false, 50)
+  run checkChain(b"span:nth-of-type(2)", 500, false, false, 60)
+  run checkChain(b"span:nth-child(3)", 3, false, true, 80)
+  run checkChain(b"span:nth-child(-n+3)", 3, false, true, 80)
+}

@@ -361,15 +361,15 @@ impl CandidateIndex {
     i = 0
     while i < attributes {
       run context.spend(1)
+      let attr = ElementTree.attribute(tree, node, i)
       if names {
-        run self.lookup(SubjectKind.Attribute, ElementTree.attributeName(tree, node, i), &mut context.*)
+        run self.lookup(SubjectKind.Attribute, attr.name, &mut context.*)
       }
       if ids && ElementTree.attributeIsId(tree, node, i) {
-        run self.lookup(SubjectKind.Id, ElementTree.attributeValue(tree, node, i), &mut context.*)
+        run self.lookup(SubjectKind.Id, attr.value, &mut context.*)
       }
-      if classes && ElementTree.attributeNamespace(tree, node, i).length == 0
-        && className(ElementTree.attributeName(tree, node, i)) {
-        let value = ElementTree.attributeValue(tree, node, i)
+      if classes && attr.namespace.length == 0 && className(attr.name) {
+        let value = attr.value
         run context.spend(value.length)
         let mut at: usize = 0
         while at < value.length {

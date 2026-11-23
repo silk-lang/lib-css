@@ -122,6 +122,13 @@ pub interface ElementTree {
     return Option<bool>.None
   }
 
+  /// 1-based element index among siblings in the same tree scope (from the start when
+  /// `reverse` is false, from the end when `reverse` is true), when the host already knows
+  /// it in O(1). None falls back to walking siblings.
+  fn siblingIndex(self: &Self, node: usize, reverse: bool) -> Option<usize> {
+    return Option<usize>.None
+  }
+
   fn parent(self: &Self, node: usize) -> usize
 
   /// Host of the node's own tree scope, or NO_ELEMENT in an ordinary tree.

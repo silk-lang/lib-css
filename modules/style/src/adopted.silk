@@ -54,6 +54,8 @@ pub struct StyleSheets {
   layers: Layers,
   output: List<Candidate>,
   matched: List<MatchedRule>,
+  scratchOutput: List<Candidate>,
+  scratchMatched: List<MatchedRule>,
   selectedStates: u32,
   variables: Option<Box<Inputs>>,
   /// The last environment, which `if(media(...))` reads during substitution.
@@ -149,7 +151,9 @@ impl StyleSheets {
 
   pub fn make() -> StyleSheets {
     return StyleSheets { entries: List<AdoptedSheet>.make(), layers: Layers.make(),
-      output: List<Candidate>.make(), matched: List<MatchedRule>.make(), selectedStates: 0, variables: Option<Box<Inputs>>.None, current: Option<Environment>.None,
+      output: List<Candidate>.make(), matched: List<MatchedRule>.make(),
+      scratchOutput: List<Candidate>.make(), scratchMatched: List<MatchedRule>.make(),
+      selectedStates: 0, variables: Option<Box<Inputs>>.None, current: Option<Environment>.None,
       settled: false, settledStarting: false }
   }
   pub fn length(self: &Self) -> usize { return self.entries.length() }
@@ -482,13 +486,15 @@ impl StyleSheets {
   pub effect fn resolveWith<T: ElementTree>(self: &mut Self, tree: &T, node: usize,
     inline: &[Priority], context: &mut MatchContext, starting: bool) -> ()
     ! ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
-    self.output.clear()
-    self.matched.clear()
+    self.output.truncate(0)
+    self.matched.truncate(0)
     self.selectedStates = 0
-    context.containers.clear()
+    context.containers.truncate(0)
     context.clearWatches()
-    let mut candidates = List<Candidate>.make()
-    let mut matched = List<MatchedRule>.make()
+    let mut candidates = Intrinsic.replace(self.scratchOutput, List<Candidate>.make())
+    let mut matched = Intrinsic.replace(self.scratchMatched, List<MatchedRule>.make())
+    candidates.truncate(0)
+    matched.truncate(0)
     let mut states: u32 = 0
     let mut order: usize = 0
     let styles = match &self.variables {
@@ -545,8 +551,8 @@ impl StyleSheets {
       items[at] = selected
       i = i + 1
     }
-    self.output = move candidates
-    self.matched = move matched
+    self.scratchOutput = Intrinsic.replace(self.output, move candidates)
+    self.scratchMatched = Intrinsic.replace(self.matched, move matched)
     self.selectedStates = states
   }
 }
