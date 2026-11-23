@@ -691,6 +691,7 @@ impl FragmentArena {
   pub effect fn endFlow(self: &mut Self) -> Shift ! OutOfMemoryError ? &mut Allocator {
     let none = Shift { start: 0, up: false, by: 0 }
     if self.afterFlow { return none }
+    run self.closeSiblings()
     // Where the previous flow ended, after the moves this compute made.
     let mut previousEnd = self.flowEnd
     let log = self.shiftLog.asSlice()
@@ -1901,10 +1902,6 @@ impl FragmentArena {
         else { run self.textMarks.append(self.texts.length()) }
         let linked = self.values.asMutSlice()
         if at == base {
-          if parent != NO_NODE {
-            let oldLast = self.values.asSlice()[parent].lastChild
-            run self.recordAdoptedParent(parent, oldLast)
-          }
           let linked = self.values.asMutSlice()
           linked[at].parent = parent
           if linked[at].firstChild != NO_NODE {
@@ -1942,6 +1939,7 @@ impl FragmentArena {
     if parent != NO_NODE {
       run self.editPosition(parent)
       previousSibling = self.values.asSlice()[parent].lastChild
+      run self.recordAdoptedParent(parent, previousSibling)
       if previousSibling != NO_NODE && self.values.asSlice()[previousSibling].nextSibling != index { run self.editPosition(previousSibling) }
     }
     let values = self.values.asMutSlice()
