@@ -4,7 +4,7 @@
 import css_properties.census { Census }
 import selectors { SelectorList, SubjectKind, SubjectKey }
 import element { ElementTree, MatchContext, PseudoTarget }
-import ancestor_filter { AncestorKeys }
+import ancestor_filter { AncestorFilter, AncestorKeys }
 import tokens { TokenBuffer, CssError }
 import silk.collections.hash { Hash }
 import silk.collections.list { List }
@@ -101,6 +101,10 @@ pub struct CandidateIndex {
   selected: List<usize>,
   /// By rule: the names some ancestor of a matched element holds.
   ancestors: List<AncestorKeys>,
+  /// Per-arm ancestor keys for multi-arm rules that have at least one keyed arm.
+  armAncestors: List<AncestorKeys>,
+  /// By rule: packed `(start << 16) | count` into `armAncestors`, or 0 for single-arm/unkeyed.
+  armRanges: List<u64>,
   indexedRules: usize,
   kinds: u8,
 }
@@ -126,6 +130,8 @@ impl CandidateIndex {
       seen: List<bool>.make(),
       selected: List<usize>.make(),
       ancestors: List<AncestorKeys>.make(),
+      armAncestors: List<AncestorKeys>.make(),
+      armRanges: List<u64>.make(),
       indexedRules: 0,
       kinds: 0,
     }
@@ -151,6 +157,10 @@ impl CandidateIndex {
     }
     let mut ancestors = run List<AncestorKeys>.makeWithCapacity(self.ancestors.length())
     run ancestors.appendSlice(self.ancestors.asSlice())
+    let mut armAncestors = run List<AncestorKeys>.makeWithCapacity(self.armAncestors.length())
+    run armAncestors.appendSlice(self.armAncestors.asSlice())
+    let mut armRanges = run List<u64>.makeWithCapacity(self.armRanges.length())
+    run armRanges.appendSlice(self.armRanges.asSlice())
     return CandidateIndex {
       entries: move entries,
       starts: move starts,
@@ -161,6 +171,8 @@ impl CandidateIndex {
       seen: move seen,
       selected: List<usize>.make(),
       ancestors: move ancestors,
+      armAncestors: move armAncestors,
+      armRanges: move armRanges,
       indexedRules: self.indexedRules,
       kinds: self.kinds,
     }
@@ -181,6 +193,8 @@ impl CandidateIndex {
     self.seen.truncate(0)
     self.selected.truncate(0)
     self.ancestors.truncate(0)
+    self.armAncestors.truncate(0)
+    self.armRanges.truncate(0)
     self.kinds = 0
   }
 
@@ -191,6 +205,18 @@ impl CandidateIndex {
     let rule = self.seen.length()
     run self.seen.append(false)
     run self.ancestors.append(selectors.ancestorKeys(buffer))
+    let mut range: u64 = 0
+    if selectors.isMultiArm() {
+      let start = self.armAncestors.length()
+      let any = run selectors.collectArmAncestors(buffer, &mut self.armAncestors)
+      let count = self.armAncestors.length() - start
+      if any && count > 0 && count <= 65535 && start <= 0xFFFFFFFFFFFF {
+        range = u64.bitOr(u64.shiftLeft(usize.toU64(start), 16), usize.toU64(count))
+      } else {
+        self.armAncestors.truncate(start)
+      }
+    }
+    run self.armRanges.append(range)
     // One unkeyed element arm makes the rule a candidate for every element; its
     // pseudo-element arms are still indexed, since element collects never offer them.
     let mut everyElement = false
@@ -390,6 +416,30 @@ impl CandidateIndex {
 
   /// The names some ancestor of every element `rule` matches holds.
   pub fn ancestorKeys(self: &Self, rule: usize) -> AncestorKeys { return self.ancestors.asSlice()[rule] }
+
+  /// Per-arm ancestor keys for a multi-arm rule with at least one keyed arm, or empty.
+  pub fn armAncestorKeys(self: &Self, rule: usize) -> &[AncestorKeys] {
+    let range = self.armRanges.asSlice()[rule]
+    if range == 0 { return &[] }
+    let start = u64.toUsize(u64.shiftRight(range, 16))
+    let count = u64.toUsize(u64.bitAnd(range, 0xFFFF))
+    return Slice.view(self.armAncestors.asSlice(), start, count)
+  }
+
+  /// Whether at least one arm of `rule` can match an element whose ancestors `held` describes.
+  pub fn mayMatchAncestors(self: &Self, rule: usize, held: &AncestorFilter) -> bool {
+    let range = self.armRanges.asSlice()[rule]
+    if range == 0 { return self.ancestors.asSlice()[rule].mayMatch(held) }
+    let start = u64.toUsize(u64.shiftRight(range, 16))
+    let count = u64.toUsize(u64.bitAnd(range, 0xFFFF))
+    let slice = self.armAncestors.asSlice()
+    let mut i: usize = 0
+    while i < count {
+      if slice[start + i].mayMatch(held) { return true }
+      i = i + 1
+    }
+    return false
+  }
 
   pub fn candidates(self: &Self) -> &[usize] {
     return self.selected.asSlice()

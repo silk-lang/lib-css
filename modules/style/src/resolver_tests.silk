@@ -4,6 +4,8 @@ import cascade
 import properties { Property }
 import values { Wide }
 import element { ElementTree, MatchContext, StateBits, AttributeText, PseudoTarget, NO_ELEMENT, HOVER }
+import ancestor_filter { AncestorFilter, NameKind }
+import ancestor_filter
 import selector_index { CandidateIndex }
 import selectors { SelectorList }
 import selectors
@@ -220,4 +222,66 @@ test effect fn lookupsFindTheirRulesAmongManyKeys() -> ()
   ! AssertionError<'static> | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run manyKeys() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+struct FilteredTree { filter: AncestorFilter }
+impl ElementTree for FilteredTree {
+  fn parent(self: &Self, node: usize) -> usize { return if node == 1 { 0 } else { NO_ELEMENT } }
+  fn containingHost(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn firstChild(self: &Self, node: usize) -> usize { return if node == 0 { 1 } else { NO_ELEMENT } }
+  fn nextSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn previousSibling(self: &Self, node: usize) -> usize { return NO_ELEMENT }
+  fn localName(self: &Self, node: usize) -> &[u8] { return b"button" }
+  fn namespaceUri(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn attributeCount(self: &Self, node: usize) -> usize { return 1 }
+  fn attributeName(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"class" }
+  fn attributeNamespace(self: &Self, node: usize, attribute: usize) -> &[u8] { return b"" }
+  fn attributeValue(self: &Self, node: usize, attribute: usize) -> &[u8] { return if node == 0 { b"hot" } else { b"item" } }
+  fn attributeIsId(self: &Self, node: usize, attribute: usize) -> bool { return false }
+  fn attribute<'a>(self: &'a Self, node: usize, attribute: usize) -> AttributeText<'a> {
+    return AttributeText { namespace: b"", name: b"class", value: if node == 0 { b"hot" } else { b"item" } }
+  }
+  fn language(self: &Self, node: usize) -> &[u8] { return b"" }
+  fn isRoot(self: &Self, node: usize) -> bool { return node == 0 }
+  fn isEmpty(self: &Self, node: usize) -> bool { return node != 0 }
+  fn isLink(self: &Self, node: usize) -> bool { return false }
+  fn ancestorFilter<'a>(self: &'a Self, node: usize) -> Option<&'a AncestorFilter> {
+    return if node == 1 { Option<&'a AncestorFilter>.some(&self.filter) } else { Option<&'a AncestorFilter>.None }
+  }
+}
+
+effect fn ancestorFilteredReads() -> ()
+  ! AssertionError<'static> | ResolverError | CssError | OutOfMemoryError ? &mut Allocator {
+  let buffers = [
+    run lexer.tokenize(b".missing button + button", &Limits.make()),
+    run lexer.tokenize(b".seats-letters > :nth-child(5), .seats-row > :nth-child(5)", &Limits.make()),
+    run lexer.tokenize(b".hot > button, .missing > :nth-child(5)", &Limits.make()),
+  ]
+  let mut resolver = Resolver.make()
+  let mut i: usize = 0
+  while i < buffers.length {
+    run add(&mut resolver, &buffers[i], i, 0)
+    i = i + 1
+  }
+  run resolver.finish()
+  let mut filter = AncestorFilter.make()
+  run filter.clear()
+  filter.push(ancestor_filter.key(NameKind.Element, b"button"))
+  filter.push(ancestor_filter.key(NameKind.Class, b"hot"))
+  let mut tree = FilteredTree { filter: move filter }
+  let mut context = MatchContext.make(0, NO_ELEMENT)
+  run resolver.resolve(BufferView.of(&buffers), &tree, 1, &[], &mut context)
+  run Testing.expect(resolver.matches().length == 1 && resolver.matches()[0].rule == 2, "matching arm of a multi-arm rule still matches")
+  run Testing.expect(context.reads == 0, "ancestor-filtered rules and arms do not taint context.reads")
+  run Testing.expect(resolver.filtered == 2, "both single-arm and multi-arm rules without matching ancestors are filtered out")
+  tree.filter.push(ancestor_filter.key(NameKind.Class, b"seats-row"))
+  let mut second = MatchContext.make(0, NO_ELEMENT)
+  run resolver.resolve(BufferView.of(&buffers), &tree, 1, &[], &mut second)
+  run Testing.expect(resolver.filtered == 3, "a multi-arm rule runs once an arm's ancestor is present")
+}
+
+test effect fn ancestorFilteredRulesDoNotPolluteReads() -> ()
+  ! AssertionError<'static> | ResolverError | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  run ancestorFilteredReads() |> Effect.provideMut<Allocator>(&mut allocator)
 }

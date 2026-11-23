@@ -59,8 +59,6 @@ pub struct Resolver {
   scratchMatched: List<Match>,
   dependencies: List<List<Dependency>>,
   states: List<u32>,
-  /// By rule: what a match can read, for the element and for its ancestors.
-  ruleReads: List<u32>,
   selectedStates: u32,
   starting: List<bool>,
   /// How many of `starting` are true: hosts ask every style pass.
@@ -88,7 +86,6 @@ impl Resolver {
       scratchMatched: List<Match>.make(),
       dependencies: List<List<Dependency>>.make(),
       states: List<u32>.make(),
-      ruleReads: List<u32>.make(),
       selectedStates: 0,
       starting: List<bool>.make(),
       startingCount: 0,
@@ -112,7 +109,6 @@ impl Resolver {
       at = at + 1
     }
     run self.states.reserve(1)
-    run self.ruleReads.reserve(1)
     run self.starting.reserve(1)
     run self.dependencies.reserve(1)
     run self.entries.reserve(1)
@@ -120,7 +116,6 @@ impl Resolver {
     run self.entries.append(move rule)
     run self.dependencies.append(move dependencies)
     run self.states.append(states)
-    run self.ruleReads.append(u32.bitOr(reads, u32.shiftLeft(reads, selectors.READS_ABOVE)))
     run self.starting.append(false)
   }
 
@@ -195,19 +190,26 @@ impl Resolver {
         if rule.buffer >= buffers.length() || rule.declarations.start > rule.declarations.end {
           fail ResolverError.InvalidRule
         }
-        // A missing ancestor name rules the selector out; what a full attempt would have read
-        // is still reported, so sharing and invalidation see the same dependencies.
+        // A missing ancestor name rules the selector out without reading siblings, indexes or
+        // descendants: any element with equal ancestors fails the same filter, and changing a
+        // child list cannot add the missing ancestor.
         if let Option<&AncestorFilter>.Some { value: held } = ancestors {
-          if !self.index.ancestorKeys(selected[i]).mayMatch(held) {
+          if !self.index.mayMatchAncestors(selected[i], held) {
             self.filtered = self.filtered + 1
-            context.reads = u32.bitOr(context.reads, self.ruleReads.asSlice()[selected[i]])
             i = i + 1
             continue
           }
         }
-        let specificity = run selectors.matchElement(
-          &rule.selectors, &buffers.one(rule.buffer)[0], tree, node, &mut context.*,
-        )
+        let armKeys = self.index.armAncestorKeys(selected[i])
+        let specificity = if armKeys.length != 0 {
+          run selectors.matchElementFiltered(
+            &rule.selectors, &buffers.one(rule.buffer)[0], tree, node, &mut context.*, ancestors, armKeys,
+          )
+        } else {
+          run selectors.matchElement(
+            &rule.selectors, &buffers.one(rule.buffer)[0], tree, node, &mut context.*,
+          )
+        }
         if let Option<Specificity>.Some { value } = specificity {
           if run filter.accepts(selected[i], &mut context) {
             run matched.append(Match { sheet: rule.sheet, rule: rule.index, specificity: value })

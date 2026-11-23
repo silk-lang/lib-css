@@ -11,7 +11,7 @@ import tokens { Span, TokenRange, TokenBuffer, Kind, Limits, CssError, CssErrorK
 import tokens
 import element
 import element { ElementTree, MatchContext, PseudoTarget, NO_ELEMENT }
-import ancestor_filter { AncestorKeys, NameKind }
+import ancestor_filter { AncestorFilter, AncestorKeys, NameKind }
 import ancestor_filter
 import silk.collections.list { List }
 import silk.collections.slice { Slice }
@@ -435,6 +435,28 @@ impl SelectorList {
     if self.validationOnly || self.head == NONE || self.arms.asSlice()[self.head].next != NONE { return keys }
     self.armKeys(buffer, self.head, false, &mut keys, 0)
     return keys
+  }
+
+  /// Whether the selector list has more than one top-level arm.
+  pub fn isMultiArm(self: &Self) -> bool {
+    return !self.validationOnly && self.head != NONE && self.arms.asSlice()[self.head].next != NONE
+  }
+
+  /// Appends one `AncestorKeys` per top-level arm of this list, in arm order. Returns whether at
+  /// least one arm had a required ancestor key.
+  pub effect fn collectArmAncestors(self: &Self, buffer: &TokenBuffer, out: &mut List<AncestorKeys>) -> bool
+    ! OutOfMemoryError ? &mut Allocator {
+    if self.validationOnly || self.head == NONE { return false }
+    let mut any = false
+    let mut arm = self.head
+    while arm != NONE {
+      let mut keys = AncestorKeys.none()
+      self.armKeys(buffer, arm, false, &mut keys, 0)
+      if keys.count != 0 { any = true }
+      run out.append(keys)
+      arm = self.arms.asSlice()[arm].next
+    }
+    return any
   }
 
   /// Adds the ancestor names of arm `arm`; with `above`, its subject is itself an ancestor.
@@ -2327,6 +2349,49 @@ pub effect fn matchElement<T: ElementTree>(
       result = Option<Specificity>.Some { value: best }
     }
     arm = entry.next
+  }
+  context.subject = outer
+  return result
+}
+
+/// Like [`matchElement`], skipping any arm whose precomputed `armKeys` the ancestor filter rules
+/// out before matching its subject or combinators.
+@inlineAlways
+pub effect fn matchElementFiltered<T: ElementTree>(
+  selectors: &SelectorList,
+  buffer: &TokenBuffer,
+  tree: &T,
+  node: usize,
+  context: &mut MatchContext,
+  ancestors: Option<&AncestorFilter>,
+  armKeys: &[AncestorKeys],
+) -> Option<Specificity>
+  ! CssError {
+  let mut result = Option<Specificity>.None
+  let outer = context.subject
+  context.subject = node
+  let mut arm = selectors.head
+  let mut armIdx: usize = 0
+  while arm != NONE {
+    run spend(&mut context.*)
+    let entry = &selectors.arms.asSlice()[arm]
+    if let Option<&AncestorFilter>.Some { value: held } = ancestors {
+      if armIdx < armKeys.length && !armKeys[armIdx].mayMatch(held) {
+        arm = entry.next
+        armIdx = armIdx + 1
+        continue
+      }
+    }
+    if subjectTarget(selectors, entry.tail) == context.pseudo
+      && run matchComplex(selectors, buffer, tree, entry.tail, node, NONE, &mut context.*, 0) {
+      let best = match &result {
+        Option<Specificity>.Some { value } => maximum(value, entry.specificity)
+        _ => entry.specificity
+      }
+      result = Option<Specificity>.Some { value: best }
+    }
+    arm = entry.next
+    armIdx = armIdx + 1
   }
   context.subject = outer
   return result
