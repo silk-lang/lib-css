@@ -572,3 +572,80 @@ test effect fn normalFlowContainerWithAbsoluteChildReusesAndRestoresOverflow() -
   run near(ov.width, 100.0)
   run Testing.expect(ov.x == expected.x && ov.y == expected.y && ov.width == expected.width && ov.height == expected.height, "restored overflow matches fresh layout")
 }
+
+test effect fn fixedShellWithNestedAbsoluteReusesWithoutCyclesAndRestoresOverflow() -> () ! InvalidNode | InvalidBox | TextError | FragmentationError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  // App shell is position: fixed (like ui-sdk-test / t3code-silk), so flowEnd == 1
+  // and all app content lives at fragment indices >= flowEnd.
+  let mut shellStyle = Style.make()
+  shellStyle.position = Position.Fixed
+  shellStyle.inset.left = Dimension.px(0.0)
+  shellStyle.inset.top = Dimension.px(0.0)
+  shellStyle.width = SizeValue.px(400.0)
+  shellStyle.height = SizeValue.px(300.0)
+  let shell = run tree.append(root, shellStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+
+  let mut tabsStyle = Style.make()
+  tabsStyle.position = Position.Relative
+  tabsStyle.width = SizeValue.px(200.0)
+  tabsStyle.height = SizeValue.px(40.0)
+  let tabs = run tree.append(shell, tabsStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+
+  let mut tabStyle = Style.make()
+  tabStyle.width = SizeValue.px(60.0)
+  tabStyle.height = SizeValue.px(20.0)
+  drop run tree.append(tabs, tabStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  drop run tree.append(tabs, tabStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+
+  let mut indicatorStyle = Style.make()
+  indicatorStyle.position = Position.Absolute
+  indicatorStyle.inset.left = Dimension.px(260.0)
+  indicatorStyle.inset.top = Dimension.px(0.0)
+  indicatorStyle.width = SizeValue.px(30.0)
+  indicatorStyle.height = SizeValue.px(4.0)
+  let indicator = run tree.append(tabs, indicatorStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+
+  let mut siblingStyle = Style.make()
+  siblingStyle.width = SizeValue.px(100.0)
+  siblingStyle.height = SizeValue.px(50.0)
+  let sibling = run tree.append(shell, siblingStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+
+  let mut output = LayoutTree.make()
+  let mut measure = EmptyMeasure {}
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(400.0, 300.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let tabsBox = match run output.firstBox(tabs) { Option<BoxId>.Some { value } => value Option<BoxId>.None => BoxId { index: 0 } }
+  run near((run output.getBox(tabsBox)).scrollableOverflow.width, 290.0)
+
+  // Frame 2: edit sibling inside fixed shell -> tabs and indicator are reused in place.
+  // Verify no sibling cycles form in fragments[..].firstChild/nextSibling!
+  siblingStyle.height = SizeValue.px(80.0)
+  run tree.setStyle(sibling, siblingStyle)
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(400.0, 300.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let frags = output.fragments.values.asSlice()
+  let mut i: usize = 0
+  while i < frags.length {
+    let mut c = frags[i].firstChild
+    let mut steps: usize = 0
+    while c != NO_NODE {
+      steps = steps + 1
+      run Testing.expect(steps <= frags.length, "fragment child list must not cycle")
+      run Testing.expect(frags[c].nextSibling != c, "fragment nextSibling must not self-cycle")
+      c = frags[c].nextSibling
+    }
+    i = i + 1
+  }
+  run near((run output.getBox(tabsBox)).scrollableOverflow.width, 290.0)
+
+  // Frame 3: move indicator back inside tabs -> overflow must shrink to 200px matching fresh layout.
+  indicatorStyle.inset.left = Dimension.px(10.0)
+  run tree.setStyle(indicator, indicatorStyle)
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(400.0, 300.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut measure, OptionalSize.definite(400.0, 300.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let ov = (run output.getBox(tabsBox)).scrollableOverflow
+  let expected = (run fresh.getBox(tabsBox)).scrollableOverflow
+  run near(ov.width, 200.0)
+  run Testing.expect(ov.x == expected.x && ov.y == expected.y && ov.width == expected.width && ov.height == expected.height, "nested absolute inside fixed shell restores overflow cleanly")
+}

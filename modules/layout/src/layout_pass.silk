@@ -643,14 +643,14 @@ impl<'a, 'source> LayoutPass<'a, 'source> {
   // Selection only adds bars within a compute, so convergence is bounded by
   // two additions per generated box, not an arbitrary retry count.
   pub effect fn selectScrollbars<S: LayoutSource>(self: &mut Self, nodes: &BoxTree<'_, S>) ! OutOfMemoryError ? &mut Allocator {
-    if !self.hasAutoScrollbars { return }
+    let listed = self.facts.scrollersFor == nodes.boxes.length()
+    if !self.hasAutoScrollbars && (!listed || self.facts.scrollers.length() == 0) { return }
     if self.frame != NO_NODE {
       run self.selectFrameScrollbars(nodes)
       return
     }
     // Only a box whose overflow is auto on an axis can gain a scrollbar: the
     // facts list those, when they were made for these boxes.
-    let listed = self.facts.scrollersFor == nodes.boxes.length()
     let mut count = nodes.boxes.length()
     if listed { count = self.facts.scrollers.length() }
     let mut at: usize = 0

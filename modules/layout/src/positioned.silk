@@ -1578,6 +1578,7 @@ effect fn previewPositionedWidows<'pass, 'source, M: Measure + TextMeasure, S: L
     output.frame = frame
     let parent = run containingInstance(nodes, &mut output, &mut measurer, cb, frame)
     output.fragmentParent = parent
+    output.fragments.markPositionedRoot()
     let checkpoint = output.checkpoint()
     let mut relaxation = BreakRelaxation.Strict
     let mut deferred = false
@@ -1639,6 +1640,7 @@ effect fn fragmentedAbsolute<'pass, 'source, M: Measure + TextMeasure, S: Layout
     let mut parent = containingExisting(nodes, &output, cb, frame)
     if !attached { parent = run containingInstance(nodes, &mut output, &mut measurer, cb, frame) }
     output.fragmentParent = parent
+    output.fragments.markPositionedRoot()
     let mut point = Point { x: location.x - shift.x, y: location.y - shift.y }
     let mut input = original.*
     if !unfragmented {
@@ -1856,6 +1858,7 @@ effect fn propagatePosOverflow<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: 
     let mut curOverflow = frag.scrollableOverflow
     if curBox != NO_NODE && frag.kind == FragmentKind.Box {
       if output.frame == NO_NODE || curSingle { output.boxes[curBox].scrollableOverflow = curOverflow }
+      if viewportFixed(nodes, curBox) { break }
       curOverflow = propagatedOverflow(nodes.style(curBox), curOverflow, frag.paddingRect)
     }
     let pos = Point { x: frag.location.x + frag.visualOffset.x, y: frag.location.y + frag.visualOffset.y }
@@ -1930,9 +1933,8 @@ fn previousMark(marks: &[u64], index: usize) -> usize {
 // Adds the border boxes of a kept run's members (see keepRun) to their
 // parent's overflow, last to first, as treeOverflow adds each absolute box
 // whose own overflow stays inside its border box. Returns true when `parentId`'s
-// scrollableOverflow actually grew (and saves its prior value when `saveFlow` and
-// `parentId < flowEnd`).
-effect fn runOverflow<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, range: &SettledRange, plain: bool, saveFlow: bool, flowEnd: usize) -> bool ! OutOfMemoryError ? &mut Allocator {
+// scrollableOverflow actually grew (and saves its prior value when `saveFlow`).
+effect fn runOverflow<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut LayoutPass<'_, '_>, range: &SettledRange, plain: bool, saveFlow: bool) -> bool ! OutOfMemoryError ? &mut Allocator {
   let parentId = output.fragments.values.asSlice()[range.start].parent
   let cb = output.fragments.values.asSlice()[parentId].box
   let mut normal = output.fragments.values.asSlice()[parentId].contentRect
@@ -1952,7 +1954,7 @@ effect fn runOverflow<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut Layo
     if member == range.start { break }
     member = fragment.previousSibling
   }
-  if grown && saveFlow && parentId < flowEnd && !sameRectExact(holds, oldHolds) {
+  if grown && saveFlow && parentId != NO_NODE && !sameRectExact(holds, oldHolds) {
     run output.fragments.savePosOverflow(parentId, oldHolds)
   }
   let values = output.fragments.values.asMutSlice()
@@ -2051,192 +2053,249 @@ effect fn treeOverflow<S: LayoutSource>(nodes: &BoxTree<'_, S>, output: &mut Lay
   if output.frame != NO_NODE { viewportLimits = unlimited }
   let total = output.fragments.values.length()
   let flowEnd = output.fragments.flowEnd
-  // Split normal-flow [0, flowEnd) and positioned [flowEnd, total) passes when
-  // unfragmented and positioned fragments exist so normal-flow fragments settle
-  // their pure normal-flow scrollableOverflow first, and positioned overflow
-  // growth is saved before mutating < flowEnd fragments (restored by detachAdopted).
+  // Split internal subtree overflow (Pass 1) from adopted positioned root
+  // propagation (Pass 2) when unfragmented and positioned fragments exist.
+  // Every fragment in [0, total) settles its pure internal scrollableOverflow
+  // first, then positioned roots propagate to their containing blocks (whether
+  // < flowEnd or nested inside an outer positioned subtree >= flowEnd) after
+  // saving pre-adoption overflow for detachAdopted.
   let split = output.frame == NO_NODE && flowEnd < total
-  let mut phase: usize = 0
-  let phases: usize = if split { 2 } else { 1 }
-  while phase < phases {
-    let posPhase = split && phase == 1
-    let low: usize = if posPhase { flowEnd } else { 0 }
-    let mut index: usize = if split && !posPhase { flowEnd } else { total }
-    let phasePlain = plain && !posPhase
-    let mut settled = output.fragments.settled.length()
-    if output.frame != NO_NODE || phasePlain { settled = 0 }
-    if split && !posPhase {
-      while settled > 0 && output.fragments.settled.get(settled - 1).end > flowEnd { settled = settled - 1 }
-    }
-    let mut addingRuns: usize = 0
-    let mut runCursor = output.fragments.settled.length()
-    if phasePlain && !split { addingRuns = output.overflowRuns }
-    let mut limitsParent = NO_NODE
-    let mut parentLimits = unlimited
-    let mut parentCovers = false
-    while index > low {
-      if phasePlain { index = previousMark(output.overflowMarks.asSlice(), index) } else { index = index - 1 }
-      if addingRuns > 0 {
-        while runCursor > 0 && output.fragments.settled.get(runCursor - 1).start > index { runCursor = runCursor - 1 }
-        if runCursor > 0 {
-          let range = output.fragments.settled.get(runCursor - 1)
-          if range.adds && range.last == index {
-            drop run runOverflow(nodes, &mut output, &range, true, false, flowEnd)
-            addingRuns = addingRuns - 1
-            index = range.start
-            continue
+  let mut posRoots = List<usize>.make()
+  let mut posRuns = List<SettledRange>.make()
+  let mut index = total
+  let mut settled = output.fragments.settled.length()
+  if output.frame != NO_NODE || plain { settled = 0 }
+  let mut addingRuns: usize = 0
+  let mut runCursor = output.fragments.settled.length()
+  if plain { addingRuns = output.overflowRuns }
+  let mut limitsParent = NO_NODE
+  let mut parentLimits = unlimited
+  let mut parentCovers = false
+  while index > 0 {
+    if plain { index = previousMark(output.overflowMarks.asSlice(), index) } else { index = index - 1 }
+    if addingRuns > 0 {
+      while runCursor > 0 && output.fragments.settled.get(runCursor - 1).start > index { runCursor = runCursor - 1 }
+      if runCursor > 0 {
+        let range = output.fragments.settled.get(runCursor - 1)
+        if range.adds && range.last == index {
+          if split && range.start >= flowEnd {
+            run posRuns.append(range)
+          } else {
+            drop run runOverflow(nodes, &mut output, &range, true, false)
           }
-        }
-      }
-      if settled > 0 && index + 1 == output.fragments.settled.get(settled - 1).end {
-        let range = output.fragments.settled.get(settled - 1)
-        settled = settled - 1
-        index = range.start
-        if range.siblings {
-          if range.adds {
-            let grew = run runOverflow(nodes, &mut output, &range, false, posPhase, flowEnd)
-            if posPhase && grew {
-              let parentId = output.fragments.values.asSlice()[range.start].parent
-              if parentId < flowEnd { run propagatePosOverflow(nodes, &mut output, parentId, viewportLimits, &mut result) }
-            }
-          }
+          addingRuns = addingRuns - 1
+          index = range.start
           continue
         }
-        let values = output.fragments.values.asMutSlice()
-        values[index].scrollableOverflow = range.overflow
       }
-      // A text fragment adds what its runs or the line boxes it carries add.
-      if output.fragments.values.asSlice()[index].kind == FragmentKind.Text {
-        textOverflow(nodes, &mut output, index)
-        continue
-      }
-      let fragment = &output.fragments.values.asSlice()[index]
-      // Nonpainting scopes contribute no own rectangle, but CB-owned absolute
-      // descendants still propagate their overflow through that physical scope.
-      let id = fragment.box
-      let kind = fragment.kind
-      let nonpainting = fragment.nonpainting
-      let parentId = fragment.parent
-      let single = fragment.previousForBox == NO_NODE && fragment.nextForBox == NO_NODE
-      let position = Point { x: fragment.location.x + fragment.visualOffset.x, y: fragment.location.y + fragment.visualOffset.y }
-      let border = Rect { x: position.x, y: position.y, width: fragment.size.width, height: fragment.size.height }
-      let bounds = fragment.layoutBounds
-      let paddingRect = fragment.paddingRect
-      let mut positioned = false
-      let mut fixed = false
-      let mut overflow = fragment.scrollableOverflow
-      let inside = overflow.x >= 0.0 && overflow.y >= 0.0 && overflow.x + overflow.width <= fragment.size.width && overflow.y + overflow.height <= fragment.size.height
-      // The in-flow fast path below, without reading the style: a box whose
-      // overflow, its descendants' included, stays inside its border box.
-      if marked && id != NO_NODE && kind == FragmentKind.Box && !nonpainting && parentId == limitsParent && parentCovers
-        && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0 && u64.bitAnd(output.outOfFlowBoxes.get(id / 64), u64.shiftLeft(1, usize.toU64(id % 64))) == 0
-        && inside {
-        if output.frame == NO_NODE || single { output.boxes[id].scrollableOverflow = overflow }
-        continue
-      }
-      // A line, a run of text or an inline box whose rectangles lie inside
-      // what its parent's overflow holds by now adds nothing to it either.
-      if kind != FragmentKind.Box && !nonpainting && parentId != NO_NODE && inside && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0 {
-        let holds = output.fragments.values.asSlice()[parentId].scrollableOverflow
-        let right = holds.x + holds.width
-        let bottom = holds.y + holds.height
-        if border.x >= holds.x && border.y >= holds.y && border.x + border.width <= right && border.y + border.height <= bottom
-          && position.x + bounds.x >= holds.x && position.y + bounds.y >= holds.y && position.x + bounds.x + bounds.width <= right && position.y + bounds.y + bounds.height <= bottom { continue }
-      }
-      if id != NO_NODE {
-        let style = nodes.style(id)
-        positioned = absolutelyPositioned(style)
-        fixed = viewportFixed(nodes, id) && kind == FragmentKind.Box
-        if kind == FragmentKind.Box {
-          // A single physical fragment has unambiguous scalar used metrics.
-          // Multi-fragment boxes keep their per-fragment overflow authoritative.
-          if output.frame == NO_NODE || single {
-            output.boxes[id].scrollableOverflow = overflow
-          }
-          // An in-flow box whose overflow stays inside its border box adds
-          // nothing to a parent that already covers its border box (see
-          // parentCovers below, set by an earlier sibling).
-          if !positioned && !nonpainting && parentId == limitsParent && parentCovers
-            && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0
-            && inside {
-            continue
-          }
-          // An absolute box's overflow inside its border box adds nothing
-          // past that border box (see below).
-          if !positioned || !inside || nonpainting { overflow = propagatedOverflow(style, overflow, paddingRect) }
-          // An absolute box inside what its parent's overflow holds by now
-          // adds nothing to it. Leaving the union out keeps the parent's
-          // edges from re-rounding, as a run kept at once leaves them.
-          if positioned && !fixed && inside && !nonpainting && parentId != NO_NODE {
-            let holds = output.fragments.values.asSlice()[parentId].scrollableOverflow
-            if border.x >= holds.x && border.y >= holds.y && border.x + border.width <= holds.x + holds.width && border.y + border.height <= holds.y + holds.height { continue }
+    }
+    if settled > 0 && index + 1 == output.fragments.settled.get(settled - 1).end {
+      let range = output.fragments.settled.get(settled - 1)
+      settled = settled - 1
+      index = range.start
+      if range.siblings {
+        if range.adds {
+          if split && range.start >= flowEnd {
+            run posRuns.append(range)
+          } else {
+            drop run runOverflow(nodes, &mut output, &range, false, false)
           }
         }
+        continue
       }
-      if !fixed {
-        overflow = overflow.translated(position)
-        if parentId == NO_NODE {
-          if !nonpainting { result = addOverflow(result, border, viewportLimits) }
-          result = addOverflow(result, overflow, viewportLimits)
-        } else {
-          let parent = &output.fragments.values.asSlice()[parentId]
-          let cb = parent.box
-          let parentBox = parent.kind == FragmentKind.Box
-          let parentOld = parent.scrollableOverflow
-          let mut combined = parentOld
-          let mut limits = unlimited
-          if cb != NO_NODE && parentBox {
-            // Siblings share their parent's limits; nothing this loop writes changes them.
-            if parentId != limitsParent {
-              let mut normal = parent.contentRect
-              if output.frame == NO_NODE { normal = output.boxes[cb].normalFlowOverflow() }
-              let parentStyle = nodes.style(cb)
-              parentLimits = reachableLimits(parentStyle, parent.paddingRect, normal, cb == 0)
-              // Unscrollable overflow, visible or clipped, starts as the padding box
-              // and every child's margin box (see overflowGeometry).
-              parentCovers = output.frame == NO_NODE && !scrollable(usedOverflowForAxis(parentStyle, true)) && !scrollable(usedOverflowForAxis(parentStyle, false))
-              limitsParent = parentId
-            }
-            limits = parentLimits
-          }
-          let covered = cb != NO_NODE && parentBox && parentCovers && kind == FragmentKind.Box && id != NO_NODE && !positioned && !nonpainting && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0
-          if !nonpainting && !covered { combined = addOverflow(combined, border, limits) }
-          if !positioned && !nonpainting && !covered {
-            let mut margin = bounds.translated(position)
-            if output.frame == NO_NODE && kind == FragmentKind.Box && parentBox && id != NO_NODE && cb != NO_NODE {
-              let layout = &output.boxes[id]
-              if isFlex(nodes.style(cb)) {
-                margin = Rect { x: position.x - layout.usedMargin.left, y: position.y - layout.usedMargin.top, width: max(0.0, layout.size.width + layout.usedMargin.horizontal()), height: max(0.0, layout.size.height + layout.usedMargin.vertical()) }
-              } else {
-                margin = flowMarginRect(nodes, cb, id, layout, &output.boxes[cb]).translated(Point { x: position.x - layout.location.x, y: position.y - layout.location.y })
-              }
-            } else if output.frame != NO_NODE && kind == FragmentKind.Box && parentBox
-              && id != NO_NODE && cb != NO_NODE && !isFlex(nodes.style(cb)) {
-              margin = fragmentFlowMargin(nodes, &output, parentId, index).translated(position)
-            }
-            combined = addOverflow(combined, margin, limits)
-          }
-          let mut grown = combined
-          if !inside || (!covered && (!positioned || nonpainting)) { grown = addOverflow(combined, overflow, limits) }
-          if posPhase && parentId < flowEnd {
-            if !sameRectExact(grown, parentOld) {
-              run output.fragments.savePosOverflow(parentId, parentOld)
-              let fragments = output.fragments.values.asMutSlice()
-              fragments[parentId].scrollableOverflow = grown
-              run propagatePosOverflow(nodes, &mut output, parentId, viewportLimits, &mut result)
-            }
-          } else {
-            let fragments = output.fragments.values.asMutSlice()
-            fragments[parentId].scrollableOverflow = grown
-            if phasePlain && (grown.x < 0.0 || grown.y < 0.0 || grown.x + grown.width > fragments[parentId].size.width || grown.y + grown.height > fragments[parentId].size.height) {
-              let marks = output.overflowMarks.asMutSlice()
-              marks[parentId / 64] = u64.bitOr(marks[parentId / 64], u64.shiftLeft(1, usize.toU64(parentId % 64)))
-            }
-          }
+      let values = output.fragments.values.asMutSlice()
+      values[index].scrollableOverflow = range.overflow
+    }
+    // A text fragment adds what its runs or the line boxes it carries add.
+    if output.fragments.values.asSlice()[index].kind == FragmentKind.Text {
+      textOverflow(nodes, &mut output, index)
+      continue
+    }
+    let fragment = &output.fragments.values.asSlice()[index]
+    // Nonpainting scopes contribute no own rectangle, but CB-owned absolute
+    // descendants still propagate their overflow through that physical scope.
+    let id = fragment.box
+    let kind = fragment.kind
+    let nonpainting = fragment.nonpainting
+    let parentId = fragment.parent
+    let single = fragment.previousForBox == NO_NODE && fragment.nextForBox == NO_NODE
+    let position = Point { x: fragment.location.x + fragment.visualOffset.x, y: fragment.location.y + fragment.visualOffset.y }
+    let border = Rect { x: position.x, y: position.y, width: fragment.size.width, height: fragment.size.height }
+    let bounds = fragment.layoutBounds
+    let paddingRect = fragment.paddingRect
+    let mut positioned = false
+    let mut fixed = false
+    let mut overflow = fragment.scrollableOverflow
+    let inside = overflow.x >= 0.0 && overflow.y >= 0.0 && overflow.x + overflow.width <= fragment.size.width && overflow.y + overflow.height <= fragment.size.height
+    // The in-flow fast path below, without reading the style: a box whose
+    // overflow, its descendants' included, stays inside its border box.
+    if marked && id != NO_NODE && kind == FragmentKind.Box && !nonpainting && parentId == limitsParent && parentCovers
+      && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0 && u64.bitAnd(output.outOfFlowBoxes.get(id / 64), u64.shiftLeft(1, usize.toU64(id % 64))) == 0
+      && inside {
+      if output.frame == NO_NODE || single { output.boxes[id].scrollableOverflow = overflow }
+      continue
+    }
+    // A line, a run of text or an inline box whose rectangles lie inside
+    // what its parent's overflow holds by now adds nothing to it either.
+    if kind != FragmentKind.Box && !nonpainting && parentId != NO_NODE && inside && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0 {
+      let holds = output.fragments.values.asSlice()[parentId].scrollableOverflow
+      let right = holds.x + holds.width
+      let bottom = holds.y + holds.height
+      if border.x >= holds.x && border.y >= holds.y && border.x + border.width <= right && border.y + border.height <= bottom
+        && position.x + bounds.x >= holds.x && position.y + bounds.y >= holds.y && position.x + bounds.x + bounds.width <= right && position.y + bounds.y + bounds.height <= bottom { continue }
+    }
+    if id != NO_NODE {
+      let style = nodes.style(id)
+      positioned = absolutelyPositioned(style)
+      fixed = viewportFixed(nodes, id) && kind == FragmentKind.Box
+      if kind == FragmentKind.Box {
+        // A single physical fragment has unambiguous scalar used metrics.
+        // Multi-fragment boxes keep their per-fragment overflow authoritative.
+        if output.frame == NO_NODE || single {
+          output.boxes[id].scrollableOverflow = overflow
+        }
+        // Defer adopted positioned roots to Pass 2 so every ancestor subtree
+        // (normal-flow and outer positioned) settles its pure internal overflow first.
+        if split && positioned && index >= flowEnd {
+          run posRoots.append(index)
+          continue
+        }
+        // An in-flow box whose overflow stays inside its border box adds
+        // nothing to a parent that already covers its border box (see
+        // parentCovers below, set by an earlier sibling).
+        if !positioned && !nonpainting && parentId == limitsParent && parentCovers
+          && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0
+          && inside {
+          continue
+        }
+        // An absolute box's overflow inside its border box adds nothing
+        // past that border box (see below).
+        if !positioned || !inside || nonpainting { overflow = propagatedOverflow(style, overflow, paddingRect) }
+        // An absolute box inside what its parent's overflow holds by now
+        // adds nothing to it. Leaving the union out keeps the parent's
+        // edges from re-rounding, as a run kept at once leaves them.
+        if positioned && !fixed && inside && !nonpainting && parentId != NO_NODE {
+          let holds = output.fragments.values.asSlice()[parentId].scrollableOverflow
+          if border.x >= holds.x && border.y >= holds.y && border.x + border.width <= holds.x + holds.width && border.y + border.height <= holds.y + holds.height { continue }
         }
       }
     }
-    phase = phase + 1
+    if !fixed {
+      overflow = overflow.translated(position)
+      if parentId == NO_NODE {
+        if !nonpainting { result = addOverflow(result, border, viewportLimits) }
+        result = addOverflow(result, overflow, viewportLimits)
+      } else {
+        let parent = &output.fragments.values.asSlice()[parentId]
+        let cb = parent.box
+        let parentBox = parent.kind == FragmentKind.Box
+        let parentOld = parent.scrollableOverflow
+        let mut combined = parentOld
+        let mut limits = unlimited
+        if cb != NO_NODE && parentBox {
+          // Siblings share their parent's limits; nothing this loop writes changes them.
+          if parentId != limitsParent {
+            let mut normal = parent.contentRect
+            if output.frame == NO_NODE { normal = output.boxes[cb].normalFlowOverflow() }
+            let parentStyle = nodes.style(cb)
+            parentLimits = reachableLimits(parentStyle, parent.paddingRect, normal, cb == 0)
+            // Unscrollable overflow, visible or clipped, starts as the padding box
+            // and every child's margin box (see overflowGeometry).
+            parentCovers = output.frame == NO_NODE && !scrollable(usedOverflowForAxis(parentStyle, true)) && !scrollable(usedOverflowForAxis(parentStyle, false))
+            limitsParent = parentId
+          }
+          limits = parentLimits
+        }
+        let covered = cb != NO_NODE && parentBox && parentCovers && kind == FragmentKind.Box && id != NO_NODE && !positioned && !nonpainting && fragment.visualOffset.x == 0.0 && fragment.visualOffset.y == 0.0
+        if !nonpainting && !covered { combined = addOverflow(combined, border, limits) }
+        if !positioned && !nonpainting && !covered {
+          let mut margin = bounds.translated(position)
+          if output.frame == NO_NODE && kind == FragmentKind.Box && parentBox && id != NO_NODE && cb != NO_NODE {
+            let layout = &output.boxes[id]
+            if isFlex(nodes.style(cb)) {
+              margin = Rect { x: position.x - layout.usedMargin.left, y: position.y - layout.usedMargin.top, width: max(0.0, layout.size.width + layout.usedMargin.horizontal()), height: max(0.0, layout.size.height + layout.usedMargin.vertical()) }
+            } else {
+              margin = flowMarginRect(nodes, cb, id, layout, &output.boxes[cb]).translated(Point { x: position.x - layout.location.x, y: position.y - layout.location.y })
+            }
+          } else if output.frame != NO_NODE && kind == FragmentKind.Box && parentBox
+            && id != NO_NODE && cb != NO_NODE && !isFlex(nodes.style(cb)) {
+            margin = fragmentFlowMargin(nodes, &output, parentId, index).translated(position)
+          }
+          combined = addOverflow(combined, margin, limits)
+        }
+        let mut grown = combined
+        if !inside || (!covered && (!positioned || nonpainting)) { grown = addOverflow(combined, overflow, limits) }
+        let fragments = output.fragments.values.asMutSlice()
+        fragments[parentId].scrollableOverflow = grown
+        if plain && (grown.x < 0.0 || grown.y < 0.0 || grown.x + grown.width > fragments[parentId].size.width || grown.y + grown.height > fragments[parentId].size.height) {
+          let marks = output.overflowMarks.asMutSlice()
+          marks[parentId / 64] = u64.bitOr(marks[parentId / 64], u64.shiftLeft(1, usize.toU64(parentId % 64)))
+        }
+      }
+    }
+  }
+  // Pass 2: propagate deferred positioned roots and kept positioned runs in
+  // descending arena order (innermost nested positioned subtrees first).
+  if split {
+    let mut ri: usize = 0
+    let mut pi: usize = 0
+    while ri < posRoots.length() || pi < posRuns.length() {
+      let takeRun = pi < posRuns.length() && (ri >= posRoots.length() || posRuns.get(pi).start > posRoots.get(ri))
+      if takeRun {
+        let range = posRuns.get(pi)
+        pi = pi + 1
+        let grew = run runOverflow(nodes, &mut output, &range, false, true)
+        if grew {
+          let parentId = output.fragments.values.asSlice()[range.start].parent
+          if parentId != NO_NODE { run propagatePosOverflow(nodes, &mut output, parentId, viewportLimits, &mut result) }
+        }
+        continue
+      }
+      let at = posRoots.get(ri)
+      ri = ri + 1
+      let fragment = &output.fragments.values.asSlice()[at]
+      let id = fragment.box
+      let nonpainting = fragment.nonpainting
+      let parentId = fragment.parent
+      let position = Point { x: fragment.location.x + fragment.visualOffset.x, y: fragment.location.y + fragment.visualOffset.y }
+      let border = Rect { x: position.x, y: position.y, width: fragment.size.width, height: fragment.size.height }
+      let paddingRect = fragment.paddingRect
+      let mut overflow = fragment.scrollableOverflow
+      let inside = overflow.x >= 0.0 && overflow.y >= 0.0 && overflow.x + overflow.width <= fragment.size.width && overflow.y + overflow.height <= fragment.size.height
+      let style = nodes.style(id)
+      if viewportFixed(nodes, id) { continue }
+      if !inside || nonpainting { overflow = propagatedOverflow(style, overflow, paddingRect) }
+      if inside && !nonpainting && parentId != NO_NODE {
+        let holds = output.fragments.values.asSlice()[parentId].scrollableOverflow
+        if border.x >= holds.x && border.y >= holds.y && border.x + border.width <= holds.x + holds.width && border.y + border.height <= holds.y + holds.height { continue }
+      }
+      overflow = overflow.translated(position)
+      if parentId == NO_NODE {
+        if !nonpainting { result = addOverflow(result, border, viewportLimits) }
+        result = addOverflow(result, overflow, viewportLimits)
+      } else {
+        let parent = &output.fragments.values.asSlice()[parentId]
+        let cb = parent.box
+        let parentBox = parent.kind == FragmentKind.Box
+        let parentOld = parent.scrollableOverflow
+        let mut combined = parentOld
+        let mut limits = unlimited
+        if cb != NO_NODE && parentBox {
+          let mut normal = parent.contentRect
+          if output.frame == NO_NODE { normal = output.boxes[cb].normalFlowOverflow() }
+          limits = reachableLimits(nodes.style(cb), parent.paddingRect, normal, cb == 0)
+        }
+        if !nonpainting { combined = addOverflow(combined, border, limits) }
+        let mut grown = combined
+        if !inside || nonpainting { grown = addOverflow(combined, overflow, limits) }
+        if !sameRectExact(grown, parentOld) {
+          run output.fragments.savePosOverflow(parentId, parentOld)
+          let fragments = output.fragments.values.asMutSlice()
+          fragments[parentId].scrollableOverflow = grown
+          run propagatePosOverflow(nodes, &mut output, parentId, viewportLimits, &mut result)
+        }
+      }
+    }
   }
   return result
 }
@@ -2606,6 +2665,7 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
     while nextRun < known.length() && known.get(nextRun).firstVisit < at { nextRun = nextRun + 1 }
     if nextRun < known.length() && known.get(nextRun).firstVisit == at {
       let mut saved = known.get(nextRun)
+      output.fragments.markPositionedRoot()
       if run keepRun(nodes, &mut output, &mut saved, at, &mut anchored) {
         run builder.close(&mut runs)
         run runs.append(saved)
@@ -2617,6 +2677,7 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
     let style = nodes.style(id)
     if nodes.node(id).firstForSource && nodes.node(id).interruptionFirst() != NO_NODE {
       plainParents = false
+      output.fragments.markPositionedRoot()
       run interruptions(nodes, &mut output, id)
     }
     if nodes.node(id).firstChild() != NO_NODE && (scrollable(usedOverflowForAxis(style, true)) || scrollable(usedOverflowForAxis(style, false))) { plainParents = false }
@@ -2624,6 +2685,7 @@ pub effect fn positionTree<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
       if style.position == Position.Fixed { plainParents = false }
       let word = u64.bitOr(output.outOfFlowBoxes.get(id / 64), u64.shiftLeft(1, usize.toU64(id % 64)))
       output.outOfFlowBoxes.set(id / 64, word)
+      output.fragments.markPositionedRoot()
       if run keepAnchored(nodes, &mut output, id, &mut anchored) {
         run gatherRun(nodes, &output, &mut builder, &mut runs, id, at, &anchored)
       } else {

@@ -6,6 +6,7 @@ import silk.core.ownership { Copy }
 import silk.mem.pointer { Pointer }
 import silk.num.usize
 import silk.num.u32
+import silk.num.u64
 import geometry { Point, Size, Rect, Layout, ResolvedEdges, BaselineSet, sameSize, sameRect, sameEdges, sameBaselines, sameOverflow }
 import tree { NO_NODE }
 
@@ -313,9 +314,9 @@ const EDITS_TRACKED: usize = 4096
 // releaseSaved keeps saved lists shorter than this many slots for the next compute.
 const RELEASE_SAVED: usize = 1024
 
-// Normal-flow parent links overwritten when positioning attaches an out-of-flow
-// fragment after `flowEnd`, restored before the next compute reuses normal flow.
-pub struct AdoptedLink { pub parent: usize, pub firstChild: usize, pub lastChild: usize }
+// Parent links overwritten when positioning attaches an out-of-flow
+// fragment after its containing subtree ended, restored before the next compute reuses it.
+pub struct AdoptedLink { pub parent: usize, pub firstChild: usize, pub lastChild: usize, pub child: usize }
 impl Copy for AdoptedLink {}
 
 // Normal-flow scrollableOverflow overwritten when positioned overflow escapes
@@ -418,12 +419,12 @@ pub struct FragmentArena {
   // Whether world locations and text first/last flags await
   // resolveLocations (see deferLocations).
   stale: bool,
-  afterFlow: bool, pub flowEnd: usize, flowTexts: usize,
+  afterFlow: bool, pub flowEnd: usize, flowTexts: usize, posRoot: usize,
   // Kept fragments whose next-sibling link may still name the fragment that
   // followed them in the previous output (see keepRange, closeSiblings).
   openSiblings: List<usize>,
   adopted: List<usize>, previousAdopted: List<usize>,
-  adoptedLinks: List<AdoptedLink>, posOverflows: List<PosOverflowSave>,
+  adoptedLinks: List<AdoptedLink>, adoptedParents: List<u64>, posOverflows: List<PosOverflowSave>,
   // How many times this compute moved the previous output.
   shifts: usize,
   // Moves of the previous output refused because they would write over
@@ -497,11 +498,11 @@ impl FragmentArena {
       offsets: false,
       resolveAll: true, edited: List<usize>.make(), editedLow: usize.MAX, editedHigh: 0,
       stale: false,
-      afterFlow: false, flowEnd: 0, flowTexts: 0, openSiblings: List<usize>.make(), plain: true, resolved: 0, resolvedAll: false, resolvedMoved: 0, resolvedEdited: 0,
+      afterFlow: false, flowEnd: 0, flowTexts: 0, posRoot: 0, openSiblings: List<usize>.make(), plain: true, resolved: 0, resolvedAll: false, resolvedMoved: 0, resolvedEdited: 0,
       carried: List<Carry>.make(), carriedKnown: false, mapped: false, shiftLog: List<Shift>.make(), spliced: List<usize>.make(),
       copied: false, copiesStand: true,
       adopted: List<usize>.make(), previousAdopted: List<usize>.make(),
-      adoptedLinks: List<AdoptedLink>.make(), posOverflows: List<PosOverflowSave>.make(),
+      adoptedLinks: List<AdoptedLink>.make(), adoptedParents: List<u64>.make(), posOverflows: List<PosOverflowSave>.make(),
       shifts: 0, shiftsRefused: 0, refusedNow: false,
     }
   }
@@ -600,9 +601,11 @@ impl FragmentArena {
     self.editedLow = usize.MAX
     self.editedHigh = 0
     self.afterFlow = false
+    self.posRoot = 0
     self.adopted.clear()
     self.previousAdopted.clear()
     self.adoptedLinks.clear()
+    self.adoptedParents.clear()
     self.posOverflows.clear()
     self.mapped = true
     self.shiftLog.clear()
@@ -714,9 +717,16 @@ impl FragmentArena {
     self.afterFlow = true
     self.flowEnd = self.count
     self.flowTexts = self.textCount
+    self.posRoot = self.count
     if !self.inPlace || stands { return shift }
     run self.finishInPlace()
     return none
+  }
+  // Marks the start of a new positioned subtree so attachments to earlier
+  // subtrees (< posRoot) are recorded for detachAdopted while internal children
+  // (>= posRoot) are left untouched.
+  pub fn markPositionedRoot(self: &mut Self) {
+    self.posRoot = self.count
   }
   // Ends writing in place: later writes append, and the previous output
   // past the write position stays readable.
@@ -1025,7 +1035,7 @@ impl FragmentArena {
     let mut previousForBox = NO_NODE
     if parent != NO_NODE { previousSibling = self.values.asSlice()[parent].lastChild }
     if box != NO_NODE { previousForBox = self.lastByBox.get(box) }
-    if previousSibling != NO_NODE && !(self.afterFlow && previousSibling < self.flowEnd) { run self.editPosition(previousSibling) }
+    if previousSibling != NO_NODE && !(self.afterFlow && parent != NO_NODE && parent < self.posRoot && previousSibling < self.posRoot) { run self.editPosition(previousSibling) }
     if previousForBox != NO_NODE { run self.editPosition(previousForBox) }
     value.firstChild = NO_NODE
     value.lastChild = NO_NODE
@@ -1034,7 +1044,7 @@ impl FragmentArena {
     value.previousForBox = previousForBox
     value.nextForBox = NO_NODE
     // Link only after allocation succeeds, leaving the arena unchanged on failure.
-    run self.adopting(parent, previousSibling, previousForBox)
+    run self.adopting(parent, previousSibling, previousForBox, next)
     let index = run self.put(move value)
     return self.linkAppended(index, parent, box, previousSibling, previousForBox)
   }
@@ -1049,9 +1059,9 @@ impl FragmentArena {
     let mut previousForBox = NO_NODE
     if parent != NO_NODE { previousSibling = self.values.asSlice()[parent].lastChild }
     if box != NO_NODE { previousForBox = self.lastByBox.get(box) }
-    if previousSibling != NO_NODE && !(self.afterFlow && previousSibling < self.flowEnd) { run self.editPosition(previousSibling) }
+    if previousSibling != NO_NODE && !(self.afterFlow && parent != NO_NODE && parent < self.posRoot && previousSibling < self.posRoot) { run self.editPosition(previousSibling) }
     if previousForBox != NO_NODE { run self.editPosition(previousForBox) }
-    run self.adopting(parent, previousSibling, previousForBox)
+    run self.adopting(parent, previousSibling, previousForBox, next)
     let index = run self.putMade(box, source, kind)
     let value = &mut self.values.asMutSlice()[index]
     value.fragmentainer = fragmentainer
@@ -1077,34 +1087,47 @@ impl FragmentArena {
     }
     return FragmentId { index: index }
   }
-  // Records normal-flow parent links overwritten by positioned fragments so
-  // `detachAdopted` can cleanly restore normal flow before the next compute.
-  effect fn recordAdoptedParent(self: &mut Self, parent: usize, previousSibling: usize) ! OutOfMemoryError ? &mut Allocator {
-    if !self.afterFlow || parent == NO_NODE || parent >= self.flowEnd { return }
-    if previousSibling == NO_NODE || previousSibling < self.flowEnd {
-      let first = self.values.asSlice()[parent].firstChild
-      run self.adoptedLinks.append(AdoptedLink { parent: parent, firstChild: first, lastChild: previousSibling })
+  // Records earlier-subtree parent links overwritten by positioned fragments so
+  // `detachAdopted` can cleanly restore them before the next compute (both
+  // normal-flow parents < flowEnd and positioned-subtree parents < posRoot).
+  effect fn recordAdoptedParent(self: &mut Self, parent: usize, previousSibling: usize, child: usize) ! OutOfMemoryError ? &mut Allocator {
+    if !self.afterFlow || parent == NO_NODE || parent >= self.posRoot { return }
+    let word = parent / 64
+    let bit = u64.shiftLeft(1, usize.toU64(parent % 64))
+    if word < self.adoptedParents.length() && u64.bitAnd(self.adoptedParents.get(word), bit) != 0 { return }
+    let apLen = self.adoptedParents.length()
+    if word >= apLen {
+      run self.adoptedParents.appendRepeated(0, word + 1 - apLen)
     }
+    let oldBits = self.adoptedParents.get(word)
+    self.adoptedParents.set(word, u64.bitOr(oldBits, bit))
+    let first = self.values.asSlice()[parent].firstChild
+    run self.adoptedLinks.append(AdoptedLink { parent: parent, firstChild: first, lastChild: previousSibling, child: child })
   }
-  // Records normal-flow fragments that a fragment appended after the
-  // normal flow links to.
-  effect fn adopting(self: &mut Self, parent: usize, previousSibling: usize, previousForBox: usize) ! OutOfMemoryError ? &mut Allocator {
+  // Records fragments that a fragment appended after the normal flow links to.
+  effect fn adopting(self: &mut Self, parent: usize, previousSibling: usize, previousForBox: usize, child: usize) ! OutOfMemoryError ? &mut Allocator {
     if !self.afterFlow { return }
-    run self.recordAdoptedParent(parent, previousSibling)
+    run self.recordAdoptedParent(parent, previousSibling, child)
     if previousForBox != NO_NODE && previousForBox < self.flowEnd { run self.adopted.append(previousForBox) }
   }
-  // Saves a normal-flow fragment's scrollableOverflow before positioned overflow grows it.
+  // Saves a fragment's scrollableOverflow before positioned overflow grows it.
   pub effect fn savePosOverflow(self: &mut Self, fragment: usize, overflow: Rect) ! OutOfMemoryError ? &mut Allocator {
     run self.posOverflows.append(PosOverflowSave { fragment: fragment, overflow: overflow })
   }
-  // Restores normal-flow parent links and scrollableOverflow modified by positioned
-  // fragments after `flowEnd`, leaving [0, flowEnd) clean for in-place or copied reuse.
+  // Restores parent links and scrollableOverflow modified by positioned
+  // fragments, leaving every subtree clean for in-place or copied reuse.
   pub fn detachAdopted(self: &mut Self, boxes: &mut [Layout]) {
     let values = self.values.asMutSlice()
     let mut at = self.adoptedLinks.length()
     while at > 0 {
       at = at - 1
       let link = self.adoptedLinks.get(at)
+      let word = link.parent / 64
+      if word < self.adoptedParents.length() {
+        let mask = u64.bitXor(u64.shiftLeft(1, usize.toU64(link.parent % 64)), u64.MAX)
+        let oldBits = self.adoptedParents.get(word)
+        self.adoptedParents.set(word, u64.bitAnd(oldBits, mask))
+      }
       if link.parent < values.length {
         values[link.parent].firstChild = link.firstChild
         values[link.parent].lastChild = link.lastChild
@@ -1132,7 +1155,19 @@ impl FragmentArena {
   // Starts the normal flow over, after a rollback to the start.
   pub fn restartFlow(self: &mut Self) {
     self.afterFlow = false
+    self.posRoot = 0
     self.adopted.clear()
+    let mut at = self.adoptedLinks.length()
+    while at > 0 {
+      at = at - 1
+      let parent = self.adoptedLinks.get(at).parent
+      let word = parent / 64
+      if word < self.adoptedParents.length() {
+        let mask = u64.bitXor(u64.shiftLeft(1, usize.toU64(parent % 64)), u64.MAX)
+        let oldBits = self.adoptedParents.get(word)
+        self.adoptedParents.set(word, u64.bitAnd(oldBits, mask))
+      }
+    }
     self.adoptedLinks.clear()
     self.posOverflows.clear()
   }
@@ -1301,6 +1336,17 @@ impl FragmentArena {
     let mut kept = self.settled.length()
     while kept > 0 && self.settled.get(kept - 1).end > checkpoint { kept = kept - 1 }
     self.settled.truncate(kept)
+    while self.adoptedLinks.length() > 0 && self.adoptedLinks.get(self.adoptedLinks.length() - 1).child >= checkpoint {
+      let last = self.adoptedLinks.length() - 1
+      let parent = self.adoptedLinks.get(last).parent
+      self.adoptedLinks.truncate(last)
+      let word = parent / 64
+      if word < self.adoptedParents.length() {
+        let mask = u64.bitXor(u64.shiftLeft(1, usize.toU64(parent % 64)), u64.MAX)
+        let oldBits = self.adoptedParents.get(word)
+        self.adoptedParents.set(word, u64.bitAnd(oldBits, mask))
+      }
+    }
   }
   // After rollback(checkpoint): takes back the records extendText added,
   // since the checkpoint counted `texts` of them (see textCheckpoint), to the
@@ -1710,7 +1756,7 @@ impl FragmentArena {
     let standing = self.values.asSlice()[start].parent == parent && self.values.asSlice()[start].previousSibling == last
       && (last == NO_NODE || self.values.asSlice()[last].nextSibling == start)
     if !standing { return false }
-    run self.recordAdoptedParent(parent, last)
+    run self.recordAdoptedParent(parent, last, start)
     run self.settled.reserve(1)
     run self.reserveCarried()
     let overflow = self.values.asSlice()[start].scrollableOverflow
@@ -1742,10 +1788,10 @@ impl FragmentArena {
     // only its parent's change, and its next-sibling link waits for the
     // next child, or closeSiblings.
     let last = if parent == NO_NODE { NO_NODE } else { self.values.asSlice()[parent].lastChild }
-    run self.recordAdoptedParent(parent, last)
     let standing = parent != NO_NODE && self.values.asSlice()[start].parent == parent && self.values.asSlice()[start].previousSibling == last
       && (last == NO_NODE || self.values.asSlice()[last].nextSibling == start)
     if standing {
+      run self.recordAdoptedParent(parent, last, start)
       run self.editPosition(parent)
       let values = self.values.asMutSlice()
       if last == NO_NODE { values[parent].firstChild = start }
@@ -1939,8 +1985,8 @@ impl FragmentArena {
     if parent != NO_NODE {
       run self.editPosition(parent)
       previousSibling = self.values.asSlice()[parent].lastChild
-      run self.recordAdoptedParent(parent, previousSibling)
-      if previousSibling != NO_NODE && self.values.asSlice()[previousSibling].nextSibling != index && !(self.afterFlow && previousSibling < self.flowEnd) { run self.editPosition(previousSibling) }
+      run self.recordAdoptedParent(parent, previousSibling, index)
+      if previousSibling != NO_NODE && self.values.asSlice()[previousSibling].nextSibling != index && !(self.afterFlow && parent < self.posRoot && previousSibling < self.posRoot) { run self.editPosition(previousSibling) }
     }
     let values = self.values.asMutSlice()
     values[index].previousSibling = previousSibling
