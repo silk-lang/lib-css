@@ -168,6 +168,13 @@ impl BoxWrites {
     marks[id].partial = generation
     marks[id].slot = slot
   }
+  // Releases large copy-on-write scratch buffers between computes.
+  pub fn release(self: &mut Self) {
+    if self.saved.storageBytes() + self.placed.capacity() * Intrinsic.layoutOf<Placement>().bytes > 65536 {
+      self.saved = LayoutStore.make()
+      self.placed.clearAndFree()
+    }
+  }
 }
 
 pub enum CacheKind { IndependentBox, IntrinsicContents, ContainerAllocation }
@@ -1576,6 +1583,7 @@ impl Snapshot {
     self.fragments = Intrinsic.replace(fragments.*, move spareFragments)
     let spareBoxes = Intrinsic.replace(self.boxes, List<Layout>.make())
     self.boxes = Intrinsic.replace(boxes.*, move spareBoxes)
+    self.fragments.detachAdopted(self.boxes.asMutSlice())
   }
   // Renumbers boxes as LayoutCache.remap does.
   pub effect fn remap(self: &mut Self, toOld: &[usize], toNew: &[usize]) ! OutOfMemoryError ? &mut Allocator {

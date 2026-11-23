@@ -349,10 +349,24 @@ pub effect fn markSubtrees<S: LayoutSource>(nodes: &BoxTree<'_, S>, facts: &mut 
 
 // The reuse level a subtree allows its parent: a float's is at most
 // independent, since its float joins exclusions it shares with its siblings.
-// An out-of-flow box may reuse its own layout, but positioning, not its
-// parent's layout, places it: a parent holding one is never copied.
+// An out-of-flow box is placed by positioning after normal flow, whose
+// fragments are cleanly detached before the next compute (detachAdopted);
+// only an inline-parented absolute box that needs a static anchor from
+// inline layout prevents reusing its parent.
 fn passedUp<S: LayoutSource>(nodes: &BoxTree<'_, S>, id: usize, level: u8) -> u8 {
-  if absolutelyPositioned(nodes.style(id)) { return REUSE_NONE }
+  if absolutelyPositioned(nodes.style(id)) {
+    let parent = nodes.node(id).parent()
+    if parent != NO_NODE {
+      let kind = nodes.node(parent).kind
+      if kind == BoxKind.Inline || kind == BoxKind.InlineFormatting {
+        let style = nodes.style(id)
+        let hasH = style.inset.left.kind != DimensionKind.Auto || style.inset.right.kind != DimensionKind.Auto
+        let hasV = style.inset.top.kind != DimensionKind.Auto || style.inset.bottom.kind != DimensionKind.Auto
+        if !(hasH && hasV) { return REUSE_NONE }
+      }
+    }
+    return REUSE_IN_FLOW
+  }
   if nodes.style(id).float != Float.None && level > REUSE_INDEPENDENT { return REUSE_INDEPENDENT }
   return level
 }

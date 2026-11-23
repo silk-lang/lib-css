@@ -523,3 +523,52 @@ test effect fn insetAnchoredRunsAreKeptAtOnce() ! OutOfMemoryError | TextError |
     step = step + 1
   }
 }
+
+test effect fn normalFlowContainerWithAbsoluteChildReusesAndRestoresOverflow() -> () ! InvalidNode | InvalidBox | TextError | FragmentationError | OutOfMemoryError | AssertionError<'static> {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let mut tree = run Tree.make(Style.make()) |> Effect.provideMut<Allocator>(&mut allocator)
+  let root = tree.root()
+  let mut cardAStyle = Style.make()
+  cardAStyle.position = Position.Relative
+  cardAStyle.width = SizeValue.px(100.0)
+  cardAStyle.height = SizeValue.px(50.0)
+  let cardA = run tree.append(root, cardAStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut innerStyle = Style.make()
+  innerStyle.width = SizeValue.px(40.0)
+  innerStyle.height = SizeValue.px(20.0)
+  drop run tree.append(cardA, innerStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut absStyle = Style.make()
+  absStyle.position = Position.Absolute
+  absStyle.inset.left = Dimension.px(150.0)
+  absStyle.inset.top = Dimension.px(0.0)
+  absStyle.width = SizeValue.px(20.0)
+  absStyle.height = SizeValue.px(20.0)
+  let badge = run tree.append(cardA, absStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut cardBStyle = Style.make()
+  cardBStyle.width = SizeValue.px(100.0)
+  cardBStyle.height = SizeValue.px(50.0)
+  let cardB = run tree.append(root, cardBStyle) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut output = LayoutTree.make()
+  let mut measure = EmptyMeasure {}
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(400.0, 300.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let boxA = match run output.firstBox(cardA) { Option<BoxId>.Some { value } => value Option<BoxId>.None => BoxId { index: 0 } }
+  run near((run output.getBox(boxA)).scrollableOverflow.width, 170.0)
+
+  // Changing sibling Card B must reuse Card A even though Card A holds an absolute child.
+  cardBStyle.height = SizeValue.px(80.0)
+  run tree.setStyle(cardB, cardBStyle)
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(400.0, 300.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  run Testing.expect(output.stats.reusedLayouts >= 1, "card holding an absolute child is reused across unrelated edits")
+  run near((run output.getBox(boxA)).scrollableOverflow.width, 170.0)
+
+  // Moving the absolute child back inside Card A must shrink Card A's overflow back to 100px.
+  absStyle.inset.left = Dimension.px(10.0)
+  run tree.setStyle(badge, absStyle)
+  run compute(&tree, &mut output, &mut measure, OptionalSize.definite(400.0, 300.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let mut fresh = LayoutTree.make()
+  run compute(&tree, &mut fresh, &mut measure, OptionalSize.definite(400.0, 300.0)) |> Effect.provideMut<Allocator>(&mut allocator)
+  let ov = (run output.getBox(boxA)).scrollableOverflow
+  let expected = (run fresh.getBox(boxA)).scrollableOverflow
+  run near(ov.width, 100.0)
+  run Testing.expect(ov.x == expected.x && ov.y == expected.y && ov.width == expected.width && ov.height == expected.height, "restored overflow matches fresh layout")
+}

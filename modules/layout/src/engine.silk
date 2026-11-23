@@ -2606,7 +2606,7 @@ fn cutoffAncestor<S: LayoutSource>(nodes: &BoxTree<'_, S>, changes: &[usize], bo
   let mut box = nodes.node(id).parent()
   while box != NO_NODE && box != 0 && nodes.node(box).parent() != 0 {
     let node = nodes.node(box)
-    if node.kind != BoxKind.Block && node.kind != BoxKind.Flex { break }
+    if node.kind != BoxKind.Block && node.kind != BoxKind.Flex && node.kind != BoxKind.Grid { break }
     if contains(changes, node.source()) { break }
     let mut seen: usize = 0
     if !staticSubtree(nodes, box, &mut seen) { break }
@@ -2926,7 +2926,7 @@ effect fn cutoffBox<'source, M: Measure + TextMeasure, S: LayoutSource>(nodes: &
       let mut bfc = BfcState.make()
       drop run layoutInFlow(nodes, &mut pass, &mut measurer, id, &finalInput, &mut bfc)
     } else { run layoutNodeInPlace(nodes, &mut pass, &mut measurer, id, &finalInput) }
-    subtreeOverflow(nodes, &mut pass)
+    run subtreeOverflow(nodes, &mut pass)
     let recorded = pass.cache.recordedRange(id)
     let length = range.end - range.start
     same = !pass.needsRelayout && !pass.hasAutoScrollbars
@@ -3331,6 +3331,7 @@ pub effect fn compute<'source, M: Measure + TextMeasure, S: LayoutSource>(tree: 
       output.keptScroll = tree.viewportScrollOffset()
       output.keptScrolls = tree.changes().scrollRevision()
       output.fragments.releaseSaved()
+      output.writes.release()
       output.fragments.deferLocations()
       output.viewportOverflow = overflow
       output.scrollReady = output.normalOffsets.length() != 0 && output.normalOffsets.length() == output.fragments.values.length()
