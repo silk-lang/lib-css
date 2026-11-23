@@ -9,6 +9,7 @@ import css_properties.values as values
 import css_properties.values { Value, Declaration }
 import css_properties.keywords { Keyword }
 import silk.collections.bytes { Bytes }
+import silk.collections.list { List }
 import silk.core.effect { Effect }
 import silk.core.option { Option }
 import silk.mem.allocator { Allocator, OutOfMemoryError }
@@ -340,4 +341,47 @@ effect fn backgroundBody() -> () ! AssertionError<'static> | CssError | OutOfMem
 test effect fn backgroundShorthandTakesLayersAndSizes() -> () ! AssertionError<'static> | CssError | OutOfMemoryError {
   let mut allocator = Allocator.systemAllocatorProvider()
   run backgroundBody() |> Effect.provideMut<Allocator>(&mut allocator)
+}
+
+effect fn batchMatchesSingle(source: Property, css: &[u8], targets: &[Property]) -> ()
+  ! AssertionError<'static> | CssError | OutOfMemoryError ? &mut Allocator {
+  let declaration = Declaration { property: source, value: run written.value(css), important: false }
+  let mut batch = List<Option<Value>>.make()
+  run written.longhands(&declaration, targets, &mut batch)
+  run Testing.expect(batch.length() == targets.length, "longhands emits one entry per target")
+  let mut i: usize = 0
+  while i < targets.length {
+    let single = run written.longhand(&declaration, targets[i])
+    match &single {
+      Option<Value>.Some { value: a } => {
+        match &batch.asSlice()[i] {
+          Option<Value>.Some { value: b } => {
+            let ta = run values.cssText(&a)
+            let tb = run values.cssText(&b)
+            run Testing.expect(sameText(ta.asSlice(), tb.asSlice()), "batch longhand matches single longhand")
+          }
+          Option<Value>.None => { run Testing.expect(false, "batch missing value present in single") }
+        }
+      }
+      Option<Value>.None => {
+        run Testing.expect(batch.asSlice()[i].isNone(), "batch should be None when single is None")
+      }
+    }
+    i = i + 1
+  }
+}
+
+test effect fn batchLonghandsMatchSingleProjection() -> () ! AssertionError<'static> | CssError | OutOfMemoryError {
+  let mut allocator = Allocator.systemAllocatorProvider()
+  let bgTargets = [
+    Property.BackgroundImage, Property.BackgroundPosition, Property.BackgroundSize,
+    Property.BackgroundRepeat, Property.BackgroundAttachment, Property.BackgroundColor,
+  ]
+  run batchMatchesSingle(Property.Background, b"url(a.png) center / cover repeat-x local, red", &bgTargets)
+    |> Effect.provideMut<Allocator>(&mut allocator)
+  let trTargets = [
+    Property.TransitionProperty, Property.TransitionDuration, Property.TransitionTimingFunction, Property.TransitionDelay,
+  ]
+  run batchMatchesSingle(Property.Transition, b"opacity 150ms ease-in 10ms, transform 200ms linear", &trTargets)
+    |> Effect.provideMut<Allocator>(&mut allocator)
 }

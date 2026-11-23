@@ -180,6 +180,87 @@ pub effect fn longhand(declaration: &Declaration, target: Property) -> Option<Va
   return Option<Value>.None
 }
 
+/// Project a written declaration to several of its longhands in one pass, parsing
+/// text shorthands (such as `background`, `transition` and `animation`) at most once.
+/// Appends one `Option<Value>` to `out` for each property in `targets`, in order.
+pub effect fn longhands(declaration: &Declaration, targets: &[Property], out: &mut List<Option<Value>>) -> ()
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  if targets.length == 0 { return () }
+  if targets.length == 1 {
+    run out.append(run longhand(declaration, targets[0]))
+    return ()
+  }
+  let mut preparedBg = Option<PreparedBackground>.None
+  if declaration.property == Property.Background {
+    if let Value.Text { css } = &declaration.value {
+      preparedBg = run prepareBackgroundWords(css.asSlice())
+    }
+  }
+  let mut store = Store.make()
+  let mut parsed = Option<ValueId>.None
+  let mut triedParse = false
+  let mut i: usize = 0
+  while i < targets.length {
+    let target = targets[i]
+    if declaration.property == target {
+      run out.append(Option<Value>.some(run values.clone(&declaration.value)))
+      i = i + 1
+      continue
+    }
+    let mut at: usize = 0
+    let count = catalog.longhandCount(declaration.property)
+    while at < count && catalog.longhandAt(declaration.property, at) != target { at = at + 1 }
+    if at == count {
+      run out.append(Option<Value>.None)
+      i = i + 1
+      continue
+    }
+    if declaration.property == Property.Container {
+      if let Value.Keyword { value: word } = &declaration.value {
+        if word == Keyword.Initial || word == Keyword.Inherit || word == Keyword.Unset || word == Keyword.Revert || word == Keyword.RevertLayer {
+          run out.append(Option<Value>.some(run values.clone(&declaration.value)))
+          i = i + 1
+          continue
+        }
+      }
+      run out.append(run containerLonghand(&declaration.value, target))
+      i = i + 1
+      continue
+    }
+    if let Option<PreparedBackground>.Some { value: bg } = &preparedBg {
+      if let Option<Value>.Some { value: found } = move run projectBackgroundWord(&bg, target) {
+        run out.append(Option<Value>.some(move found))
+        i = i + 1
+        continue
+      }
+    }
+    let expanded = run shorthands.longhand(declaration.property, &declaration.value, target)
+    if let Option<Value>.Some { value: found } = move expanded {
+      run out.append(Option<Value>.some(move found))
+      i = i + 1
+      continue
+    }
+    if !triedParse {
+      triedParse = true
+      let text = run values.cssText(&declaration.value)
+      let buffer = run lexer.tokenize(text.asSlice(), &Limits.make())
+      let input = Input.Contiguous { buffer: &buffer, range: buffer.all() }
+      parsed = run parsed_values.parse(&mut store, declaration.property, &input, Mode.Css)
+    }
+    if let Option<ValueId>.Some { value: id } = parsed {
+      let css = run cssom_value_serialization.value(&store, id, declaration.property, target)
+      if css.length() != 0 {
+        run out.append(Option<Value>.some(run value(css.asSlice())))
+      } else {
+        run out.append(Option<Value>.None)
+      }
+    } else {
+      run out.append(Option<Value>.None)
+    }
+    i = i + 1
+  }
+}
+
 fn wordByte(byte: u8) -> bool {
   return (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57)
     || byte == 45
@@ -254,12 +335,12 @@ effect fn unshapedCall(css: &[u8], start: usize, open: usize) -> bool ! CssError
   }
 }
 
-/// Longhand `target` of a `background` value that spells what the shared model has no shape
-/// for: a `url()` image, an image set, most gradients, `repeat-x`, `repeat-y` or `local`. It is
-/// read with a placeholder image, the two-value repeats and `scroll` in their places, then with
-/// the images and `local` put back in their layers of `background-image` and
-/// `background-attachment`. None when it has none of them.
-pub effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
+struct PreparedBackground {
+  layers: List<LayerWords>,
+  shaped: Value,
+}
+
+effect fn prepareBackgroundWords(css: &[u8]) -> Option<PreparedBackground>
   ! CssError | OutOfMemoryError ? &mut Allocator {
   let mut plain = Bytes.make()
   let mut layers = List<LayerWords>.make()
@@ -300,7 +381,7 @@ pub effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
       if called && (tokens.insensitive(word, b"url") || tokens.insensitive(word, b"image-set")
         || tokens.insensitive(word, b"-webkit-image-set") || unshapedGradient(word)
         || (tokens.insensitive(word, b"linear-gradient") && run unshapedCall(css, i, end))) {
-        if current.image.length() != 0 { return Option<Value>.None }
+        if current.image.length() != 0 { return Option<PreparedBackground>.None }
         let close = itemEnd(css, end)
         let mut stop = end + 1
         let mut quote: u8 = 0
@@ -317,7 +398,7 @@ pub effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
           }
           stop = stop + 1
         }
-        if stop >= css.length { return Option<Value>.None }
+        if stop >= css.length { return Option<PreparedBackground>.None }
         current.image = run Bytes.copy(Slice.view(css, i, stop + 1 - i))
         // A gradient holds the image's place: `none` could also be written beside it.
         run Bytes.append(&mut plain, b"linear-gradient(red, red)")
@@ -344,10 +425,15 @@ pub effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
     run Bytes.append(&mut plain, Slice.view(css, i, 1))
     i = i + 1
   }
-  if !changed { return Option<Value>.None }
+  if !changed { return Option<PreparedBackground>.None }
   run layers.append(move current)
   let shaped = run value(plain.asSlice())
-  let found = run shorthands.longhand(Property.Background, &shaped, target)
+  return Option<PreparedBackground>.some(PreparedBackground { layers: move layers, shaped: move shaped })
+}
+
+effect fn projectBackgroundWord(prepared: &PreparedBackground, target: Property) -> Option<Value>
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  let found = run shorthands.longhand(Property.Background, &prepared.shaped, target)
   let image = target == Property.BackgroundImage
   if !(image || target == Property.BackgroundAttachment) { return move found }
   let listed = match move found {
@@ -357,13 +443,14 @@ pub effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
   // One item a layer, with what the layer spelled put back.
   let spelled = run values.cssText(&listed)
   let text = spelled.asSlice()
+  let layers = prepared.layers.asSlice()
   let mut out = Bytes.make()
   let mut layer: usize = 0
   let mut at: usize = 0
   while at <= text.length {
     let end = itemEnd(text, at)
     if layer > 0 { run Bytes.append(&mut out, b", ") }
-    let words = &layers.asSlice()[if layer < layers.length() { layer } else { layers.length() - 1 }]
+    let words = &layers[if layer < layers.length { layer } else { layers.length - 1 }]
     if image && words.image.length() != 0 {
       run Bytes.append(&mut out, words.image.asSlice())
     } else if !image && words.local {
@@ -377,6 +464,19 @@ pub effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
     at = end + 1
   }
   return Option<Value>.some(run value(out.asSlice()))
+}
+
+/// Longhand `target` of a `background` value that spells what the shared model has no shape
+/// for: a `url()` image, an image set, most gradients, `repeat-x`, `repeat-y` or `local`. It is
+/// read with a placeholder image, the two-value repeats and `scroll` in their places, then with
+/// the images and `local` put back in their layers of `background-image` and
+/// `background-attachment`. None when it has none of them.
+pub effect fn backgroundWords(css: &[u8], target: Property) -> Option<Value>
+  ! CssError | OutOfMemoryError ? &mut Allocator {
+  if let Option<PreparedBackground>.Some { value: prepared } = move run prepareBackgroundWords(css) {
+    return run projectBackgroundWord(&prepared, target)
+  }
+  return Option<Value>.None
 }
 
 effect fn containerLonghand(specified: &Value, target: Property) -> Option<Value> ! CssError | OutOfMemoryError ? &mut Allocator {
