@@ -1025,7 +1025,7 @@ impl FragmentArena {
     let mut previousForBox = NO_NODE
     if parent != NO_NODE { previousSibling = self.values.asSlice()[parent].lastChild }
     if box != NO_NODE { previousForBox = self.lastByBox.get(box) }
-    if previousSibling != NO_NODE { run self.editPosition(previousSibling) }
+    if previousSibling != NO_NODE && !(self.afterFlow && previousSibling < self.flowEnd) { run self.editPosition(previousSibling) }
     if previousForBox != NO_NODE { run self.editPosition(previousForBox) }
     value.firstChild = NO_NODE
     value.lastChild = NO_NODE
@@ -1049,7 +1049,7 @@ impl FragmentArena {
     let mut previousForBox = NO_NODE
     if parent != NO_NODE { previousSibling = self.values.asSlice()[parent].lastChild }
     if box != NO_NODE { previousForBox = self.lastByBox.get(box) }
-    if previousSibling != NO_NODE { run self.editPosition(previousSibling) }
+    if previousSibling != NO_NODE && !(self.afterFlow && previousSibling < self.flowEnd) { run self.editPosition(previousSibling) }
     if previousForBox != NO_NODE { run self.editPosition(previousForBox) }
     run self.adopting(parent, previousSibling, previousForBox)
     let index = run self.putMade(box, source, kind)
@@ -1940,7 +1940,7 @@ impl FragmentArena {
       run self.editPosition(parent)
       previousSibling = self.values.asSlice()[parent].lastChild
       run self.recordAdoptedParent(parent, previousSibling)
-      if previousSibling != NO_NODE && self.values.asSlice()[previousSibling].nextSibling != index { run self.editPosition(previousSibling) }
+      if previousSibling != NO_NODE && self.values.asSlice()[previousSibling].nextSibling != index && !(self.afterFlow && previousSibling < self.flowEnd) { run self.editPosition(previousSibling) }
     }
     let values = self.values.asMutSlice()
     values[index].previousSibling = previousSibling
