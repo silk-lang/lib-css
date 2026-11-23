@@ -267,6 +267,7 @@ effect fn memoContribution<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
   output: &mut LayoutPass<'pass, 'source>,
   measurer: &mut M,
   memos: &mut ContributionMemos,
+  base: &Input,
   slot: usize,
   key: &ContributionMemo,
   request: &Input,
@@ -287,7 +288,7 @@ effect fn memoContribution<'pass, 'source, M: Measure + TextMeasure, S: LayoutSo
     let mut value = key.*
     value.clock = clock
     value.result = measured
-    run memos.store(slot, value)
+    run memos.store(base, slot, value)
   }
   return measured
 }
@@ -393,7 +394,7 @@ effect fn collectContributions<'pass, 'source, M: Measure + TextMeasure, S: Layo
   // inherits, so its kept contribution is checked first (see the loop).
   let fast = quick && !baselines.any() && !source.subgridChildren
   if quick {
-    run own.memos.startPass(checkOnly, sizing.columns != axis.vertical, false, crossFinal,
+    run own.memos.startPass(base, checkOnly, sizing.columns != axis.vertical, false, crossFinal,
       sizing.usedGap, crossSizing.usedGap, own.policies.asSlice(), own.crossPolicies.asSlice(), tracks, crossTracks,
       output.cache.clearClock())
   } else {
@@ -581,7 +582,7 @@ effect fn collectContributions<'pass, 'source, M: Measure + TextMeasure, S: Layo
                   usedMinimum: 0.0,
                 }
                 if policy.intrinsic {
-                  measured = run memoContribution(nodes, &mut output, &mut measurer, &mut own.memos, slot, &key, &request)
+                  measured = run memoContribution(nodes, &mut output, &mut measurer, &mut own.memos, base, slot, &key, &request)
                   contribution.minimum = measured.minimum
                   contribution.minContent = measured.minContent
                   contribution.maxContent = measured.maxContent
@@ -978,7 +979,7 @@ pub effect fn requestItem<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
         key.trackEnd = columnEnd
         key.crossTrack = row
         key.crossEnd = rowEnd
-        let measured = run memoContribution(nodes, &mut output, &mut measurer, &mut memos, 2 * index, &key, &request)
+        let measured = run memoContribution(nodes, &mut output, &mut measurer, &mut memos, base, 2 * index, &key, &request)
         applyMinimum(&mut request, !axis.vertical, measured.usedMinimum)
       }
     }
@@ -996,7 +997,7 @@ pub effect fn requestItem<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
         key.trackEnd = columnEnd
         key.crossTrack = row
         key.crossEnd = rowEnd
-        let measured = run memoContribution(nodes, &mut output, &mut measurer, &mut memos, 2 * index + 1, &key, &request)
+        let measured = run memoContribution(nodes, &mut output, &mut measurer, &mut memos, base, 2 * index + 1, &key, &request)
         applyMinimum(&mut request, axis.vertical, measured.usedMinimum)
       }
     }
@@ -1652,7 +1653,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
       track = track + 1
     }
     if items.length >= TRACKED_ITEMS {
-      run scratch.finalMemos.startPass(false, false, true, true, columnSizing.usedGap, rowSizing.usedGap,
+      run scratch.finalMemos.startPass(&base, false, false, true, true, columnSizing.usedGap, rowSizing.usedGap,
         scratch.finalColumns.asSlice(),
         scratch.finalRows.asSlice(), columns, rows, output.cache.clearClock())
     } else {
@@ -1667,7 +1668,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
   if asBefore {
     scratch.finals.begin(&base)
     run scratch.finals.reserveMarks(items.length)
-    run scratch.finals.startPass(false, input.baselines, true, true, columnSizing.usedGap, rowSizing.usedGap,
+    run scratch.finals.startPass(&base, false, input.baselines, true, true, columnSizing.usedGap, rowSizing.usedGap,
       scratch.finalColumns.asSlice(),
       scratch.finalRows.asSlice(), columns, rows, output.cache.clearClock())
   } else if input.performLayout {
@@ -1716,7 +1717,7 @@ effect fn gridWithScratch<'pass, 'source, M: Measure + TextMeasure, S: LayoutSou
           || Baselines.active(&baselines, index, false)
         if input.performLayout {
           run layoutNodeInPlace(nodes, &mut output, &mut measurer, item.id, &request)
-          if asBefore { run scratch.finals.markLaidOut(index, item.id, tracksArea, clock) }
+          if asBefore { run scratch.finals.markLaidOut(&base, index, item.id, tracksArea, clock) }
         } else {
           run probeNode(nodes, &mut output, &mut measurer, item.id, &request)
         }

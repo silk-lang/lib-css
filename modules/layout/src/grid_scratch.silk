@@ -178,7 +178,7 @@ effect fn copySizes(seen: &mut List<f32>, tracks: &[TrackState]) ! OutOfMemoryEr
 // the previous pass of its kind finds its items' keys unchanged:
 // such an item's entry stands if that pass found it standing and the cache
 // cleared nothing of it since (`kept`), with no key built or compared.
-pub struct ContributionMemos {
+struct MemoStore {
   base: Input,
   entries: List<ContributionMemo>,
   stamp: usize,
@@ -198,6 +198,12 @@ pub struct ContributionMemos {
   marks: List<ItemMark>,
 }
 
+// Lazily boxed so grids without intrinsic tracks or tracked final passes pay
+// one pointer per axis instead of four inline ~900 B memo payloads.
+pub struct ContributionMemos {
+  inner: Option<Box<MemoStore>>,
+}
+
 // An item laid out by a final pass in `area`, when the cache had cleared
 // nothing of it since `clock`.
 struct ItemMark { id: usize, pass: usize, area: TrackArea, clock: usize }
@@ -214,16 +220,10 @@ impl TrackArea {
   }
 }
 
-impl ContributionMemos {
-  // Entries in use and room for them, and the same for the per-track and per-item lists.
-  pub fn censusEntries(self: &Self) -> usize { return self.entries.length() }
-  pub fn censusRoom(self: &Self) -> usize { return self.entries.capacity() }
-  pub fn censusSideBytes(self: &Self) -> usize {
-    return (self.changed.capacity() + self.crossChanged.capacity()) * Intrinsic.layoutOf<usize>().bytes + self.marks.capacity() * Intrinsic.layoutOf<ItemMark>().bytes
-  }
-  pub fn make() -> ContributionMemos {
-    return ContributionMemos {
-      base: Input.make(OptionalSize.none()), entries: List<ContributionMemo>.make(), stamp: 0, previous: 0,
+impl MemoStore {
+  fn make(base: Input) -> MemoStore {
+    return MemoStore {
+      base: base, entries: List<ContributionMemo>.make(), stamp: 0, previous: 0,
       floor: 0, previousClock: 0, flat: false, recheckPass: false,
       sizing: MemoPass.make(), recheck: MemoPass.make(),
       changed: List<usize>.make(), crossChanged: List<usize>.make(),
@@ -231,80 +231,164 @@ impl ContributionMemos {
     }
   }
 
-  pub fn clear(self: &mut Self) {
+  fn clear(self: &mut Self) {
     self.entries.clear()
     self.marks.clear()
     self.sizing.reset()
     self.recheck.reset()
   }
+}
+
+impl ContributionMemos {
+  // Entries in use and room for them, and the same for the per-track and per-item lists.
+  pub fn censusEntries(self: &Self) -> usize {
+    return match &self.inner {
+      Option<Box<MemoStore>>.Some { value } => value.get()[0].entries.length()
+      Option<Box<MemoStore>>.None => 0
+    }
+  }
+  pub fn censusRoom(self: &Self) -> usize {
+    return match &self.inner {
+      Option<Box<MemoStore>>.Some { value } => value.get()[0].entries.capacity()
+      Option<Box<MemoStore>>.None => 0
+    }
+  }
+  pub fn censusSideBytes(self: &Self) -> usize {
+    return match &self.inner {
+      Option<Box<MemoStore>>.Some { value } => {
+        let s = &value.get()[0]
+        Intrinsic.layoutOf<MemoStore>().bytes
+          + (s.changed.capacity() + s.crossChanged.capacity()) * Intrinsic.layoutOf<usize>().bytes
+          + s.marks.capacity() * Intrinsic.layoutOf<ItemMark>().bytes
+      }
+      Option<Box<MemoStore>>.None => 0
+    }
+  }
+  pub fn make() -> ContributionMemos {
+    return ContributionMemos { inner: Option<Box<MemoStore>>.None }
+  }
+
+  effect fn ensure(self: &mut Self, base: &Input) -> &mut MemoStore ! OutOfMemoryError ? &mut Allocator {
+    if self.inner.isNone() {
+      self.inner = Option<Box<MemoStore>>.Some { value: run Box<MemoStore>.make(MemoStore.make(base.*)) }
+    }
+    return match &mut self.inner {
+      Option<Box<MemoStore>>.Some { value } => &mut value.getMut()[0]
+      Option<Box<MemoStore>>.None => Intrinsic.trap("ContributionMemos.ensure")
+    }
+  }
+
+  pub fn clear(self: &mut Self) {
+    if let Option<Box<MemoStore>>.Some { value } = &mut self.inner {
+      value.getMut()[0].clear()
+    }
+  }
 
   // Keeps the entries only if they were measured under the same base.
   pub fn begin(self: &mut Self, base: &Input) {
-    if (self.entries.length() != 0 || self.marks.length() != 0) && LayoutCache.sameBase(&self.base, base) { return }
-    self.clear()
-    self.base = base.*
+    if let Option<Box<MemoStore>>.Some { value } = &mut self.inner {
+      let s = &mut value.getMut()[0]
+      if (s.entries.length() != 0 || s.marks.length() != 0) && LayoutCache.sameBase(&s.base, base) { return }
+      s.clear()
+      s.base = base.*
+    }
   }
 
   // Room for `count` entries, so storing them one slot at a time doesn't
   // regrow the list; kept entries stay where they are.
   pub effect fn reserveSlots(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {
-    let length = self.entries.length()
-    if self.entries.capacity() < count { run self.entries.reserveExact(count - length) }
+    if count == 0 { return }
+    if let Option<Box<MemoStore>>.Some { value } = &mut self.inner {
+      let s = &mut value.getMut()[0]
+      let length = s.entries.length()
+      if s.entries.capacity() < count { run s.entries.reserveExact(count - length) }
+    }
   }
 
   // Room for `count` final-pass marks (see markLaidOut).
   pub effect fn reserveMarks(self: &mut Self, count: usize) ! OutOfMemoryError ? &mut Allocator {
-    let length = self.marks.length()
-    if self.marks.capacity() < count { run self.marks.reserveExact(count - length) }
+    if count == 0 { return }
+    if let Option<Box<MemoStore>>.Some { value } = &mut self.inner {
+      let s = &mut value.getMut()[0]
+      let length = s.marks.length()
+      if s.marks.capacity() < count { run s.marks.reserveExact(count - length) }
+    }
   }
 
   // Starts a pass that keeps nothing by tracks: the next pass of either kind
   // compares with none.
   pub fn startUntracked(self: &mut Self) {
-    self.stamp = self.stamp + 1
-    self.previous = 0
-    self.flat = false
-    self.sizing.stamp = 0
-    self.recheck.stamp = 0
+    if let Option<Box<MemoStore>>.Some { value } = &mut self.inner {
+      let s = &mut value.getMut()[0]
+      s.stamp = s.stamp + 1
+      s.previous = 0
+      s.flat = false
+      s.sizing.stamp = 0
+      s.recheck.stamp = 0
+    }
   }
 
   // Starts a sizing pass (or re-check pass) over `tracks` with `policies`,
   // across `crossTracks` with `crossPolicies`. Keys read each axis's sizes
   // only once final (`ownFinal`, `crossFinal`).
   pub effect fn startPass(
-    self: &mut Self, recheck: bool, horizontal: bool, ownFinal: bool, crossFinal: bool, gap: f32, crossGap: f32,
+    self: &mut Self, base: &Input, recheck: bool, horizontal: bool, ownFinal: bool, crossFinal: bool, gap: f32, crossGap: f32,
     policies: &[TrackPolicy], crossPolicies: &[TrackPolicy], tracks: &[TrackState], crossTracks: &[TrackState],
     clock: usize,
   ) ! OutOfMemoryError ? &mut Allocator {
-    self.stamp = self.stamp + 1
-    self.recheckPass = recheck
-    let mut seen = &mut self.sizing
-    if recheck { seen = &mut self.recheck }
-    self.floor = seen.floor
-    self.previousClock = seen.clock
+    let s = run self.ensure(base)
+    s.stamp = s.stamp + 1
+    s.recheckPass = recheck
+    let mut seen = &mut s.sizing
+    if recheck { seen = &mut s.recheck }
+    s.floor = seen.floor
+    s.previousClock = seen.clock
     seen.clock = clock
-    seen.floor = self.stamp
-    self.previous = run startKind(&mut seen, &mut self.changed, &mut self.crossChanged, self.stamp,
+    seen.floor = s.stamp
+    s.previous = run startKind(&mut seen, &mut s.changed, &mut s.crossChanged, s.stamp,
       horizontal, ownFinal, crossFinal, gap, crossGap, policies, crossPolicies, tracks, crossTracks)
     // Every track kept what keys read of it, in both axes.
-    let changed = self.changed.asSlice()
-    let crossChanged = self.crossChanged.asSlice()
-    self.flat = self.previous != 0 && changed.length == policies.length + 1 && changed[policies.length] == 0
+    let changed = s.changed.asSlice()
+    let crossChanged = s.crossChanged.asSlice()
+    s.flat = s.previous != 0 && changed.length == policies.length + 1 && changed[policies.length] == 0
       && crossChanged.length == crossPolicies.length + 1 && crossChanged[crossPolicies.length] == 0
   }
 
   // Whether this pass keeps every track as the previous pass of its kind did,
   // which ran when the cache's clear clock was `previousClock()`.
-  pub fn keepsTracks(self: &Self) -> bool { return self.flat }
-  pub fn previousClearClock(self: &Self) -> usize { return self.previousClock }
-  pub fn previousPass(self: &Self) -> usize { return self.previous }
-  pub fn pass(self: &Self) -> usize { return self.stamp }
+  pub fn keepsTracks(self: &Self) -> bool {
+    return match &self.inner {
+      Option<Box<MemoStore>>.Some { value } => value.get()[0].flat
+      Option<Box<MemoStore>>.None => false
+    }
+  }
+  pub fn previousClearClock(self: &Self) -> usize {
+    return match &self.inner {
+      Option<Box<MemoStore>>.Some { value } => value.get()[0].previousClock
+      Option<Box<MemoStore>>.None => 0
+    }
+  }
+  pub fn previousPass(self: &Self) -> usize {
+    return match &self.inner {
+      Option<Box<MemoStore>>.Some { value } => value.get()[0].previous
+      Option<Box<MemoStore>>.None => 0
+    }
+  }
+  pub fn pass(self: &Self) -> usize {
+    return match &self.inner {
+      Option<Box<MemoStore>>.Some { value } => value.get()[0].stamp
+      Option<Box<MemoStore>>.None => 0
+    }
+  }
 
   // Records that this flat pass looked only at the items cleared since the
   // previous one: entries the passes since its floor found standing stand.
   pub fn carry(self: &mut Self) {
-    if self.recheckPass { self.recheck.floor = self.floor }
-    else { self.sizing.floor = self.floor }
+    if let Option<Box<MemoStore>>.Some { value } = &mut self.inner {
+      let s = &mut value.getMut()[0]
+      if s.recheckPass { s.recheck.floor = s.floor }
+      else { s.sizing.floor = s.floor }
+    }
   }
 
   // Whether tracks `start` to `end` all kept what keys read of them.
@@ -321,13 +405,17 @@ impl ContributionMemos {
     self: &mut Self, slot: usize, id: usize, track: usize, trackEnd: usize, crossTrack: usize, crossEnd: usize,
     cleared: usize,
   ) -> Option<ItemContribution> {
-    if slot >= self.entries.length() || self.previous == 0 { return Option<ItemContribution>.None }
-    let memo = &mut self.entries.asMutSlice()[slot]
-    if memo.pass >= self.floor && memo.id == id && memo.track == track && memo.trackEnd == trackEnd
+    let s = match &mut self.inner {
+      Option<Box<MemoStore>>.Some { value } => &mut value.getMut()[0]
+      Option<Box<MemoStore>>.None => { return Option<ItemContribution>.None }
+    }
+    if slot >= s.entries.length() || s.previous == 0 { return Option<ItemContribution>.None }
+    let memo = &mut s.entries.asMutSlice()[slot]
+    if memo.pass >= s.floor && memo.id == id && memo.track == track && memo.trackEnd == trackEnd
       && memo.crossTrack == crossTrack && memo.crossEnd == crossEnd && cleared <= memo.clock
-      && ContributionMemos.spanSame(&self.changed, track, trackEnd)
-      && ContributionMemos.spanSame(&self.crossChanged, crossTrack, crossEnd) {
-      memo.pass = self.stamp
+      && ContributionMemos.spanSame(&s.changed, track, trackEnd)
+      && ContributionMemos.spanSame(&s.crossChanged, crossTrack, crossEnd) {
+      memo.pass = s.stamp
       return Option<ItemContribution>.Some { value: memo.result }
     }
     return Option<ItemContribution>.None
@@ -336,35 +424,48 @@ impl ContributionMemos {
   // Whether the previous final pass laid out the item at `index` in the same
   // tracks, unchanged since: if so its request is the one it made then.
   pub fn laidOut(self: &mut Self, index: usize, id: usize, area: &TrackArea, cleared: usize) -> bool {
-    if index >= self.marks.length() || self.previous == 0 { return false }
-    let mark = &mut self.marks.asMutSlice()[index]
-    if mark.pass == self.previous && mark.id == id && mark.area.same(area) && cleared <= mark.clock
-      && ContributionMemos.spanSame(&self.changed, area.column, area.columnEnd)
-      && ContributionMemos.spanSame(&self.crossChanged, area.row, area.rowEnd) {
-      mark.pass = self.stamp
+    let s = match &mut self.inner {
+      Option<Box<MemoStore>>.Some { value } => &mut value.getMut()[0]
+      Option<Box<MemoStore>>.None => { return false }
+    }
+    if index >= s.marks.length() || s.previous == 0 { return false }
+    let mark = &mut s.marks.asMutSlice()[index]
+    if mark.pass == s.previous && mark.id == id && mark.area.same(area) && cleared <= mark.clock
+      && ContributionMemos.spanSame(&s.changed, area.column, area.columnEnd)
+      && ContributionMemos.spanSame(&s.crossChanged, area.row, area.rowEnd) {
+      mark.pass = s.stamp
       return true
     }
     return false
   }
 
-  pub fn forgetLaidOut(self: &mut Self) { self.marks.clear() }
+  pub fn forgetLaidOut(self: &mut Self) {
+    if let Option<Box<MemoStore>>.Some { value } = &mut self.inner {
+      value.getMut()[0].marks.clear()
+    }
+  }
 
-  pub effect fn markLaidOut(self: &mut Self, index: usize, id: usize, area: TrackArea, clock: usize)
+  pub effect fn markLaidOut(self: &mut Self, base: &Input, index: usize, id: usize, area: TrackArea, clock: usize)
     ! OutOfMemoryError ? &mut Allocator {
-    let mark = ItemMark { id: id, pass: self.stamp, area: area, clock: clock }
-    while self.marks.length() <= index { run self.marks.append(ItemMark { id: NO_NODE, pass: 0, area: area, clock: 0 }) }
-    self.marks.set(index, mark)
+    let s = run self.ensure(base)
+    let mark = ItemMark { id: id, pass: s.stamp, area: area, clock: clock }
+    while s.marks.length() <= index { run s.marks.append(ItemMark { id: NO_NODE, pass: 0, area: area, clock: 0 }) }
+    s.marks.set(index, mark)
   }
 
   pub fn lookup(self: &mut Self, slot: usize, key: &ContributionMemo, cleared: usize) -> Option<ItemContribution> {
-    if slot >= self.entries.length() { return Option<ItemContribution>.None }
-    let memo = &mut self.entries.asMutSlice()[slot]
+    let s = match &mut self.inner {
+      Option<Box<MemoStore>>.Some { value } => &mut value.getMut()[0]
+      Option<Box<MemoStore>>.None => { return Option<ItemContribution>.None }
+    }
+    if slot >= s.entries.length() { return Option<ItemContribution>.None }
+    let memo = &mut s.entries.asMutSlice()[slot]
     if memo.id == key.id && cleared <= memo.clock && sameOptional(&memo.area, &key.area)
       && memo.minimum.width == key.minimum.width && memo.minimum.height == key.minimum.height
       && memo.horizontal == key.horizontal && memo.automatic == key.automatic
       && memo.cap == key.cap && memo.crossCap == key.crossCap
       && memo.needMin == key.needMin && memo.needMax == key.needMax {
-      memo.pass = self.stamp
+      memo.pass = s.stamp
       memo.track = key.track
       memo.trackEnd = key.trackEnd
       memo.crossTrack = key.crossTrack
@@ -374,13 +475,14 @@ impl ContributionMemos {
     return Option<ItemContribution>.None
   }
 
-  pub effect fn store(self: &mut Self, slot: usize, value: ContributionMemo) ! OutOfMemoryError ? &mut Allocator {
+  pub effect fn store(self: &mut Self, base: &Input, slot: usize, value: ContributionMemo) ! OutOfMemoryError ? &mut Allocator {
+    let s = run self.ensure(base)
     let mut stored = value
-    stored.pass = self.stamp
+    stored.pass = s.stamp
     let mut gap = value
     gap.id = NO_NODE
-    while self.entries.length() <= slot { run self.entries.append(gap) }
-    self.entries.set(slot, stored)
+    while s.entries.length() <= slot { run s.entries.append(gap) }
+    s.entries.set(slot, stored)
   }
 }
 
