@@ -164,7 +164,11 @@ enum Pseudo {
   DirRtl,
   Default,
   InRange,
-  OutOfRange
+  OutOfRange,
+  Valid,
+  Invalid,
+  UserValid,
+  UserInvalid
 }
 
 enum FunctionKind {
@@ -1886,12 +1890,20 @@ fn pseudo(word: &[u8]) -> Option<Pseudo> {
   if tokens.insensitive(word, b"out-of-range") {
     return Option<Pseudo>.some(Pseudo.OutOfRange)
   }
+  if tokens.insensitive(word, b"valid") {
+    return Option<Pseudo>.some(Pseudo.Valid)
+  }
+  if tokens.insensitive(word, b"invalid") {
+    return Option<Pseudo>.some(Pseudo.Invalid)
+  }
+  if tokens.insensitive(word, b"user-valid") {
+    return Option<Pseudo>.some(Pseudo.UserValid)
+  }
+  if tokens.insensitive(word, b"user-invalid") {
+    return Option<Pseudo>.some(Pseudo.UserInvalid)
+  }
   if tokens.insensitive(word, b"visited")
     || tokens.insensitive(word, b"unchecked")
-    || tokens.insensitive(word, b"valid")
-    || tokens.insensitive(word, b"invalid")
-    || tokens.insensitive(word, b"user-valid")
-    || tokens.insensitive(word, b"user-invalid")
     || tokens.insensitive(word, b"autofill")
     || tokens.insensitive(word, b"-webkit-autofill")
     || tokens.insensitive(word, b"current") {
@@ -3224,6 +3236,10 @@ fn stateMask(state: Pseudo) -> u32 {
     Pseudo.Default => element.DEFAULT
     Pseudo.InRange => element.IN_RANGE
     Pseudo.OutOfRange => element.OUT_OF_RANGE
+    Pseudo.Valid => element.VALID
+    Pseudo.Invalid => element.INVALID
+    Pseudo.UserValid => element.USER_VALID
+    Pseudo.UserInvalid => element.USER_INVALID
     _ => 0
   }
 }
@@ -3508,6 +3524,10 @@ effect fn writePseudo(writer: &mut BinaryWriter, value: Pseudo) -> ()
     Pseudo.Default => 31
     Pseudo.InRange => 32
     Pseudo.OutOfRange => 33
+    Pseudo.Valid => 34
+    Pseudo.Invalid => 35
+    Pseudo.UserValid => 36
+    Pseudo.UserInvalid => 37
   })
 }
 
@@ -3548,6 +3568,10 @@ effect fn readPseudo(reader: &mut BinaryReader<'_>) -> Pseudo
     31 => Pseudo.Default
     32 => Pseudo.InRange
     33 => Pseudo.OutOfRange
+    34 => Pseudo.Valid
+    35 => Pseudo.Invalid
+    36 => Pseudo.UserValid
+    37 => Pseudo.UserInvalid
     _ => { fail DecodeError { reason: DecodeReason.Invalid, offset: reader.at } }
   }
 }

@@ -990,6 +990,11 @@ test effect fn formStatesMatchTheirHostBits() -> ()
   run checkState(b":in-range", 2, true, 0, 1, 0, element.IN_RANGE)
   run checkState(b":out-of-range", 2, true, 0, 1, 0, element.OUT_OF_RANGE)
   run checkState(b":in-range", 2, false, 0, 0, 0, element.OUT_OF_RANGE)
+  run checkState(b":valid", 2, true, 0, 1, 0, element.VALID)
+  run checkState(b":invalid", 2, true, 0, 1, 0, element.INVALID)
+  run checkState(b":valid", 2, false, 0, 0, 0, element.INVALID)
+  run checkState(b":user-valid", 2, true, 0, 1, 0, element.USER_VALID)
+  run checkState(b":user-invalid", 2, true, 0, 1, 0, element.USER_INVALID)
 }
 
 // One element whose host answers class tests from its own interned names, which here differ
